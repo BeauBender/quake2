@@ -67,6 +67,7 @@ id<MTLRenderPipelineState> rmb_pipe(int i);
 id<MTLSamplerState> rmb_sampler(int i);
 id<MTLRenderPipelineState> rmb_pipe3d(int i);
 id<MTLRenderPipelineState> rmb_alpha_pipe(void);
+id<MTLRenderPipelineState> rmb_retro_pipe(void);
 id<MTLDepthStencilState> rmb_depth_state(int i);
 id<MTLBuffer> rmb_static_buffer(int bid);
 
@@ -105,6 +106,7 @@ void rmb_present_commit(void);
 static id<MTLTexture> color;     /* the frame's: own, or with display sync off a present slot's (FIX51) */
 static id<MTLTexture> own;       /* the frame's own colour target, private */
 static id<MTLTexture> depth;     /* depth32Float_stencil8, private */
+static id<MTLTexture> retro_src; /* TASK184: the copy of the frame the Retro pass reads, made at its first use */
 static id<MTLBuffer> readbuf;    /* shared, for rmb_read */
 static int color_defined;        /* a pass has written color since it was made */
 
@@ -421,6 +423,91 @@ int
 rmb_pass_2d(void)
 {
 	return rmb_pass(NULL, 0);
+}
+
+int
+rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
+{
+	id<MTLRenderPipelineState> pso;
+	int tw, th;
+
+	if (!frame_open || frame_skipped || !frame_cmd || !color)
+	{
+		return 0;
+	}
+
+	tw = (int)color.width;
+	th = (int)color.height;
+
+	/* clipped to the target */
+	if (x < 0)
+	{
+		w += x;
+		x = 0;
+	}
+
+	if (y < 0)
+	{
+		h += y;
+		y = 0;
+	}
+
+	w = (x + w > tw) ? tw - x : w;
+	h = (y + h > th) ? th - y : h;
+
+	if ((w <= 0) || (h <= 0) || !(pso = rmb_retro_pipe()))
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		MTLRenderPassDescriptor *rp;
+		id<MTLBlitCommandEncoder> blit;
+		id<MTLRenderCommandEncoder> enc;
+		MTLViewport vp = { (double)x, (double)y, (double)w, (double)h, 0.0, 1.0 };
+		MTLScissorRect sc = { (NSUInteger)x, (NSUInteger)y, (NSUInteger)w, (NSUInteger)h };
+		int p[6] = { x, y, w, h, filter ? 1 : 0, curve };
+
+		if (!retro_src || (retro_src.width != color.width) || (retro_src.height != color.height)
+			|| (retro_src.pixelFormat != color.pixelFormat))
+		{
+			rmb_set_texture(&retro_src, rmb_new_target(color.pixelFormat, tw, th, MTLTextureUsageShaderRead));
+
+			if (!retro_src)
+			{
+				return 0;
+			}
+		}
+
+		rmb_end_encoder();
+		blit = [frame_cmd blitCommandEncoder];
+		[blit copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake((NSUInteger)x, (NSUInteger)y, 0)
+				sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1) toTexture:retro_src destinationSlice:0
+				destinationLevel:0 destinationOrigin:MTLOriginMake((NSUInteger)x, (NSUInteger)y, 0)];
+		[blit endEncoding];
+
+		rp = [MTLRenderPassDescriptor renderPassDescriptor];
+		rp.colorAttachments[0].texture = color;
+		rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+		rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+		enc = [frame_cmd renderCommandEncoderWithDescriptor:rp];
+
+		if (!enc)
+		{
+			return 0;
+		}
+
+		[enc setRenderPipelineState:pso];
+		[enc setViewport:vp];
+		[enc setScissorRect:sc];
+		[enc setFragmentTexture:retro_src atIndex:0];
+		[enc setFragmentBytes:p length:sizeof(p) atIndex:0];
+		[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+		[enc endEncoding];
+	}
+
+	return 1;
 }
 
 void
@@ -813,6 +900,7 @@ rmb_encode_release(void)
 		color = nil;   /* own, or a present slot's, which rmb_device.m dropped */
 		rmb_set_texture(&own, nil);
 		rmb_set_texture(&depth, nil);
+		rmb_set_texture(&retro_src, nil);
 		rmb_gbuf_release();
 		rmb_fx_release();
 

@@ -335,3 +335,25 @@ calls from `.githooks/pre-push`, restore the exemption block, and delete
 `tests/check-pre-commit-hook.sh`. Reading the names by absolute path is not
 reversed on its own: with the shim on `PATH`, a `PATH` lookup refuses every
 marker again.
+
+## Addendum 2026-11-18: unreadable blobs refused, binary files scanned (FIX124, FIX125)
+
+Two rules of `tests/check-no-local-identity.sh` change, and the record above
+is left as it was accepted. Where it says that a binary file (one with a NUL
+byte) is not scanned, in the first item of "Not scanned" and in the push
+hook's list of what the check covers, a binary file is now scanned as bytes
+(FIX125, `git grep -a`); the check no longer uses git's own binary test, as
+before. Where it says that the check takes an index blob it cannot read as
+clean, it now refuses one (FIX124): `git grep` reports a missing blob on
+stderr and exits 1, its no-match status, so the check first gives every
+index blob id (gitlinks left out) to `git cat-file --batch-check` and refuses
+any answer that is not a blob, `missing` included, or a count of answers
+that differs from the count of ids. A blob whose header reads but whose body
+is corrupt is reported as a blob there; it makes `git grep` die with status
+128, which the check refuses too. The self-test holds each of these.
+
+Known limits after this change: `YQ2_IDENTITY_TEST_EXTRA_WORD` is not looked
+for in files, since the gate check has no test word; the hooks run the checks
+in the working tree, so a working-tree change to a check or a hook changes
+what runs, as before. "A binary file is scanned as bytes" is no longer a
+limit.

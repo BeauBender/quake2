@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/header/rm_rtgate.h"
+#include "../../src/client/refresh/metal/common/mtl_retro_math.h"
 
 static int checks, failures;
 
@@ -421,7 +422,13 @@ test_pres_decide(void)
 	/* enhanced traces rays: stock on a device without ray tracing (the VM) */
 	CHECK(rm_pres_decide(1, RM_RTG_NONE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NORT);
 	/* retro and RT-primary are later slices: stock here, whatever the device */
-	CHECK(rm_pres_decide(2, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
+	/* TASK184: Retro needs no ray tracing, so every path runs it */
+	CHECK(rm_pres_decide(2, RM_RTG_NONE, &why) == RM_PRES_RETRO && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(2, RM_RTG_COMPUTE, &why) == RM_PRES_RETRO && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(2, RM_RTG_RENDER, &why) == RM_PRES_RETRO && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(2.5f, RM_RTG_NONE, &why) == RM_PRES_RETRO && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(2, RM_RTG_NONE, NULL) == RM_PRES_RETRO);
+	CHECK(rm_pres_decide(3, RM_RTG_NONE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
 	CHECK(rm_pres_decide(3, RM_RTG_RENDER, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
 	CHECK(rm_pres_decide(-1, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
 	CHECK(rm_pres_decide(1e30f, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
@@ -507,6 +514,8 @@ test_pres_format(void)
 			"ref_metal: presentation: stock; r_presentation 1 (enhanced) reads 0: no ray tracing on this device"));
 	CHECK(pres_is(2, RM_PRES_STOCK, RM_PRES_WHY_NOTBUILT,
 			"ref_metal: presentation: stock; r_presentation 2 (retro) reads 0: not in this build"));
+	CHECK(pres_is(2, RM_PRES_RETRO, RM_PRES_WHY_OK,
+			"ref_metal: presentation: retro (r_presentation 2): the 3D view in RGB565 with the 4 x 4 dither, r_retro_filter and r_retro_gamma read each frame"));
 	CHECK(pres_is(7, RM_PRES_STOCK, RM_PRES_WHY_NOTBUILT,
 			"ref_metal: presentation: stock; r_presentation 7 reads 0: not in this build"));
 	CHECK(!rm_pres_format(1, RM_PRES_ENHANCED, RM_PRES_WHY_OK, small, sizeof(small)) && small[0] == '\0');
@@ -551,6 +560,94 @@ test_effect_overlaid(void)
 	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, b, NULL));
 }
 
+/*
+ * TASK184: the Retro post-process's arithmetic (common/mtl_retro_math.h),
+ * the CPU reference of rm_fragment_retro on known pixels.
+ */
+static void
+test_retro_math(void)
+{
+	static const unsigned bayer[4][4] = {
+		{ 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 }
+	};
+	unsigned x, y, c, r, bits;
+	int seen[16] = { 0 }, all = 1;
+
+	/* the 4 x 4 Bayer matrix, each rank once, repeating every 4 pixels */
+	for (y = 0; y < 8; y++)
+	{
+		for (x = 0; x < 8; x++)
+		{
+			all &= mtl_retro_bayer(x, y) == bayer[y & 3][x & 3];
+			all &= mtl_retro_bayer(x + 1024, y + 4096) == bayer[y & 3][x & 3];
+			seen[mtl_retro_bayer(x, y)] = 1;
+		}
+	}
+
+	CHECK(all);
+
+	for (r = 0; r < 16; r++)
+	{
+		CHECK(seen[r]);
+	}
+
+	/* known pixels: black and white stay at every rank; mid grey splits between two levels */
+	for (r = 0; r < 16; r++)
+	{
+		CHECK(mtl_retro_quant(0, 5, r) == 0 && mtl_retro_quant(0, 6, r) == 0);
+		CHECK(mtl_retro_quant(255, 5, r) == 255 && mtl_retro_quant(255, 6, r) == 255);
+	}
+
+	CHECK(mtl_retro_quant(128, 5, 0) == 123);    /* level 15 of 31 */
+	CHECK(mtl_retro_quant(128, 5, 15) == 132);   /* level 16 */
+	CHECK(mtl_retro_quant(128, 6, 0) == 125);    /* level 31 of 63 */
+	CHECK(mtl_retro_quant(128, 6, 15) == 130);   /* level 32 */
+	CHECK(mtl_retro_quant(300, 5, 0) == 255);    /* a value above a byte is clamped */
+
+	/*
+	 * Every byte at every rank is one of the levels' bytes, the result is
+	 * monotonic in the byte and in the rank, and the 16 ranks average to
+	 * the byte within 1: the dither keeps the mean.
+	 */
+	for (bits = 5; bits <= 6; bits++)
+	{
+		unsigned l = (1u << bits) - 1u;
+		int levels = 1, mono = 1, mean = 1;
+
+		for (c = 0; c < 256; c++)
+		{
+			unsigned sum = 0;
+
+			for (r = 0; r < 16; r++)
+			{
+				unsigned q = mtl_retro_quant(c, bits, r);
+				unsigned k = (q * l + 127u) / 255u;
+
+				levels &= ((k * 255u + l / 2u) / l) == q;
+				mono &= (c == 0) || (q >= mtl_retro_quant(c - 1, bits, r));
+				mono &= (r == 0) || (q >= mtl_retro_quant(c, bits, r - 1));
+				sum += q;
+			}
+
+			mean &= fabs(sum / 16.0 - (double)c) <= 1.0;
+		}
+
+		CHECK(levels);
+		CHECK(mono);
+		CHECK(mean);
+	}
+
+	/* the box filter and the curves */
+	CHECK(mtl_retro_box(0, 0, 0, 255) == 64);
+	CHECK(mtl_retro_box(123, 132, 132, 123) == 128);
+	CHECK(mtl_retro_box(255, 255, 255, 255) == 255);
+	CHECK(mtl_retro_gamma(0) == 1.0f);
+	CHECK(fabsf(mtl_retro_gamma(1) - 1.0f / 1.15f) < 1e-6f);
+	CHECK(fabsf(mtl_retro_gamma(2) - 1.0f / 1.3f) < 1e-6f);
+	CHECK(mtl_retro_gamma(3) == 1.0f && mtl_retro_gamma(-1) == 1.0f);
+	CHECK(MTL_RETRO_CURVES == 3);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -564,6 +661,7 @@ main(int argc, char **argv)
 	test_pres_format();
 	test_ab_overlay();
 	test_effect_overlaid();
+	test_retro_math();
 
 	test_decide();
 	test_traces();

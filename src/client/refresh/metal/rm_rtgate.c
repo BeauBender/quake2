@@ -326,7 +326,9 @@ rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t *ou
  * with the ray-traced layers on at their defaults (the plan's section
  * 2.2): each effect switch below reads 1 under it, and every other
  * setting (the AO's size, the sun's angles, r_metalfx, ...) stays the
- * user's. Retro and RT-primary are later slices and decide nothing here.
+ * user's. Retro (TASK184, PM2) needs no ray tracing and runs on every
+ * device; its post-process decides no cvar, so it overlays nothing here.
+ * RT-primary is a later slice and decides nothing here.
  */
 static const char *const pres_enhanced[] = { "r_rt_shadows", "r_rt_sun", "r_rt_ao", "r_rt_water" };
 
@@ -352,6 +354,10 @@ rm_pres_decide(float requested, int path, int *why)
 		{
 			mode = RM_PRES_ENHANCED;
 		}
+	}
+	else if ((int)requested == RM_PRES_RETRO)
+	{
+		mode = RM_PRES_RETRO;
 	}
 	else if ((int)requested != RM_PRES_STOCK)
 	{
@@ -423,6 +429,13 @@ rm_pres_format(float requested, int mode, int why, char *buf, size_t len)
 		{
 			return rtg_put(snprintf(buf, len,
 					"ref_metal: presentation: enhanced (r_presentation %d): r_rt_shadows, r_rt_sun, r_rt_ao and r_rt_water read 1, the user's values kept",
+					mode), buf, len);
+		}
+
+		if (mode == RM_PRES_RETRO)
+		{
+			return rtg_put(snprintf(buf, len,
+					"ref_metal: presentation: retro (r_presentation %d): the 3D view in RGB565 with the 4 x 4 dither, r_retro_filter and r_retro_gamma read each frame",
 					mode), buf, len);
 		}
 

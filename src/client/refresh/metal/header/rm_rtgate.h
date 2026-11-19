@@ -173,7 +173,8 @@ int rm_pres_decide(float requested, int path, int *why);
  * The value the renderer uses for the cvar name whose user value is user:
  * the mode's own value for a cvar the mode decides, else user. Stock
  * decides none. Enhanced turns on r_rt_shadows, r_rt_sun, r_rt_ao and
- * r_rt_water (1), and leaves every other setting the user's.
+ * r_rt_water (1), and leaves every other setting the user's. Retro
+ * (TASK184) decides none: its post-process is the mode itself.
  */
 float rm_pres_value(int mode, const char *name, float user);
 
