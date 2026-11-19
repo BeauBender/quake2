@@ -132,7 +132,7 @@ check_tree() { # root: 0 when the tree keeps the invariant, 1 with the reasons p
 		src/client/refresh/soft/sw_model.c; do
 		[ -f "$r/$f" ] || continue
 		live=$(strip_dead < "$r/$f")
-		for u in Mod_LoadBegin Mod_LoadEnd Mod_LoadAbandon; do
+		for u in Mod_LoadBegin Mod_LoadEnd Mod_ReclaimUnfinished; do
 			if ! printf '%s\n' "$live" | grep -qE "(^|[^A-Za-z0-9_])$u[[:space:]]*\("; then
 				echo "check-bsp-loader: $f does not use $u (a refused map would leave a named empty slot)"
 				bad=1
@@ -204,9 +204,9 @@ awk '/^Mod_LoadBrushModel/ { inb = 1 }
 expect_refused "soft reading a lump before the checks" "${tmp:?}/late"
 
 copy "${tmp:?}/noslot"
-sed 's/Mod_LoadAbandon(/Mod_Other(/' \
+sed 's/Mod_ReclaimUnfinished(/Mod_Other(/' \
 	"$root/src/client/refresh/gl1/gl1_model.c" > "${tmp:?}/noslot/src/client/refresh/gl1/gl1_model.c"
-expect_refused "gl1 without Mod_LoadAbandon" "${tmp:?}/noslot"
+expect_refused "gl1 without Mod_ReclaimUnfinished" "${tmp:?}/noslot"
 
 copy "${tmp:?}/fifth"
 mkdir -p "${tmp:?}/fifth/src/client/refresh/vk"
