@@ -751,19 +751,53 @@ TEST(cmvis_cluster_outside_lump_is_novis)
 	T_EQ_INT(CM_ClusterPVS(0)[0], 0x18);	/* the low byte of -1000 */
 }
 
-/* Without visibility a leaf's cluster is not checked, and every row but
-   -1's is all visible, as before. */
+/*
+ * Without visibility a leaf's cluster of 0 or more is not bounded, and
+ * every row but -1's is all visible, as before. A cluster below -1 is
+ * refused with or without visibility (FIX137 round 2): the server skips
+ * only -1 when it links an entity, and indexes its fat PVS and PHS rows
+ * and CM_HeadnodeVisible's row by the cluster.
+ */
 TEST(cmvis_no_vis_any_cluster)
 {
 	unsigned checksum;
 
 	g_default();
-	g.leafs[3].cluster = -2;
+	g.leafs[3].cluster = 7;
 	T_REQUIRE(CM_LoadMap(v_load(), false, &checksum) != NULL);
 	T_EQ_INT(CM_ClusterPVS(0)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(7)[0], 0xff);
 	T_EQ_INT(CM_ClusterPVS(-2)[0], 0xff);
 	T_EQ_INT(CM_ClusterPHS(-2)[0], 0xff);
 	T_EQ_INT(CM_ClusterPVS(-1)[0], 0x00);
+
+	g_default();
+	g.leafs[3].cluster = -2;
+	v_refused("leaf 3 has cluster -2, the visibility has 0 clusters");
+
+	g_default();
+	g.leafs[3].cluster = -32768;
+	v_refused("leaf 3 has cluster -32768, the visibility has 0 clusters");
+}
+
+/*
+ * The offset bound is inclusive at both ends: an offset of 0 (the count's
+ * own bytes, here 02 00 00 00) and one equal to the lump's length (no
+ * input: the row is all visible) both load.
+ */
+TEST(cmvis_offset_at_lump_edges)
+{
+	unsigned checksum;
+
+	g_default();
+	v_map();
+	g.vis[1] = 0;	/* cluster 0 PVS at the lump's start */
+	g.vis[4] = 24;	/* cluster 1 PHS at the lump's end */
+	T_REQUIRE(CM_LoadMap(v_load(), false, &checksum) != NULL);
+	T_EQ_INT(CM_ClusterPVS(0)[0], 0x02);
+	T_EQ_INT(CM_ClusterPHS(0)[0], 0x02);
+	T_EQ_INT(CM_ClusterPVS(1)[0], 0x03);
+	T_EQ_INT(CM_ClusterPHS(1)[0], 0xff);
 }
 
 /*
@@ -1099,6 +1133,15 @@ TEST(bspcheck_leaf_cluster_below_minus_one)
 	c_default();
 	g.leafs[2].cluster = -2;
 	C_REFUSED(g_build(), 4, "leaf 2 has cluster -2, the visibility has 2 clusters");
+}
+
+TEST(bspcheck_leaf_cluster_below_minus_one_no_vis)
+{
+	/* refused without visibility too, as the collision model does */
+	c_default();
+	g.nvis = 0;
+	g.leafs[2].cluster = -2;
+	C_REFUSED(g_build(), 4, "leaf 2 has cluster -2, the visibility has 0 clusters");
 }
 
 TEST(bspcheck_leaf_cluster_bounds_pass)
