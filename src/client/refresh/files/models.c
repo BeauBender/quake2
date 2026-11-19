@@ -69,6 +69,25 @@ Mod_LoadAbandon(void **buf)
 }
 
 /*
+ * What the renderers run at the start of Mod_ForName and Mod_FreeAll: an
+ * unfinished load's slot goes to mod_free (the renderer's Mod_Free, which
+ * unmaps the hunk the load may have begun and clears the slot) and its file
+ * buffer to free_file (ri.FS_FreeFile).
+ */
+void
+Mod_ReclaimUnfinished(void (*mod_free)(void *slot), void (*free_file)(void *buf))
+{
+	void *buf;
+	void *slot = Mod_LoadAbandon(&buf);
+
+	if (slot)
+	{
+		mod_free(slot);
+		free_file(buf);
+	}
+}
+
+/*
 =================
 Mod_LoadAliasModel/Mod_LoadMD2
 =================

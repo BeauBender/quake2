@@ -121,6 +121,13 @@ Mod_Init(void)
 	memset(mod_novis, 0xff, sizeof(mod_novis));
 }
 
+/* Mod_Free for Mod_ReclaimUnfinished (FIX135) */
+static void
+Mod_FreeSlot(void *slot)
+{
+	Mod_Free(slot);
+}
+
 /*
  * Loads in a model for the given name
  */
@@ -132,16 +139,7 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 	int i;
 
 	/* a load a refusal cut short (FIX135): clear its slot, free its file */
-	{
-		void *stale_buf;
-		model_t *stale = Mod_LoadAbandon(&stale_buf);
-
-		if (stale)
-		{
-			Mod_Free(stale);
-			ri.FS_FreeFile(stale_buf);
-		}
-	}
+	Mod_ReclaimUnfinished(Mod_FreeSlot, ri.FS_FreeFile);
 
 	if (!name[0])
 	{
@@ -757,16 +755,7 @@ Mod_FreeAll(void)
 {
 	int i;
 
-	{
-		void *stale_buf;
-		model_t *stale = Mod_LoadAbandon(&stale_buf);
-
-		if (stale)
-		{
-			Mod_Free(stale);
-			ri.FS_FreeFile(stale_buf);
-		}
-	}
+	Mod_ReclaimUnfinished(Mod_FreeSlot, ri.FS_FreeFile);
 
 	for (i = 0; i < mod_numknown; i++)
 	{

@@ -1000,3 +1000,109 @@ TEST(slot_finished_load_is_kept)
 	T_CHECK(Mod_LoadAbandon(&freed) == NULL);
 	T_CHECK(freed == NULL);
 }
+
+/*
+ * A refusal after Hunk_Begin and before Hunk_End (FIX135): Mod_LoadBrushModel
+ * begins the hunk before its lump loaders run, so a lump a loader refuses
+ * (a bad texinfo number in Mod_LoadFaces, for example) longjmps with the
+ * hunk still open. Hunk_Free must unmap all of it then; it used to read a
+ * size of 0 from the header and end in Sys_Error.
+ */
+static void
+hunk_unfinished_child(void *arg)
+{
+	void *base;
+	byte *p;
+
+	(void)arg;
+
+	base = Hunk_Begin(256 * 1024);
+	p = Hunk_Alloc(4096);
+	memset(p, 0x5a, 4096);
+	Hunk_Free(base);
+	printf("yq2test-child: freed\n");
+}
+
+TEST(hunk_unfinished_free)
+{
+	char out[1024];
+	int status = t_expect_exit(hunk_unfinished_child, NULL, out, sizeof(out));
+
+	T_EQ_INT(status, 0);
+	T_CHECK(strstr(out, "munmap failed") == NULL);
+	T_CHECK(strstr(out, "yq2test-child: freed") != NULL);
+}
+
+/*
+ * The abandon path the renderers run (Mod_ReclaimUnfinished at the start of
+ * Mod_ForName and Mod_FreeAll), against the real hunk: a slot whose load
+ * began its hunk and was refused before Hunk_End, reclaimed by the next
+ * load, twice, the way a second "map" of the same refused map runs.
+ * t_slot_free is what each renderer's Mod_Free does.
+ */
+typedef struct
+{
+	char name[MAX_QPATH];
+	void *extradata;
+	int extradatasize;
+} t_slot_t;
+
+static int t_files_freed;
+
+static void
+t_slot_free(void *slot)
+{
+	t_slot_t *mod = slot;
+
+	Hunk_Free(mod->extradata);
+	memset(mod, 0, sizeof(*mod));
+}
+
+static void
+t_file_free(void *buf)
+{
+	free(buf);
+	t_files_freed++;
+}
+
+static void
+slot_reclaim_child(void *arg)
+{
+	t_slot_t slot;
+	int pass;
+
+	(void)arg;
+	memset(&slot, 0, sizeof(slot));
+	t_files_freed = 0;
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		/* Mod_ForName names the slot, loads the file, begins the hunk */
+		strcpy(slot.name, "maps/refused.bsp");
+		Mod_LoadBegin(&slot, malloc(64));
+		slot.extradata = Hunk_Begin(256 * 1024);
+		Hunk_Alloc(1024);
+
+		/* refused here (Com_Error): no Hunk_End, no Mod_LoadEnd */
+
+		Mod_ReclaimUnfinished(t_slot_free, t_file_free);
+		T_CHECK(slot.name[0] == '\0');
+		T_CHECK(slot.extradata == NULL);
+		T_EQ_INT(t_files_freed, pass + 1);
+	}
+
+	/* nothing left to reclaim */
+	Mod_ReclaimUnfinished(t_slot_free, t_file_free);
+	T_EQ_INT(t_files_freed, 2);
+	printf("yq2test-child: reclaimed\n");
+}
+
+TEST(slot_reclaim_frees_unfinished_hunk)
+{
+	char out[1024];
+	int status = t_expect_exit(slot_reclaim_child, NULL, out, sizeof(out));
+
+	T_EQ_INT(status, 0);
+	T_CHECK(strstr(out, "munmap failed") == NULL);
+	T_CHECK(strstr(out, "yq2test-child: reclaimed") != NULL);
+}

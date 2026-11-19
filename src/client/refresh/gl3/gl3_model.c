@@ -607,21 +607,19 @@ Mod_Free(gl3model_t *mod)
 	memset(mod, 0, sizeof(*mod));
 }
 
+/* Mod_Free for Mod_ReclaimUnfinished (FIX135) */
+static void
+Mod_FreeSlot(void *slot)
+{
+	Mod_Free(slot);
+}
+
 void
 GL3_Mod_FreeAll(void)
 {
 	int i;
 
-	{
-		void *stale_buf;
-		gl3model_t *stale = Mod_LoadAbandon(&stale_buf);
-
-		if (stale)
-		{
-			Mod_Free(stale);
-			ri.FS_FreeFile(stale_buf);
-		}
-	}
+	Mod_ReclaimUnfinished(Mod_FreeSlot, ri.FS_FreeFile);
 
 	for (i = 0; i < mod_numknown; i++)
 	{
@@ -643,16 +641,7 @@ Mod_ForName(const char *name, gl3model_t *parent_model, qboolean crash)
 	int i, modfilelen;
 
 	/* a load a refusal cut short (FIX135): clear its slot, free its file */
-	{
-		void *stale_buf;
-		gl3model_t *stale = Mod_LoadAbandon(&stale_buf);
-
-		if (stale)
-		{
-			Mod_Free(stale);
-			ri.FS_FreeFile(stale_buf);
-		}
-	}
+	Mod_ReclaimUnfinished(Mod_FreeSlot, ri.FS_FreeFile);
 
 	if (!name[0])
 	{
