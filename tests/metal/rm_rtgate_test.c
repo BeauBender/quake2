@@ -522,6 +522,44 @@ test_pres_format(void)
 	CHECK(!rm_pres_format(1, RM_PRES_ENHANCED, RM_PRES_WHY_OK, small, 0));
 }
 
+/* TASK195: the A/B overlay gives the B value on B, the user's (0) on A, and never a near name */
+static void
+test_ab_overlay(void)
+{
+	const char *b = "B: stock|r_rt_ao=0;r_rt_ao_range=128;r_rt_sun_angles=55 45;";
+	char v[16], line[128];
+
+	CHECK(!rm_ab_value("", "r_rt_ao", v, sizeof(v)));
+	CHECK(!rm_ab_value(NULL, "r_rt_ao", v, sizeof(v)));
+	CHECK(rm_ab_value(b, "r_rt_ao", v, sizeof(v)) && !strcmp(v, "0"));
+	CHECK(rm_ab_value(b, "r_rt_ao_range", v, sizeof(v)) && !strcmp(v, "128"));
+	CHECK(rm_ab_value(b, "r_rt_sun_angles", v, sizeof(v)) && !strcmp(v, "55 45"));
+	CHECK(!rm_ab_value(b, "r_rt_ao_ran", v, sizeof(v)));
+	CHECK(!rm_ab_value(b, "r_rt_sun", v, sizeof(v)));
+	CHECK(!rm_ab_value(b, "r_rt_sun_angles", v, 4));   /* does not fit: the user's stands */
+	CHECK(!rm_ab_value("B: x|broken", "broken", v, sizeof(v)));
+
+	CHECK(rm_ab_format("", line, sizeof(line)) && !strcmp(line, "ref_metal: A/B: A: your settings"));
+	CHECK(rm_ab_format(b, line, sizeof(line)) &&
+		!strcmp(line, "ref_metal: A/B: B: stock (3 settings overlaid, no cvar written)"));
+}
+
+/* TASK195: a value is the user's own unless the presentation decides it or the B side holds it */
+static void
+test_effect_overlaid(void)
+{
+	const char *b = "B: stock|r_metalfx=3;r_rt_ao_range=128;";
+
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, "", "r_metalfx"));
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, NULL, "r_metalfx"));
+	CHECK(rm_effect_overlaid(RM_PRES_STOCK, b, "r_metalfx"));
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, b, "r_metalfx_interp"));
+	CHECK(!rm_effect_overlaid(RM_PRES_ENHANCED, "", "r_metalfx"));   /* not a switch the mode decides */
+	CHECK(rm_effect_overlaid(RM_PRES_ENHANCED, "", "r_rt_ao"));
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, "", "r_rt_ao"));
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, b, NULL));
+}
+
 /*
  * TASK184: the Retro post-process's arithmetic (common/mtl_retro_math.h),
  * the CPU reference of rm_fragment_retro on known pixels.
@@ -621,6 +659,8 @@ main(int argc, char **argv)
 	test_pres_decide();
 	test_pres_overlay();
 	test_pres_format();
+	test_ab_overlay();
+	test_effect_overlaid();
 	test_retro_math();
 
 	test_decide();

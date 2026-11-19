@@ -33,8 +33,8 @@ viddef_t viddef;
 qboolean keydown[K_LAST];
 cvar_t *vid_fullscreen, *vid_renderer;
 
-static cvar_t pool[64];
-static int writes[64];
+static cvar_t pool[128];
+static int writes[128];
 static int npool;
 
 static int
@@ -149,7 +149,8 @@ Writes(const char *n)
 }
 
 static int restarts;	/* the vid_restart commands queued */
-void Cbuf_AddText(const char *t) { if (t && strstr(t, "vid_restart")) { restarts++; } }
+static char cbuf_last[128];	/* TASK195: the last command queued */
+void Cbuf_AddText(const char *t) { if (t && strstr(t, "vid_restart")) { restarts++; } if (t) { snprintf(cbuf_last, sizeof(cbuf_last), "%s", t); } }
 void Com_Printf(const char *f, ...) { (void)f; }
 
 void
@@ -1017,7 +1018,7 @@ test_ray_tracing_screen(void)
 
 	/* 1: the screen has its 13 items; the sliders wait for their effects */
 	OpenRT("1");
-	CHECK(rt_menu != main_menu && rt_menu->nitems == 13, "the screen has %d items", rt_menu->nitems);
+	CHECK(rt_menu != main_menu && rt_menu->nitems == 14, "the screen has %d items", rt_menu->nitems);
 	for (size_t i = 0; i < sizeof(sw) / sizeof(sw[0]); i++)
 	{
 		CHECK(!RTGreyed(sw[i]), "%s greyed", sw[i]);
@@ -1067,7 +1068,7 @@ test_ray_tracing_screen(void)
 
 	/* 5: no ray tracing on the device, every item greyed with the reason */
 	OpenRT("0");
-	CHECK(rt_menu->nitems == 13, "unavailable screen has %d items", rt_menu->nitems);
+	CHECK(rt_menu->nitems == 14, "unavailable screen has %d items", rt_menu->nitems);
 	for (int i = 0; i < rt_menu->nitems; i++)
 	{
 		const menucommon_s *c = rt_menu->items[i];
@@ -1221,6 +1222,122 @@ test_presentation_item(void)
 	SetCv("r_rt_available", "1");
 }
 
+/* TASK195: the tuning screen: every row present and live or greyed with its reason, one debug view
+   at a time, the A/B and preset actions queue their commands, apply (restart) only after the
+   presentation changed */
+static void
+test_tuning_screen(void)
+{
+	static const char *const items[] = { "sun elevation", "sun azimuth", "AO rays", "water hits", "flat light",
+		"scaler", "debug view", "presentation", "A/B: A: your settings", "B: stock", "preset name",
+		"save preset", "load preset", "preset as B", "apply (restart)" };
+	menuframework_s *tm;
+	int before;
+
+	for (int i = 0; i < VidRules_TuneNum(); i++)
+	{
+		const vidrt_control_t *c = VidRules_TuneControl(i);
+
+		SetCv(c->cvar, (c->part == VIDTUNE_PART_DEBUG) ? "0" : c->def);
+	}
+	for (int v = 1; v < VidRules_NumDebugViews(); v++)
+	{
+		SetCv(VidRules_DebugView(v), "0");
+	}
+	SetCv("r_rt_ab", "");
+	OpenRT("1");
+	CHECK(!RTGreyed("tuning..."), "tuning greyed: %s", RTItem("tuning...")->statusbar);
+	Menu_SelectItem(rt_menu);
+	tm = menu;
+	CHECK(tm != rt_menu && tm->keepview, "the tuning screen is not open, or dims the view");
+	rt_menu = tm;
+
+	/* 1: every item shown */
+	CHECK(tm->nitems == (int)(sizeof(items) / sizeof(items[0])), "the tuning screen has %d items", tm->nitems);
+	for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); i++)
+	{
+		RTItem(items[i]);
+	}
+
+	/* 2: the greying and its reasons */
+	CHECK(RTGreyed("sun elevation") && !strcmp(RTItem("sun elevation")->statusbar, "turn on sun first"),
+		"sun elevation says %s", RTItem("sun elevation")->statusbar);
+	CHECK(RTGreyed("AO rays") && !strcmp(RTItem("AO rays")->statusbar, "turn on ambient occlusion first"),
+		"AO rays says %s", RTItem("AO rays")->statusbar);
+	CHECK(RTGreyed("water hits"), "water hits live with water off");
+	CHECK(!RTGreyed("scaler") && !RTGreyed("flat light") && !RTGreyed("debug view"), "a live row greyed");
+	CHECK(RTGreyed("save preset") && !strcmp(RTItem("save preset")->statusbar, "the name is empty"),
+		"save preset says %s", RTItem("save preset")->statusbar);
+	CHECK(RTGreyed("apply (restart)") &&
+		!strcmp(RTItem("apply (restart)")->statusbar, "nothing here waits for a restart"),
+		"apply (restart) says %s", RTItem("apply (restart)")->statusbar);
+
+	/* 3: a row of the pair writes its word; it goes live with its effect */
+	SetCv("r_rt_sun", "1");
+	tm->draw(tm);
+	CHECK(!RTGreyed("sun elevation"), "sun elevation greyed with sun on");
+	RTItem("sun elevation");
+	Menu_SlideItem(tm, 1);
+	CHECK(!strcmp(Str("r_rt_sun_angles"), "60 45"), "sun elevation wrote %s", Str("r_rt_sun_angles"));
+	RTItem("sun azimuth");
+	Menu_SlideItem(tm, -1);
+	CHECK(!strcmp(Str("r_rt_sun_angles"), "60 40"), "sun azimuth wrote %s", Str("r_rt_sun_angles"));
+
+	/* 4: the debug view, one at a time */
+	CHECK(NumChoices((menulist_s *)RTItem("debug view")) == VidRules_NumDebugViews(), "debug views: %d",
+		NumChoices((menulist_s *)RTItem("debug view")));
+	Menu_SlideItem(tm, 1);
+	CHECK(Cvar_VariableValue("r_rt_shadows_show") == 1, "debug view 1 is not the shadows");
+	Menu_SlideItem(tm, 1);
+	CHECK(Cvar_VariableValue("r_rt_shadows_show") == 0 && Cvar_VariableValue("r_rt_sun_show") == 1,
+		"debug view 2: shadows %g, sun %g", Cvar_VariableValue("r_rt_shadows_show"),
+		Cvar_VariableValue("r_rt_sun_show"));
+
+	/* 5: A/B and the presets queue their commands; a bad name queues nothing */
+	RTItem("A/B: A: your settings");
+	Menu_SelectItem(tm);
+	CHECK(!strcmp(cbuf_last, "rt_ab\n"), "A/B queued %s", cbuf_last);
+	SetCv("r_rt_ab", "B: stock|r_rt_ao=0;");
+	tm->draw(tm);
+	RTItem("A/B: B: stock");
+	snprintf(((menufield_s *)RTItem("preset name"))->buffer, 80, "%s", "x;quit");
+	tm->draw(tm);
+	cbuf_last[0] = '\0';
+	RTItem("save preset");
+	Menu_SelectItem(tm);
+	CHECK(RTGreyed("save preset") && !cbuf_last[0], "a bad name queued %s", cbuf_last);
+	snprintf(((menufield_s *)RTItem("preset name"))->buffer, 80, "%s", "mine");
+	tm->draw(tm);
+	RTItem("save preset");
+	Menu_SelectItem(tm);
+	CHECK(!strcmp(cbuf_last, "rt_preset save mine\n"), "save queued %s", cbuf_last);
+	SetCv("r_rt_ab", "");
+
+	/* 6: apply (restart) only after the presentation changed, and it restarts */
+	RTItem("presentation");
+	Menu_SlideItem(tm, 1);
+	CHECK(Cvar_VariableValue("r_presentation") == 1, "presentation wrote %g", Cvar_VariableValue("r_presentation"));
+	CHECK(!RTGreyed("apply (restart)"), "apply (restart) greyed after the presentation changed");
+	before = restarts;
+	RTItem("apply (restart)");
+	Menu_SelectItem(tm);
+	CHECK(restarts == before + 1, "apply (restart) queued %d", restarts - before);
+	SetCv("r_presentation", "0");
+	SetCv("r_rt_sun", "0");
+
+	/* 7: off Metal (the screen drawn under a menu built for soft) every row is shown, greyed */
+	Open("soft", "7");
+	tm->draw(tm);
+	CHECK(tm->nitems == (int)(sizeof(items) / sizeof(items[0])), "off Metal the screen has %d items", tm->nitems);
+	for (int i = 0; i < VidRules_TuneNum(); i++)
+	{
+		const menucommon_s *c = tm->items[i];
+
+		CHECK((c->flags & QMF_GRAYED) && !strcmp(c->statusbar, "needs the Metal renderer"),
+			"%s off Metal: greyed %d, %s", c->name, (c->flags & QMF_GRAYED) != 0, c->statusbar);
+	}
+}
+
 int
 main(void)
 {
@@ -1245,6 +1362,7 @@ main(void)
 	test_ray_tracing_screen();
 	test_presentation_item();
 	test_rt_screen_under_presentation();
+	test_tuning_screen();
 
 	printf("videomenu_test: %d checks, %d failed\n", checks, failed);
 

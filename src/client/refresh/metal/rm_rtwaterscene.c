@@ -323,7 +323,7 @@ RM_RTW_View(const rm_view_t *view)
 	RM_GB_TargetSize(&w, &h);
 
 	/* TASK158: setting 1 where the pass built its resources; else TASK58's path, which needs none of them */
-	ws = rm_rtw_path(r_rt_water_hits ? r_rt_water_hits->value : 0, rmb_rtw_ws_ok(err, sizeof(err)), &rtw_ws_told, &say);
+	ws = rm_rtw_path(r_rt_water_hits ? RM_Effect(r_rt_water_hits) : 0, rmb_rtw_ws_ok(err, sizeof(err)), &rtw_ws_told, &say);
 
 	if (say)
 	{
@@ -331,7 +331,7 @@ RM_RTW_View(const rm_view_t *view)
 	}
 
 	if (!rm_rtw_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value, r_newrefdef.time,
-			rm_rtw_amp(r_rt_water_normal->value), rm_rtw_reflect(r_rt_water_reflect->value),
+			rm_rtw_amp(RM_Effect(r_rt_water_normal)), rm_rtw_reflect(RM_Effect(r_rt_water_reflect)),
 			(unsigned)rm_rtw_show(r_rt_water_show->value), &v) ||
 		!rmb_rtw_prepare((unsigned long)w, (unsigned long)h, ws))
 	{

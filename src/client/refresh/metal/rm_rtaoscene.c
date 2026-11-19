@@ -171,12 +171,12 @@ RM_RTAO_View(const rm_view_t *view)
 
 	/* everything the trace needs that can fail, before the raster: the view's inverse and the outputs */
 	RM_GB_TargetSize(&w, &h);
-	div = rm_rtao_div(r_rt_ao_scale->value);
+	div = rm_rtao_div(RM_Effect(r_rt_ao_scale));
 
 	if (!rm_rtao_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value,
-			rm_rtao_range(r_rt_ao_range->value), rm_rtao_floor(r_rt_ao_min->value),
+			rm_rtao_range(RM_Effect(r_rt_ao_range)), rm_rtao_floor(RM_Effect(r_rt_ao_min)),
 			rm_rtao_frame(r_rt_ao_seed->value, ao_count), (unsigned)rm_rtao_show(r_rt_ao_show->value),
-			(unsigned)div, (unsigned)rm_rtao_rays(r_rt_ao_rays->value), &v) ||
+			(unsigned)div, (unsigned)rm_rtao_rays(RM_Effect(r_rt_ao_rays)), &v) ||
 		!rmb_rtao_prepare((unsigned long)w, (unsigned long)h, (unsigned)div))
 	{
 		rmb_rtao_set_view(NULL);

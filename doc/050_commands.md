@@ -64,6 +64,9 @@ original clients (Vanilla Quake II) commands are still in place.
   loaded pak files will be listed first followed by maps placed in 
   the current game's maps folder.
 
+* **load <name>**: Loads the single-player savegame `save/<name>` from
+  the write directory.
+
 * **ogg <cmd>**: Controls OGG/Vobis music playback. Commands are:
   * **info**: Print informations about the current track.
   * **mute**: Mute playback.
@@ -84,6 +87,32 @@ original clients (Vanilla Quake II) commands are still in place.
 * **screenshot <tga>**: Writes the current frame to `scrnshot/q2_NNNN.tga`
   as an uncompressed 24-bit TGA. TGA is the only format; the argument is
   optional and, if given, must be `tga`.
+
+* **rt_ab [stock]**: Flips the Metal renderer between A, the player's
+  own ray-tracing settings, and B, a second set: every tuning setting at
+  its default ("B: stock", the default), or a preset given with
+  `rt_preset ab`. B is an overlay (`r_rt_ab`): no setting is written, and
+  flipping back shows the player's values. The console and the video
+  menu's tuning screen show which side is on screen. `rt_ab stock` makes B the
+  defaults again without flipping. Bindable to a key.
+
+* **rt_preset save|load|ab <name>, rt_preset list**: The ray-tracing
+  tuning presets, `<writedir>/presets/rt-<name>.cfg`: plain `set` lines
+  for every tuning setting (the ray-tracing screen's and the tuning
+  screen's, without the debug views and the presentation) under a
+  comment with the engine version and the date; a setting the renderer
+  has not registered, or whose value holds a quote or one of `;`, `|`
+  and `=`, gets no line. Its first word: save writes the
+  current values, load sets them from the file (only those settings;
+  any other line, and an empty value, is passed over) and prints each one it changed, ab
+  makes the preset the B side of `rt_ab` without writing any setting,
+  and list names the presets. The name is refused when it is empty,
+  longer than 32 characters, holds `..`, a slash or a backslash, starts
+  with a dot, or holds a character other than a letter, a digit, `_` or
+  `-`.
+
+* **save <name>**: Saves the single-player game as `save/<name>` in the
+  write directory.
 
 * **spawnentity classname x y z <angle_x angle_y angle_z> <flags>**:
   Spawn new entity of `classname` at `x y z` coordinates.

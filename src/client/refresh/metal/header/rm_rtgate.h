@@ -188,4 +188,26 @@ const char *rm_pres_name(int mode);
  */
 int rm_pres_format(float requested, int mode, int why, char *buf, size_t len);
 
+/*
+ * The A/B toggle of the tuning harness (TASK195): r_rt_ab, which the
+ * client's rt_ab writes, is empty for A (the user's values) or
+ * "<label>|name=value;name=value;..." for B. It is an overlay as the
+ * presentation is: rm_ab_value copies the B value of the cvar name into
+ * out and returns 1 when spec is a B side that holds it, else 0 (the
+ * user's value stands); no cvar is written. rm_ab_format is the report
+ * line when the side changes ("ref_metal: A/B: A: your settings", or the
+ * label and how many settings it holds); 1 when it fits in buf.
+ */
+int rm_ab_value(const char *spec, const char *name, char *out, size_t len);
+int rm_ab_format(const char *spec, char *buf, size_t len);
+
+/*
+ * Whether an overlay supplies the value of the cvar name, as RM_Effect
+ * reads it: the presentation mode decides it (rm_pres_value) or the B side
+ * ab_spec holds it (rm_ab_value, a value of up to RM_AB_MAXVALUE - 1
+ * characters). 0: the value read is the user's own.
+ */
+#define RM_AB_MAXVALUE 64
+int rm_effect_overlaid(int pres_mode, const char *ab_spec, const char *name);
+
 #endif

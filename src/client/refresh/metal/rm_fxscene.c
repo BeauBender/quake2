@@ -48,6 +48,7 @@ static cvar_t *r_metalfx_modes;
 static unsigned fx_has;         /* RM_FX_HAS bits of the device */
 static unsigned fx_families;
 static int fx_mode;             /* the mode the world views run */
+static float fx_read;           /* TASK195: r_metalfx as last read (RM_Effect), to see a flip of rt_ab */
 static int fx_interp;
 static rm_fx_state_t fx_state;  /* the history's last view, the jitter's index, this frame's view */
 
@@ -134,19 +135,26 @@ RM_FX_Read(void)
 		r_metalfx_modes->modified = false;
 	}
 
-	if (r_metalfx->modified)
+	/* TASK195: the tuning harness's B side may change the value read without a write */
+	if (r_metalfx->modified || !rm_fx_same(RM_Effect(r_metalfx), fx_read))
 	{
-		const float asked_v = r_metalfx->value;
+		const float asked_v = RM_Effect(r_metalfx);
 		const int asked = rm_fx_mode_of(asked_v), got = rm_fx_supported(asked, fx_has);
+		const int overlaid = RM_EffectOverlaid(r_metalfx);
 
 		r_metalfx->modified = false;
+
+		/* the user's own value is set back (a NaN to 0); an overlaid one is only read as got */
+		if (rm_fx_writeback(asked_v, got, overlaid, &fx_read))
+		{
+			ri.Cvar_SetValue("r_metalfx", (float)got);
+			r_metalfx->modified = false;
+		}
 
 		if ((float)got != asked_v)
 		{
 			RM_FX_Say((got != asked) && rm_fx_fallback_format("r_metalfx", asked, got,
 					"is not supported on this device, it reads", line, sizeof(line)), line);
-			ri.Cvar_SetValue("r_metalfx", (float)got);
-			r_metalfx->modified = false;
 		}
 
 		/* no ray-traced effect exists before RT3: the denoised scaler runs as the temporal one */

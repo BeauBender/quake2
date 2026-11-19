@@ -498,7 +498,7 @@ RM_RT_Frame(const refdef_t *fd)
 		return;
 	}
 
-	gun = r_rt_gunshadow->value != 0;
+	gun = RM_Effect(r_rt_gunshadow) != 0;
 	ne = r_drawentities->value ? rm_entity_count(fd->num_entities) : 0;
 
 	for (i = 0; i < ne; i++)

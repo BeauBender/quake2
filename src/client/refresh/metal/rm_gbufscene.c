@@ -210,7 +210,7 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 	rmb_gbuf_set_surface((path == RM_GB_PATH_GBUFFER) && RM_RTS_Active());
 
 	/* TASK173: r_rt_flatlight, the preview's flat light in place of the lightmap; only the raster writes it */
-	rmb_gbuf_set_flatlight((path == RM_GB_PATH_GBUFFER) ? rm_gb_flatlight(r_rt_flatlight->value) : 0.0f);
+	rmb_gbuf_set_flatlight((path == RM_GB_PATH_GBUFFER) ? rm_gb_flatlight(RM_Effect(r_rt_flatlight)) : 0.0f);
 
 	if (!rmb_gbuf_view_begin(path, rw, rh, stencil, clear_rgba))
 	{

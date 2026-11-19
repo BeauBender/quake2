@@ -142,10 +142,40 @@ static int rm_presentation = RM_PRES_STOCK;
 static cvar_t *r_retro_filter;
 static cvar_t *r_retro_gamma;
 
+/* TASK195: the tuning harness's B side, "" for A (the client's rt_ab writes it) */
+static cvar_t *r_rt_ab;
+
+const char *
+RM_EffectString(const cvar_t *cv)
+{
+	static char b[RM_AB_MAXVALUE];
+
+	if (r_rt_ab && r_rt_ab->string[0] && rm_ab_value(r_rt_ab->string, cv->name, b, sizeof(b)))
+	{
+		return b;
+	}
+
+	return cv->string;
+}
+
+int
+RM_EffectOverlaid(const cvar_t *cv)
+{
+	return rm_effect_overlaid(rm_presentation, r_rt_ab ? r_rt_ab->string : NULL, cv->name);
+}
+
 float
 RM_Effect(const cvar_t *cv)
 {
-	return rm_pres_value(rm_presentation, cv->name, cv->value);
+	char b[RM_AB_MAXVALUE];
+	float user = cv->value;
+
+	if (r_rt_ab && r_rt_ab->string[0] && rm_ab_value(r_rt_ab->string, cv->name, b, sizeof(b)))
+	{
+		user = (float)strtod(b, NULL);
+	}
+
+	return rm_pres_value(rm_presentation, cv->name, user);
 }
 
 /* gl1's clear colour for r_clear 1 */
@@ -166,6 +196,8 @@ R_Register(void)
 	r_presentation = ri.Cvar_Get("r_presentation", "0", CVAR_ARCHIVE);
 	r_retro_filter = ri.Cvar_Get("r_retro_filter", "0", CVAR_ARCHIVE);
 	r_retro_gamma = ri.Cvar_Get("r_retro_gamma", "0", CVAR_ARCHIVE);
+	r_rt_ab = ri.Cvar_Get("r_rt_ab", "", 0);
+	r_rt_ab->modified = false;   /* the report line is for a flip, not for the start */
 	metal_lightmap_filter = ri.Cvar_Get("metal_lightmap_filter", "0", CVAR_ARCHIVE);
 
 	/* gl1's, by gl1's names and defaults (gl1_main.c, R_Register) */
@@ -510,6 +542,18 @@ RI_BeginFrame(float camera_separation)
 
 	/* without ray tracing an effect switch set since the last frame reads 0 before this one (TASK60) */
 	RM_RTG_Frame();
+
+	/* TASK195: a line each time rt_ab flips the side the scenes read */
+	if (r_rt_ab && r_rt_ab->modified)
+	{
+		char line[160];
+
+		r_rt_ab->modified = false;
+		if (rm_ab_format(r_rt_ab->string, line, sizeof(line)))
+		{
+			R_Printf(PRINT_ALL, "%s\n", line);
+		}
+	}
 
 	/* the layer's displaySyncEnabled, read back by IsVSyncActive (gl1 sets the swap interval) */
 	if (r_vsync->modified)

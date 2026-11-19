@@ -117,7 +117,6 @@ reconnect
 record
 reset
 resetall
-save
 say
 say_team
 serverinfo

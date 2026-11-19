@@ -1066,6 +1066,15 @@ is.
   cut to the whole number below it. Cheat-protected: reset to `0` in
   multiplayer. Applies from the next frame.
 
+* **r_rt_ab**: The B side of the ray-tracing tuning harness's A/B
+  toggle, written by the `rt_ab` and `rt_preset ab` commands and not by
+  hand: empty (the default, and at every start) for A, the player's own
+  settings, else a label and the tuning settings of the B side (every
+  default, or a preset). The Metal renderer reads each tuning setting
+  through it, so B shows without any of those settings being written,
+  and prints a line each time it changes. Not saved with the
+  configuration. Other renderers do not have it.
+
 * **r_rt_available**: A status, set by the Metal renderer when it
   starts: `1` where the device traces rays (its start-up line
   `ref_metal: ray tracing:` names a path), `0` where it does not. The
