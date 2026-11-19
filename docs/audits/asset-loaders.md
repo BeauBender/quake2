@@ -293,13 +293,29 @@ submodel face ranges, the vis offsets) reaches the renderer unchecked. A
 collision fix that refuses a map also protects the renderer, which is why
 several rows below cite FIX3.
 
+Since FIX118 the renderers no longer depend on that order for the lumps.
+Every renderer's `Mod_LoadBrushModel` (gl1, gl3, soft and metal) refuses a
+file shorter than the header, then runs the shared checks in
+`src/client/refresh/files/models.c` before it reads a lump: `Mod_CheckLumps`
+(every lump inside the file and 4-aligned, the node, plane, vertex, edge,
+surfedge and leaf-face counts and the lighting inside the limits, the texinfo
+names terminated and their `nexttexinfo` chains bounded), `Mod_CheckVis` (the
+cluster count and every PVS and PHS offset inside the lump),
+`Mod_CheckNodes` (model 0's head a node, the nodes a tree from node 0 over
+the map's leafs, each node's faces inside the face lump and in one node only)
+and `Mod_CheckFaceEdges` (each face's surfedges inside their lump, each
+surfedge an edge, each edge's vertices inside the vertex lump).
+`tests/check-bsp-loader.sh` refuses a loader that drops one. The rows below
+describe the loaders as audited; where a row says a renderer is safe only
+because of the call order, the shared check now holds by itself.
+
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
 | `Mod_ForName` | first 4 bytes | `LittleLong(*(unsigned *)buf)` format switch | none; `FS_LoadFile` allocates `length + 1`, so a 1 or 2 byte file is read up to 2 bytes past the allocation (a BSP is protected by `CM_LoadMap`; this matters for MD2 and SP2, see the next section) | **defect D7** |
 | `Mod_ForName` | requested name | `strcpy(mod->name, name)` into `MAX_QPATH` | names come from configstrings (at most `MAX_QPATH - 1`) or from `Com_sprintf` into `MAX_QPATH` buffers | ok-by-construction |
 | `Mod_ForName` | `*N` inline model | `&parent_model->submodels[i]` | `if (i < 1 \|\| i >= parent_model->numsubmodels)` | ok |
-| `Mod_LoadBrushModel` | file length | header copy and lump swap over `sizeof(dheader_t)` | none in the renderer; `CM_LoadMap` refuses a file shorter than the header first | ok-by-construction (collision-first order) |
-| `Mod_LoadBrushModel` | every `fileofs`, `filelen` | `mod_base + l->fileofs` in every `Mod_Load*` | none in the renderer; `CMod_CheckLumps` checks the same lumps of the same file first | hardening (safe only because of the call order) |
+| `Mod_LoadBrushModel` | file length | header copy and lump swap over `sizeof(dheader_t)` | `CM_LoadMap` refuses a file shorter than the header first; since FIX118 every renderer's `Mod_LoadBrushModel` refuses it too | ok |
+| `Mod_LoadBrushModel` | every `fileofs`, `filelen` | `mod_base + l->fileofs` in every `Mod_Load*` | since FIX118 `Mod_CheckLumps` (`files/models.c`) in every renderer, before any lump is read; `CMod_CheckLumps` checks the same lumps of the same file first | ok (FIX118; formerly safe only because of the call order) |
 | `Mod_LoadBrushModel` | lump lengths | `hunkSize` sum via `Mod_CalcLumpHunkSize` and `calcTexinfoAndFacesSize` | `int` arithmetic without an overflow test; a lump of several hundred MB wraps the sum and a later `Hunk_Alloc` fails with `Sys_Error` | hardening (fatal error, not memory corruption; carded under FIX17: sum in 64-bit and refuse past a limit) |
 | `Mod_CalcLumpHunkSize`, all `Mod_Load*` | lump length modulo record size | record count | `if (l->filelen % sizeof(*in))` ("funny lump size") | ok |
 | `Mod_LoadVertexes`, `Mod_LoadEdges`, `Mod_LoadSurfedges`, `Mod_LoadPlanes` | counts | array fills through `Hunk_Alloc((count + extra) * size)` | the allocation is sized from the count; there is no upper limit such as `MAX_MAP_SURFEDGES` (the comment "else it errors out later anyway" is not backed by a check; the hunk runs out and `Sys_Error`s) | ok for memory |
