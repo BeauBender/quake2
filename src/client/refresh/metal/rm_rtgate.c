@@ -444,3 +444,65 @@ rm_pres_format(float requested, int mode, int why, char *buf, size_t len)
 	return rtg_put(snprintf(buf, len, "ref_metal: presentation: %s; r_presentation %s reads 0: %s", rm_pres_name(mode),
 			req, (why == RM_PRES_WHY_NORT) ? "no ray tracing on this device" : "not in this build"), buf, len);
 }
+
+int
+rm_ab_value(const char *spec, const char *name, char *out, size_t len)
+{
+	const char *p = spec ? strchr(spec, '|') : NULL;
+	const size_t nlen = name ? strlen(name) : 0;
+
+	if (!p || !nlen || !out || !len)
+	{
+		return 0;
+	}
+
+	for (p++; *p; )
+	{
+		const char *eq = strchr(p, '=');
+		const char *end = strchr(p, ';');
+
+		if (!eq || !end || eq > end)
+		{
+			return 0;   /* not a B side the harness wrote */
+		}
+
+		if (((size_t)(eq - p) == nlen) && !strncmp(p, name, nlen))
+		{
+			const size_t vlen = (size_t)(end - eq - 1);
+
+			if (vlen >= len)
+			{
+				return 0;
+			}
+
+			memcpy(out, eq + 1, vlen);
+			out[vlen] = '\0';
+
+			return 1;
+		}
+
+		p = end + 1;
+	}
+
+	return 0;
+}
+
+int
+rm_ab_format(const char *spec, char *buf, size_t len)
+{
+	const char *bar = spec ? strchr(spec, '|') : NULL;
+	int n = 0;
+
+	if (!bar)
+	{
+		return rtg_put(snprintf(buf, len, "ref_metal: A/B: A: your settings"), buf, len);
+	}
+
+	for (const char *p = bar + 1; *p; p++)
+	{
+		n += (*p == ';');
+	}
+
+	return rtg_put(snprintf(buf, len, "ref_metal: A/B: %.*s (%d settings overlaid, no cvar written)",
+			(int)(bar - spec), spec, n), buf, len);
+}

@@ -123,7 +123,7 @@ RM_RTSun_Angles(float *pitch, float *yaw)
 		return;
 	}
 
-	if (rm_rtsun_parse_angles(r_rt_sun_angles->string, pitch, yaw))
+	if (rm_rtsun_parse_angles(RM_EffectString(r_rt_sun_angles), pitch, yaw))
 	{
 		sun_angles_bad = 0;
 		return;
@@ -302,7 +302,7 @@ RM_RTSun_View(const rm_view_t *view)
 	rm_rtsun_sky_color((const float (*)[3])means, have, sky);
 
 	if (!rm_rtsun_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value, dir, sky,
-			rm_rtsun_scale(r_rt_sunscale->value), rm_rtsun_floor(r_rt_sunfloor->value),
+			rm_rtsun_scale(RM_Effect(r_rt_sunscale)), rm_rtsun_floor(RM_Effect(r_rt_sunfloor)),
 			(unsigned)rm_rtsun_show(r_rt_sun_show->value), &v) ||
 		!rmb_rtsun_prepare((unsigned long)w, (unsigned long)h))
 	{

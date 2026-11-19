@@ -513,6 +513,28 @@ test_pres_format(void)
 	CHECK(!rm_pres_format(1, RM_PRES_ENHANCED, RM_PRES_WHY_OK, small, 0));
 }
 
+/* TASK195: the A/B overlay gives the B value on B, the user's (0) on A, and never a near name */
+static void
+test_ab_overlay(void)
+{
+	const char *b = "B: stock|r_rt_ao=0;r_rt_ao_range=128;r_rt_sun_angles=55 45;";
+	char v[16], line[128];
+
+	CHECK(!rm_ab_value("", "r_rt_ao", v, sizeof(v)));
+	CHECK(!rm_ab_value(NULL, "r_rt_ao", v, sizeof(v)));
+	CHECK(rm_ab_value(b, "r_rt_ao", v, sizeof(v)) && !strcmp(v, "0"));
+	CHECK(rm_ab_value(b, "r_rt_ao_range", v, sizeof(v)) && !strcmp(v, "128"));
+	CHECK(rm_ab_value(b, "r_rt_sun_angles", v, sizeof(v)) && !strcmp(v, "55 45"));
+	CHECK(!rm_ab_value(b, "r_rt_ao_ran", v, sizeof(v)));
+	CHECK(!rm_ab_value(b, "r_rt_sun", v, sizeof(v)));
+	CHECK(!rm_ab_value(b, "r_rt_sun_angles", v, 4));   /* does not fit: the user's stands */
+	CHECK(!rm_ab_value("B: x|broken", "broken", v, sizeof(v)));
+
+	CHECK(rm_ab_format("", line, sizeof(line)) && !strcmp(line, "ref_metal: A/B: A: your settings"));
+	CHECK(rm_ab_format(b, line, sizeof(line)) &&
+		!strcmp(line, "ref_metal: A/B: B: stock (3 settings overlaid, no cvar written)"));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -524,6 +546,7 @@ main(int argc, char **argv)
 	test_pres_decide();
 	test_pres_overlay();
 	test_pres_format();
+	test_ab_overlay();
 
 	test_decide();
 	test_traces();

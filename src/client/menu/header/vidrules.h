@@ -277,4 +277,20 @@ int VidRules_IsPresetCvar(const char *name);
 #define VIDPRESET_MAXNAME 32
 const char *VidRules_PresetNameError(const char *name);
 
+/*
+ * rtpreset.c's commands (TASK195): rt_preset save|load|ab|list and rt_ab.
+ * Save and the loads check the name themselves (VidRules_PresetNameError)
+ * and return 0 when refused or when the file cannot be written or read.
+ * Load writes the tuning cvars and nothing else; LoadAB and AB write none
+ * of them, only r_rt_ab, the B side the renderer overlays. RTPreset_Side
+ * is the side showing: "A: your settings", "B: stock" or "B: preset <name>".
+ */
+void RTPreset_Init(void);
+int RTPreset_Save(const char *name);
+int RTPreset_Load(const char *name);
+int RTPreset_LoadAB(const char *name);
+void RTPreset_AB(void);
+const char *RTPreset_Side(void);
+void RTPreset_SetDir(const char *dir);   /* the tests: NULL is <writedir> */
+
 #endif

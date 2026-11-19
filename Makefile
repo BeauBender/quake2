@@ -1250,6 +1250,7 @@ CLIENT_OBJS_ := \
 	src/client/input/touch.o \
 	src/client/menu/menu.o \
 	src/client/menu/qmenu.o \
+	src/client/menu/rtpreset.o \
 	src/client/menu/vidrules.o \
 	src/client/menu/videomenu.o \
 	src/client/refresh/files/imgdecode.o \
@@ -1881,6 +1882,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_upscale.o \
 	$(TESTDIR)/src/client/input/ingate.o \
 	$(TESTDIR)/src/client/input/touch.o \
+	$(TESTDIR)/src/client/menu/rtpreset.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
 	$(TESTDIR)/src/client/sound/wave.o \
