@@ -632,7 +632,7 @@ rmb_hdr_probe_copy(id<MTLCommandBuffer> cmd, id<MTLTexture> dst)
 	const int f16 = (dst.pixelFormat == MTLPixelFormatRGBA16Float);
 	const NSUInteger bpp = f16 ? 8 : 4;
 	unsigned w = atomic_load(&probe_word);
-	unsigned token;
+	unsigned word;
 
 	if ((rm_probe_state(w) != RM_PROBE_ASKED) || !dst.width || !dst.height)
 	{
@@ -650,9 +650,9 @@ rmb_hdr_probe_copy(id<MTLCommandBuffer> cmd, id<MTLTexture> dst)
 	}
 
 	/* this generation's copy: the word its completion expects */
-	token = rm_probe_word(rm_probe_gen(w), RM_PROBE_COPYING);
+	word = rm_probe_word(rm_probe_gen(w), RM_PROBE_COPYING);
 
-	if (!atomic_compare_exchange_strong(&probe_word, &w, token))
+	if (!atomic_compare_exchange_strong(&probe_word, &w, word))
 	{
 		return;
 	}
@@ -673,12 +673,12 @@ rmb_hdr_probe_copy(id<MTLCommandBuffer> cmd, id<MTLTexture> dst)
 	}
 
 	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
-		unsigned want = token;
+		unsigned want = word;
 
 		(void)b;
 
 		/* RM_PROBE_READ only while the word is still this generation's copy */
-		atomic_compare_exchange_strong(&probe_word, &want, rm_probe_word(rm_probe_gen(token), RM_PROBE_READ));
+		atomic_compare_exchange_strong(&probe_word, &want, rm_probe_word(rm_probe_gen(word), RM_PROBE_READ));
 	}];
 }
 
