@@ -876,7 +876,8 @@ marked `(n/a)` and skipped.
   `0`. This version shows the frame at SDR white still (its tone map
   comes later), turns the MetalFX scalers off with one line, and is
   taken on a display without extended range too. Under the *Retro*
-  presentation (`r_presentation 2`) it reads `0`. The readback of the
+  presentation (`r_presentation 2`) it has no effect (the cvar keeps its
+  value, and the console says so once when it is set). The readback of the
   frame (screenshots, the pins) is the picture clamped to white, in 8
   bits. Only `0` and `1` are values: any other value is `0`. Other
   renderers do not have it. Saved with the configuration; applies from

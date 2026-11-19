@@ -1621,6 +1621,17 @@ void rmb_colorspace_set(int mode);
  */
 void rmb_hdr_set(int active);
 
+/*
+ * A pipeline of the float16 path could not be built (rmb_fmt_pipe, the
+ * present's): r_hdr is off for the session, said once on stderr by the
+ * caller. It takes effect through the next rmb_hdr_set, between frames,
+ * the way a live r_hdr 0 does; the frame that failed is not presented.
+ */
+void rmb_hdr_fail(void);
+
+/* rmb_hdr_fail was called: rmb_hdr_set(1) then leaves the path off */
+int rmb_hdr_failed(void);
+
 /* the float16 path is in force on the layer (the colour targets are RM_FMT_RGBA16F) */
 int rmb_hdr_on(void);
 
@@ -1634,8 +1645,11 @@ int rmb_hdr_info(char *buf, size_t len);
  * The pipeline to draw with into a colour target of the format in force:
  * ps itself on the stock path; on the float16 path its variant with every
  * BGRA8Unorm colour attachment made RGBA16Float, built at its first use
- * from the descriptor rmb_new_render_pipe kept (rmb_resource.m). nil when
- * the variant cannot be built (said once).
+ * from the descriptor rmb_new_render_pipe kept (rmb_resource.m). When the
+ * variant cannot be built it says so once, turns the float16 path off for
+ * the session (rmb_hdr_fail) and returns ps, never nil: that frame's draw
+ * is not presented (the frame and the drawable differ in format), and the
+ * next frame is stock.
  */
 id<MTLRenderPipelineState> rmb_fmt_pipe(id<MTLRenderPipelineState> ps);
 

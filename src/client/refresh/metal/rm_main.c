@@ -203,7 +203,32 @@ R_HdrInfo_f(void)
 static void
 R_HdrFrame(void)
 {
-	const int active = rm_hdr_active(rm_hdr_mode(r_hdr->value), rm_presentation == RM_PRES_RETRO);
+	/* Retro holds r_hdr 1 off; a failed float16 pipeline (rmb_hdr_fail) holds it off for the session */
+	const int asked = rm_hdr_mode(r_hdr->value);
+	const int retro = asked && (rm_presentation == RM_PRES_RETRO);
+	const int active = rm_hdr_active(asked, rm_presentation == RM_PRES_RETRO) && !rmb_hdr_failed();
+	const int live = rm_hdr_applied >= 0;
+	static int retro_said;
+
+	/*
+	 * said on a live change only: neither a stock run nor a start with
+	 * r_hdr 1 prints, so no notify line lands in a recorded frame. The
+	 * Retro line is said once per r_hdr 1 under Retro; it changes nothing
+	 * on the layer, so it sits before the early return.
+	 */
+	if (!retro)
+	{
+		retro_said = 0;
+	}
+	else if (!retro_said)
+	{
+		retro_said = 1;
+
+		if (live)
+		{
+			R_Printf(PRINT_ALL, "ref_metal: hdr: off: Retro is a 16-bit SDR look\n");
+		}
+	}
 
 	if (active == rm_hdr_applied)
 	{
@@ -212,11 +237,7 @@ R_HdrFrame(void)
 
 	rmb_hdr_set(active);
 
-	/*
-	 * said on a live change only: neither a stock run nor a start with
-	 * r_hdr 1 prints, so no notify line lands in a recorded frame
-	 */
-	if (rm_hdr_applied < 0)
+	if (!live)
 	{
 		/* nothing */
 	}
@@ -227,10 +248,6 @@ R_HdrFrame(void)
 	else if (rm_hdr_applied > 0)
 	{
 		R_Printf(PRINT_ALL, "ref_metal: hdr: off\n");
-	}
-	else if (rm_hdr_mode(r_hdr->value))
-	{
-		R_Printf(PRINT_ALL, "ref_metal: hdr: off: Retro is a 16-bit SDR look\n");
 	}
 
 	rm_hdr_applied = active;

@@ -188,10 +188,11 @@ rmb_fmt_pipe(id<MTLRenderPipelineState> ps)
 	if (!told)
 	{
 		told = 1;
-		fprintf(stderr, "ref_metal: hdr: a pipeline's RGBA16Float variant was not built%s%s\n",
+		fprintf(stderr, "ref_metal: hdr: a pipeline's RGBA16Float variant was not built%s%s; r_hdr is off\n",
 				e ? ": " : "", e ? e.localizedDescription.UTF8String : "");
 	}
 
+	rmb_hdr_fail();
 	return ps;
 }
 
@@ -220,8 +221,9 @@ rmb_hdr_simple_pipe(__strong id<MTLRenderPipelineState> *slot, int *tried, NSStr
 		}
 		else
 		{
-			fprintf(stderr, "ref_metal: hdr: the %s pipeline was not built%s%s\n", fs.UTF8String,
+			fprintf(stderr, "ref_metal: hdr: the %s pipeline was not built%s%s; r_hdr is off\n", fs.UTF8String,
 					e ? ": " : "", e ? e.localizedDescription.UTF8String : "");
+			rmb_hdr_fail();
 		}
 	}
 

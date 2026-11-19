@@ -75,7 +75,7 @@ static CGColorSpaceRef rmb_cs_own;   /* the layer's own colour space, kept while
  * set for it (RGBA16Float, extended linear sRGB, EDR), and that colour
  * space while it is on the layer
  */
-static int rmb_hdr_want, rmb_hdr_layer;
+static int rmb_hdr_want, rmb_hdr_layer, rmb_hdr_dead;
 static CGColorSpaceRef rmb_hdr_cs;
 
 /* rmb_encode.m */
@@ -903,8 +903,22 @@ rmb_hdr_apply(void)
 void
 rmb_hdr_set(int active)
 {
-	rmb_hdr_want = active ? 1 : 0;
+	rmb_hdr_want = (active && !rmb_hdr_dead) ? 1 : 0;
 	rmb_hdr_apply();
+}
+
+/* a pipeline of the float16 path could not be built: off for the session, applied by the next rmb_hdr_set (between frames) */
+void
+rmb_hdr_fail(void)
+{
+	rmb_hdr_dead = 1;
+	rmb_hdr_want = 0;
+}
+
+int
+rmb_hdr_failed(void)
+{
+	return rmb_hdr_dead;
 }
 
 int
@@ -927,7 +941,11 @@ rmb_hdr_info(char *buf, size_t len)
 
 		if (n)
 		{
-			CFStringGetCString(n, name, sizeof(name), kCFStringEncodingUTF8);
+			if (!CFStringGetCString(n, name, sizeof(name), kCFStringEncodingUTF8))
+			{
+				snprintf(name, sizeof(name), "unknown");
+			}
+
 			CFRelease(n);
 		}
 		else if (cs)
