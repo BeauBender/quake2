@@ -30,49 +30,96 @@
 /*
 ===================
 Mod_DecompressVis
+
+The run-length row at in, which has inlen bytes of the visibility lump
+left, into row bytes. Neither end is passed: a row whose input ends inside
+it is all visible, as without visibility, and a zero run stops at the
+row's end (ref_metal's rm_decompress_vis decodes the same way).
 ===================
 */
 const byte *
-Mod_DecompressVis(const byte *in, int row)
+Mod_DecompressVis(const byte *in, int inlen, int row)
 {
 	YQ2_ALIGNAS_TYPE(int) static byte decompressed[MAX_MAP_LEAFS / 8];
-	int c;
-	byte *out;
+	int c, i, o;
 
-	out = decompressed;
+	if (row > (int)sizeof(decompressed))
+	{
+		/* Mod_CheckVis allows at most MAX_MAP_LEAFS clusters */
+		row = sizeof(decompressed);
+	}
 
 	if (!in)
 	{
 		/* no vis info, so make all visible */
-		while (row)
-		{
-			*out++ = 0xff;
-			row--;
-		}
-
+		memset(decompressed, 0xff, row);
 		return decompressed;
 	}
 
-	do
+	i = 0;
+	o = 0;
+
+	while (o < row)
 	{
-		if (*in)
+		if (i >= inlen)
 		{
-			*out++ = *in++;
+			break;
+		}
+
+		if (in[i])
+		{
+			decompressed[o++] = in[i++];
 			continue;
 		}
 
-		c = in[1];
-		in += 2;
-
-		while (c)
+		if (i + 1 >= inlen)
 		{
-			*out++ = 0;
+			break;
+		}
+
+		c = in[i + 1];
+		i += 2;
+
+		while (c && (o < row))
+		{
+			decompressed[o++] = 0;
 			c--;
 		}
 	}
-	while (out - decompressed < row);
+
+	if (o < row)
+	{
+		/* the input ended inside the row: everything visible */
+		memset(decompressed, 0xff, row);
+	}
 
 	return decompressed;
+}
+
+/*
+===================
+Mod_ClusterPVSRow
+
+The PVS row of cluster in vis (vislen bytes), or novis for a map without
+visibility and for a cluster outside [0, numclusters): the cluster is a
+leaf's, from the map, and Mod_CheckVis put only the first numclusters
+offsets inside the lump (ref_metal's Mod_ClusterPVS guards the same way).
+===================
+*/
+const byte *
+Mod_ClusterPVSRow(const dvis_t *vis, int vislen, int cluster, const byte *novis)
+{
+	int ofs;
+
+	if (!vis || (cluster < 0) || (cluster >= vis->numclusters))
+	{
+		return novis;
+	}
+
+	ofs = vis->bitofs[cluster][DVIS_PVS];
+
+	return Mod_DecompressVis((const byte *)vis + ofs, vislen - ofs,
+		(vis->numclusters + 7) >> 3);
 }
 
 float
