@@ -153,6 +153,7 @@ run(const char *name, CGColorSpaceRef initial, int counted)
 	/* r_hdr (TASK196) 0 -> 1 -> 0 with metal_colorspace 0 and 1: the colour space is back as it was */
 	for (int mode = 0; mode < 2; mode++)
 	{
+		rmb_hdr_dead = 0;               /* the probe includes rmb_device.m: a failed session is cleared for each case */
 		rmb_colorspace_set(mode);
 		CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
 		CHECK(!rmb_hdr_on());
