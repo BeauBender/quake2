@@ -1780,6 +1780,39 @@ int rm_2d_sharp(float cvar, int smp, int flat_linear);
 int rm_colorspace_mode(float cvar);
 
 /*
+ * r_hdr (TASK196, HD2; docs/plans/hdr-output.md): 1 when the cvar is
+ * exactly 1; 0 for every other value, a value that is not finite included.
+ */
+int rm_hdr_mode(float cvar);
+
+/* the float16 path is taken: r_hdr's mode on, and not under Retro, a 16-bit SDR look (the plan's H5) */
+int rm_hdr_active(int mode, int retro);
+
+/* the colour targets' pixel format: RM_FMT_RGBA16F on the float16 path, RM_FMT_BGRA8 (stock) otherwise */
+#define RM_FMT_BGRA8 80     /* MTLPixelFormatBGRA8Unorm */
+#define RM_FMT_RGBA16F 115  /* MTLPixelFormatRGBA16Float */
+int rm_hdr_format(int active);
+
+/*
+ * A present slot's target (FIX51) is kept for the next frame only at the
+ * frame's size and the colour format in force: a size or a format change
+ * drops every slot, so a live switch back to r_hdr 0 draws into BGRA8 again.
+ */
+int rm_hdr_slot_keep(int fmt, int w, int h, int want_fmt, int want_w, int want_h);
+
+/* the MetalFX mode the view runs: off (RM_FX_OFF) on the float16 path until HD4, the asked one otherwise */
+int rm_hdr_fx_mode(int active, int mode);
+
+/*
+ * metal_hdr_info's line (without a newline): the layer's pixel format
+ * (fmt, an RM_FMT_* or another MTLPixelFormat by number), its colour
+ * space's name (cs, NULL for none), the EDR property, and the display's
+ * headroom now and its potential, each "unavailable" when below 0 or not
+ * finite. 1 when it fits; 0, with buf empty, when it does not.
+ */
+int rm_hdr_info_format(int fmt, const char *cs, int edr, float now, float potential, char *buf, size_t len);
+
+/*
  * Loads ref_metal.metallib from dir and builds the 2D pipeline table and
  * the samplers. 0 with err filled on failure.
  */

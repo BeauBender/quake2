@@ -45,6 +45,7 @@
 #include "../../src/client/refresh/metal/common/mtl_rate.h"
 #include "../../src/client/refresh/metal/common/mtl_ring.h"
 #include "../../src/client/refresh/metal/common/mtl_shader_math.h"
+#include "../../src/client/refresh/metal/common/mtl_hdr_math.h"
 
 /* tests/metal/rm_host_shim.c: the shim's mgl_compute_raster for glViewport(vx, vy, vw, vh) */
 void rm_host_shim_raster(int vx, int vy, int vw, int vh, int tw, int th, double *out);
@@ -8682,10 +8683,100 @@ test_colorspace_mode(void)
 	CHECK(rm_colorspace_mode(INFINITY) == 0);
 }
 
+/*
+ * r_hdr (TASK196, HD2): the mode, the float16 path's gate (off under
+ * Retro), the format, the present slots dropped on a size or a format
+ * change, MetalFX off on the float16 path, metal_hdr_info's line, and the
+ * shaders' arithmetic (common/mtl_hdr_math.h): the extended sRGB decode
+ * and the SDR fallback's clamp and byte.
+ */
+static void
+test_hdr(void)
+{
+	char line[256], small[24];
+	float c;
+	unsigned v;
+	int mono = 1, exact = 1;
+
+	CHECK(rm_hdr_mode(0.0f) == 0);
+	CHECK(rm_hdr_mode(1.0f) == 1);
+	CHECK(rm_hdr_mode(2.0f) == 0);
+	CHECK(rm_hdr_mode(0.5f) == 0);
+	CHECK(rm_hdr_mode(-1.0f) == 0);
+	CHECK(rm_hdr_mode(NAN) == 0);
+	CHECK(rm_hdr_mode(INFINITY) == 0);
+
+	CHECK(rm_hdr_active(0, 0) == 0);
+	CHECK(rm_hdr_active(1, 0) == 1);
+	CHECK(rm_hdr_active(1, 1) == 0);
+	CHECK(rm_hdr_active(0, 1) == 0);
+
+	/* r_hdr 0 is the stock format, exactly */
+	CHECK(rm_hdr_format(0) == RM_FMT_BGRA8);
+	CHECK(rm_hdr_format(1) == RM_FMT_RGBA16F);
+	CHECK(RM_FMT_BGRA8 == 80 && RM_FMT_RGBA16F == 115);
+
+	/* a slot of the old format is dropped, as one of the old size is */
+	CHECK(rm_hdr_slot_keep(RM_FMT_BGRA8, 640, 480, RM_FMT_BGRA8, 640, 480));
+	CHECK(!rm_hdr_slot_keep(RM_FMT_BGRA8, 640, 480, RM_FMT_RGBA16F, 640, 480));
+	CHECK(!rm_hdr_slot_keep(RM_FMT_RGBA16F, 640, 480, RM_FMT_BGRA8, 640, 480));
+	CHECK(!rm_hdr_slot_keep(RM_FMT_BGRA8, 640, 480, RM_FMT_BGRA8, 641, 480));
+	CHECK(!rm_hdr_slot_keep(RM_FMT_BGRA8, 640, 480, RM_FMT_BGRA8, 640, 481));
+
+	/* MetalFX: off on the float16 path, whatever was asked; as asked otherwise */
+	CHECK(rm_hdr_fx_mode(1, 1) == 0);
+	CHECK(rm_hdr_fx_mode(1, 2) == 0);
+	CHECK(rm_hdr_fx_mode(0, 1) == 1);
+	CHECK(rm_hdr_fx_mode(0, 2) == 2);
+	CHECK(rm_hdr_fx_mode(0, 0) == 0);
+
+	CHECK(rm_hdr_info_format(RM_FMT_RGBA16F, "kCGColorSpaceExtendedLinearSRGB", 1, 2.5f, 16.0f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: layer RGBA16Float, colour space kCGColorSpaceExtendedLinearSRGB, "
+			"extended dynamic range on; headroom 2.50 now, 16.00 potential"));
+	CHECK(rm_hdr_info_format(RM_FMT_BGRA8, NULL, 0, -1.0f, NAN, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: layer BGRA8Unorm, colour space none, extended dynamic range off; "
+			"headroom unavailable now, unavailable potential"));
+	CHECK(rm_hdr_info_format(552, "", 0, INFINITY, 1.0f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: layer pixel format 552, colour space none, extended dynamic range off; "
+			"headroom unavailable now, 1.00 potential"));
+	CHECK(!rm_hdr_info_format(RM_FMT_BGRA8, NULL, 0, 1.0f, 1.0f, small, sizeof(small)) && small[0] == '\0');
+	CHECK(!rm_hdr_info_format(RM_FMT_BGRA8, NULL, 0, 1.0f, 1.0f, small, 0));
+
+	/* the decode: 0 and 1 fixed, the linear toe, the 2.4 segment, past 1.0, sign kept, monotonic */
+	CHECK(mtl_hdr_linear(0.0f) == 0.0f);
+	CHECK(fabsf(mtl_hdr_linear(1.0f) - 1.0f) < 1e-6f);
+	CHECK(fabsf(mtl_hdr_linear(0.04045f) - 0.04045f / 12.92f) < 1e-7f);
+	CHECK(fabsf(mtl_hdr_linear(0.5f) - 0.214041f) < 1e-5f);
+	CHECK(fabsf(mtl_hdr_linear(2.0f) - powf(2.055f / 1.055f, 2.4f)) < 1e-5f);
+	CHECK(mtl_hdr_linear(2.0f) > 4.0f);
+	CHECK(mtl_hdr_linear(-0.5f) == -mtl_hdr_linear(0.5f));
+
+	for (c = -2.0f; c < 4.0f; c += 1.0f / 512.0f)
+	{
+		mono &= mtl_hdr_linear(c + 1.0f / 512.0f) > mtl_hdr_linear(c);
+	}
+
+	CHECK(mono);
+
+	/* the SDR fallback: every byte value of the stock path read back as itself; the rest clamped */
+	for (v = 0; v < 256; v++)
+	{
+		exact &= mtl_hdr_byte((float)v / 255.0f) == v;
+	}
+
+	CHECK(exact);
+	CHECK(mtl_hdr_clamp(1.5f) == 1.0f && mtl_hdr_byte(1.5f) == 255);
+	CHECK(mtl_hdr_clamp(-0.25f) == 0.0f && mtl_hdr_byte(-0.25f) == 0);
+	CHECK(mtl_hdr_clamp(NAN) == 0.0f && mtl_hdr_byte(NAN) == 0);
+	CHECK(mtl_hdr_byte(INFINITY) == 255);
+	CHECK(mtl_hdr_byte(0.5f) == 128);
+}
+
 int
 main(void)
 {
 	test_colorspace_mode();
+	test_hdr();
 	test_frames_drain();
 	test_present_drain();
 	test_readback();
