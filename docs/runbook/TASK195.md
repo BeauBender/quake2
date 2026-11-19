@@ -108,24 +108,34 @@ and no AO counter line, as the world was not drawn.
 
 ## Pin comparison at defaults
 
-Not done. Every record, base (`git archive` of main `1c91ecbc`, built in scratch) and branch, ended at
-"failed to load game DLL" (the game module was not built in either tree), so no frame was captured and
-nothing was compared. The lane had used its three timing-lock holds. Next run: `make game` in both trees,
-then `PINS_SEED=1 scripts/pins.sh record metal <scenario>` with `PINS_BIN` for the base, and compare the
-hash of the frames' hashes per scenario. The change at defaults: with `r_rt_ab` empty, `RM_Effect` and
-`RM_EffectString` return what they returned before (the cvar's value under the presentation), and
-`r_metalfx` is read on the same frames as before plus a comparison.
+Base: `git archive` of main `7e29deee`; branch: `task195` after merging that main. Both built with
+`make client game ref_metal`. Every committed scenario but `cinematic` recorded on metal with `PINS_SEED=1`, no
+preset, A side: 25 scenarios, 23 frames each, the hash of the frames' hashes equal base against branch in all 25
+(for example `world` da510450be3a8527, `rt-ao` ef2d8ecdc5f64c77, `rt-water` 9fdbdc338273b39e,
+`world-metalfx3` 0e8074ad234d1f49, `hud2d` 82c4e1a9bfdf550d). Byte-identical.
+
+## Engine run with the world drawn
+
+`+map base1`, `r_rt_ao 1`, `r_rt_stats 2`, 1280x720 windowed. The AO pass line (`ref_metal: rt ao: frame N`):
+
+| step | rays per frame | AO pass |
+|---|---|---|
+| `r_rt_ao_scale 1` | 7313574 | 3.5 to 5.8 ms |
+| `set r_rt_ao_scale 0.5` live | 1828488 (traced at 1280x720, 1/2) | 3.2 ms |
+| `rt_ab` (`rt_ab: B: stock`, `ref_metal: A/B: B: stock (17 settings overlaid, no cvar written)`) | no AO line: stock has AO off | |
+| `rt_ab` again (`A: your settings`) | 1828488, the live value kept | 3.2 ms |
+
+`r_rt_ao_scale` still read "0.5" at the end: the overlay wrote no cvar.
 
 ## Checks
 
-The gate at `e0813699`: `check-video-menu`, `check-ref-metal`, `check-cvar-docs`, `check-doc-links`,
-`check-runbook-index` and `check-no-local-identity` ok; `make test` 396 tests, 2 failed
-(`sv_connectionless_packets`, `sv_rcon_log_line`): the new tests started a fresh cvar table and did not
-put the suite's back, so the server tests after them lost their cvars. Fixed after that run (each test
-puts the table back); the gate has not been run on the fix.
+Gate at the merge of main into `task195`: `test.sh: the gate passed in 799 s`. `check-video-menu`,
+`check-ref-metal`, `check-cvar-docs`, `check-doc-links`, `check-runbook-index` and `check-no-local-identity` ok.
+The suite's cvar table is put back by each new test (the earlier 2 failures are gone).
 
 `check-cvar-docs`: the word "save" in `rt_preset save` documents the upstream command of that name too, so
-its line left `tests/baselines/undocumented-commands.txt`, as the check asks.
+its line left `tests/baselines/undocumented-commands.txt`; restoring it makes the check refuse ("lists commands
+that are now documented or removed; delete these lines: save"), which is its documented rule.
 
 ## Left for slice 2
 
