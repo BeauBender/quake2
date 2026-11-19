@@ -218,13 +218,17 @@ R_HdrInfo_f(void)
 static void
 R_HdrProbe_f(void)
 {
-	if (ri.Cmd_Argc() != 3)
+	int x, y;
+
+	/* each coordinate held to [0, INT_MAX] (rm_hdr_probe_args), so an ask from here never cancels */
+	if ((ri.Cmd_Argc() != 3) || !rm_hdr_probe_args(ri.Cmd_Argv(1), ri.Cmd_Argv(2), &x, &y))
 	{
-		R_Printf(PRINT_ALL, "usage: metal_hdr_probe <x> <y>: one pixel of the drawable, from its top left\n");
+		R_Printf(PRINT_ALL, "usage: metal_hdr_probe <x> <y>: one pixel of the drawable, from its top left "
+				"(whole numbers, held to the drawable's size)\n");
 		return;
 	}
 
-	rmb_hdr_probe_ask((int)strtol(ri.Cmd_Argv(1), NULL, 10), (int)strtol(ri.Cmd_Argv(2), NULL, 10));
+	rmb_hdr_probe_ask(x, y);
 	rm_hdr_probe_wait = 1;
 }
 

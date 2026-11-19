@@ -865,12 +865,41 @@ rm_hdr_probe_format(int fmt, int x, int y, const unsigned char *px, char *buf, s
 			((v[0] > 1.0f) || (v[1] > 1.0f) || (v[2] > 1.0f)) ? "above SDR white" : "at or below SDR white");
 }
 
-/* RED STUB: the old parse ((int)strtol, unclamped) */
+/* one of metal_hdr_probe's coordinates: 1 with v the whole decimal number s held to [0, INT_MAX] */
+static int
+rm_hdr_probe_arg(const char *s, int *v)
+{
+	char *end;
+	long n;
+
+	if (!s || !*s)
+	{
+		return 0;
+	}
+
+	n = strtol(s, &end, 10);   /* out of range: LONG_MIN or LONG_MAX, held below as any other */
+
+	if ((end == s) || (*end != '\0'))
+	{
+		return 0;
+	}
+
+	*v = (n < 0) ? 0 : ((n > INT_MAX) ? INT_MAX : (int)n);
+	return 1;
+}
+
 int
 rm_hdr_probe_args(const char *xs, const char *ys, int *x, int *y)
 {
-	*x = xs ? (int)strtol(xs, NULL, 10) : 0;
-	*y = ys ? (int)strtol(ys, NULL, 10) : 0;
+	int a, b;
+
+	if (!rm_hdr_probe_arg(xs, &a) || !rm_hdr_probe_arg(ys, &b))
+	{
+		return 0;
+	}
+
+	*x = a;
+	*y = b;
 	return 1;
 }
 

@@ -48,7 +48,9 @@ original clients (Vanilla Quake II) commands are still in place.
   nothing.
 
 * **metal_hdr_probe <x> <y>**: The Metal renderer only. Reads the pixel
-  at `x`, `y` (from the top left, held to the drawable's size) of the next
+  at `x`, `y` (whole numbers from the top left, held to the drawable's
+  size, so a negative one reads the first row or column and a huge one the
+  last; anything else prints the usage line) of the next
   frame shown, after the renderer wrote it and before the system displays
   it, and prints its four values (four 16-bit floats under `r_hdr 1`, the
   bytes as fractions of 255 otherwise) and whether a colour component is
