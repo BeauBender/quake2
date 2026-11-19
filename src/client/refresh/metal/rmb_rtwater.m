@@ -737,7 +737,12 @@ rmb_rtw_mark(id<MTLRenderCommandEncoder> enc, int surf)
 	vp.height = view.vp[3];
 	vp.znear = 0.0;
 	vp.zfar = 1.0;
-	[enc setRenderPipelineState:rmb_fmt_pipe(pipe)];
+
+	if (!rmb_fmt_bind(enc, pipe))
+	{
+		return 0;
+	}
+
 	[enc setDepthStencilState:mark_depth];
 	[enc setCullMode:MTLCullModeNone];
 	[enc setViewport:vp];
@@ -1024,7 +1029,11 @@ rmb_rtw_blend(id<MTLRenderCommandEncoder> enc, id<MTLTexture> material)
 		return 0;
 	}
 
-	[enc setRenderPipelineState:rmb_fmt_pipe(view.show ? show_pipe : blend_pipe)];
+	if (!rmb_fmt_bind(enc, view.show ? show_pipe : blend_pipe))
+	{
+		return 0;
+	}
+
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:0];
 	[enc setFragmentTexture:t_refl atIndex:0];
 	[enc setFragmentTexture:material atIndex:1];

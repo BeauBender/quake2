@@ -108,6 +108,8 @@ static NSMapTable *fmt_descs;      /* pipeline -> a copy of its descriptor */
 static NSMapTable *fmt_variants;   /* pipeline -> its RGBA16Float variant, NSNull when it was not built */
 static id<MTLRenderPipelineState> present_hdr_pipe, hdr_read_pipe, tonemap_pipe;
 static int present_hdr_tried, hdr_read_tried, tonemap_tried;
+/* a test seam (FIX133): tests/metal/rmb_cs_probe.m, which includes this file, sets it to refuse every variant build */
+static int fmt_refuse;
 
 #define RMB_COLOR_ATTACHMENTS 8
 
@@ -152,7 +154,7 @@ rmb_fmt_pipe(id<MTLRenderPipelineState> ps)
 
 	if (v)
 	{
-		return (v == [NSNull null]) ? ps : v;
+		return (v == [NSNull null]) ? nil : v;
 	}
 
 	d = [[fmt_descs objectForKey:ps] copy];
@@ -170,7 +172,7 @@ rmb_fmt_pipe(id<MTLRenderPipelineState> ps)
 		}
 	}
 
-	v = [rmb_device newRenderPipelineStateWithDescriptor:d error:&e];
+	v = fmt_refuse ? nil : [rmb_device newRenderPipelineStateWithDescriptor:d error:&e];
 
 	if (!fmt_variants)
 	{
@@ -193,7 +195,21 @@ rmb_fmt_pipe(id<MTLRenderPipelineState> ps)
 	}
 
 	rmb_hdr_fail();
-	return ps;
+	return nil;
+}
+
+int
+rmb_fmt_bind(id<MTLRenderCommandEncoder> enc, id<MTLRenderPipelineState> ps)
+{
+	id<MTLRenderPipelineState> p = rmb_fmt_pipe(ps);
+
+	if (!enc || !p)
+	{
+		return 0;
+	}
+
+	[enc setRenderPipelineState:p];
+	return 1;
 }
 
 /* rm_vertex_alpha's triangle with fragment fs into format, tried once until the pipelines are released */
@@ -674,6 +690,7 @@ rmb_resources_close(void)
 		hdr_read_pipe = nil;
 		tonemap_pipe = nil;
 		present_hdr_tried = hdr_read_tried = tonemap_tried = 0;
+		rmb_hdr_retry();   /* with the caches above, never apart from them (FIX133) */
 
 		for (i = 0; i < RMB_DS_COUNT; i++)
 		{

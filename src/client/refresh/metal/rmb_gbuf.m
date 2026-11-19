@@ -804,13 +804,15 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		/* the resolve that adds the shadowed dynamic lights where they were traced, else the stock one */
 		if (!rmb_rts_resolve(enc, r, sizeof(*r), t_albedo, lt, t_material, t_depth, t_normal))
 		{
-			[enc setRenderPipelineState:rmb_fmt_pipe(resolve_pipe)];
-			[enc setFragmentBytes:r length:sizeof(*r) atIndex:0];
-			[enc setFragmentTexture:t_albedo atIndex:0];
-			[enc setFragmentTexture:lt atIndex:1];
-			[enc setFragmentTexture:t_material atIndex:2];
-			[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-			rmb_counts.draws++;
+			if (rmb_fmt_bind(enc, resolve_pipe))
+			{
+				[enc setFragmentBytes:r length:sizeof(*r) atIndex:0];
+				[enc setFragmentTexture:t_albedo atIndex:0];
+				[enc setFragmentTexture:lt atIndex:1];
+				[enc setFragmentTexture:t_material atIndex:2];
+				[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+				rmb_counts.draws++;
+			}
 		}
 
 		/* r_rt_ao_show's view over the resolve, when the frame traced the AO */
@@ -875,18 +877,21 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 
 			if (enc)
 			{
-				[enc setRenderPipelineState:rmb_fmt_pipe(mvd ? show_mv_pipe : show_gb_pipe)];
-				[enc setFragmentBytes:&u length:sizeof(u) atIndex:0];
-				[enc setFragmentTexture:mvd ? t_motion : t_albedo atIndex:0];
-				[enc setFragmentTexture:mvd ? t_depth : t_normal atIndex:1];
-
-				if (!mvd)
+				if (rmb_fmt_bind(enc, mvd ? show_mv_pipe : show_gb_pipe))
 				{
-					[enc setFragmentTexture:t_material atIndex:2];
-					[enc setFragmentTexture:t_light atIndex:3];
+					[enc setFragmentBytes:&u length:sizeof(u) atIndex:0];
+					[enc setFragmentTexture:mvd ? t_motion : t_albedo atIndex:0];
+					[enc setFragmentTexture:mvd ? t_depth : t_normal atIndex:1];
+
+					if (!mvd)
+					{
+						[enc setFragmentTexture:t_material atIndex:2];
+						[enc setFragmentTexture:t_light atIndex:3];
+					}
+
+					[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 				}
 
-				[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 				rmb_frame_close_pass();
 			}
 		}
@@ -930,7 +935,11 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 		u[6] = (float)((src->x + src->w) / rw);
 		u[7] = (float)((src->y + src->h) / rh);
 
-		[enc setRenderPipelineState:rmb_fmt_pipe(blit_pipe)];
+		if (!rmb_fmt_bind(enc, blit_pipe))
+		{
+			return;
+		}
+
 		[enc setViewport:(MTLViewport){ 0, 0, fw, fh, 0, 1 }];
 		[enc setVertexBytes:u length:sizeof(u) atIndex:0];
 		[enc setFragmentTexture:t_rcolor atIndex:0];
