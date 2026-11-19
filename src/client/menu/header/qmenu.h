@@ -72,6 +72,9 @@ typedef struct _tag_menuframework
 	const char *(*key)(struct _tag_menuframework *m, int k);
 	void (*close)(struct _tag_menuframework *m);
 	void (*cursordraw)(struct _tag_menuframework *m);
+
+	/* 1: the 3D view behind this page is drawn undimmed (TASK194's ray-tracing screen) */
+	int keepview;
 } menuframework_s;
 
 typedef struct
