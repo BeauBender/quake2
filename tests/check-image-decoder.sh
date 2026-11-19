@@ -161,8 +161,10 @@ fi
 
 # (b) no leak on any path, refusals included
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${CHECK_IMAGE_DECODER_REQUIRE:-0}" != 1 ] || { echo "check-image-decoder: CHECK_IMAGE_DECODER_REQUIRE=1 and the leak run cannot run: not Darwin"; exit 1; }
 	echo "check-image-decoder: leaks skipped: not Darwin"
 elif ! command -v leaks >/dev/null 2>&1; then
+	[ "${CHECK_IMAGE_DECODER_REQUIRE:-0}" != 1 ] || { echo "check-image-decoder: CHECK_IMAGE_DECODER_REQUIRE=1 and the leak run cannot run: no leaks(1)"; exit 1; }
 	echo "check-image-decoder: leaks skipped: no leaks(1)"
 else
 	# shellcheck disable=SC2086 # flags, srcs and libs are word lists

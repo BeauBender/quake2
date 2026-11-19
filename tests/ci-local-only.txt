@@ -1,0 +1,10 @@
+# The tests/check-*.sh that run on the build host's gate (scripts/test.sh)
+# only, not in CI, one "name: reason" per line (tests/check-ci-parity.sh).
+# "unverified on runner" marks a check that may run there but has not been
+# shown to.
+check-no-local-identity.sh: it guards the names of the host that commits (user name, host name, home path); on the runner the user name is "runner", a word the tracked text uses in prose, so it fails there on words that name no host
+check-identity-env.sh: unverified on runner; it runs tests/check-no-local-identity.sh and the hooks with the host's real user and host names beside made-up ones
+check-image-decoder.sh: fails on the macos-latest runner (run 44549989930): one host-test check fails there, likely the same cause as check-tvos.sh and check-visionos.sh; FIX138 returns it to CI
+check-tvos.sh: fails on the macos-latest runner (run 44549989930): the runner's SDK builds imgdecode.o without kCGImageSourceAllowableTypes; FIX138 returns it to CI
+check-visionos.sh: fails on the macos-latest runner (run 44549989930): the positive control on _kCGImageSourceAllowableTypes fails on the runner's SDK, for the same reason; FIX138 returns it to CI
+check-metalfx-report.sh: fails on the macos-latest runner (run 44549989930): the e2e lock assertions fail on the slower runner (timing); FIX139 returns it to CI

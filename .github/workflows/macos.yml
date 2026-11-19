@@ -47,16 +47,6 @@ jobs:
       run: |
         # tests/unit against the q2ded objects; no SDL, no game data.
         gmake -j3 test
-    - name: iOS objects
-      run: |
-        # tests/check-ios.sh in its default mode: the client, game and
-        # ref_metal objects for the iOS simulator and the device, the
-        # Info.plist, and the selftests of scripts/ios-sim.sh and
-        # scripts/ios-device.sh. No SDL, no game data, no signing, no
-        # simulator booted, no device; the script sets METAL_SHADERS=no
-        # itself. Without the iOS SDK in the runner's Xcode it prints one
-        # "skipped" line and exits 0; with it, any failure fails the step.
-        tests/check-ios.sh
     - name: Coverage
       run: |
         # Toolchain-only line coverage; fails below scripts/coverage-floor.
@@ -93,3 +83,45 @@ jobs:
         name: quake2-macos-${{github.sha}}
         path: publish/
         if-no-files-found: error
+  invariants_macos:
+    # The gate's invariants (tests/check-*.sh, as scripts/test.sh runs them)
+    # on a free standard runner: every check in tests/ci-checks.txt, through
+    # scripts/ci-checks.sh. tests/ci-local-only.txt names the checks that run
+    # on the build host only, each with its reason; tests/check-ci-parity.sh
+    # keeps the two lists equal to the checks. Among them tests/check-ios.sh:
+    # the client, game and ref_metal objects for the iOS simulator and the
+    # device, no SDL, no game data, no signing, no simulator booted.
+    runs-on: macos-latest
+    permissions:
+      # actions/checkout reads the repository.
+      contents: read
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        # The full history: tests/check-cvar-docs.sh reads the upstream base
+        # commit and fails on a shallow clone (FIX117).
+        fetch-depth: 0
+        # The checks need no token after the checkout.
+        persist-credentials: false
+    - name: Invariants
+      env:
+        # Public runners come with 3 CPUs.
+        GATE_JOBS: 2
+        # A skip that this runner must not take fails the check. The image
+        # is macOS with Xcode: the iOS simulator and device SDKs (the iOS
+        # objects of tests/check-ios.sh were built here before FIX115),
+        # python3 (in tests/check-ios.sh's tool list), cc, bash and /bin/ps.
+        # The full history (fetch-depth: 0 above) holds the upstream commit
+        # that tests/check-cvar-docs-selftest.sh compares against.
+        # Not set: the tvOS and visionOS SDKs, a Metal compiler and a Metal
+        # device, leaks(1), the VideoToolbox model and a working script(1)
+        # pty (CHECK_BENCH_TTY_REQUIRE) are not shown here.
+        CHECK_IOS_REQUIRE: 1
+        CHECK_EVIDENCE_REQUIRE: 1
+        CHECK_AUTORELEASE_POOL_REQUIRE: 1
+        CHECK_STATIC_MODULES_REQUIRE: 1
+        CHECK_BENCH_REQUIRE: 1
+        CHECK_CVAR_DOCS_SELFTEST_REQUIRE: 1
+      run: |
+        scripts/ci-checks.sh

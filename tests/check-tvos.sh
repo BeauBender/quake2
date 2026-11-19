@@ -195,6 +195,7 @@ if [ "$fail" != 0 ]; then
 fi
 
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${CHECK_TVOS_REQUIRE:-0}" != 1 ] || { echo "check-tvos: CHECK_TVOS_REQUIRE=1 and this is not macOS"; exit 1; }
 	echo "check-tvos: skipped: the tvOS build is macOS only (docs/decisions/0008)"
 	exit 0
 fi
@@ -203,10 +204,12 @@ if command -v xcrun >/dev/null 2>&1; then
 	sdk=$(xcrun --sdk appletvsimulator --show-sdk-path 2>/dev/null) || sdk=
 fi
 if [ -z "$sdk" ] || [ ! -f "$sdk/SDKSettings.plist" ]; then
+	[ "${CHECK_TVOS_REQUIRE:-0}" != 1 ] || { echo "check-tvos: CHECK_TVOS_REQUIRE=1 and there is no tvOS simulator SDK (xcrun --sdk appletvsimulator --show-sdk-path)"; exit 1; }
 	echo "check-tvos: skipped: no tvOS simulator SDK (xcrun --sdk appletvsimulator --show-sdk-path)"
 	exit 0
 fi
 if ! xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
+	[ "${CHECK_TVOS_REQUIRE:-0}" != 1 ] || { echo "check-tvos: CHECK_TVOS_REQUIRE=1 and there is no iOS simulator SDK for the object-list comparison"; exit 1; }
 	echo "check-tvos: skipped: no iOS simulator SDK for the object-list comparison"
 	exit 0
 fi

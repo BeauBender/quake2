@@ -60,6 +60,7 @@ export LC_ALL=C
 unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
 
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${CHECK_VISIONOS_REQUIRE:-0}" != 1 ] || { echo "check-visionos: CHECK_VISIONOS_REQUIRE=1 and this is not macOS"; exit 1; }
 	echo "check-visionos: skipped: the visionOS build is macOS only (docs/decisions/0008)"
 	exit 0
 fi
@@ -68,6 +69,7 @@ if command -v xcrun >/dev/null 2>&1; then
 	sdk=$(xcrun --sdk xrsimulator --show-sdk-path 2>/dev/null) || sdk=
 fi
 if [ -z "$sdk" ] || [ ! -f "$sdk/SDKSettings.plist" ]; then
+	[ "${CHECK_VISIONOS_REQUIRE:-0}" != 1 ] || { echo "check-visionos: CHECK_VISIONOS_REQUIRE=1 and there is no visionOS simulator SDK (xcrun --sdk xrsimulator --show-sdk-path)"; exit 1; }
 	echo "check-visionos: skipped: no visionOS simulator SDK (xcrun --sdk xrsimulator --show-sdk-path)"
 	exit 0
 fi
