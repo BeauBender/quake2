@@ -611,9 +611,16 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 	int		i;
 	dheader_t	*header;
 	byte	*mod_base;
+	char	why[256];
 
 	if (mod != mod_known)
 		Com_Error(ERR_DROP, "%s: Loaded a brush model after the world", __func__);
+
+	if (modfilelen < (int)sizeof(dheader_t))
+	{
+		Com_Error(ERR_DROP, "%s: %s: %d bytes, too short for a BSP header",
+				__func__, mod->name, modfilelen);
+	}
 
 	header = (dheader_t *)buffer;
 
@@ -629,6 +636,15 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 
 	for (i=0 ; i<sizeof(dheader_t)/4 ; i++)
 		((int *)header)[i] = LittleLong ( ((int *)header)[i]);
+
+	/* the shared BSP checks, before any lump is read (FIX118) */
+	if (!Mod_CheckLumps(mod_base, header, modfilelen, why, sizeof(why)) ||
+		!Mod_CheckVis(mod_base, header, why, sizeof(why)) ||
+		!Mod_CheckNodes(mod_base, header, why, sizeof(why)) ||
+		!Mod_CheckFaceEdges(mod_base, header, why, sizeof(why)))
+	{
+		Com_Error(ERR_DROP, "%s: %s: %s", __func__, mod->name, why);
+	}
 
 	// calculate the needed hunksize from the lumps
 	int hunkSize = 0;

@@ -997,3 +997,347 @@ Mod_PointInLeaf(const vec3_t p, mnode_t *node)
 
 	return NULL; /* never reached */
 }
+
+/*
+ * The BSP checks every renderer's Mod_LoadBrushModel runs before it reads
+ * a lump (FIX118, from ref_metal's RM_Check*). They read the file in place
+ * (the header swapped, the lumps as stored) and change nothing. Each
+ * returns true when the map passes, or false with the reason in why, and
+ * the caller refuses the map (Com_Error, or ref_metal's RM_Refuse), as
+ * Mod_LoadNodes refuses on Mod_CheckNodeTree's reason. Mod_CheckLumps
+ * runs first: the other three rely on every lump being inside the file.
+ */
+
+/* [first, first + count) inside [0, total], with no overflow */
+static qboolean
+Mod_RangeOk(long first, long count, long total)
+{
+	return (first >= 0) && (count >= 0) && (total >= 0) && (first <= total) &&
+		(count <= total - first);
+}
+
+/* the lump's record count at most limit, or false with why */
+static qboolean
+Mod_LumpCountOk(const dheader_t *header, int lump, size_t size, long limit,
+	const char *what, char *why, size_t whysize)
+{
+	long count = (long)((size_t)header->lumps[lump].filelen / size);
+
+	if (count > limit)
+	{
+		snprintf(why, whysize, "%ld %s, more than %ld", count, what, limit);
+		return false;
+	}
+
+	return true;
+}
+
+/* the next texinfo of an animation chain, or -1 at its end */
+static long
+Mod_TexinfoNext(const int *next, long i)
+{
+	return next[i] > 0 ? next[i] : -1;
+}
+
+/*
+ * Every lump inside the file (its offset 4-aligned: the loaders read the
+ * records' int and float fields in place), the counts the loaders size
+ * their arrays by inside the limits, the lighting inside its limit, the
+ * texinfo names terminated and their animation chains bounded
+ * (Mod_LoadTexinfo prints the name with %s and walks nexttexinfo).
+ */
+qboolean
+Mod_CheckLumps(const byte *mod_base, const dheader_t *header, int len,
+	char *why, size_t whysize)
+{
+	static int next[MAX_MAP_TEXINFO];
+	const lump_t *l;
+	long i, step, steps, count;
+
+	if (len < (int)sizeof(dheader_t))
+	{
+		snprintf(why, whysize, "%d bytes, too short for a BSP header", len);
+		return false;
+	}
+
+	for (i = 0; i < HEADER_LUMPS; i++)
+	{
+		l = &header->lumps[i];
+
+		if ((l->fileofs & 3) || !Mod_RangeOk(l->fileofs, l->filelen, len))
+		{
+			snprintf(why, whysize, "lump %ld (%d bytes at %d) is not inside the %d bytes of the file",
+				i, l->filelen, l->fileofs, len);
+			return false;
+		}
+	}
+
+	if (!Mod_LumpCountOk(header, LUMP_NODES, sizeof(dnode_t), MAX_MAP_NODES, "nodes", why, whysize) ||
+		!Mod_LumpCountOk(header, LUMP_PLANES, sizeof(dplane_t), MAX_MAP_PLANES, "planes", why, whysize) ||
+		!Mod_LumpCountOk(header, LUMP_VERTEXES, sizeof(dvertex_t), MAX_MAP_VERTS, "vertices", why, whysize) ||
+		!Mod_LumpCountOk(header, LUMP_EDGES, sizeof(dedge_t), MAX_MAP_EDGES, "edges", why, whysize) ||
+		!Mod_LumpCountOk(header, LUMP_SURFEDGES, sizeof(int), MAX_MAP_SURFEDGES, "surfedges", why, whysize) ||
+		!Mod_LumpCountOk(header, LUMP_LEAFFACES, sizeof(short), MAX_MAP_LEAFFACES, "leaf faces", why, whysize))
+	{
+		return false;
+	}
+
+	if (header->lumps[LUMP_LIGHTING].filelen > MAX_MAP_LIGHTING)
+	{
+		snprintf(why, whysize, "%d bytes of lighting, more than %d",
+			header->lumps[LUMP_LIGHTING].filelen, MAX_MAP_LIGHTING);
+		return false;
+	}
+
+	l = &header->lumps[LUMP_TEXINFO];
+
+	if ((l->filelen % sizeof(texinfo_t)) == 0)
+	{
+		const texinfo_t *in = (const texinfo_t *)(mod_base + l->fileofs);
+
+		if (!Mod_LumpCountOk(header, LUMP_TEXINFO, sizeof(texinfo_t), MAX_MAP_TEXINFO,
+				"texinfos", why, whysize))
+		{
+			return false;
+		}
+
+		count = (long)((size_t)l->filelen / sizeof(texinfo_t));
+
+		for (i = 0; i < count; i++)
+		{
+			if (!memchr(in[i].texture, 0, sizeof(in[i].texture)))
+			{
+				snprintf(why, whysize, "texinfo %ld has an unterminated texture name", i);
+				return false;
+			}
+
+			next[i] = LittleLong(in[i].nexttexinfo);
+
+			if (next[i] >= count)
+			{
+				snprintf(why, whysize, "a texinfo animation chain leaves the lump or never ends");
+				return false;
+			}
+		}
+
+		/* Mod_LoadTexinfo's count loop: from each texinfo until the chain ends or comes back */
+		for (i = 0; i < count; i++)
+		{
+			for (step = Mod_TexinfoNext(next, i), steps = 0; (step != -1) && (step != i);
+				step = Mod_TexinfoNext(next, step))
+			{
+				if (++steps > count)
+				{
+					snprintf(why, whysize, "a texinfo animation chain leaves the lump or never ends");
+					return false;
+				}
+			}
+		}
+	}
+
+	return true;
+}
+
+/*
+ * The visibility lump: its size inside the limit, room in it for the
+ * numclusters (at most MAX_MAP_LEAFS) offset pairs, and each PVS and PHS
+ * offset inside it (Mod_LoadVisibility swaps them in place, the draw
+ * decompresses from them).
+ */
+qboolean
+Mod_CheckVis(const byte *mod_base, const dheader_t *header, char *why, size_t whysize)
+{
+	const lump_t *l = &header->lumps[LUMP_VISIBILITY];
+	const int *ofs;
+	long numclusters, i;
+
+	if (!l->filelen)
+	{
+		return true;
+	}
+
+	if ((l->filelen > MAX_MAP_VISIBILITY) || (l->filelen < 4))
+	{
+		snprintf(why, whysize, "%d bytes of visibility", l->filelen);
+		return false;
+	}
+
+	ofs = (const int *)(mod_base + l->fileofs);
+	numclusters = LittleLong(ofs[0]);
+
+	if ((numclusters < 0) || (numclusters > MAX_MAP_LEAFS) ||
+		(numclusters > (l->filelen - 4) / 8))
+	{
+		snprintf(why, whysize, "visibility of %ld clusters in %d bytes", numclusters, l->filelen);
+		return false;
+	}
+
+	for (i = 0; i < 2 * numclusters; i++)
+	{
+		long bitofs = LittleLong(ofs[1 + i]);
+
+		if (!Mod_RangeOk(bitofs, 0, l->filelen))
+		{
+			snprintf(why, whysize, "cluster %ld has its visibility at %ld, outside %d bytes",
+				i / 2, bitofs, l->filelen);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/*
+ * The nodes: at least one, model 0's head one of them, a tree from node 0
+ * (every child a leaf of the map, or a node other than 0 with one parent
+ * at most: Mod_SetParent and Mod_NumberLeafs recurse through them and the
+ * draw would chain a node's surfaces once per visit), and each node's
+ * faces inside the face lump and in that node only.
+ */
+qboolean
+Mod_CheckNodes(const byte *mod_base, const dheader_t *header, char *why, size_t whysize)
+{
+	static byte seen[MAX_MAP_NODES];
+	const lump_t *l = &header->lumps[LUMP_NODES];
+	const dnode_t *in = (const dnode_t *)(mod_base + l->fileofs);
+	long numnodes = (long)((size_t)l->filelen / sizeof(dnode_t));
+	long nummodels = (long)((size_t)header->lumps[LUMP_MODELS].filelen / sizeof(dmodel_t));
+	long numleafs = (long)((size_t)header->lumps[LUMP_LEAFS].filelen / sizeof(dleaf_t));
+	long numfaces = (long)((size_t)header->lumps[LUMP_FACES].filelen / sizeof(dface_t));
+	long headnode, i, k;
+	byte *owner;
+	int j;
+
+	headnode = nummodels ? LittleLong(((const dmodel_t *)(mod_base +
+		header->lumps[LUMP_MODELS].fileofs))->headnode) : -1;
+
+	if ((numnodes < 1) || (numnodes > MAX_MAP_NODES) || (nummodels < 1) ||
+		(headnode < 0) || (headnode >= numnodes))
+	{
+		snprintf(why, whysize, "%ld nodes and %ld models, model 0 at node %ld",
+			numnodes, nummodels, headnode);
+		return false;
+	}
+
+	memset(seen, 0, (size_t)numnodes);
+
+	for (i = 0; i < numnodes; i++)
+	{
+		for (j = 0; j < 2; j++)
+		{
+			long c = LittleLong(in[i].children[j]);
+
+			if (c < 0)
+			{
+				/* a leaf, -1 - c; a leaf may have more than one parent */
+				if (-1 - c >= numleafs)
+				{
+					snprintf(why, whysize, "node %ld names leaf %ld, the map has %ld",
+						i, -1 - c, numleafs);
+					return false;
+				}
+
+				continue;
+			}
+
+			/* node 0 is the root; any other node has one parent at most */
+			if ((c == 0) || (c >= numnodes) || seen[c])
+			{
+				snprintf(why, whysize, "the %ld nodes are not a tree from node 0: node %ld names node %ld",
+					numnodes, i, c);
+				return false;
+			}
+
+			seen[c] = 1;
+		}
+	}
+
+	owner = calloc(numfaces ? numfaces : 1, 1);
+
+	if (!owner)
+	{
+		snprintf(why, whysize, "out of memory");
+		return false;
+	}
+
+	for (i = 0; i < numnodes; i++)
+	{
+		/* read as Mod_LoadNodes reads them */
+		long first = LittleShort(in[i].firstface);
+		long count = LittleShort(in[i].numfaces);
+		qboolean ok = Mod_RangeOk(first, count, numfaces);
+
+		for (k = first; ok && (k < first + count); k++)
+		{
+			ok = !owner[k];
+			owner[k] = 1;
+		}
+
+		if (!ok)
+		{
+			free(owner);
+			snprintf(why, whysize, "node %ld has surfaces %ld to %ld of %ld, or one of another node",
+				i, first, first + count, numfaces);
+			return false;
+		}
+	}
+
+	free(owner);
+	return true;
+}
+
+/*
+ * Every face's edges: at least 3, inside the surfedge lump; every
+ * surfedge names an edge, and both vertices of that edge exist (the
+ * extents and the polygon builders index them unchecked).
+ */
+qboolean
+Mod_CheckFaceEdges(const byte *mod_base, const dheader_t *header, char *why, size_t whysize)
+{
+	const lump_t *fl = &header->lumps[LUMP_FACES];
+	const dface_t *in = (const dface_t *)(mod_base + fl->fileofs);
+	const int *surfedges = (const int *)(mod_base + header->lumps[LUMP_SURFEDGES].fileofs);
+	const dedge_t *edges = (const dedge_t *)(mod_base + header->lumps[LUMP_EDGES].fileofs);
+	long numfaces = (long)((size_t)fl->filelen / sizeof(dface_t));
+	long numsurfedges = (long)((size_t)header->lumps[LUMP_SURFEDGES].filelen / sizeof(int));
+	long numedges = (long)((size_t)header->lumps[LUMP_EDGES].filelen / sizeof(dedge_t));
+	long numvertexes = (long)((size_t)header->lumps[LUMP_VERTEXES].filelen / sizeof(dvertex_t));
+	long f, i;
+
+	for (f = 0; f < numfaces; f++)
+	{
+		/* read as the loaders read them */
+		long firstedge = LittleLong(in[f].firstedge);
+		long n = LittleShort(in[f].numedges);
+
+		if ((n < 3) || !Mod_RangeOk(firstedge, n, numsurfedges))
+		{
+			snprintf(why, whysize, "face %ld has %ld edges from %ld, the map has %ld",
+				f, n, firstedge, numsurfedges);
+			return false;
+		}
+
+		for (i = 0; i < n; i++)
+		{
+			long e = LittleLong(surfedges[firstedge + i]);
+			const dedge_t *edge;
+
+			if ((e >= numedges) || (e <= -numedges))
+			{
+				snprintf(why, whysize, "face %ld names edge %ld, the map has %ld", f, e, numedges);
+				return false;
+			}
+
+			edge = &edges[e >= 0 ? e : -e];
+
+			if (((unsigned short)LittleShort(edge->v[0]) >= numvertexes) ||
+				((unsigned short)LittleShort(edge->v[1]) >= numvertexes))
+			{
+				snprintf(why, whysize, "face %ld has an edge past the %ld vertices", f, numvertexes);
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
