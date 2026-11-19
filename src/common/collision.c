@@ -1763,19 +1763,88 @@ CMod_LoadAreaPortals(lump_t *l)
 	memcpy(out, in, sizeof(dareaportal_t) * count);
 }
 
+/*
+ * The visibility lump: empty, or a cluster count in 0..MAX_MAP_LEAFS
+ * whose PVS and PHS offsets all fit the lump and each point inside it
+ * (FIX137, as Mod_CheckVis has it for the renderers): CM_ClusterPVS and
+ * CM_ClusterPHS index the offsets by a leaf's cluster and decompress from
+ * them.
+ */
 static void
-CMod_LoadVisibility(lump_t *l)
+CMod_LoadVisibility(const char *name, lump_t *l)
 {
-	numvisibility = l->filelen;
+	int i;
+
+	numvisibility = 0;
+
+	if (!l->filelen)
+	{
+		map_vis->numclusters = 0;
+		return;
+	}
 
 	if (l->filelen > MAX_MAP_VISIBILITY)
 	{
 		Com_Error(ERR_DROP, "Map has too large visibility lump");
 	}
 
+	if (l->filelen < 4)
+	{
+		Com_Error(ERR_DROP, "%s: Map %s has %d bytes of visibility",
+			__func__, name, l->filelen);
+	}
+
 	memcpy(map_visibility, cmod_base + l->fileofs, l->filelen);
 
 	map_vis->numclusters = LittleLong(map_vis->numclusters);
+
+	if ((map_vis->numclusters < 0) || (map_vis->numclusters > MAX_MAP_LEAFS) ||
+		(map_vis->numclusters > (l->filelen - 4) / 8))
+	{
+		Com_Error(ERR_DROP, "%s: Map %s has visibility of %d clusters in %d bytes",
+			__func__, name, map_vis->numclusters, l->filelen);
+	}
+
+	for (i = 0; i < 2 * map_vis->numclusters; i++)
+	{
+		int ofs = LittleLong(map_vis->bitofs[i / 2][i % 2]);
+
+		if ((ofs < 0) || (ofs > l->filelen))
+		{
+			Com_Error(ERR_DROP, "%s: Map %s cluster %d has its visibility at %d, outside %d bytes",
+				__func__, name, i / 2, ofs, l->filelen);
+		}
+	}
+
+	numvisibility = l->filelen;
+}
+
+/*
+ * With visibility, every leaf's cluster is -1 (none) or one the lump has
+ * offsets for (FIX137, as Mod_CheckLeafs has it): CMod_LoadLeafs raised
+ * numclusters to cover them before the lump was read. Without visibility
+ * every row but -1's is all visible, whatever the cluster.
+ */
+static void
+CMod_CheckLeafClusters(const char *name)
+{
+	int i;
+
+	if (!numvisibility)
+	{
+		return;
+	}
+
+	for (i = 0; i < numleafs; i++)
+	{
+		int cluster = map_leafs[i].cluster;
+
+		if ((cluster != -1) && ((cluster < 0) || (cluster >= map_vis->numclusters)))
+		{
+			Com_Error(ERR_DROP, "%s: Map %s leaf %d has cluster %d, the visibility has %d clusters",
+				__func__, name, i, cluster, map_vis->numclusters);
+		}
+	}
 }
 
 static void
@@ -2038,7 +2107,8 @@ CM_LoadMap(const char *name, qboolean clientload, unsigned *checksum)
 
 	CMod_LoadAreas(&header.lumps[LUMP_AREAS]);
 	CMod_LoadAreaPortals(&header.lumps[LUMP_AREAPORTALS]);
-	CMod_LoadVisibility(&header.lumps[LUMP_VISIBILITY]);
+	CMod_LoadVisibility(name, &header.lumps[LUMP_VISIBILITY]);
+	CMod_CheckLeafClusters(name);
 	/* From kmquake2: adding an extra parameter for .ent support. */
 	CMod_LoadEntityString(&header.lumps[LUMP_ENTITIES], name);
 
@@ -2155,7 +2225,7 @@ CM_DecompressVis(byte *in, byte *out)
 
 	do
 	{
-		if ((in >= end) || (!*in && (end - in < 2)))
+		if ((in < map_visibility) || (in >= end) || (!*in && (end - in < 2)))
 		{
 			/* the input ran out: the rest of the row is visible */
 			while (out_p - out < row)
@@ -2197,6 +2267,11 @@ CM_ClusterPVS(int cluster)
 	{
 		memset(pvsrow, 0, (numclusters + 7) >> 3);
 	}
+	else if (!numvisibility || (cluster < 0) || (cluster >= map_vis->numclusters))
+	{
+		/* no offsets for it: the no-vis row, all visible */
+		CM_DecompressVis(NULL, pvsrow);
+	}
 	else
 	{
 		CM_DecompressVis(map_visibility +
@@ -2213,7 +2288,11 @@ CM_ClusterPHS(int cluster)
 	{
 		memset(phsrow, 0, (numclusters + 7) >> 3);
 	}
-
+	else if (!numvisibility || (cluster < 0) || (cluster >= map_vis->numclusters))
+	{
+		/* no offsets for it: the no-vis row, all visible */
+		CM_DecompressVis(NULL, phsrow);
+	}
 	else
 	{
 		CM_DecompressVis(map_visibility +
