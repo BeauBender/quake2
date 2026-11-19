@@ -2236,7 +2236,7 @@ t_quiet_marker() {
 t_freq() {
 	fresh freq
 	if [ "$(uname -s)" != Darwin ] || ! command -v cc > /dev/null 2>&1; then
-		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || bad "t_freq: CHECK_BENCH_REQUIRE=1 and there is no cc or this is not macOS"
+		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || { bad "t_freq: CHECK_BENCH_REQUIRE=1 and there is no cc or this is not macOS"; return 1; }
 		echo "$me: t_freq skipped: no cc or not macOS"
 		return 0
 	fi
@@ -2287,7 +2287,7 @@ t_snap_system() {
 t_snap_argv() {
 	fresh snapargv
 	if ! command -v bash > /dev/null 2>&1 || [ ! -x /bin/ps ]; then
-		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || bad "t_snap_argv: CHECK_BENCH_REQUIRE=1 and there is no bash or no /bin/ps"
+		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || { bad "t_snap_argv: CHECK_BENCH_REQUIRE=1 and there is no bash or no /bin/ps"; return 1; }
 		echo "$me: t_snap_argv skipped: no bash for exec -a, or no /bin/ps"
 		return 0
 	fi
@@ -2421,7 +2421,7 @@ t_gate_poll() {
 t_probe_first() {
 	fresh probefirst
 	if [ "$(uname -s)" != Darwin ]; then
-		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || bad "t_probe_first: CHECK_BENCH_REQUIRE=1 and this is not macOS"
+		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || { bad "t_probe_first: CHECK_BENCH_REQUIRE=1 and this is not macOS"; return 1; }
 		echo "$me: t_probe_first skipped: not macOS"
 		return 0
 	fi
