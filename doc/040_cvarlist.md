@@ -880,7 +880,10 @@ marked `(n/a)` and skipped.
   extended range, or while the renderer has no headroom reading, the
   peak is `1.0` and the frame is shown clamped at SDR white. This
   version turns the MetalFX scalers off with one line. A live change
-  prints one line with the peak in force. Under the *Retro*
+  prints one line: `off`; or, with a headroom above SDR white, `on` with
+  the peak in force, `r_hdr_peak` and the display's headroom; or, without
+  one, `on, shown at SDR` with the reason (no headroom reading, or no
+  extended range) and no peak. Under the *Retro*
   presentation (`r_presentation 2`) it has no effect (the cvar keeps its
   value, and the console says so once when it is set). The readback of the
   frame (screenshots, the pins) is the picture clamped to white, in 8
@@ -893,7 +896,9 @@ marked `(n/a)` and skipped.
   as white. Held to `1` to `16` (a value outside is taken as the bound),
   and each frame to the display's current headroom, so the peak in force
   is never above what the display can show; with no headroom (or none
-  read) it is `1`, SDR white. A live change prints the peak in force.
+  read) it is `1`, SDR white. A live change while `r_hdr 1` is in force
+  prints `r_hdr`'s line: the peak in force when the display has headroom
+  above SDR white, else that the frame is shown at SDR and why.
   The Metal renderer only; no effect while `r_hdr` is `0` or under the
   *Retro* presentation. Saved with the configuration; applies from the
   next frame. `metal_hdr_info` prints the peak in force.
