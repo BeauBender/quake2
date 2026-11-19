@@ -1580,6 +1580,35 @@ int rmb_hdr_on(void);
 /* metal_hdr_info's line (rm_hdr_info_format), from the layer's state now; 1 when it fits */
 int rmb_hdr_info(char *buf, size_t len);
 
+/*
+ * TASK196 (HD3): the display's headroom now and its potential, each below
+ * 0 when it is unavailable (no reading yet: HD1 reads them).
+ */
+void rmb_hdr_headroom(float *now, float *potential);
+
+/* the peak in force (mtl_hdr_peak; below 1.0 is 1.0) for the tone map and the present, from the next pass that uses it */
+void rmb_hdr_peak_set(float peak);
+
+/*
+ * The tone map (rm_fragment_tonemap, common/mtl_hdr_math.h) over the
+ * rectangle (x, y, w, h) of the float16 frame target, in pixels from its
+ * top left, in place at the Retro pass's seat (rmb_retro_pass): the end of
+ * the 3D view, before the 2D layer. 0, the frame untouched, off the
+ * float16 path, outside a frame, for an empty rectangle or when the
+ * pipeline did not build (rmb_hdr_fail).
+ */
+int rmb_tonemap_pass(int x, int y, int w, int h);
+
+/*
+ * metal_hdr_probe: asks for the pixel (x, y) of the next drawable that is
+ * presented (held to its size), read after the present wrote it; a
+ * negative x or y cancels. rmb_hdr_probe_take gives it once read: 1 with
+ * the drawable's pixel format (fmt), the pixel read and its 8 bytes (an
+ * RGBA16Float pixel; the first 4 of a BGRA8Unorm one), 0 while there is none.
+ */
+void rmb_hdr_probe_ask(int x, int y);
+int rmb_hdr_probe_take(int *fmt, int *x, int *y, unsigned char px[8]);
+
 #ifdef __OBJC__
 #import <Metal/Metal.h>
 
@@ -1601,6 +1630,9 @@ id<MTLRenderPipelineState> rmb_new_render_pipe(MTLRenderPipelineDescriptor *d, N
 /* the float16 path's present (rm_fragment_present_hdr) and SDR readback (rm_fragment_hdr_read), built at first use */
 id<MTLRenderPipelineState> rmb_present_hdr_pipe(void);
 id<MTLRenderPipelineState> rmb_hdr_read_pipe(void);
+
+/* the tone map's pipeline (rm_fragment_tonemap into RGBA16Float, HD3), built at first use */
+id<MTLRenderPipelineState> rmb_tonemap_pipe(void);
 #endif
 
 /* Waits (bounded) for the frames on the GPU and releases the layer and the targets. */
@@ -1801,6 +1833,74 @@ int rm_hdr_fx_mode(int active, int mode);
  * finite. 1 when it fits; 0, with buf empty, when it does not.
  */
 int rm_hdr_info_format(int fmt, const char *cs, int edr, float now, float potential, char *buf, size_t len);
+
+/*
+ * TASK196 (HD3): the report line printed on a live change of r_hdr or
+ * r_hdr_peak (without a newline): "off"; "on, shown at SDR" with the
+ * reason when the headroom now is unavailable or not above 1.0; else
+ * "on" with the peak in force (mtl_hdr_peak of cvar and now), the cvar
+ * and the headroom now and its potential. 1 when it fits; 0, with buf
+ * empty, when it does not.
+ */
+int rm_hdr_report(int active, float cvar, float now, float potential, char *buf, size_t len);
+
+/* metal_hdr_info's second line: the peak in force, r_hdr_peak and the headroom now; as rm_hdr_report */
+int rm_hdr_peak_line(float cvar, float now, char *buf, size_t len);
+
+/* a float16 (IEEE 754 binary16) from its bits, the subnormals, infinities and NaN included */
+float rm_hdr_half(unsigned short h);
+
+/*
+ * metal_hdr_probe's line: the pixel (x, y) of the drawable, its format
+ * (RM_FMT_RGBA16F: px is 8 bytes, four little-endian float16; RM_FMT_BGRA8:
+ * 4 bytes, b g r a; any other: not read) and its four values, and whether
+ * a colour component is above SDR white (1.0). As rm_hdr_report.
+ */
+int rm_hdr_probe_format(int fmt, int x, int y, const unsigned char *px, char *buf, size_t len);
+
+/*
+ * metal_hdr_probe's two arguments: 1 with x and y each a whole decimal
+ * number held to [0, INT_MAX] (a negative one is 0, a huge one INT_MAX,
+ * which the probe then holds to the drawable's size); 0, x and y left
+ * as they are, when either is missing or not a whole number.
+ */
+int rm_hdr_probe_args(const char *xs, const char *ys, int *x, int *y);
+
+/*
+ * The probe's generation and state in one word (rmb_encode.m keeps it in
+ * one atomic and compares and swaps the whole word), so a completion
+ * from before a re-ask never matches the new probe's word: state in the
+ * low 2 bits, generation (30 bits, wrapping) above.
+ */
+#define RM_PROBE_IDLE 0      /* nothing asked */
+#define RM_PROBE_ASKED 1     /* asked, waiting for a present */
+#define RM_PROBE_COPYING 2   /* its copy on the GPU */
+#define RM_PROBE_READ 3      /* the copy's command buffer completed */
+
+static inline unsigned
+rm_probe_word(unsigned gen, int state)
+{
+	return ((gen & 0x3fffffffu) << 2) | ((unsigned)state & 3u);
+}
+
+static inline unsigned
+rm_probe_gen(unsigned w)
+{
+	return w >> 2;
+}
+
+static inline int
+rm_probe_state(unsigned w)
+{
+	return (int)(w & 3u);
+}
+
+/* a new ask (arm) or a cancel: the next generation, asked or idle */
+static inline unsigned
+rm_probe_ask_word(unsigned w, int arm)
+{
+	return rm_probe_word(rm_probe_gen(w) + 1u, arm ? RM_PROBE_ASKED : RM_PROBE_IDLE);
+}
 
 /*
  * Loads ref_metal.metallib from dir and builds the 2D pipeline table and

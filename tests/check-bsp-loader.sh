@@ -130,7 +130,11 @@ check_tree() { # root: 0 when the tree keeps the invariant, 1 with the reasons p
 	# Mod_FreeAll (ref_metal frees its own, RM_FreeUnfinished)
 	for f in src/client/refresh/gl1/gl1_model.c src/client/refresh/gl3/gl3_model.c \
 		src/client/refresh/soft/sw_model.c; do
-		[ -f "$r/$f" ] || continue
+		if [ ! -f "$r/$f" ]; then
+			echo "check-bsp-loader: $f is missing"
+			bad=1
+			continue
+		fi
 		live=$(strip_dead < "$r/$f")
 		for u in Mod_LoadBegin Mod_LoadEnd Mod_ReclaimUnfinished; do
 			if ! printf '%s\n' "$live" | grep -qE "(^|[^A-Za-z0-9_])$u[[:space:]]*\("; then
@@ -138,6 +142,55 @@ check_tree() { # root: 0 when the tree keeps the invariant, 1 with the reasons p
 				bad=1
 			fi
 		done
+	done
+
+	# the reclaim runs first (FIX140): in Mod_ForName before the cached-name
+	# lookup (else a refused load's named slot is returned as a cache hit),
+	# in Mod_FreeAll before the free loop (gl3 names it GL3_Mod_FreeAll)
+	for f in src/client/refresh/gl1/gl1_model.c src/client/refresh/gl3/gl3_model.c \
+		src/client/refresh/soft/sw_model.c; do
+		[ -f "$r/$f" ] || continue
+		live=$(strip_dead < "$r/$f")
+		for fn in Mod_ForName:'strcmp[[:space:]]*\(' Mod_FreeAll:'for[[:space:]]*\('; do
+			name=${fn%%:*}
+			first=${fn#*:}
+			body=$(printf '%s\n' "$live" |
+				sed -n "/^\(GL3_\)\{0,1\}$name[[:space:]]*(/,/^}/p")
+			rec=$(printf '%s\n' "$body" | grep -nE '(^|[^A-Za-z0-9_])Mod_ReclaimUnfinished[[:space:]]*\(' |
+				head -n 1 | cut -d: -f1)
+			look=$(printf '%s\n' "$body" | grep -nE "$first" | head -n 1 | cut -d: -f1)
+			if [ -z "$body" ] || [ -z "$rec" ] || [ -z "$look" ] || [ "$rec" -gt "$look" ]; then
+				echo "check-bsp-loader: $f: $name must call Mod_ReclaimUnfinished before its first $first"
+				bad=1
+			fi
+		done
+	done
+
+	# the load is recorded before the file is read and ended on a miss
+	# (FIX140): in Mod_ForName, Mod_LoadBegin before the first FS_LoadFile
+	# (else a refusal before the read, a missing file with crash set, leaves
+	# a named empty slot nothing reclaims) and Mod_LoadEnd between that
+	# FS_LoadFile and the miss branch's return NULL
+	for f in src/client/refresh/gl1/gl1_model.c src/client/refresh/gl3/gl3_model.c \
+		src/client/refresh/soft/sw_model.c; do
+		[ -f "$r/$f" ] || continue
+		body=$(strip_dead < "$r/$f" |
+			sed -n '/^\(GL3_\)\{0,1\}Mod_ForName[[:space:]]*(/,/^}/p')
+		load=$(printf '%s\n' "$body" | grep -nE '(^|[^A-Za-z0-9_])FS_LoadFile[[:space:]]*\(' |
+			head -n 1 | cut -d: -f1)
+		begin=$(printf '%s\n' "$body" | grep -nE '(^|[^A-Za-z0-9_])Mod_LoadBegin[[:space:]]*\(' |
+			head -n 1 | cut -d: -f1)
+		if [ -z "$load" ] || [ -z "$begin" ] || [ "$begin" -gt "$load" ]; then
+			echo "check-bsp-loader: $f: Mod_ForName must call Mod_LoadBegin before its first FS_LoadFile"
+			bad=1
+			continue
+		fi
+		miss=$(printf '%s\n' "$body" | awk -v l="$load" 'NR > l && /(^|[^A-Za-z0-9_])return[[:space:]]+NULL/ { print NR; exit }')
+		end=$(printf '%s\n' "$body" | awk -v l="$load" 'NR > l && /(^|[^A-Za-z0-9_])Mod_LoadEnd[[:space:]]*\(/ { print NR; exit }')
+		if [ -z "$miss" ] || [ -z "$end" ] || [ "$end" -gt "$miss" ]; then
+			echo "check-bsp-loader: $f: Mod_ForName must call Mod_LoadEnd between its FS_LoadFile and the miss return NULL"
+			bad=1
+		fi
 	done
 
 	# no definition of the forked loaders outside the four known files
@@ -253,4 +306,41 @@ mutate "${tmp:?}/void" src/client/refresh/metal/rm_model.c "" \
 expect_refused "metal discarding Mod_CheckNodes" "${tmp:?}/void"
 expect_reason "(void)" "rm_model.c: Mod_LoadBrushModel discards the result of Mod_CheckNodes"
 
-echo "check-bsp-loader: OK (4 loaders call the shared checks first; 6 mutants refused)"
+# the reclaim moved below the cached-name lookup of gl1's Mod_ForName
+copy "${tmp:?}/late-reclaim"
+awk '/^Mod_ForName/ { inb = 1 }
+	inb && /^\tMod_ReclaimUnfinished\(/ { held = $0; next }
+	inb && /^\t\/\* find a free model slot spot \*\// && held != "" { print held; held = ""; inb = 0 }
+	{ print }' "$root/src/client/refresh/gl1/gl1_model.c" > "${tmp:?}/late-reclaim/src/client/refresh/gl1/gl1_model.c"
+cmp -s "$root/src/client/refresh/gl1/gl1_model.c" "${tmp:?}/late-reclaim/src/client/refresh/gl1/gl1_model.c" &&
+	{ echo "check-bsp-loader: selftest: the late-reclaim mutant changed nothing"; exit 1; }
+expect_refused "gl1 reclaiming after the cached-name lookup" "${tmp:?}/late-reclaim"
+expect_reason "late reclaim" "gl1_model.c: Mod_ForName must call Mod_ReclaimUnfinished before"
+
+# Mod_ForName's early record dropped from gl1 (FIX140)
+copy "${tmp:?}/nobegin"
+awk '/^Mod_ForName/ { inb = 1 }
+	inb && /^\tMod_LoadBegin\(mod, NULL\);/ { inb = 0; next }
+	{ print }' "$root/src/client/refresh/gl1/gl1_model.c" > "${tmp:?}/nobegin/src/client/refresh/gl1/gl1_model.c"
+cmp -s "$root/src/client/refresh/gl1/gl1_model.c" "${tmp:?}/nobegin/src/client/refresh/gl1/gl1_model.c" &&
+	{ echo "check-bsp-loader: selftest: the no-begin mutant changed nothing"; exit 1; }
+expect_refused "gl1 without the early Mod_LoadBegin" "${tmp:?}/nobegin"
+expect_reason "no begin" "gl1_model.c: Mod_ForName must call Mod_LoadBegin before"
+
+# Mod_LoadEnd dropped from the miss branch of gl3's Mod_ForName (FIX140)
+copy "${tmp:?}/noend"
+awk '/^Mod_ForName/ { inb = 1 }
+	inb && /^\t\tMod_LoadEnd\(\);/ { inb = 0; next }
+	{ print }' "$root/src/client/refresh/gl3/gl3_model.c" > "${tmp:?}/noend/src/client/refresh/gl3/gl3_model.c"
+cmp -s "$root/src/client/refresh/gl3/gl3_model.c" "${tmp:?}/noend/src/client/refresh/gl3/gl3_model.c" &&
+	{ echo "check-bsp-loader: selftest: the no-end mutant changed nothing"; exit 1; }
+expect_refused "gl3 without Mod_LoadEnd on the miss" "${tmp:?}/noend"
+expect_reason "no end" "gl3_model.c: Mod_ForName must call Mod_LoadEnd between"
+
+# a renderer's loader file missing
+copy "${tmp:?}/nofile"
+rm "${tmp:?}/nofile/src/client/refresh/soft/sw_model.c"
+expect_refused "a missing loader file" "${tmp:?}/nofile"
+expect_reason "missing file" "sw_model.c is missing"
+
+echo "check-bsp-loader: OK (4 loaders call the shared checks first; 10 mutants refused)"
