@@ -852,13 +852,14 @@ else
 		# sets NULL, 1 -> 0 leaves the colour space on the layer, detach leaves it too; FIX133: a
 		# float16 variant that was not built hands back the stock pipeline (fmtstock), a drawable
 		# nothing wrote is presented (unwritten), the frame of a failed variant is presented
-		# (failframe), the failure outlives rmb_attach (hdrdead)
+		# (failframe), rmb_attach clears the failure while its caches stay (hdrattach), the close
+		# empties the caches and keeps the failure (hdrkept)
 		probe_mutants=0
-		for m in nulled kept detached unretained fmtstock unwritten failframe hdrdead; do
+		for m in nulled kept detached unretained fmtstock unwritten failframe hdrattach hdrkept; do
 			rm -rf "${tmp:?}/csmut"
 			mkdir "${tmp:?}/csmut"
 			case $m in
-				fmtstock) mf=rmb_resource.m ;;
+				fmtstock|hdrkept) mf=rmb_resource.m ;;
 				*) mf=rmb_device.m ;;
 			esac
 			case $m in
@@ -869,7 +870,8 @@ else
 				fmtstock) sed 's|return (v == \[NSNull null\]) ? nil : v;|return (v == [NSNull null]) ? ps : v;|' "$rm_dir/$mf" ;;
 				unwritten) sed 's|if (!cmd \|\| !drawable \|\| !region)|if (!cmd \|\| !drawable \|\| (region < 0))|' "$rm_dir/$mf" ;;
 				failframe) sed 's|(hdr \&\& (!have_pso \|\| rmb_hdr_dead))|(hdr \&\& !have_pso)|' "$rm_dir/$mf" ;;
-				hdrdead) sed 's|rmb_hdr_dead = 0;   /\* a failed float16 path|(void)0;   /* a failed float16 path|' "$rm_dir/$mf" ;;
+				hdrattach) sed 's|rmb_detach();   /\* a failed float16 path stays off|rmb_detach(); rmb_hdr_dead = 0;   /* a failed float16 path stays off|' "$rm_dir/$mf" ;;
+				hdrkept) sed 's|rmb_hdr_retry();   /\* with the caches|(void)0;   /* with the caches|' "$rm_dir/$mf" ;;
 			esac > "${tmp:?}/csmut/$mf"
 			if cmp -s "$rm_dir/$mf" "${tmp:?}/csmut/$mf"; then
 				bad "the colour-space mutant ($m) of $mf changed nothing"

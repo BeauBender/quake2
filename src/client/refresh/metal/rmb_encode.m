@@ -902,8 +902,10 @@ rmb_present_inset_set(const rm_inset_t *in)
  * FIX51: the frame onto the drawable of a layer that is not opaque, in one
  * pass: the frame's rows of r with alpha 1 (rm_fragment_present), the rest
  * of the drawable black, as the copy and FIX53's alpha pass leave it.
+ * Returns 0 when pso could not be bound (rmb_fmt_bind): nothing was drawn,
+ * and the drawable is not presented (FIX133).
  */
-static void
+static int
 rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MTLTexture> dst, const rm_present_t *r)
 {
 	MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -921,7 +923,7 @@ rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MT
 	if (!rmb_fmt_bind(enc, pso))
 	{
 		[enc endEncoding];
-		return;
+		return 0;
 	}
 
 	[enc setViewport:vp];
@@ -936,6 +938,7 @@ rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MT
 
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	[enc endEncoding];
+	return 1;
 }
 
 void
@@ -1007,7 +1010,10 @@ rmb_frame_end(void)
 			if (region && pso)
 			{
 				/* a layer that is not opaque: the copy and the alpha 1 of FIX53 in one pass (FIX51) */
-				rmb_present_pass(pcmd, pso, dst, &r);
+				if (!rmb_present_pass(pcmd, pso, dst, &r))
+				{
+					region = 0;   /* nothing written: not presented */
+				}
 			}
 			else if (region)
 			{

@@ -127,7 +127,8 @@ count_of(CGColorSpaceRef cs)
  * FIX133: with the float16 path on, a pipeline whose RGBA16Float variant is
  * not built (fmt_refuse) is never handed back or bound (rmb_fmt_pipe nil,
  * rmb_fmt_bind 0 and no bind), that frame presents nothing, and HDR is off
- * at the next rmb_hdr_set until rmb_attach, which tries it again. ps stands
+ * at the next rmb_hdr_set until the next renderer start (rmb_resources_close,
+ * then rmb_attach), which tries it again; an attach alone keeps it off. ps stands
  * for a stock pipeline: an object with the descriptor rmb_new_render_pipe
  * would have kept for it.
  */
@@ -181,17 +182,36 @@ hdr_fail_case(CAMetalLayer *layer, int mode)
 	CHECK(!rmb_hdr_on());
 	CHECK(!mode || is_srgb(layer));
 	rmb_hdr_set(1);
-	CHECK(!rmb_hdr_on());                          /* off until the next attach */
+	CHECK(!rmb_hdr_on());                          /* off until the next renderer start */
 
-	/* gap 3: a detach and an attach (vid_restart) try the float16 path again */
+	/*
+	 * gap 3: a detach and an attach without rmb_resources_close keep the failure with the caches
+	 * that remember it (ps's NSNull): r_hdr 1 stays off, and no draw meets a nil pipeline while on
+	 */
 	rmb_detach();
 	CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
-	CHECK(!rmb_hdr_failed());
+	CHECK(rmb_hdr_failed());
+	rmb_hdr_set(1);
+	CHECK(!rmb_hdr_on());
+	CHECK((rmb_fmt_pipe(ps) != nil) || !rmb_hdr_on());
+	CHECK(layer.pixelFormat == MTLPixelFormatBGRA8Unorm);
+
+	/* the close and the next open (vid_restart): the flag and the caches reset together, the path is tried again */
+	rmb_detach();
+	rmb_resources_close();
+	CHECK(!rmb_hdr_failed() && ([fmt_variants objectForKey:ps_obj] == nil));
+	CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
 	rmb_hdr_set(1);
 	CHECK(rmb_hdr_on());
 	CHECK(layer.pixelFormat == MTLPixelFormatRGBA16Float);
+	fmt_descs = [NSMapTable weakToStrongObjectsMapTable];
+	[fmt_descs setObject:d forKey:ps_obj];
+	fmt_refuse = 1;
+	CHECK((rmb_fmt_pipe(ps) == nil) && rmb_hdr_failed());   /* built again, not the cached failure */
+	fmt_refuse = 0;
 	rmb_hdr_set(0);
 	rmb_detach();
+	rmb_resources_close();
 	rmb_colorspace_set(0);
 }
 
@@ -276,9 +296,15 @@ run(const char *name, CGColorSpaceRef initial, int counted)
 		CHECK(same_as(layer, at_attach));
 		rmb_colorspace_set(0);
 
-		/* FIX133: the failure is off until the next renderer start, which tries the float16 path again */
+		/* FIX133: the failure outlasts an attach; it is off until the next renderer start (rmb_resources_close) */
 		CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
+		CHECK(rmb_hdr_failed());
+		rmb_hdr_set(1);
+		CHECK(!rmb_hdr_on());
+		rmb_detach();
+		rmb_resources_close();
 		CHECK(!rmb_hdr_failed());
+		CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
 		rmb_hdr_set(1);
 		CHECK(rmb_hdr_on());
 		rmb_hdr_set(0);
