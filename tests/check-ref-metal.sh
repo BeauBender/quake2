@@ -867,7 +867,7 @@ else
 				unretained) sed 's|CGColorSpaceRetain(rmb_cs_own);|(void)0;|' "$rm_dir/$mf" ;;
 				detached) sed 's|rmb_cs_release();   /\* the view|(void)0;   /* the view|' "$rm_dir/$mf" ;;
 				fmtstock) sed 's|return (v == \[NSNull null\]) ? nil : v;|return (v == [NSNull null]) ? ps : v;|' "$rm_dir/$mf" ;;
-				unwritten) sed 's|if (!cmd \|\| !drawable \|\| !region)|if (!cmd \|\| !drawable)|' "$rm_dir/$mf" ;;
+				unwritten) sed 's|if (!cmd \|\| !drawable \|\| !region)|if (!cmd \|\| !drawable \|\| (region < 0))|' "$rm_dir/$mf" ;;
 				failframe) sed 's|(hdr \&\& (!have_pso \|\| rmb_hdr_dead))|(hdr \&\& !have_pso)|' "$rm_dir/$mf" ;;
 				hdrdead) sed 's|rmb_hdr_dead = 0;   /\* a failed float16 path|(void)0;   /* a failed float16 path|' "$rm_dir/$mf" ;;
 			esac > "${tmp:?}/csmut/$mf"

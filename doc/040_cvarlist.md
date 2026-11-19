@@ -887,7 +887,11 @@ marked `(n/a)` and skipped.
   presentation (`r_presentation 2`) it has no effect (the cvar keeps its
   value, and the console says so once when it is set). The readback of the
   frame (screenshots, the pins) is the picture clamped to white, in 8
-  bits. Only `0` and `1` are values: any other value is `0`. Other
+  bits. Only `0` and `1` are values: any other value is `0`. When the
+  device cannot build a pipeline of the 16-bit path it says so with one
+  line, the frame that needed it is not shown, and `1` draws as `0`
+  until the next renderer start (`vid_restart`), which tries the 16-bit
+  path again. Other
   renderers do not have it. Saved with the configuration; applies from
   the next frame. `metal_hdr_info` prints the layer's state.
 

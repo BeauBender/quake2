@@ -1623,7 +1623,8 @@ void rmb_hdr_set(int active);
 
 /*
  * A pipeline of the float16 path could not be built (rmb_fmt_pipe, the
- * present's): r_hdr is off for the session, said once on stderr by the
+ * present's): r_hdr is off until the next rmb_attach (a renderer start,
+ * which tries it again, FIX133), said once on stderr by the
  * caller. It takes effect through the next rmb_hdr_set, between frames,
  * the way a live r_hdr 0 does; the frame that failed is not presented.
  */
