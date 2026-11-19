@@ -402,6 +402,16 @@ t_expect_exit(void (*fn)(void *), void *arg, char *out, size_t outlen)
 		return T_EXIT_TIMEOUT;
 	}
 
+	if (WIFSIGNALED(status))
+	{
+		/* A child killed by a signal (SIGABRT from a sanitizer report, a
+		   crash) fails the test and its output, which holds the report,
+		   reaches the log. The return value stays -1. */
+		t_fail(__FILE__, __LINE__, "forked child killed by signal %d; its output:\n%s",
+			WTERMSIG(status), out);
+		return -1;
+	}
+
 	if (!WIFEXITED(status))
 	{
 		return -1;
