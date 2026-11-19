@@ -62,6 +62,17 @@ typedef struct
 	int nportals;
 	const byte *vistail;	/* the last bytes of the visibility lump */
 	int nvistail;
+	/* the face lumps (FIX118), written when nfaces is set */
+	dface_t faces[2];
+	int nfaces;
+	int surfedges[8];
+	int nsurfedges;
+	dedge_t edges[8];
+	int nedges;
+	dvertex_t verts[4];
+	int nverts;
+	int vis[8];		/* a small visibility lump, written when nvis is set */
+	int nvis;
 } gmap_t;
 
 static gmap_t g;
@@ -177,6 +188,19 @@ g_build(void)
 	LUMP(LUMP_BRUSHSIDES, &side, (int)sizeof(side));
 	LUMP(LUMP_AREAS, &area, (int)sizeof(area));
 	LUMP(LUMP_AREAPORTALS, g.portals, g.nportals * (int)sizeof(dareaportal_t));
+
+	if (g.nfaces)
+	{
+		LUMP(LUMP_FACES, g.faces, g.nfaces * (int)sizeof(dface_t));
+		LUMP(LUMP_SURFEDGES, g.surfedges, g.nsurfedges * (int)sizeof(int));
+		LUMP(LUMP_EDGES, g.edges, g.nedges * (int)sizeof(dedge_t));
+		LUMP(LUMP_VERTEXES, g.verts, g.nverts * (int)sizeof(dvertex_t));
+	}
+
+	if (g.nvis)
+	{
+		LUMP(LUMP_VISIBILITY, g.vis, g.nvis * (int)sizeof(int));
+	}
 
 #undef LUMP
 
@@ -572,4 +596,169 @@ TEST(bspgraph_areaportal_bound)
 	T_CONSOLE_HAS("areaportal > numareaportals");
 	T_EXPECT_DROP(CM_SetAreaPortalState(-1, true));
 	CM_SetAreaPortalState(2, false);
+}
+
+/*
+ * The shared BSP checks (FIX118) every renderer's Mod_LoadBrushModel runs
+ * before it reads a lump, in its order: the lumps, the visibility, the
+ * nodes, the face edges. The stock shape gets one triangle (face 0 of
+ * node 0) and a two-cluster visibility lump; each hostile map breaks one
+ * bound and is refused by its check with the reason, the checks before
+ * it passing.
+ */
+static char c_why[256];
+
+/* the index of the check that refuses gbuf, or 4 when all four pass */
+static int
+c_check(int len)
+{
+	const dheader_t *h = (const dheader_t *)gbuf;
+
+	c_why[0] = '\0';
+
+	if (!Mod_CheckLumps(gbuf, h, len, c_why, sizeof(c_why)))
+	{
+		return 0;
+	}
+
+	if (!Mod_CheckVis(gbuf, h, c_why, sizeof(c_why)))
+	{
+		return 1;
+	}
+
+	if (!Mod_CheckNodes(gbuf, h, c_why, sizeof(c_why)))
+	{
+		return 2;
+	}
+
+	if (!Mod_CheckFaceEdges(gbuf, h, c_why, sizeof(c_why)))
+	{
+		return 3;
+	}
+
+	return 4;
+}
+
+static void
+c_default(void)
+{
+	g_default();
+	g.nverts = 3;
+	g.edges[1].v[0] = 0;
+	g.edges[1].v[1] = 1;
+	g.edges[2].v[0] = 1;
+	g.edges[2].v[1] = 2;
+	g.edges[3].v[0] = 2;
+	g.edges[3].v[1] = 0;
+	g.nedges = 4;	/* edge 0 is unused, as in every stock map */
+	g.surfedges[0] = 1;
+	g.surfedges[1] = 2;
+	g.surfedges[2] = -3;
+	g.nsurfedges = 3;
+	g.faces[0].firstedge = 0;
+	g.faces[0].numedges = 3;
+	g.nfaces = 1;
+	g.nodes[0].firstface = 0;
+	g.nodes[0].numfaces = 1;
+	/* two clusters in 24 bytes: the offsets, then one byte of each row */
+	g.vis[0] = 2;
+	g.vis[1] = 20;
+	g.vis[2] = 21;
+	g.vis[3] = 22;
+	g.vis[4] = 23;
+	g.nvis = 6;
+}
+
+#define C_REFUSED(LEN, CHECK, WHY) \
+	do { \
+		T_EQ_INT(c_check(LEN), (CHECK)); \
+		if (!strstr(c_why, (WHY))) \
+		{ \
+			t_fail(__FILE__, __LINE__, "reason: %s", c_why); \
+		} \
+	} while (0)
+
+TEST(bspcheck_stock_shape_passes)
+{
+	c_default();
+	T_EQ_INT(c_check(g_build()), 4);
+	T_EQ_STR(c_why, "");
+}
+
+TEST(bspcheck_lump_past_file_end)
+{
+	int len;
+
+	c_default();
+	len = g_build();
+	((dheader_t *)gbuf)->lumps[LUMP_LEAFS].filelen = len;
+	C_REFUSED(len, 0, "lump 8 (");
+
+	/* the file cut 4 bytes short: its last lump passes the end */
+	c_default();
+	len = g_build();
+	C_REFUSED(len - 4, 0, "is not inside the");
+
+	/* a lump at an offset that is not 4-aligned */
+	c_default();
+	len = g_build();
+	((dheader_t *)gbuf)->lumps[LUMP_PLANES].fileofs += 2;
+	C_REFUSED(len, 0, "lump 1 (");
+
+	/* a header cut short */
+	C_REFUSED((int)sizeof(dheader_t) - 1, 0, "too short for a BSP header");
+}
+
+TEST(bspcheck_vis_offset_past_lump)
+{
+	c_default();
+	g.vis[3] = 25;	/* the PVS of cluster 1 at 25 of 24 bytes */
+	C_REFUSED(g_build(), 1, "cluster 1 has its visibility at 25, outside 24 bytes");
+
+	c_default();
+	g.vis[0] = 3;	/* three clusters' offsets do not fit in 24 bytes */
+	C_REFUSED(g_build(), 1, "visibility of 3 clusters in 24 bytes");
+}
+
+TEST(bspcheck_node_child_out_of_range)
+{
+	c_default();
+	g_node(1, 1, LEAF(2), 3);	/* node 3 of 3 */
+	C_REFUSED(g_build(), 2, "node 1 names node 3");
+
+	c_default();
+	g_node(1, 1, LEAF(6), LEAF(3));	/* leaf 6 of 6 */
+	C_REFUSED(g_build(), 2, "node 1 names leaf 6, the map has 6");
+
+	c_default();
+	g.nodes[1].firstface = 0;	/* face 0 in node 0 and node 1 */
+	g.nodes[1].numfaces = 1;
+	C_REFUSED(g_build(), 2, "node 1 has surfaces 0 to 1 of 1, or one of another node");
+
+	c_default();
+	g.nodes[0].numfaces = 2;	/* faces 0 and 1 of 1 */
+	C_REFUSED(g_build(), 2, "node 0 has surfaces 0 to 2 of 1");
+
+	c_default();
+	g.models[0].headnode = 3;	/* model 0 at node 3 of 3 */
+	C_REFUSED(g_build(), 2, "3 nodes and 2 models, model 0 at node 3");
+}
+
+TEST(bspcheck_face_edges_past_surfedges)
+{
+	c_default();
+	g.faces[0].firstedge = 1;	/* surfedges 1 to 3 of 3 */
+	C_REFUSED(g_build(), 3, "face 0 has 3 edges from 1, the map has 3");
+
+	c_default();
+	g.faces[0].numedges = 2;	/* fewer than 3 */
+	C_REFUSED(g_build(), 3, "face 0 has 2 edges from 0");
+
+	c_default();
+	g.surfedges[2] = -4;	/* edge 4 of 4 */
+	C_REFUSED(g_build(), 3, "face 0 names edge -4, the map has 4");
+
+	c_default();
+	g.edges[3].v[0] = 3;	/* vertex 3 of 3 */
+	C_REFUSED(g_build(), 3, "face 0 has an edge past the 3 vertices");
 }
