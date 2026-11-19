@@ -86,3 +86,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK194](../runbook/TASK194.md): Video options > Ray tracing on the ray-tracing Mac: each effect on and off live, each slider moved, the values read back after a restart
 - [FIX126](../runbook/FIX126.md): t_settle reads the readings and naps the settle took, not the put's wall time, so a starved host no longer turns it red
 - [TASK183](../runbook/TASK183.md): the presentation setting (Stock, Enhanced, Ray traced, Retro): report lines and cvar read-backs at each mode, the mutant table, and the base-against-branch pin comparison
+- [FIX102](../runbook/FIX102.md): a pin record's capture stall stays out of the timedemo clock, so 5K records with a temporal scaler repeat byte for byte
