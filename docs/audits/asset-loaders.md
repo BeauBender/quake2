@@ -16,6 +16,20 @@ became `image.c` and its `LoadSTB` became `LoadDecoded`, which decodes through
 `imgdecode.c` (ImageIO) instead of `stb_image.h`. The text below is the audit
 as written and still names the old file and function.
 
+Note, 2026-11-19 (FIX138): what keeps ImageIO to the file's type in
+`imgdecode.c` depends on the SDK. With a 27.0 SDK on a 27.0 system the image
+source is created with `kCGImageSourceAllowableTypes` set to the extension's
+one type, so ImageIO itself refuses any other format. An older SDK (the
+`macos-latest` runner's) does not declare that key, and the decoder is built
+without it; there, and on an older system, the type check is the restriction:
+`CGImageSourceGetType` is compared with the extension's type
+(`IMGDEC_TypeCheck`) before a header is parsed for the size or a pixel is
+decoded, and a PNG, JPEG or TGA named as another of the three is refused
+(`IMGDEC_ERR_MISMATCH`). The check runs in every build, as the backstop
+behind the key. `tests/check-image-decoder.sh` runs the host test against both
+builds, and `tests/check-tvos.sh` and `tests/check-visionos.sh` require the
+type check in every `imgdecode.o` and the key wherever the SDK declares it.
+
 ## Contents
 
 1. [Method and coverage](#method-and-coverage)

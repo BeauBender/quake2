@@ -104,6 +104,11 @@ jobs:
         fetch-depth: 0
         # The checks need no token after the checkout.
         persist-credentials: false
+    - name: Toolchain
+      # The Xcode and SDK the checks run with: an older SDK builds the image
+      # decoder without kCGImageSourceAllowableTypes (FIX138).
+      run: |
+        xcodebuild -version; xcrun --show-sdk-version
     - name: Invariants
       env:
         # Public runners come with 3 CPUs.
