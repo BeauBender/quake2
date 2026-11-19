@@ -117,7 +117,7 @@ RM_RTS_Shutdown(void)
 int
 RM_RTS_Wanted(void)
 {
-	return r_rt_shadows && rm_rt_wanted(r_rt_shadows->value, rts_device);
+	return r_rt_shadows && rm_rt_wanted(RM_Effect(r_rt_shadows), rts_device);
 }
 
 /* a new map's structures: the last map's tables go (its triangles are not the new map's); nothing is made here */
@@ -252,7 +252,7 @@ RM_RTS_Frame(const refdef_t *fd, int scene_ready)
 
 	rts_active = 0;
 
-	if (r_rt_shadows && rm_rts_on(r_rt_shadows->value, rts_device, r_fullbright->value, gl1_dynamic->value,
+	if (r_rt_shadows && rm_rts_on(RM_Effect(r_rt_shadows), rts_device, r_fullbright->value, gl1_dynamic->value,
 			gl1_flashblend->value) && scene_ready && fd && !(fd->rdflags & RDF_NOWORLDMODEL))
 	{
 		if (!rts_opened && !rts_refused)

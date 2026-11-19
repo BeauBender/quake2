@@ -208,8 +208,8 @@ RM_RTSun_SkyOk(void)
 int
 RM_RTSun_Wanted(void)
 {
-	return r_rt_sun && rm_rt_wanted(r_rt_sun->value, sun_device) &&
-		rm_rtsun_wanted(r_rt_sun->value, sun_device, RM_RTSun_SkyOk());
+	return r_rt_sun && rm_rt_wanted(RM_Effect(r_rt_sun), sun_device) &&
+		rm_rtsun_wanted(RM_Effect(r_rt_sun), sun_device, RM_RTSun_SkyOk());
 }
 
 void
@@ -223,7 +223,7 @@ RM_RTSun_Frame(const refdef_t *fd, int scene_ready)
 	rmb_rtsun_set_view(NULL);
 
 	/* under 2 % sky: nothing opens, the view keeps its path, the frame is the effect off's */
-	if (r_rt_sun && rm_rtsun_on(r_rt_sun->value, sun_device, r_fullbright->value) && fd &&
+	if (r_rt_sun && rm_rtsun_on(RM_Effect(r_rt_sun), sun_device, r_fullbright->value) && fd &&
 		!(fd->rdflags & RDF_NOWORLDMODEL) && RM_RTSun_SkyOk() && scene_ready)
 	{
 		if (!sun_opened && !sun_refused)

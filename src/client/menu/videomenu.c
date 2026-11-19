@@ -471,6 +471,8 @@ ApplyList(menulist_s *list, viditem_t id)
 	}
 }
 
+static qboolean PresentationApply(void);
+
 static void
 ApplyChanges(void *unused)
 {
@@ -646,6 +648,12 @@ ApplyChanges(void *unused)
 		}
 	}
 
+	/* the presentation (TASK183): ref_metal reads it at vid_restart */
+	if (PresentationApply())
+	{
+		restart = true;
+	}
+
 	if (restart)
 	{
 		Cbuf_AddText("vid_restart\n");
@@ -700,6 +708,10 @@ OpenRendererOptions(void *unused)
 
 static menuframework_s s_rt_menu;
 static menuaction_s s_rt_action;   /* the entry in the video menu */
+/* TASK183: r_presentation; a mode that does not apply is shown with its reason */
+static menulist_s s_pres_list;
+static char s_pres_text[VIDPRES_COUNT][48];
+static const char *s_pres_names[VIDPRES_COUNT + 1];
 static menulist_s s_rt_switches[RT_MAX_ROWS];
 static menuslider_s s_rt_sliders[RT_MAX_ROWS];
 static menuaction_s s_rt_defaults_action;
@@ -726,14 +738,15 @@ static void
 RTMenu_Rules(void)
 {
 	const int available = (Cvar_VariableValue("r_rt_available") != 0);
+	const float pres = Cvar_VariableValue("r_presentation");
 
 	for (int i = 0; i < s_rt_rows; i++)
 	{
 		const vidrt_control_t *c = VidRules_RTControl(i);
 		const vidrt_control_t *e = VidRules_RTControl(c->effect);
-		const int on = !e || (Cvar_VariableValue(e->cvar) != 0);
 
-		RTSetRule(s_rt_items[i], VidRules_RTItem(i, s_built_renderer, available, on));
+		RTSetRule(s_rt_items[i], VidRules_RTRow(i, s_built_renderer, available, pres,
+				e ? Cvar_VariableValue(e->cvar) : 0.0f));
 	}
 
 	RTSetRule(&s_rt_defaults_action.generic, VidRules_RTItem(-1, s_built_renderer, available, 1));
@@ -780,7 +793,9 @@ RTMenu_Values(void)
 		}
 		else if (c->effect < 0)
 		{
-			((menulist_s *)s_rt_items[i])->curvalue = (Cvar_VariableValue(c->cvar) != 0);
+			((menulist_s *)s_rt_items[i])->curvalue = VidRules_RTEffective(i, s_built_renderer,
+				(Cvar_VariableValue("r_rt_available") != 0), Cvar_VariableValue("r_presentation"),
+				Cvar_VariableValue(c->cvar));
 		}
 	}
 }
@@ -865,10 +880,85 @@ RTMenu_Init(void)
 	RTMenu_Values();
 	RTMenu_Rules();
 
-	Menu_SetStatusBar(&s_rt_menu, "Esc: back; each change shows on the next frame");
+	Menu_SetStatusBar(&s_rt_menu, VidRules_RTStatus(s_built_renderer, Cvar_VariableValue("r_rt_available") != 0,
+			Cvar_VariableValue("r_presentation")));
 	Menu_Center(&s_rt_menu);
 	/* the items on the left, the view to their right left clear to judge */
 	s_rt_menu.x = (int)(viddef.width * 0.30f);
+}
+
+/* the presentation's status bar: the rule of the mode the list shows */
+static void
+PresentationRule(void)
+{
+	const int avail = (Cvar_VariableValue("r_rt_available") != 0);
+	const vidrule_t item = VidRules_PresentationMode(-1, s_built_renderer, avail);
+
+	RTSetRule(&s_pres_list.generic, item);
+	if (item.enabled)
+	{
+		s_pres_list.generic.statusbar = VidRules_PresentationMode(s_pres_list.curvalue, s_built_renderer, avail).text;
+	}
+}
+
+static void
+PresentationChanged(void *unused)
+{
+	PresentationRule();
+}
+
+static void
+PresentationInit(int y)
+{
+	const vidrt_control_t *p = VidRules_Presentation();
+	const int avail = (Cvar_VariableValue("r_rt_available") != 0);
+
+	Cvar_Get(p->cvar, p->def, p->flags);   /* saved with the configuration, as the renderer registers it */
+
+	for (int m = 0; m < VIDPRES_COUNT; m++)
+	{
+		const vidrule_t r = VidRules_PresentationMode(m, s_built_renderer, avail);
+
+		/* every mode shown; one that does not apply carries its reason */
+		if (r.enabled || VidRules_Renderer(s_built_renderer) != VIDREF_METAL)
+		{
+			snprintf(s_pres_text[m], sizeof(s_pres_text[m]), "%s", p->choices[m]);
+		}
+		else
+		{
+			snprintf(s_pres_text[m], sizeof(s_pres_text[m]), "%s (%s)", p->choices[m], r.text);
+		}
+		s_pres_names[m] = s_pres_text[m];
+	}
+	s_pres_names[VIDPRES_COUNT] = NULL;
+
+	memset(&s_pres_list, 0, sizeof(s_pres_list));
+	s_pres_list.generic.type = MTYPE_SPINCONTROL;
+	s_pres_list.generic.name = p->label;
+	s_pres_list.generic.x = 0;
+	s_pres_list.generic.y = y;
+	s_pres_list.generic.callback = PresentationChanged;
+	s_pres_list.itemnames = s_pres_names;
+	s_pres_list.curvalue = VidRules_PresentationIndex(Cvar_VariableValue(p->cvar));
+	PresentationRule();
+}
+
+/* the presentation at apply: written when it changed to a mode that applies, then a vid_restart */
+static qboolean
+PresentationApply(void)
+{
+	const vidrt_control_t *p = VidRules_Presentation();
+	const int avail = (Cvar_VariableValue("r_rt_available") != 0);
+
+	if ((s_pres_list.generic.flags & QMF_GRAYED) ||
+		!VidRules_PresentationMode(s_pres_list.curvalue, s_built_renderer, avail).enabled ||
+		VidRules_PresentationIndex(Cvar_VariableValue(p->cvar)) == s_pres_list.curvalue)
+	{
+		return false;
+	}
+
+	Cvar_SetValue(p->cvar, s_pres_list.curvalue);
+	return true;
 }
 
 static void
@@ -1517,6 +1607,9 @@ VID_MenuInit(void)
 	s_rt_action.generic.callback = OpenRTOptions;
 	RTSetRule(&s_rt_action.generic, VidRules_RTEntry(s_built_renderer));
 
+	/* the presentation (TASK183): every mode shown, greyed with its reason */
+	PresentationInit(y += 10);
+
 	s_defaults_action.generic.type = MTYPE_ACTION;
 	s_defaults_action.generic.name = "reset to default";
 	s_defaults_action.generic.x = 0;
@@ -1552,6 +1645,7 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_opengl_menu, (void *)&s_filter_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_ropts_action);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_rt_action);
+	Menu_AddItem(&s_opengl_menu, (void *)&s_pres_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_defaults_action);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_apply_action);
 

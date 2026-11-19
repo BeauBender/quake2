@@ -83,7 +83,7 @@ RM_RTAO_Shutdown(void)
 int
 RM_RTAO_Wanted(void)
 {
-	return r_rt_ao && rm_rt_wanted(r_rt_ao->value, ao_device);
+	return r_rt_ao && rm_rt_wanted(RM_Effect(r_rt_ao), ao_device);
 }
 
 void
@@ -100,7 +100,7 @@ RM_RTAO_Frame(const refdef_t *fd, int scene_ready)
 	ao_active = ao_viewed = 0;
 	rmb_rtao_set_view(NULL);
 
-	if (r_rt_ao && rm_rtao_on(r_rt_ao->value, ao_device, r_fullbright->value) && scene_ready && fd &&
+	if (r_rt_ao && rm_rtao_on(RM_Effect(r_rt_ao), ao_device, r_fullbright->value) && scene_ready && fd &&
 		!(fd->rdflags & RDF_NOWORLDMODEL))
 	{
 		if (!ao_opened && !ao_refused)

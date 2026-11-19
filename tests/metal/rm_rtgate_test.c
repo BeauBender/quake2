@@ -407,6 +407,112 @@ check_names(int argc, char **argv)
 	return (unclassified || stale || effect_default) ? 1 : 0;
 }
 
+/* TASK183: the presentation modes' choice of mode on a device */
+static void
+test_pres_decide(void)
+{
+	int why = -1;
+
+	CHECK(rm_pres_decide(0, RM_RTG_NONE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(0, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(1, RM_RTG_COMPUTE, &why) == RM_PRES_ENHANCED && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(1, RM_RTG_RENDER, &why) == RM_PRES_ENHANCED && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(1.75f, RM_RTG_COMPUTE, &why) == RM_PRES_ENHANCED && why == RM_PRES_WHY_OK);
+	/* enhanced traces rays: stock on a device without ray tracing (the VM) */
+	CHECK(rm_pres_decide(1, RM_RTG_NONE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NORT);
+	/* retro and RT-primary are later slices: stock here, whatever the device */
+	CHECK(rm_pres_decide(2, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
+	CHECK(rm_pres_decide(3, RM_RTG_RENDER, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
+	CHECK(rm_pres_decide(-1, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
+	CHECK(rm_pres_decide(1e30f, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
+	CHECK(rm_pres_decide(NAN, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
+	CHECK(rm_pres_decide(1, RM_RTG_COMPUTE, NULL) == RM_PRES_ENHANCED);
+}
+
+/*
+ * The overlay: stock gives the user's values, enhanced its own for the
+ * four effect switches and the user's for every other setting, and going
+ * back to stock gives the user's values again. The user's values are held
+ * in the test's own array, which the overlay cannot write: nothing it
+ * returns is stored anywhere but in the result.
+ */
+static void
+test_pres_overlay(void)
+{
+	static const char *const decided[] = { "r_rt_ao", "r_rt_shadows", "r_rt_sun", "r_rt_water" };
+	const float users[] = { 0.0f, 0.5f, 2.0f, -1.0f };
+	int i, j, k, mode, effect;
+
+	for (j = 0; j < (int)(sizeof(users) / sizeof(users[0])); j++)
+	{
+		for (i = 0; i < rm_rtg_ncvars(); i++)
+		{
+			const char *name = rm_rtg_cvar(i, &effect);
+			int decides = 0;
+
+			for (k = 0; k < (int)(sizeof(decided) / sizeof(decided[0])); k++)
+			{
+				decides |= !strcmp(name, decided[k]);
+			}
+
+			/* stock, enhanced, then stock again: the switch and its way back */
+			for (mode = 0; mode < 3; mode++)
+			{
+				const int m = (mode == 1) ? RM_PRES_ENHANCED : RM_PRES_STOCK;
+				const float want = (m == RM_PRES_ENHANCED && decides) ? 1.0f : users[j];
+
+				CHECK(rm_pres_value(m, name, users[j]) == want);
+			}
+
+			/* the modes of later slices decide nothing in this one */
+			CHECK(rm_pres_value(RM_PRES_RETRO, name, users[j]) == users[j]);
+			CHECK(rm_pres_value(RM_PRES_RTPRIMARY, name, users[j]) == users[j]);
+		}
+	}
+
+	/* every switch enhanced decides is one of the gate's effect switches */
+	for (k = 0; k < (int)(sizeof(decided) / sizeof(decided[0])); k++)
+	{
+		i = rm_rtg_find(decided[k]);
+		CHECK(i >= 0 && rm_rtg_cvar(i, &effect) && effect == 1);
+	}
+
+	CHECK(rm_pres_value(RM_PRES_ENHANCED, "vid_gamma", 1.2f) == 1.2f);
+	CHECK(rm_pres_value(RM_PRES_ENHANCED, NULL, 3.0f) == 3.0f);
+	CHECK(rm_pres_value(-1, "r_rt_ao", 0.0f) == 0.0f);
+}
+
+static int
+pres_is(float requested, int mode, int why, const char *want)
+{
+	char buf[256];
+
+	return rm_pres_format(requested, mode, why, buf, sizeof(buf)) && !strcmp(buf, want);
+}
+
+static void
+test_pres_format(void)
+{
+	char small[8];
+
+	CHECK(!strcmp(rm_pres_name(RM_PRES_STOCK), "stock"));
+	CHECK(!strcmp(rm_pres_name(RM_PRES_ENHANCED), "enhanced"));
+	CHECK(!strcmp(rm_pres_name(RM_PRES_RETRO), "retro"));
+	CHECK(!strcmp(rm_pres_name(RM_PRES_RTPRIMARY), "ray traced"));
+	CHECK(!strcmp(rm_pres_name(4), "") && !strcmp(rm_pres_name(-1), ""));
+	CHECK(pres_is(0, RM_PRES_STOCK, RM_PRES_WHY_OK, "ref_metal: presentation: stock (r_presentation 0)"));
+	CHECK(pres_is(1, RM_PRES_ENHANCED, RM_PRES_WHY_OK,
+			"ref_metal: presentation: enhanced (r_presentation 1): r_rt_shadows, r_rt_sun, r_rt_ao and r_rt_water read 1, the user's values kept"));
+	CHECK(pres_is(1, RM_PRES_STOCK, RM_PRES_WHY_NORT,
+			"ref_metal: presentation: stock; r_presentation 1 (enhanced) reads 0: no ray tracing on this device"));
+	CHECK(pres_is(2, RM_PRES_STOCK, RM_PRES_WHY_NOTBUILT,
+			"ref_metal: presentation: stock; r_presentation 2 (retro) reads 0: not in this build"));
+	CHECK(pres_is(7, RM_PRES_STOCK, RM_PRES_WHY_NOTBUILT,
+			"ref_metal: presentation: stock; r_presentation 7 reads 0: not in this build"));
+	CHECK(!rm_pres_format(1, RM_PRES_ENHANCED, RM_PRES_WHY_OK, small, sizeof(small)) && small[0] == '\0');
+	CHECK(!rm_pres_format(1, RM_PRES_ENHANCED, RM_PRES_WHY_OK, small, 0));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -414,6 +520,10 @@ main(int argc, char **argv)
 	{
 		return check_names(argc, argv);
 	}
+
+	test_pres_decide();
+	test_pres_overlay();
+	test_pres_format();
 
 	test_decide();
 	test_traces();

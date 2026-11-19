@@ -217,7 +217,7 @@ RM_RTW_Shutdown(void)
 int
 RM_RTW_Wanted(void)
 {
-	return r_rt_water && rm_rt_wanted(r_rt_water->value, rtw_device);
+	return r_rt_water && rm_rt_wanted(RM_Effect(r_rt_water), rtw_device);
 }
 
 void
@@ -235,7 +235,7 @@ RM_RTW_Frame(const refdef_t *fd, int scene_ready)
 	rtw_active = rtw_viewed = 0;
 	rmb_rtw_set_view(NULL);
 
-	if (r_rt_water && scene_ready && rm_rtw_on(r_rt_water->value, rtw_device, rmb_rt_map_water()) && fd &&
+	if (r_rt_water && scene_ready && rm_rtw_on(RM_Effect(r_rt_water), rtw_device, rmb_rt_map_water()) && fd &&
 		!(fd->rdflags & RDF_NOWORLDMODEL))
 	{
 		if (!rtw_opened && !rtw_refused)

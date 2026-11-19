@@ -327,4 +327,12 @@ int RM_ModuleDir(char *dir, size_t len);
 /* Keeps this image mapped after the engine's dlclose (RTLD_NODELETE): completion handlers run its code. */
 int RM_KeepMapped(void);
 
+/*
+ * rm_main.c: the value an effect cvar has under the presentation mode
+ * (TASK183, rm_pres_value): the mode's own for a cvar the mode decides,
+ * else the cvar's. The scenes read their switches through it; no cvar is
+ * written.
+ */
+float RM_Effect(const cvar_t *cv);
+
 #endif /* RM_LOCAL_H */
