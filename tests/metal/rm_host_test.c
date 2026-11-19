@@ -8770,6 +8770,13 @@ test_hdr(void)
 	CHECK(mtl_hdr_clamp(NAN) == 0.0f && mtl_hdr_byte(NAN) == 0);
 	CHECK(mtl_hdr_byte(INFINITY) == 255);
 	CHECK(mtl_hdr_byte(0.5f) == 128);
+
+	/* the present's clamp (HD2, until HD3's tone map): nothing above SDR white, NaN and negatives black */
+	CHECK(mtl_hdr_present(1.0f) == mtl_hdr_linear(1.0f));
+	CHECK(mtl_hdr_present(1.5f) == mtl_hdr_linear(1.0f));
+	CHECK(mtl_hdr_present(100.0f) <= 1.0f && mtl_hdr_present(INFINITY) <= 1.0f);
+	CHECK(mtl_hdr_present(-0.25f) == 0.0f && mtl_hdr_present(NAN) == 0.0f);
+	CHECK(mtl_hdr_present(0.5f) == mtl_hdr_linear(0.5f));
 }
 
 int

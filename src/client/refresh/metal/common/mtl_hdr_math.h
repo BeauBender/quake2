@@ -67,6 +67,18 @@ mtl_hdr_clamp(float c)
 	return (c > 0.0f) ? ((c < 1.0f) ? c : 1.0f) : 0.0f;
 }
 
+/*
+ * The present's value for a channel of the float16 frame target under
+ * r_hdr 1 until HD3's tone map replaces it: c held to [0, 1] (not a
+ * number to 0) and then decoded to linear light, so nothing shows above
+ * SDR white. The float16 target does not clamp an additive blend.
+ */
+static inline float
+mtl_hdr_present(float c)
+{
+	return mtl_hdr_linear(mtl_hdr_clamp(c));
+}
+
 /* the byte the 8-bit store makes of mtl_hdr_clamp(c): round to nearest (the host's reference) */
 static inline unsigned
 mtl_hdr_byte(float c)

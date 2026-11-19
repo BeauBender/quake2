@@ -420,6 +420,9 @@ rm_fragment_present(float4 pos [[position]], texture2d<float, access::read> fram
  * target (RGBA16Float) holds the stock, sRGB-encoded values; each pixel
  * is decoded to linear light once (common/mtl_hdr_math.h, extended past
  * 1.0) for the RGBA16Float drawable in extended linear sRGB, alpha 1.
+ * HD2 shows the frame at SDR white, so each channel is first clamped to
+ * [0, 1] (mtl_hdr_present; the float16 target does not clamp an additive
+ * blend, and a NaN is 0). HD3 replaces this clamp with the tone map.
  */
 fragment float4
 rm_fragment_present_hdr(float4 pos [[position]], texture2d<float, access::read> frame [[texture(0)]],
@@ -427,7 +430,7 @@ rm_fragment_present_hdr(float4 pos [[position]], texture2d<float, access::read> 
 {
 	float3 c = frame.read(uint2(int2(pos.xy) + ofs)).rgb;
 
-	return float4(mtl_hdr_linear(c.r), mtl_hdr_linear(c.g), mtl_hdr_linear(c.b), 1.0f);
+	return float4(mtl_hdr_present(c.r), mtl_hdr_present(c.g), mtl_hdr_present(c.b), 1.0f);
 }
 
 /*
