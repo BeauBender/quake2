@@ -9022,6 +9022,56 @@ test_hdr_tonemap(void)
 				&& rm_probe_gen(rm_probe_word(rm_probe_gen(stale), RM_PROBE_READ)) == rm_probe_gen(stale));
 		CHECK(rm_probe_gen(rm_probe_ask_word(wrap, 1)) == 0 && rm_probe_ask_word(wrap, 1) != wrap);
 	}
+	{
+		/*
+		 * The tone map once per pixel per frame (the runbook's HD3 rework
+		 * round 2): R_HdrToneMap maps each view's rectangle after the view.
+		 * The shoulder is not idempotent above white, so a pixel mapped by
+		 * the world view and again by the player model's view
+		 * (RDF_NOWORLDMODEL, menu.c) would roll off twice; it is not,
+		 * because that view first repaints its whole rectangle opaque
+		 * (R_ClearNoWorld, 0.3 grey over r_view.vp, the rectangle
+		 * rm_view_rect gives the tone map too). A strip of encoded grey
+		 * pixels walked through that order, at a peak of 4.
+		 */
+		const float p = 4.0f, hot = 1.6f, model = 1.4f;
+		float px[8], want[8];
+		int i;
+
+		/* the shoulder above white, twice, is not once: a second pass over a mapped pixel would show */
+		CHECK(mtl_hdr_tone(mtl_hdr_tone(hot, mtl_hdr_max(hot, hot, hot), p),
+				mtl_hdr_max(mtl_hdr_tone(hot, mtl_hdr_max(hot, hot, hot), p), 0.0f, 0.0f), p)
+				< mtl_hdr_tone(hot, mtl_hdr_max(hot, hot, hot), p) - 1e-3f);
+
+		for (i = 0; i < 8; i++)
+		{
+			px[i] = hot;   /* the world view, above white */
+		}
+
+		for (i = 0; i < 8; i++)
+		{
+			px[i] = mtl_hdr_tone(px[i], mtl_hdr_max(px[i], px[i], px[i]), p);   /* its tone map, the whole view */
+			want[i] = px[i];
+		}
+
+		for (i = 2; i < 6; i++)
+		{
+			px[i] = (i == 4) ? model : 0.3f;   /* the model view: its rectangle repainted, then the model */
+			want[i] = mtl_hdr_tone(px[i], mtl_hdr_max(px[i], px[i], px[i]), p);
+		}
+
+		for (i = 2; i < 6; i++)
+		{
+			px[i] = mtl_hdr_tone(px[i], mtl_hdr_max(px[i], px[i], px[i]), p);   /* its tone map, its rectangle */
+		}
+
+		for (i = 0; i < 8; i++)
+		{
+			CHECK(px[i] == want[i]);   /* each pixel mapped once: the world's outside, the model view's inside */
+		}
+
+		CHECK(want[2] == 0.3f && want[4] < model && want[0] < hot);
+	}
 }
 
 int

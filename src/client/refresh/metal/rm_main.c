@@ -1278,6 +1278,13 @@ R_RetroFinish(const refdef_t *fd)
  * view fd just drawn, at the Retro pass's seat (R_RetroFinish): after the
  * view and its scaling, before the 2D layer, so the HUD and the console
  * stay at SDR white. Retro and the float16 path never run together.
+ * Each pixel is mapped once a frame although a frame can hold two views
+ * (the player model of the menu, RDF_NOWORLDMODEL, over the world): that
+ * view repaints its whole rectangle opaque first (R_ClearNoWorld, over
+ * r_view.vp, which is this rectangle), so what the world's map wrote
+ * there is gone before the second map runs. The shoulder is not
+ * idempotent above white; a view that did not repaint its rectangle
+ * would need its own scheme (the host test walks the order).
  */
 static void
 R_HdrToneMap(const refdef_t *fd)
