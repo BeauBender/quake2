@@ -300,10 +300,13 @@ also missed fine-grained GitHub tokens. So, superseding the section
   name out of a check: they add a word or make the check refuse.
 - Known limits, unchanged in kind: a binary file is not scanned (the gate
   check's rule); `YQ2_IDENTITY_TEST_EXTRA_WORD` is not looked for in files,
-  since the gate check has no test word; the gate check takes an index blob
-  it cannot read as clean (`git grep` reports the error and exits 1), so
-  the push hook hands it only blobs git has listed and read, and the commit
-  hook's own read of the staged diff refuses a staged blob git cannot read;
+  since the gate check has no test word; the gate check refuses an index
+  blob it cannot read (FIX124: `git grep` reports a missing blob on stderr
+  and exits 1, its no-match status, so the check refuses any word on
+  `git grep`'s stderr and any blob `git cat-file --batch-check` reports
+  missing), and the push hook hands it only blobs git has listed and read,
+  and the commit hook's own read of the staged diff refuses a staged blob
+  git cannot read;
   the hooks run the checks in the working tree, so a working-tree change to
   a check or a hook changes what runs, and `tests/check-pre-commit-hook.sh`
   and `tests/check-pre-push-hook.sh` in the gate refuse a hook that no

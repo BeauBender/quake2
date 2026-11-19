@@ -15,7 +15,9 @@
 # read from its blob with `git cat-file`. Binary files (a NUL byte in the
 # index blob) are not scanned; the decision is made here, not by git, so a
 # committed .gitattributes (`-diff`, `binary`) cannot take a text file out of
-# the scan. A link target is reported as line 1 of the link.
+# the scan. A link target is reported as line 1 of the link. An index blob
+# that cannot be read (missing or corrupt) refuses: the check never reports
+# clean on what it could not read.
 # File contents are reported as file:line and the kind of value, file names
 # only as a count; a file whose own name holds a value is reported as
 # "<withheld file name>:line". Nothing printed carries the matched text. If
@@ -154,6 +156,20 @@ scan_repo() {
 	tr '\000' '\n' < "$tmp/ls.z" > "$tmp/ls"
 	sed 's/^[0-7]* [0-9a-f]* [0-3]	//' "$tmp/ls" > "$tmp/names"
 	sed -n "s/^120000 \([0-9a-f]*\) [0-3]	/\1$us/p" "$tmp/ls" > "$tmp/links"
+	# Every blob the index names must be readable: git grep reports a missing
+	# one on stderr and exits 1, its no-match status. The ids of all entries
+	# but gitlinks (mode 160000, a commit of another repository, which git
+	# grep does not read) go to `git cat-file --batch-check`, which prints
+	# "<id> missing" for one it cannot find; anything but a blob, or a word on
+	# stderr, refuses.
+	sed -nE 's/^(100644|100755|120000) ([0-9a-f]+) [0-3]	.*/\2/p' "$tmp/ls" > "$tmp/ids" 2>/dev/null ||
+		{ echo "$me: cannot list the index blobs" >&2; return 2; }
+	git -C "$1" cat-file --batch-check='%(objecttype) %(objectname)' < "$tmp/ids" > "$tmp/types" 2> "$tmp/err.cat" ||
+		{ echo "$me: git cat-file failed" >&2; return 2; }
+	[ ! -s "$tmp/err.cat" ] || { echo "$me: git cat-file cannot read an index blob" >&2; return 2; }
+	_st=0
+	grep -qvE '^blob [0-9a-f]+$' "$tmp/types" || _st=$?
+	[ "$_st" -eq 1 ] || { echo "$me: an index blob is missing or not a blob" >&2; return 2; }
 	for _spec in "host:-iF:$2" "user:-iwF:$3" "home:-iF:$4" "host:-iF:${5:-}" "user:-iwF:${6:-}"; do
 		_kind=${_spec%%:*}
 		_rest=${_spec#*:}
@@ -166,7 +182,10 @@ scan_repo() {
 		# cannot shift the fields; awk keeps the first two fields only. -a:
 		# git's own binary test honours .gitattributes, so it is not used.
 		_st=0
-		git -C "$1" -c color.ui=false grep --cached --no-color -a -nz "$_mode" -e "$_word" -- . > "$tmp/grep" 2>/dev/null || _st=$?
+		git -C "$1" -c color.ui=false grep --cached --no-color -a -nz "$_mode" -e "$_word" -- . > "$tmp/grep" 2> "$tmp/err.grep" || _st=$?
+		# A blob git grep cannot read is said on stderr, with status 1 when it
+		# is missing: any word there refuses, whatever the status.
+		[ ! -s "$tmp/err.grep" ] || _st=2
 		case $_st in
 		0) tr '\000' '\037' < "$tmp/grep" | awk -F '\037' -v k="$_kind" '{ print $1 "\037" $2 "\037" k }' >> "$tmp/hits" ;;
 		1) ;;
