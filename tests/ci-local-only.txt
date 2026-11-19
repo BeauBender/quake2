@@ -1,0 +1,6 @@
+# The tests/check-*.sh that run on the build host's gate (scripts/test.sh)
+# only, not in CI, one "name: reason" per line (tests/check-ci-parity.sh).
+# "unverified on runner" marks a check that may run there but has not been
+# shown to.
+check-no-local-identity.sh: it guards the names of the host that commits (user name, host name, home path); on the runner the user name is "runner", a word the tracked text uses in prose, so it fails there on words that name no host
+check-identity-env.sh: unverified on runner; it runs tests/check-no-local-identity.sh and the hooks with the host's real user and host names beside made-up ones
