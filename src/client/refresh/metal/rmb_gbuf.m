@@ -44,6 +44,7 @@
 #include "header/rm_rtsun.h"
 #include "header/rm_rtwater.h"
 #include "header/rm_metalfx.h"
+#include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_gbuf.m is written for ARC: compile it with -fobjc-arc"
@@ -53,20 +54,6 @@
 extern id<MTLDevice> rmb_device;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
-
-/* rmb_resource.m */
-id<MTLLibrary> rmb_library(void);
-id<MTLRenderPipelineState> rmb_pipe3d(int i);
-id<MTLBuffer> rmb_static_buffer(int bid);
-
-/* rmb_encode.m */
-id<MTLRenderCommandEncoder> rmb_frame_open_pass(MTLRenderPassDescriptor *rp, int depth, int stencil, int keep);
-void rmb_frame_close_pass(void);
-id<MTLTexture> rmb_frame_color(void);
-void *rmb_frame_ring_take(size_t n, __strong id<MTLBuffer> *buf, size_t *ofs);
-
-/* rmb_rtwater.m (TASK162): the water's marks, the raster's last draw at r_rt_water_hits 1 */
-int rmb_rtw_mark(id<MTLRenderCommandEncoder> enc, int surf);
 
 /* the attachments, kept across frames and made again for another size or path */
 static id<MTLTexture> t_depth, t_stencil, t_normal, t_material, t_motion, t_light, t_albedo, t_rcolor;
