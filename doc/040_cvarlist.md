@@ -923,18 +923,42 @@ marked `(n/a)` and skipped.
   while every other setting (`r_rt_ao_scale`, `vid_gamma` and the rest)
   keeps its own value. A presentation is an overlay: it writes no other
   cvar, so the configuration keeps your own `r_rt_*` values, and `0`
-  brings them back. `2` (*Retro*) and `3` (*Ray traced*) are reserved for
-  later work and are greyed in the menu "awaiting review"; the values
-  are never renumbered. Read at start-up and at `vid_restart`, which say
-  which presentation runs in one line (`ref_metal: presentation: stock
-  (r_presentation 0)`); a value the device cannot run, Enhanced without
-  ray tracing or one not in this build, runs stock and says why
+  brings them back. `2` is *Retro*, the look of a 16-bit 3dfx
+  Voodoo-class board: after the world and the models, the 3D view is
+  quantized to RGB565 (5, 6 and 5 bits) with a 4 x 4 ordered dither,
+  optionally box-filtered (`r_retro_filter`), through one gamma curve
+  on top of `vid_gamma` (`r_retro_gamma`); the 2D layer stays stock and
+  no fog is drawn. It needs no ray tracing and runs on every device; its
+  textures and its low-resolution view are later work. `3` (*Ray
+  traced*) is reserved for later work. Retro and Ray traced are greyed in
+  the menu "awaiting review" until their look is accepted, and work from
+  the console; the values are never renumbered. Read at start-up and at
+  `vid_restart`, which say which presentation runs in one line
+  (`ref_metal: presentation: stock (r_presentation 0)`); a value the
+  device cannot run, Enhanced without ray tracing or one not in this
+  build, runs stock and says why
   (`ref_metal: presentation: stock; r_presentation 1 (enhanced) reads 0:
   no ray tracing on this device`), and the cvar keeps its value. Other
   renderers ignore it. The video menu and the Ray tracing screen show the
   cvar's value, so after a console `set` without a `vid_restart` they can
   differ from the mode that runs until the restart. Saved with the
   configuration.
+
+* **r_retro_filter**: The output filter of the Metal renderer's *Retro*
+  presentation (`r_presentation 2`), which some boards of that era
+  applied to hide the dither. `0` (the default) shows the dithered
+  16-bit pixels as they are; any other value averages each pixel with
+  its right, lower and lower-right neighbours after the quantize (a 2 x
+  2 box, kept inside the 3D view). Read every frame; has no effect under
+  another presentation or another renderer. Saved with the configuration.
+
+* **r_retro_gamma**: The gamma curve of the Metal renderer's *Retro*
+  presentation (`r_presentation 2`), applied to the 3D view after the
+  quantize and the filter, on top of `vid_gamma`. `0` (the default) is
+  none; `1` raises each channel to the power `1 / 1.15` and `2` to `1 /
+  1.3`, brightening the dark tones. Any other value counts as `0` (a
+  fraction is truncated). Read every frame; has no effect under another
+  presentation or another renderer. Saved with the configuration.
 
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
 being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second, `r_rt_water` its third and `r_rt_sun` its fourth; with `r_rt_stats` set, the renderer
