@@ -45,7 +45,7 @@ left the push-time refusal to a separate card; this record is that card.
   file or a tracked file name contains one of them (the user name as a whole
   word or path component). It reports file and line (a file whose own name
   holds a value as `<withheld file name>`), and a count for file names. A
-  file is binary when its index blob holds a NUL byte, and is scanned as bytes (FIX125); git's
+  file is binary, and skipped, when its index blob holds a NUL byte; git's
   own test is not used, because a committed `.gitattributes` (`-diff`,
   `binary`) would take a text file out of it. It reads the staged content,
   not the working tree: the index blobs of regular files (`git grep
@@ -232,7 +232,7 @@ also missed fine-grained GitHub tokens. So, superseding the section
   scanned by `tests/check-no-local-identity.sh`
   itself, so there is one matcher, the gate's: the host name and home path
   as substrings, the user name as a whole word, the owner-handle rule above,
-  binary files (a NUL byte) scanned as bytes (FIX125). The hook hands the blobs to the
+  binary files (a NUL byte) not scanned. The hook hands the blobs to the
   check under placeholder names made of punctuation (no name can hold a
   value) in a temporary index, and the paths as the text of one more blob
   per ref in a temporary object directory given to git as an alternate of
@@ -298,15 +298,12 @@ also missed fine-grained GitHub tokens. So, superseding the section
   `host-empty`, `user-missing`, `user-empty`) runs a path that cannot exist,
   or `/usr/bin/true`, in place of one tool. None of them can take a real
   name out of a check: they add a word or make the check refuse.
-- Known limits, unchanged in kind: a binary file is scanned as bytes (FIX125;
-  before, the gate check skipped it); `YQ2_IDENTITY_TEST_EXTRA_WORD` is not looked for in files,
-  since the gate check has no test word; the gate check refuses an index
-  blob it cannot read (FIX124: `git grep` reports a missing blob on stderr
-  and exits 1, its no-match status, so the check first refuses any index
-  blob `git cat-file --batch-check` reports missing; a corrupt body makes
-  `git grep` die, which refuses too), and the push hook hands it only blobs git has listed and read,
-  and the commit hook's own read of the staged diff refuses a staged blob
-  git cannot read;
+- Known limits, unchanged in kind: a binary file is not scanned (the gate
+  check's rule); `YQ2_IDENTITY_TEST_EXTRA_WORD` is not looked for in files,
+  since the gate check has no test word; the gate check takes an index blob
+  it cannot read as clean (`git grep` reports the error and exits 1), so
+  the push hook hands it only blobs git has listed and read, and the commit
+  hook's own read of the staged diff refuses a staged blob git cannot read;
   the hooks run the checks in the working tree, so a working-tree change to
   a check or a hook changes what runs, and `tests/check-pre-commit-hook.sh`
   and `tests/check-pre-push-hook.sh` in the gate refuse a hook that no
@@ -338,3 +335,25 @@ calls from `.githooks/pre-push`, restore the exemption block, and delete
 `tests/check-pre-commit-hook.sh`. Reading the names by absolute path is not
 reversed on its own: with the shim on `PATH`, a `PATH` lookup refuses every
 marker again.
+
+## Addendum 2026-11-18: unreadable blobs refused, binary files scanned (FIX124, FIX125)
+
+Two rules of `tests/check-no-local-identity.sh` change, and the record above
+is left as it was accepted. Where it says that a binary file (one with a NUL
+byte) is not scanned, in the first item of "Not scanned" and in the push
+hook's list of what the check covers, a binary file is now scanned as bytes
+(FIX125, `git grep -a`); the check no longer uses git's own binary test, as
+before. Where it says that the check takes an index blob it cannot read as
+clean, it now refuses one (FIX124): `git grep` reports a missing blob on
+stderr and exits 1, its no-match status, so the check first gives every
+index blob id (gitlinks left out) to `git cat-file --batch-check` and refuses
+any answer that is not a blob, `missing` included, or a count of answers
+that differs from the count of ids. A blob whose header reads but whose body
+is corrupt is reported as a blob there; it makes `git grep` die with status
+128, which the check refuses too. The self-test holds each of these.
+
+Known limits after this change: `YQ2_IDENTITY_TEST_EXTRA_WORD` is not looked
+for in files, since the gate check has no test word; the hooks run the checks
+in the working tree, so a working-tree change to a check or a hook changes
+what runs, as before. "A binary file is scanned as bytes" is no longer a
+limit.

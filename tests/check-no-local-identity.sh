@@ -171,6 +171,9 @@ scan_repo() {
 		{ echo "$me: cannot list the index blobs" >&2; return 2; }
 	git -C "$1" cat-file --batch-check='%(objecttype) %(objectname)' < "$tmp/ids" > "$tmp/types" 2>/dev/null ||
 		{ echo "$me: git cat-file failed" >&2; return 2; }
+	# One answer per id: a short output would hide a blob from the check.
+	[ "$(wc -l < "$tmp/types")" -eq "$(wc -l < "$tmp/ids")" ] ||
+		{ echo "$me: git cat-file answered for fewer blobs than asked" >&2; return 2; }
 	_st=0
 	grep -qvE '^blob [0-9a-f]+$' "$tmp/types" || _st=$?
 	[ "$_st" -eq 1 ] || { echo "$me: an index blob is missing or not a blob" >&2; return 2; }
@@ -372,6 +375,17 @@ fi
 	expect 2 "a missing index blob" "$tmp/none" "$syn" zzquser /home/zzqhome
 	printf 'zzq not a zlib stream\n' > "$_of"
 	expect 2 "a corrupt index blob" "$tmp/none" "$syn" zzquser /home/zzqhome
+	# A header that decodes over a zlib stream cut short: --batch-check
+	# still says "blob", so only git grep dying (status 128) can refuse it.
+	rm -f "$_of"
+	printf 'zzq gone\n' | git -C "$r" hash-object -w --stdin > /dev/null
+	_sz=$(wc -c < "$_of")
+	head -c $((_sz - 8)) "$_of" > "$tmp/cut"
+	rm -f "$_of"
+	cp "$tmp/cut" "$_of"
+	_ty=$(printf '%s\n' "$_id" | git -C "$r" cat-file --batch-check='%(objecttype)' 2>/dev/null) || _ty=
+	[ "$_ty" = blob ] || { echo "$me: self-test 'a truncated blob' is built wrong: --batch-check says '$_ty'"; exit 1; }
+	expect 2 "a truncated index blob (header reads, body does not)" "$tmp/none" "$syn" zzquser /home/zzqhome
 	rm -f "$_of"
 	printf 'zzq gone\n' | git -C "$r" hash-object -w --stdin > /dev/null
 	expect 0 "the same index, the blob readable again" "$tmp/none" "$syn" zzquser /home/zzqhome
