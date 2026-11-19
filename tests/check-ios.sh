@@ -104,6 +104,7 @@ case "${1:-}" in
 esac
 
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${CHECK_IOS_REQUIRE:-0}" != 1 ] || { echo "check-ios: CHECK_IOS_REQUIRE=1 and this is not macOS"; exit 1; }
 	echo "check-ios: skipped: the iOS mode builds on macOS only (docs/decisions/0008)"
 	exit 0
 fi
@@ -112,6 +113,7 @@ if command -v xcrun >/dev/null 2>&1; then
 	sdk=$(xcrun --sdk iphonesimulator --show-sdk-path 2>/dev/null) || sdk=
 fi
 if [ -z "$sdk" ] || [ ! -f "$sdk/SDKSettings.plist" ]; then
+	[ "${CHECK_IOS_REQUIRE:-0}" != 1 ] || { echo "check-ios: CHECK_IOS_REQUIRE=1 and there is no iOS simulator SDK (xcrun --sdk iphonesimulator --show-sdk-path)"; exit 1; }
 	echo "check-ios: skipped: no iOS simulator SDK (xcrun --sdk iphonesimulator --show-sdk-path)"
 	exit 0
 fi
@@ -427,6 +429,7 @@ if [ -n "$dsdk" ]; then
 		exit 1
 	fi
 else
+	[ "${CHECK_IOS_REQUIRE:-0}" != 1 ] || bad "CHECK_IOS_REQUIRE=1 and there is no iOS device SDK (xcrun --sdk iphoneos --show-sdk-path)"
 	echo "check-ios: device parts skipped: no iOS device SDK (xcrun --sdk iphoneos --show-sdk-path)"
 fi
 

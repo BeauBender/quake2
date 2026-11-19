@@ -27,6 +27,13 @@
  *   it, and the rest of a row whose input runs out is visible.
  * - CM_SetAreaPortalState refuses a portal number equal to the portal
  *   count and above it (FIX23, D3).
+ * - The collision model bounds a leaf's cluster and every visibility
+ *   offset (FIX137, cmvis_*): a lump whose count or offsets do not fit
+ *   it and a leaf whose cluster is below -1 or (with visibility) one the
+ *   lump has no offsets for are refused at load, the inclusive offset
+ *   edges 0 and the lump's length load, and CM_ClusterPVS and
+ *   CM_ClusterPHS answer any other
+ *   cluster outside the lump with the no-vis row.
  *
  * =======================================================================
  */
@@ -608,6 +615,194 @@ TEST(bspgraph_areaportal_bound)
 }
 
 /*
+ * The collision model's visibility (FIX137): CMod_LoadVisibility refuses
+ * a lump whose cluster count does not fit it or whose PVS or PHS offset
+ * is outside it, CM_LoadMap refuses a leaf whose cluster is neither -1
+ * nor below the lump's count, and CM_ClusterPVS and CM_ClusterPHS answer
+ * a cluster outside the lump with the no-vis row (all visible). The
+ * stock shape is g_default's two clusters in a 24-byte lump: the count,
+ * the four offsets, then one byte of each row.
+ */
+static void
+v_map(void)
+{
+	g.vis[0] = 2;
+	g.vis[1] = 20;	/* cluster 0 PVS */
+	g.vis[2] = 21;	/* cluster 0 PHS */
+	g.vis[3] = 22;	/* cluster 1 PVS */
+	g.vis[4] = 23;	/* cluster 1 PHS */
+	g.vis[5] = LittleLong(0x02030201);	/* bytes 20..23: 01 02 03 02 */
+	g.nvis = 6;
+}
+
+static const char *
+v_load(void)
+{
+	return g_write(g_build());
+}
+
+TEST(cmvis_stock_shape_rows)
+{
+	unsigned checksum;
+
+	g_default();
+	v_map();
+	T_REQUIRE(CM_LoadMap(v_load(), false, &checksum) != NULL);
+	T_EQ_INT(CM_NumClusters(), 2);
+	T_EQ_INT(CM_ClusterPVS(0)[0], 0x01);
+	T_EQ_INT(CM_ClusterPHS(0)[0], 0x02);
+	T_EQ_INT(CM_ClusterPVS(1)[0], 0x03);
+	T_EQ_INT(CM_ClusterPHS(1)[0], 0x02);
+	T_EQ_INT(CM_ClusterPVS(-1)[0], 0x00);
+	T_EQ_INT(CM_ClusterPHS(-1)[0], 0x00);
+}
+
+/* a map that must be refused at load, with why in the message */
+static void
+v_refused(const char *why)
+{
+	const char *name = v_load();
+	unsigned checksum;
+
+	T_EXPECT_DROP(CM_LoadMap(name, false, &checksum));
+	if (!strstr(t_console(), name) || !strstr(t_console(), why))
+	{
+		t_fail(__FILE__, __LINE__, "message: %s", t_console());
+	}
+}
+
+TEST(cmvis_leaf_cluster_minus_two)
+{
+	g_default();
+	v_map();
+	g.leafs[3].cluster = -2;
+	v_refused("leaf 3 has cluster -2, the visibility has 2 clusters");
+}
+
+TEST(cmvis_leaf_cluster_at_count)
+{
+	g_default();
+	v_map();
+	g.leafs[3].cluster = 2;
+	v_refused("leaf 3 has cluster 2, the visibility has 2 clusters");
+}
+
+TEST(cmvis_pvs_offset_negative)
+{
+	g_default();
+	v_map();
+	g.vis[3] = -4;
+	v_refused("cluster 1 has its visibility at -4, outside 24 bytes");
+}
+
+TEST(cmvis_phs_offset_past_lump)
+{
+	g_default();
+	v_map();
+	g.vis[2] = 25;
+	v_refused("cluster 0 has its visibility at 25, outside 24 bytes");
+}
+
+TEST(cmvis_clusters_past_lump)
+{
+	g_default();
+	v_map();
+	g.vis[0] = 3;	/* three clusters' offsets do not fit in 24 bytes */
+	v_refused("visibility of 3 clusters in 24 bytes");
+
+	g_default();
+	v_map();
+	g.vis[0] = -1;
+	v_refused("visibility of -1 clusters in 24 bytes");
+
+	/* a lump of 2 bytes, too short for its count */
+	g_default();
+	v_map();
+	g.nvis = 1;
+	{
+		int len = g_build();
+		const char *name;
+		unsigned checksum;
+
+		((dheader_t *)gbuf)->lumps[LUMP_VISIBILITY].filelen = 2;
+		name = g_write(len);
+		T_EXPECT_DROP(CM_LoadMap(name, false, &checksum));
+		T_CONSOLE_HAS("has 2 bytes of visibility");
+	}
+}
+
+/*
+ * Defence in depth: a cluster the lump has no offsets for (a leaf of a
+ * map without visibility may carry any cluster of 0 or more, and a
+ * caller may pass any) is answered with the no-vis row, reading nothing before or after
+ * the lump's table. Cluster 2's offsets would be the row bytes, and -2's
+ * the 16 bytes before map_visibility.
+ */
+TEST(cmvis_cluster_outside_lump_is_novis)
+{
+	unsigned checksum;
+
+	g_default();
+	v_map();
+	g.vis[5] = LittleLong(-1000);	/* cluster 2's PVS offset, if read */
+	T_REQUIRE(CM_LoadMap(v_load(), false, &checksum) != NULL);
+	T_EQ_INT(CM_ClusterPVS(2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPHS(2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(-2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPHS(-2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(0)[0], 0x18);	/* the low byte of -1000 */
+}
+
+/*
+ * Without visibility a leaf's cluster of 0 or more is not bounded, and
+ * every row but -1's is all visible, as before. A cluster below -1 is
+ * refused with or without visibility (FIX137 round 2): the server skips
+ * only -1 when it links an entity, and indexes its fat PVS and PHS rows
+ * and CM_HeadnodeVisible's row by the cluster.
+ */
+TEST(cmvis_no_vis_any_cluster)
+{
+	unsigned checksum;
+
+	g_default();
+	g.leafs[3].cluster = 7;
+	T_REQUIRE(CM_LoadMap(v_load(), false, &checksum) != NULL);
+	T_EQ_INT(CM_ClusterPVS(0)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(7)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(-2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPHS(-2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(-1)[0], 0x00);
+
+	g_default();
+	g.leafs[3].cluster = -2;
+	v_refused("leaf 3 has cluster -2, the visibility has 0 clusters");
+
+	g_default();
+	g.leafs[3].cluster = -32768;
+	v_refused("leaf 3 has cluster -32768, the visibility has 0 clusters");
+}
+
+/*
+ * The offset bound is inclusive at both ends: an offset of 0 (the count's
+ * own bytes, here 02 00 00 00) and one equal to the lump's length (no
+ * input: the row is all visible) both load.
+ */
+TEST(cmvis_offset_at_lump_edges)
+{
+	unsigned checksum;
+
+	g_default();
+	v_map();
+	g.vis[1] = 0;	/* cluster 0 PVS at the lump's start */
+	g.vis[4] = 24;	/* cluster 1 PHS at the lump's end */
+	T_REQUIRE(CM_LoadMap(v_load(), false, &checksum) != NULL);
+	T_EQ_INT(CM_ClusterPVS(0)[0], 0x02);
+	T_EQ_INT(CM_ClusterPHS(0)[0], 0x02);
+	T_EQ_INT(CM_ClusterPVS(1)[0], 0x03);
+	T_EQ_INT(CM_ClusterPHS(1)[0], 0xff);
+}
+
+/*
  * The shared BSP checks (FIX118) every renderer's Mod_LoadBrushModel runs
  * before it reads a lump, in its order: the lumps, the visibility, the
  * nodes, the face edges, the leaves. The stock shape gets one triangle (face 0 of
@@ -942,6 +1137,15 @@ TEST(bspcheck_leaf_cluster_below_minus_one)
 	C_REFUSED(g_build(), 4, "leaf 2 has cluster -2, the visibility has 2 clusters");
 }
 
+TEST(bspcheck_leaf_cluster_below_minus_one_no_vis)
+{
+	/* refused without visibility too, as the collision model does */
+	c_default();
+	g.nvis = 0;
+	g.leafs[2].cluster = -2;
+	C_REFUSED(g_build(), 4, "leaf 2 has cluster -2, the visibility has 0 clusters");
+}
+
 TEST(bspcheck_leaf_cluster_bounds_pass)
 {
 	/* the last cluster and -1 pass; without visibility no cluster is read */
@@ -954,4 +1158,155 @@ TEST(bspcheck_leaf_cluster_bounds_pass)
 	g.nvis = 0;
 	g.leafs[3].cluster = 7;
 	T_EQ_INT(c_check(g_build()), 5);
+}
+
+/*
+ * A refused map leaves no named slot behind (FIX135). Mod_ForName names the
+ * slot and loads the file; the refusal is a Com_Error, which longjmps, so
+ * nothing after it runs. The loader records the load in progress
+ * (Mod_LoadBegin), Mod_LoadEnd closes it, and the next Mod_ForName or
+ * Mod_FreeAll takes an unfinished one back (Mod_LoadAbandon): the slot to
+ * clear and the file buffer to free.
+ */
+TEST(slot_refused_load_is_abandoned)
+{
+	char slot[MAX_QPATH];
+	char buf[16];
+	void *freed = NULL;
+
+	/* nothing in progress: nothing to take back */
+	T_CHECK(Mod_LoadAbandon(&freed) == NULL);
+	T_CHECK(freed == NULL);
+
+	/* the map is named and loaded, then refused: Mod_LoadEnd never runs */
+	strcpy(slot, "maps/refused.bsp");
+	Mod_LoadBegin(slot, buf);
+
+	/* the reconnect: the next Mod_ForName takes the slot back, once */
+	T_CHECK(Mod_LoadAbandon(&freed) == slot);
+	T_CHECK(freed == buf);
+	T_CHECK(Mod_LoadAbandon(&freed) == NULL);
+
+	/* a second load of the same name is refused again, not cached */
+	Mod_LoadBegin(slot, buf);
+	T_CHECK(Mod_LoadAbandon(&freed) == slot);
+}
+
+TEST(slot_finished_load_is_kept)
+{
+	char slot[MAX_QPATH];
+	char buf[16];
+	void *freed = NULL;
+
+	strcpy(slot, "maps/good.bsp");
+	Mod_LoadBegin(slot, buf);
+	Mod_LoadEnd();
+	T_CHECK(Mod_LoadAbandon(&freed) == NULL);
+	T_CHECK(freed == NULL);
+}
+
+/*
+ * A refusal after Hunk_Begin and before Hunk_End (FIX135): Mod_LoadBrushModel
+ * begins the hunk before its lump loaders run, so a lump a loader refuses
+ * (a bad texinfo number in Mod_LoadFaces, for example) longjmps with the
+ * hunk still open. Hunk_Free must unmap all of it then; it used to read a
+ * size of 0 from the header and end in Sys_Error.
+ */
+static void
+hunk_unfinished_child(void *arg)
+{
+	void *base;
+	byte *p;
+
+	(void)arg;
+
+	base = Hunk_Begin(256 * 1024);
+	p = Hunk_Alloc(4096);
+	memset(p, 0x5a, 4096);
+	Hunk_Free(base);
+	printf("yq2test-child: freed\n");
+}
+
+TEST(hunk_unfinished_free)
+{
+	char out[1024];
+	int status = t_expect_exit(hunk_unfinished_child, NULL, out, sizeof(out));
+
+	T_EQ_INT(status, 0);
+	T_CHECK(strstr(out, "munmap failed") == NULL);
+	T_CHECK(strstr(out, "yq2test-child: freed") != NULL);
+}
+
+/*
+ * The abandon path the renderers run (Mod_ReclaimUnfinished at the start of
+ * Mod_ForName and Mod_FreeAll), against the real hunk: a slot whose load
+ * began its hunk and was refused before Hunk_End, reclaimed by the next
+ * load, twice, the way a second "map" of the same refused map runs.
+ * t_slot_free is what each renderer's Mod_Free does.
+ */
+typedef struct
+{
+	char name[MAX_QPATH];
+	void *extradata;
+	int extradatasize;
+} t_slot_t;
+
+static int t_files_freed;
+
+static void
+t_slot_free(void *slot)
+{
+	t_slot_t *mod = slot;
+
+	Hunk_Free(mod->extradata);
+	memset(mod, 0, sizeof(*mod));
+}
+
+static void
+t_file_free(void *buf)
+{
+	free(buf);
+	t_files_freed++;
+}
+
+static void
+slot_reclaim_child(void *arg)
+{
+	t_slot_t slot;
+	int pass;
+
+	(void)arg;
+	memset(&slot, 0, sizeof(slot));
+	t_files_freed = 0;
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		/* Mod_ForName names the slot, loads the file, begins the hunk */
+		strcpy(slot.name, "maps/refused.bsp");
+		Mod_LoadBegin(&slot, malloc(64));
+		slot.extradata = Hunk_Begin(256 * 1024);
+		Hunk_Alloc(1024);
+
+		/* refused here (Com_Error): no Hunk_End, no Mod_LoadEnd */
+
+		Mod_ReclaimUnfinished(t_slot_free, t_file_free);
+		T_CHECK(slot.name[0] == '\0');
+		T_CHECK(slot.extradata == NULL);
+		T_EQ_INT(t_files_freed, pass + 1);
+	}
+
+	/* nothing left to reclaim */
+	Mod_ReclaimUnfinished(t_slot_free, t_file_free);
+	T_EQ_INT(t_files_freed, 2);
+	printf("yq2test-child: reclaimed\n");
+}
+
+TEST(slot_reclaim_frees_unfinished_hunk)
+{
+	char out[1024];
+	int status = t_expect_exit(slot_reclaim_child, NULL, out, sizeof(out));
+
+	T_EQ_INT(status, 0);
+	T_CHECK(strstr(out, "munmap failed") == NULL);
+	T_CHECK(strstr(out, "yq2test-child: reclaimed") != NULL);
 }

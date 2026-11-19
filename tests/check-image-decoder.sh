@@ -159,10 +159,37 @@ if [ "$status" -ne 0 ]; then
 	exit 1
 fi
 
+# the decoder as an SDK before 27.0 builds it, without
+# kCGImageSourceAllowableTypes (FIX138): the type check alone refuses a
+# PNG, JPEG or TGA named as another of the three (IMGDEC_ERR_MISMATCH)
+if [ "$(uname -s)" = Darwin ]; then
+	# shellcheck disable=SC2086 # flags, srcs and libs are word lists
+	if ! $cc $sflags -DIMGDEC_TEST_NO_ALLOWABLE_TYPES -o "${tmp:?}/imgdecode_old" $srcs $libs > "${tmp:?}/cc.out" 2>&1; then
+		cat "${tmp:?}/cc.out"
+		echo "check-image-decoder: the host test without kCGImageSourceAllowableTypes does not build"
+		exit 1
+	fi
+	if nm -u "${tmp:?}/imgdecode_old" | grep -q '_kCGImageSourceAllowableTypes$'; then
+		echo "check-image-decoder: IMGDEC_TEST_NO_ALLOWABLE_TYPES still builds kCGImageSourceAllowableTypes in"
+		exit 1
+	fi
+	status=0
+	bounded "${tmp:?}/imgdecode_old" > "${tmp:?}/old.out" 2>&1 || status=$?
+	expired "the host test without kCGImageSourceAllowableTypes"
+	if [ "$status" -ne 0 ]; then
+		cat "${tmp:?}/old.out"
+		echo "check-image-decoder: the host test without kCGImageSourceAllowableTypes failed"
+		exit 1
+	fi
+	sed 's/^imgdecode_test:/imgdecode_test (no kCGImageSourceAllowableTypes):/' "${tmp:?}/old.out" | tail -n 1
+fi
+
 # (b) no leak on any path, refusals included
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${CHECK_IMAGE_DECODER_REQUIRE:-0}" != 1 ] || { echo "check-image-decoder: CHECK_IMAGE_DECODER_REQUIRE=1 and the leak run cannot run: not Darwin"; exit 1; }
 	echo "check-image-decoder: leaks skipped: not Darwin"
 elif ! command -v leaks >/dev/null 2>&1; then
+	[ "${CHECK_IMAGE_DECODER_REQUIRE:-0}" != 1 ] || { echo "check-image-decoder: CHECK_IMAGE_DECODER_REQUIRE=1 and the leak run cannot run: no leaks(1)"; exit 1; }
 	echo "check-image-decoder: leaks skipped: no leaks(1)"
 else
 	# shellcheck disable=SC2086 # flags, srcs and libs are word lists

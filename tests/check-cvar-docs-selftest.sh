@@ -9,6 +9,9 @@
 # commit, which a shallow clone (CI) does not have: without it that step
 # is skipped here, with the command that fetches it, and runs on every
 # host that has the history. The plain check itself needs no history.
+# CHECK_CVAR_DOCS_SELFTEST_REQUIRE=1 turns that skip into a failure; the
+# invariants job of .github/workflows/macos.yml sets it, as its checkout
+# is the full history (FIX115).
 set -eu
 cd "$(dirname "$0")/.."
 sh tests/check-cvar-docs.sh --selftest
@@ -19,5 +22,6 @@ esac
 if git cat-file -e "$id^{commit}" 2> /dev/null; then
 	sh tests/check-cvar-docs.sh --verify-upstream
 else
+	[ "${CHECK_CVAR_DOCS_SELFTEST_REQUIRE:-0}" != 1 ] || { echo "check-cvar-docs-selftest: CHECK_CVAR_DOCS_SELFTEST_REQUIRE=1 and the upstream commit $id is not here (git fetch --depth=1 origin $id)" >&2; exit 1; }
 	echo "check-cvar-docs-selftest: the upstream commit $id is not here; --verify-upstream skipped (git fetch --depth=1 origin $id)"
 fi

@@ -25,7 +25,8 @@
 #       of the iPhone's UIFileSharingEnabled, orientation or status bar keys;
 #   (e) the compiled touch.o: Touch_Supported is "mov w0, #0x0; ret", 0
 #       whatever the device; nm -u of every imgdecode.o lists
-#       _kCGImageSourceAllowableTypes (ImageIO reads only the file's type);
+#       _CGImageSourceGetType, and _kCGImageSourceAllowableTypes where the
+#       SDK declares it (ImageIO reads only the file's type, FIX138);
 #       sdl3.o holds no SDL_RETURN_KEY_HIDES_IME, does not need
 #       _Touch_TextInput and holds the name SDL_TV_REMOTE_AS_JOYSTICK, which
 #       sdl3.c's one line naming it sets to "0" (the Siri Remote as keys);
@@ -195,6 +196,7 @@ if [ "$fail" != 0 ]; then
 fi
 
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${CHECK_TVOS_REQUIRE:-0}" != 1 ] || { echo "check-tvos: CHECK_TVOS_REQUIRE=1 and this is not macOS"; exit 1; }
 	echo "check-tvos: skipped: the tvOS build is macOS only (docs/decisions/0008)"
 	exit 0
 fi
@@ -203,10 +205,12 @@ if command -v xcrun >/dev/null 2>&1; then
 	sdk=$(xcrun --sdk appletvsimulator --show-sdk-path 2>/dev/null) || sdk=
 fi
 if [ -z "$sdk" ] || [ ! -f "$sdk/SDKSettings.plist" ]; then
+	[ "${CHECK_TVOS_REQUIRE:-0}" != 1 ] || { echo "check-tvos: CHECK_TVOS_REQUIRE=1 and there is no tvOS simulator SDK (xcrun --sdk appletvsimulator --show-sdk-path)"; exit 1; }
 	echo "check-tvos: skipped: no tvOS simulator SDK (xcrun --sdk appletvsimulator --show-sdk-path)"
 	exit 0
 fi
 if ! xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
+	[ "${CHECK_TVOS_REQUIRE:-0}" != 1 ] || { echo "check-tvos: CHECK_TVOS_REQUIRE=1 and there is no iOS simulator SDK for the object-list comparison"; exit 1; }
 	echo "check-tvos: skipped: no iOS simulator SDK for the object-list comparison"
 	exit 0
 fi
@@ -543,8 +547,26 @@ grep '/imgdecode\.o$' "${tmp:?}/objs" > "${tmp:?}/imgdecode" || :
 if [ ! -s "${tmp:?}/imgdecode" ]; then
 	bad "(e) the build has no imgdecode.o"
 fi
+# The restriction is kCGImageSourceAllowableTypes where the SDK declares
+# it (27.0 on); an older SDK (FIX138) builds without it, and the type
+# check on CGImageSourceGetType is the restriction then, as it is the
+# backstop always. Whether the SDK declares it is asked of the SDK, so a
+# decoder that leaves it out on an SDK that has it still fails.
+printf '#include <ImageIO/ImageIO.h>\nconst void *tvos_a(void) { return kCGImageSourceAllowableTypes; }\n' > "${tmp:?}/a.c"
+imgdec_syms=_CGImageSourceGetType
+if xcrun --sdk appletvsimulator clang -target arm64-apple-tvos17.0-simulator -Wno-unguarded-availability-new \
+	-c "${tmp:?}/a.c" -o "${tmp:?}/a.o" > "${tmp:?}/a.out" 2>&1; then
+	imgdec_syms="$imgdec_syms _kCGImageSourceAllowableTypes"
+elif grep -q "undeclared identifier 'kCGImageSourceAllowableTypes'" "${tmp:?}/a.out"; then
+	echo "check-tvos: note: the tvOS simulator SDK $(xcrun --sdk appletvsimulator --show-sdk-version 2>/dev/null) does not declare kCGImageSourceAllowableTypes: the type check (CGImageSourceGetType) is pinned alone"
+else
+	cat "${tmp:?}/a.out"
+	bad "(e) the probe for kCGImageSourceAllowableTypes does not build for another reason"
+fi
 while read -r obj; do
-	assert_need "$obj" _kCGImageSourceAllowableTypes > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the image decoder does not restrict ImageIO to the file's type"; }
+	for sym in $imgdec_syms; do
+		assert_need "$obj" "$sym" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the image decoder does not restrict ImageIO to the file's type"; }
+	done
 done < "${tmp:?}/imgdecode"
 
 # the positive controls: the iOS simulator's object of each pinned file,

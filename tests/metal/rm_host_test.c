@@ -4373,6 +4373,13 @@ Hunk_Alloc(int size)
 	return buf;
 }
 
+/* the loader frees its hunk on a refusal (FIX135); the next Hunk_Begin frees the memory */
+void
+Hunk_Free(void *base)
+{
+	(void)base;
+}
+
 void
 Com_Error(int code, const char *fmt, ...)
 {

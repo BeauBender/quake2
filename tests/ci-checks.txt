@@ -1,0 +1,47 @@
+# The tests/check-*.sh that the invariants job of .github/workflows/macos.yml
+# runs on a free standard macOS runner (scripts/ci-checks.sh), one name per
+# line. Every check is here or in tests/ci-local-only.txt, never in both
+# (tests/check-ci-parity.sh).
+check-autorelease-pool.sh
+check-bench-entry.sh
+check-bench-quake2.sh
+check-bench.sh
+check-bsp-loader.sh
+check-card-close-labels.sh
+check-checkout-current.sh
+check-ci-parity.sh
+check-codeql-changes.sh
+check-compat-names.sh
+check-cvar-docs-selftest.sh
+check-cvar-docs.sh
+check-doc-links.sh
+check-evidence.sh
+check-gate-parallel.sh
+check-input-gate.sh
+check-ios-screen.sh
+check-ios.sh
+check-memory-rules.sh
+check-metal-shim.sh
+check-mode-size.sh
+check-no-tracked-memory.sh
+check-pins-latch.sh
+check-pins.sh
+check-pre-commit-hook.sh
+check-pre-push-hook.sh
+check-ref-metal.sh
+check-refrecord.sh
+check-removed-deps.sh
+check-rt-variations.sh
+check-runbook-index.sh
+check-savegame-tables.sh
+check-static-modules.sh
+check-stop-invariants.sh
+check-title-fit.sh
+check-tvos.sh
+check-upscale-metalfx.sh
+check-upscale-report.sh
+check-upscale-vt.sh
+check-vendored.sh
+check-video-menu.sh
+check-visionos.sh
+check-workflow-pins.sh
