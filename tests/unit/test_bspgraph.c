@@ -955,3 +955,48 @@ TEST(bspcheck_leaf_cluster_bounds_pass)
 	g.leafs[3].cluster = 7;
 	T_EQ_INT(c_check(g_build()), 5);
 }
+
+/*
+ * A refused map leaves no named slot behind (FIX135). Mod_ForName names the
+ * slot and loads the file; the refusal is a Com_Error, which longjmps, so
+ * nothing after it runs. The loader records the load in progress
+ * (Mod_LoadBegin), Mod_LoadEnd closes it, and the next Mod_ForName or
+ * Mod_FreeAll takes an unfinished one back (Mod_LoadAbandon): the slot to
+ * clear and the file buffer to free.
+ */
+TEST(slot_refused_load_is_abandoned)
+{
+	char slot[MAX_QPATH];
+	char buf[16];
+	void *freed = NULL;
+
+	/* nothing in progress: nothing to take back */
+	T_CHECK(Mod_LoadAbandon(&freed) == NULL);
+	T_CHECK(freed == NULL);
+
+	/* the map is named and loaded, then refused: Mod_LoadEnd never runs */
+	strcpy(slot, "maps/refused.bsp");
+	Mod_LoadBegin(slot, buf);
+
+	/* the reconnect: the next Mod_ForName takes the slot back, once */
+	T_CHECK(Mod_LoadAbandon(&freed) == slot);
+	T_CHECK(freed == buf);
+	T_CHECK(Mod_LoadAbandon(&freed) == NULL);
+
+	/* a second load of the same name is refused again, not cached */
+	Mod_LoadBegin(slot, buf);
+	T_CHECK(Mod_LoadAbandon(&freed) == slot);
+}
+
+TEST(slot_finished_load_is_kept)
+{
+	char slot[MAX_QPATH];
+	char buf[16];
+	void *freed = NULL;
+
+	strcpy(slot, "maps/good.bsp");
+	Mod_LoadBegin(slot, buf);
+	Mod_LoadEnd();
+	T_CHECK(Mod_LoadAbandon(&freed) == NULL);
+	T_CHECK(freed == NULL);
+}

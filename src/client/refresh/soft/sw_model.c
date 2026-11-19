@@ -129,6 +129,18 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 	void	*buf;
 	int	i, modfilelen;
 
+	/* a load a refusal cut short (FIX135): clear its slot, free its file */
+	{
+		void *stale_buf;
+		model_t *stale = Mod_LoadAbandon(&stale_buf);
+
+		if (stale)
+		{
+			Mod_Free(stale);
+			ri.FS_FreeFile(stale_buf);
+		}
+	}
+
 	if (!name[0])
 	{
 		Com_Error(ERR_DROP, "%s: NULL name", __func__);
@@ -188,6 +200,8 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 		return NULL;
 	}
 
+	Mod_LoadBegin(mod, buf);
+
 	//
 	// fill it in
 	//
@@ -235,6 +249,7 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 
 	mod->extradatasize = Hunk_End();
 
+	Mod_LoadEnd();
 	ri.FS_FreeFile(buf);
 
 	return mod;
@@ -822,6 +837,17 @@ void
 Mod_FreeAll (void)
 {
 	int		i;
+
+	{
+		void *stale_buf;
+		model_t *stale = Mod_LoadAbandon(&stale_buf);
+
+		if (stale)
+		{
+			Mod_Free(stale);
+			ri.FS_FreeFile(stale_buf);
+		}
+	}
 
 	for (i=0 ; i<mod_numknown ; i++)
 	{

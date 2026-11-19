@@ -227,6 +227,11 @@ extern qboolean Mod_CheckFaceEdges(const byte *mod_base, const dheader_t *header
 	char *why, size_t whysize);
 extern qboolean Mod_CheckLeafs(const byte *mod_base, const dheader_t *header,
 	char *why, size_t whysize);
+
+/* The model load in progress (FIX135), see files/models.c */
+extern void Mod_LoadBegin(void *slot, void *buf);
+extern void Mod_LoadEnd(void);
+extern void *Mod_LoadAbandon(void **buf);
 extern mleaf_t *Mod_PointInLeaf(const vec3_t p, mnode_t *node);
 
 /* Surface logic */

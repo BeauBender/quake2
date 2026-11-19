@@ -612,6 +612,17 @@ GL3_Mod_FreeAll(void)
 {
 	int i;
 
+	{
+		void *stale_buf;
+		gl3model_t *stale = Mod_LoadAbandon(&stale_buf);
+
+		if (stale)
+		{
+			Mod_Free(stale);
+			ri.FS_FreeFile(stale_buf);
+		}
+	}
+
 	for (i = 0; i < mod_numknown; i++)
 	{
 		if (mod_known[i].extradatasize)
@@ -630,6 +641,18 @@ Mod_ForName(const char *name, gl3model_t *parent_model, qboolean crash)
 	gl3model_t *mod;
 	void *buf;
 	int i, modfilelen;
+
+	/* a load a refusal cut short (FIX135): clear its slot, free its file */
+	{
+		void *stale_buf;
+		gl3model_t *stale = Mod_LoadAbandon(&stale_buf);
+
+		if (stale)
+		{
+			Mod_Free(stale);
+			ri.FS_FreeFile(stale_buf);
+		}
+	}
 
 	if (!name[0])
 	{
@@ -700,6 +723,8 @@ Mod_ForName(const char *name, gl3model_t *parent_model, qboolean crash)
 		return NULL;
 	}
 
+	Mod_LoadBegin(mod, buf);
+
 	/* call the apropriate loader */
 	switch (LittleLong(*(unsigned *)buf))
 	{
@@ -742,6 +767,7 @@ Mod_ForName(const char *name, gl3model_t *parent_model, qboolean crash)
 
 	mod->extradatasize = Hunk_End();
 
+	Mod_LoadEnd();
 	ri.FS_FreeFile(buf);
 
 	return mod;

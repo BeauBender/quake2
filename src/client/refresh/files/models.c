@@ -27,6 +27,48 @@
 #include "../ref_shared.h"
 
 /*
+ * The model load in progress (FIX135). Mod_ForName names a slot and loads
+ * the file, and a loader refuses a bad model with Com_Error, which longjmps:
+ * nothing after it runs, so the slot would stay named and empty (a
+ * reconnect would get it back from the cache) and the file buffer would
+ * leak. Mod_ForName records the load with Mod_LoadBegin and closes it with
+ * Mod_LoadEnd. A load still open when the next Mod_ForName or Mod_FreeAll
+ * runs was refused: Mod_LoadAbandon returns its slot, for the renderer to
+ * free and clear (Mod_Free), and the file buffer, for ri.FS_FreeFile.
+ * Keeping this here, not at each of the refusals, covers every loader
+ * (BSP, alias, sprite) and the ones added later. ref_metal frees its
+ * unfinished slots itself (RM_FreeUnfinished).
+ */
+static void *mod_loadslot;
+static void *mod_loadbuf;
+
+void
+Mod_LoadBegin(void *slot, void *buf)
+{
+	mod_loadslot = slot;
+	mod_loadbuf = buf;
+}
+
+void
+Mod_LoadEnd(void)
+{
+	mod_loadslot = NULL;
+	mod_loadbuf = NULL;
+}
+
+/* the unfinished load's slot (NULL when none) and, in *buf, its file buffer */
+void *
+Mod_LoadAbandon(void **buf)
+{
+	void *slot = mod_loadslot;
+
+	*buf = mod_loadbuf;
+	Mod_LoadEnd();
+
+	return slot;
+}
+
+/*
 =================
 Mod_LoadAliasModel/Mod_LoadMD2
 =================
