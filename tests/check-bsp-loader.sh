@@ -7,15 +7,18 @@
 # Mod_CheckNodes, Mod_CheckFaceEdges), so a hostile map is refused the same
 # way by all four. This fails when
 # - a Mod_LoadBrushModel body does not call all four checks, or calls one
-#   after its first lump read (a Mod_Load* or Mod_CalcLumpHunkSize call);
+#   after its first lump read (a Mod_Load* or Mod_CalcLumpHunkSize call),
+#   or discards a check's result (a call that is not !Mod_Check...(), such
+#   as (void)Mod_CheckNodes(...) or a bare statement);
 # - a Mod_LoadBrushModel, Mod_LoadFaces or Mod_LoadLeafs definition appears
 #   outside the four known loader files (a fifth fork would skip the checks);
 # - the shared checks are not defined in models.c.
-# Comments do not count as calls.
+# Calls in comments (one line or several) and in #if 0 regions do not count.
 #
 # Then it proves itself on scratch copies: a copy with one renderer's call
-# dropped, one with a check moved after a lump read and one with a fifth
-# loader must each be refused.
+# dropped, one with a check moved after a lump read, one with a fifth
+# loader, one with a call inside a multi-line comment, one with a call under
+# #if 0 and one with a (void) call must each be refused.
 #
 # Usage: tests/check-bsp-loader.sh [root]   (root defaults to the repo)
 set -eu
@@ -28,6 +31,45 @@ loaders="src/client/refresh/gl1/gl1_model.c src/client/refresh/gl3/gl3_model.c
 src/client/refresh/soft/sw_model.c src/client/refresh/metal/rm_model.c"
 checks="Mod_CheckLumps Mod_CheckVis Mod_CheckNodes Mod_CheckFaceEdges"
 shared=src/client/refresh/files/models.c
+
+# stdin to stdout with only the code the compiler sees: /* */ comments
+# removed across lines, // comments removed, and every #if 0 region (nested
+# #if, #ifdef and #ifndef inside it included) dropped up to its #endif, or
+# up to an #else or #elif of its own level, whose branch is kept. A line
+# keeps its place (a dropped line is printed empty). String literals are
+# not parsed: none in a loader body holds a comment marker.
+strip_dead() {
+	awk '
+	{
+		line = $0
+		out = ""
+		while (line != "") {
+			if (incomment) {
+				e = index(line, "*/")
+				if (!e) { line = ""; break }
+				line = substr(line, e + 2)
+				incomment = 0
+				continue
+			}
+			s = index(line, "/*")
+			d = index(line, "//")
+			if (d && (!s || d < s)) { out = out substr(line, 1, d - 1); line = ""; break }
+			if (!s) { out = out line; line = ""; break }
+			out = out substr(line, 1, s - 1) " "
+			line = substr(line, s + 2)
+			incomment = 1
+		}
+		if (dead) {
+			if (out ~ /^[ \t]*#[ \t]*if/) depth++
+			else if (out ~ /^[ \t]*#[ \t]*endif/) { if (--depth == 0) dead = 0 }
+			else if (depth == 1 && out ~ /^[ \t]*#[ \t]*(else|elif)/) dead = 0
+			print ""
+			next
+		}
+		if (out ~ /^[ \t]*#[ \t]*if[ \t]+0([^0-9A-Za-z_xX]|$)/) { dead = 1; depth = 1; print ""; next }
+		print out
+	}'
+}
 
 check_tree() { # root: 0 when the tree keeps the invariant, 1 with the reasons printed
 	r=$1
@@ -54,9 +96,9 @@ check_tree() { # root: 0 when the tree keeps the invariant, 1 with the reasons p
 			continue
 		fi
 
-		# the body, comments stripped: from the definition to the first closing brace in column 1
-		body=$(sed -n '/^Mod_LoadBrushModel[[:space:]]*(/,/^}/p' "$r/$f" |
-			sed 's,/\*.*\*/,,g; s,//.*,,')
+		# the body, from the definition to the first closing brace in column 1,
+		# with its live code only (strip_dead)
+		body=$(sed -n '/^Mod_LoadBrushModel[[:space:]]*(/,/^}/p' "$r/$f" | strip_dead)
 		first_read=$(printf '%s\n' "$body" |
 			grep -nE '(Mod_Load[A-Za-z0-9_]*|Mod_CalcLumpHunkSize|calcTexinfoAndFacesSize)[[:space:]]*\(' |
 			grep -vE ':Mod_LoadBrushModel' | head -n 1 | cut -d: -f1)
@@ -68,6 +110,13 @@ check_tree() { # root: 0 when the tree keeps the invariant, 1 with the reasons p
 				bad=1
 			elif [ -n "$first_read" ] && [ "$at" -gt "$first_read" ]; then
 				echo "check-bsp-loader: $f: Mod_LoadBrushModel calls $c after its first lump read"
+				bad=1
+			fi
+
+			# every call's result feeds the refusal: each call is negated, !Mod_Check...(
+			if printf '%s\n' "$body" | sed -E "s/![[:space:]]*$c[[:space:]]*\(//g" |
+				grep -qE "(^|[^A-Za-z0-9_])$c[[:space:]]*\("; then
+				echo "check-bsp-loader: $f: Mod_LoadBrushModel discards the result of $c (call it as !$c(...) in the refusal's condition)"
 				bad=1
 			fi
 		done
@@ -141,4 +190,43 @@ mkdir -p "${tmp:?}/fifth/src/client/refresh/vk"
 printf 'static void\nMod_LoadFaces(model_t *m, byte *b, lump_t *l)\n{\n}\n' > "${tmp:?}/fifth/src/client/refresh/vk/vk_model.c"
 expect_refused "a fifth loader" "${tmp:?}/fifth"
 
-echo "check-bsp-loader: OK (4 loaders call the shared checks first; 3 mutants refused)"
+# mutate file in a copy at dir: the Mod_CheckNodes line of its condition
+# replaced by the lines of the awk program's "repl" (\n separated), and
+# "before" printed ahead of the condition's first line when set
+mutate() { # dir file repl before
+	awk -v repl="$3" -v before="$4" '
+		index($0, "!Mod_CheckLumps(mod_base, header, modfilelen, why, sizeof(why)) ||") && before != "" { print before }
+		index($0, "!Mod_CheckNodes(mod_base, header, why, sizeof(why)) ||") { print repl; next }
+		{ print }' "$root/$2" > "$1/$2"
+	cmp -s "$root/$2" "$1/$2" &&
+		{ echo "check-bsp-loader: selftest: the mutant of $2 changed nothing"; exit 1; }
+	return 0
+}
+
+expect_reason() { # what reason
+	grep -qF "$2" "${tmp:?}/out" ||
+		{ echo "check-bsp-loader: selftest: $1: wrong reason: $(cat "${tmp:?}/out")"; exit 1; }
+}
+
+# the call inside a comment that spans two lines
+copy "${tmp:?}/comment"
+mutate "${tmp:?}/comment" src/client/refresh/gl1/gl1_model.c \
+	"$(printf '\t\t/* no node check:\n\t\t!Mod_CheckNodes(mod_base, header, why, sizeof(why)) */')" ""
+expect_refused "gl1 with Mod_CheckNodes in a multi-line comment" "${tmp:?}/comment"
+expect_reason "the multi-line comment" "gl1_model.c: Mod_LoadBrushModel does not call Mod_CheckNodes"
+
+# the call inside #if 0, after a nested #ifdef ... #endif
+copy "${tmp:?}/ifzero"
+mutate "${tmp:?}/ifzero" src/client/refresh/soft/sw_model.c \
+	"$(printf '#if 0\n#ifdef NODES\n#endif\n\t\t!Mod_CheckNodes(mod_base, header, why, sizeof(why)) ||\n#endif')" ""
+expect_refused "soft with Mod_CheckNodes under #if 0" "${tmp:?}/ifzero"
+expect_reason "#if 0" "sw_model.c: Mod_LoadBrushModel does not call Mod_CheckNodes"
+
+# the call made before the condition, its result cast away
+copy "${tmp:?}/void"
+mutate "${tmp:?}/void" src/client/refresh/metal/rm_model.c "" \
+	"$(printf '\t(void)Mod_CheckNodes(mod_base, header, why, sizeof(why));')"
+expect_refused "metal discarding Mod_CheckNodes" "${tmp:?}/void"
+expect_reason "(void)" "rm_model.c: Mod_LoadBrushModel discards the result of Mod_CheckNodes"
+
+echo "check-bsp-loader: OK (4 loaders call the shared checks first; 6 mutants refused)"
