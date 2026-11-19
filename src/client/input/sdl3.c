@@ -3329,6 +3329,7 @@ IN_MatchJoyPreset(void)
  * when a person presses it; "wait <n>" there counts n frames.
  */
 extern sizebuf_t cmd_text; /* src/common/cmdparser.c */
+int Key_StringToKeynum(char *str); /* src/client/cl_keyboard.c */
 
 static SDL_Joystick *probe_joy;
 static char *probe_script, *probe_next;
