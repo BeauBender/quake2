@@ -686,9 +686,9 @@ rm_hdr_slot_keep(int fmt, int w, int h, int want_fmt, int want_w, int want_h)
 }
 
 int
-rm_hdr_fx_mode(int active, int mode)
+rm_hdr_fx_note(int fmt)
 {
-	return active ? 0 : mode;   /* RM_FX_OFF */
+	return (fmt == RM_FMT_RGBA16F) ? 3 : 1;   /* RM_FX_NOTE_HDR, RM_FX_NOTE_UNMADE */
 }
 
 static const char *

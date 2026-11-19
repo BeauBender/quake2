@@ -8730,12 +8730,9 @@ test_hdr(void)
 	CHECK(!rm_hdr_slot_keep(RM_FMT_BGRA8, 640, 480, RM_FMT_BGRA8, 641, 480));
 	CHECK(!rm_hdr_slot_keep(RM_FMT_BGRA8, 640, 480, RM_FMT_BGRA8, 640, 481));
 
-	/* MetalFX: off on the float16 path, whatever was asked; as asked otherwise */
-	CHECK(rm_hdr_fx_mode(1, 1) == 0);
-	CHECK(rm_hdr_fx_mode(1, 2) == 0);
-	CHECK(rm_hdr_fx_mode(0, 1) == 1);
-	CHECK(rm_hdr_fx_mode(0, 2) == 2);
-	CHECK(rm_hdr_fx_mode(0, 0) == 0);
+	/* MetalFX (HD4): a scaler refused in float16 gives r_hdr's note, one refused in 8 bits the stock note */
+	CHECK(rm_hdr_fx_note(RM_FMT_RGBA16F) == 3);   /* RM_FX_NOTE_HDR */
+	CHECK(rm_hdr_fx_note(RM_FMT_BGRA8) == 1);     /* RM_FX_NOTE_UNMADE */
 
 	CHECK(rm_hdr_info_format(RM_FMT_RGBA16F, "kCGColorSpaceExtendedLinearSRGB", 1, 2.5f, 16.0f, line, sizeof(line)));
 	CHECK(!strcmp(line, "ref_metal: hdr: layer RGBA16Float, colour space kCGColorSpaceExtendedLinearSRGB, "
