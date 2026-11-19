@@ -435,6 +435,7 @@ void CL_CalcViewValues(void);
 /* TASK172: Hor+ at w x h; with vertical_minimum never narrower than fov (a window under 4:3 shows more height instead). */
 float CL_AspectFov(float fov, float w, float h, qboolean vertical_minimum);
 void CL_AddEntities (void);
+int CL_ClockStep (int timedelta);
 void CL_AddDLights (void);
 void CL_AddTEnts (void);
 void CL_AddLightStyles (void);
