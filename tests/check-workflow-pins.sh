@@ -596,6 +596,7 @@ selftest()
 	step unreadable '    - name: Check out repository code' "$pinstep"
 	chmod 000 "${tmp:?}/unreadable/.github/workflows/w.yml"
 	if [ -r "${tmp:?}/unreadable/.github/workflows/w.yml" ]; then
+		[ "${CHECK_WORKFLOW_PINS_REQUIRE:-0}" != 1 ] || { echo "$me: selftest: CHECK_WORKFLOW_PINS_REQUIRE=1 and this user reads a mode 000 file" >&2; failed=1; }
 		echo "$me: selftest: the unreadable-file case is skipped: this user reads a mode 000 file" >&2
 	else
 		expect refuse "a file the scan cannot read" unreadable

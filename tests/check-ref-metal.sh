@@ -831,6 +831,7 @@ probe_run() {
 }
 probe="probe skipped"
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${CHECK_REF_METAL_DEVICE_REQUIRE:-0}" != 1 ] || bad "CHECK_REF_METAL_DEVICE_REQUIRE=1 and the colour-space probe cannot run: not macOS"
 	echo "check-ref-metal: colour-space probe skipped: not macOS"
 else
 	rc=0
@@ -842,6 +843,7 @@ else
 		cat "${tmp:?}/probe.out"
 		bad "tests/metal/rmb_cs_probe.m failed"
 	elif grep -q 'skipped: no Metal device' "${tmp:?}/probe.out"; then
+		[ "${CHECK_REF_METAL_DEVICE_REQUIRE:-0}" != 1 ] || bad "CHECK_REF_METAL_DEVICE_REQUIRE=1 and the colour-space probe found no Metal device"
 		echo "check-ref-metal: colour-space probe skipped: no Metal device"
 	else
 		probe=$(tail -n 1 "${tmp:?}/probe.out" | sed 's/^rmb_cs_probe: //')
@@ -963,6 +965,7 @@ else
 fi
 
 if [ -n "$skip" ]; then
+	[ "${CHECK_REF_METAL_REQUIRE:-0}" != 1 ] || bad "CHECK_REF_METAL_REQUIRE=1 and the build cannot run: $skip"
 	echo "check-ref-metal: build skipped: $skip"
 	build="build skipped"
 else

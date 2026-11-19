@@ -78,6 +78,7 @@ else
 fi
 
 if [ -n "$skip" ]; then
+	[ "${CHECK_METAL_SHIM_REQUIRE:-0}" != 1 ] || bad "CHECK_METAL_SHIM_REQUIRE=1 and the shim build cannot run: $skip"
 	echo "check-metal-shim: build skipped: $skip"
 	build="build skipped"
 else

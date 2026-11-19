@@ -34,6 +34,7 @@ bad() { echo "check-upscale-report: $*"; fail=1; }
 gen="$root/scripts/upscale-report.sh"
 
 if [ -n "$(cd "${tmp:?}" && git rev-parse --show-toplevel 2>/dev/null)" ]; then
+	[ "${CHECK_UPSCALE_REPORT_REQUIRE:-0}" != 1 ] || { echo "check-upscale-report: CHECK_UPSCALE_REPORT_REQUIRE=1 and the temporary directory is inside a git work tree"; exit 1; }
 	echo "check-upscale-report: skipped: the temporary directory is inside a git work tree"
 	exit 0
 fi

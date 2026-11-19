@@ -168,6 +168,7 @@ fetch_guard . || exit 1
 echo "check-upscale-vt: the fetch guard refused its mutants (${fg_refused#, })"
 
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${UPSCALE_VT_REQUIRE:-0}" != 1 ] || { echo "check-upscale-vt: UPSCALE_VT_REQUIRE=1 and this is not macOS"; exit 1; }
 	echo "check-upscale-vt: skipped: not macOS"
 	exit 0
 fi
