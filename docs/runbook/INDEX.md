@@ -91,3 +91,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK195](../runbook/TASK195.md): the ray-tracing tuning screen, the A/B toggle (`rt_ab`, an overlay that writes no setting) and presets (`rt_preset`), with the engine runs, the mutants and the base-against-branch pin comparison
 - [TASK184](../runbook/TASK184.md): the Retro post-process (RGB565 with the 4 x 4 dither, the box filter, the gamma curve): the tests and mutants, the retro records and the GPU time at 1080p and 5K (WIP: the pin comparison and the gate are left)
 - [FIX124](../runbook/FIX124.md): the identity check refuses an index blob it cannot read, and scans binary blobs as bytes (FIX125 too)
+- [FIX115](../runbook/FIX115.md): the gate's invariants in CI (`invariants_macos`), the required status checks of `main-protect`, and a `_REQUIRE` variable for every skip
