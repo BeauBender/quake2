@@ -94,5 +94,6 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX124](../runbook/FIX124.md): the identity check refuses an index blob it cannot read, and scans binary blobs as bytes (FIX125 too)
 - [FIX115](../runbook/FIX115.md): the gate's invariants in CI (`invariants_macos`), the required status checks of `main-protect`, and a `_REQUIRE` variable for every skip
 - [FIX118](../runbook/FIX118.md): the shared BSP checks of all four renderers: the round-2 red and green runs, the mutants, and every stock map passing
+- [FIX137](../runbook/FIX137.md): the collision model bounds a leaf's cluster and every visibility offset: the red and green runs, every stock map loading with the same PVS and PHS rows, and the live server check
 - [FIX134](../runbook/FIX134.md): the PVS decompressor of gl1, gl3 and soft stops at the visibility lump and its row: the red and green runs and every stock row decoding as before
 - [FIX138](../runbook/FIX138.md): the image decoder's type restriction on an SDK before 27.0: the type check tested and pinned on both kinds of SDK, and why check-image-decoder stays local-only
