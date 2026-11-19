@@ -182,8 +182,15 @@ R_HdrFrame(void)
 
 	rmb_hdr_set(active);
 
-	/* said on a change only: a stock run prints nothing */
-	if (active)
+	/*
+	 * said on a live change only: neither a stock run nor a start with
+	 * r_hdr 1 prints, so no notify line lands in a recorded frame
+	 */
+	if (rm_hdr_applied < 0)
+	{
+		/* nothing */
+	}
+	else if (active)
 	{
 		R_Printf(PRINT_ALL, "ref_metal: hdr: on (r_hdr 1): the frame in float16, shown at SDR until the tone map\n");
 	}
