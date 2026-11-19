@@ -73,12 +73,19 @@
  * __IPHONE_17_0 whatever its release (TASK175). The process-wide
  * CGImageSourceSetAllowableTypes is not used: it would also restrict the
  * image decoding of AppKit and SDL in the client, for the process's life.
+ *
+ * An older SDK (the macos-latest runner's 26.x, FIX138) builds without
+ * it: there the type check in IMGDEC_DecodeImageIO, CGImageSourceGetType
+ * against the extension's type before any header is parsed or a pixel
+ * decoded, is the restriction. IMGDEC_TEST_NO_ALLOWABLE_TYPES builds that
+ * path on a newer SDK, for tests/check-image-decoder.sh only.
  */
-#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000) || \
+#if !defined(IMGDEC_TEST_NO_ALLOWABLE_TYPES) && ( \
+	(defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000) || \
 	(defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000) || \
 	(defined(__TV_OS_VERSION_MAX_ALLOWED) && __TV_OS_VERSION_MAX_ALLOWED >= 270000) || \
 	(defined(__WATCH_OS_VERSION_MAX_ALLOWED) && __WATCH_OS_VERSION_MAX_ALLOWED >= 270000) || \
-	(defined(__VISION_OS_VERSION_MAX_ALLOWED) && __VISION_OS_VERSION_MAX_ALLOWED >= 270000)
+	(defined(__VISION_OS_VERSION_MAX_ALLOWED) && __VISION_OS_VERSION_MAX_ALLOWED >= 270000))
 #define IMGDEC_HAVE_ALLOWABLE_TYPES 1
 #endif
 #endif
