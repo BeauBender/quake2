@@ -535,6 +535,22 @@ test_ab_overlay(void)
 		!strcmp(line, "ref_metal: A/B: B: stock (3 settings overlaid, no cvar written)"));
 }
 
+/* TASK195: a value is the user's own unless the presentation decides it or the B side holds it */
+static void
+test_effect_overlaid(void)
+{
+	const char *b = "B: stock|r_metalfx=3;r_rt_ao_range=128;";
+
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, "", "r_metalfx"));
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, NULL, "r_metalfx"));
+	CHECK(rm_effect_overlaid(RM_PRES_STOCK, b, "r_metalfx"));
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, b, "r_metalfx_interp"));
+	CHECK(!rm_effect_overlaid(RM_PRES_ENHANCED, "", "r_metalfx"));   /* not a switch the mode decides */
+	CHECK(rm_effect_overlaid(RM_PRES_ENHANCED, "", "r_rt_ao"));
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, "", "r_rt_ao"));
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, b, NULL));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -547,6 +563,7 @@ main(int argc, char **argv)
 	test_pres_overlay();
 	test_pres_format();
 	test_ab_overlay();
+	test_effect_overlaid();
 
 	test_decide();
 	test_traces();
