@@ -42,6 +42,7 @@
 #
 # Needs only sh, awk, sed, grep and cp. Usage: tests/check-ci-parity.sh
 set -eu
+unset RUBYOPT RUBYLIB
 me=check-ci-parity
 cd "$(dirname "$0")/.."
 
@@ -409,71 +410,87 @@ skips() {
 }
 
 
-# jobs_ok <workflow>: the invariants job is there, unconditional, deep and
-# requires iOS where scripts/ci-checks.sh runs
+# jobs_ok <workflow>: the workflow, parsed by ruby's yaml as
+# tests/check-workflow-pins.sh parses it, has exactly one step whose run is
+# scripts/ci-checks.sh and nothing else; neither that step nor its job has an
+# if or a continue-on-error key; every actions/checkout step of the job has
+# fetch-depth 0 and persist-credentials false; CHECK_IOS_REQUIRE is 1 in the
+# step's env (or, when the step does not set it, the job's). No ruby, or a
+# ruby that cannot load yaml or parse the file, is a failure.
+jobs_prog='
+begin
+  require "yaml"
+rescue LoadError
+  puts "ruby cannot load its yaml library; nothing was checked"
+  exit 3
+end
+RUN = "scripts/ci-checks.sh"
+$bad = false
+def err(m)
+  puts m
+  $bad = true
+end
+def map(v)
+  v.is_a?(Hash) ? v : {}
+end
+def has(h, k)
+  h.keys.any? { |x| x.to_s == k }
+end
+begin
+  tree = YAML.safe_load(File.read(ARGV[0]), permitted_classes: [], aliases: true)
+rescue StandardError => e
+  puts "cannot be read as YAML (" + e.class.to_s + "); nothing was checked"
+  exit 1
+end
+hits = []
+map(map(tree)["jobs"]).each do |jn, job|
+  steps = map(job)["steps"]
+  next unless steps.is_a?(Array)
+  steps.each do |st|
+    r = map(st)["run"]
+    next unless r.is_a?(String)
+    if r.strip == RUN
+      hits << [jn.to_s, job, st]
+    elsif r.include?(RUN)
+      err("job " + jn.to_s + ": a step names " + RUN + " but its run is not that line alone: " + r.strip.inspect[0, 120])
+    end
+  end
+end
+if hits.empty?
+  err("no job runs " + RUN + " (a step whose run is that line alone)")
+elsif hits.length > 1
+  err(hits.length.to_s + " steps run " + RUN + "; exactly one must")
+else
+  jn, job, st = hits[0]
+  p = "job " + jn + ": "
+  err(p + "runs " + RUN + " under a job-level if: (a condition can skip it)") if has(job, "if")
+  err(p + "runs " + RUN + " with a job-level continue-on-error: (its failure would not fail the run)") if has(job, "continue-on-error")
+  err(p + "the step that runs " + RUN + " has an if: (a condition can skip it)") if has(st, "if")
+  err(p + "the step that runs " + RUN + " has continue-on-error: (its failure would not fail the job)") if has(st, "continue-on-error")
+  cos = job["steps"].select { |s| map(s)["uses"].is_a?(String) && s["uses"].downcase.start_with?("actions/checkout@") }
+  err(p + "runs " + RUN + " on a shallow checkout (no actions/checkout step)") if cos.empty?
+  cos.each do |s|
+    w = map(s["with"])
+    err(p + "runs " + RUN + " on a shallow checkout (an actions/checkout step without fetch-depth: 0)") unless [0, "0"].include?(w["fetch-depth"])
+    err(p + "an actions/checkout step keeps its token (no persist-credentials: false)") unless [false, "false"].include?(w["persist-credentials"])
+  end
+  se = map(st["env"])
+  v = se.key?("CHECK_IOS_REQUIRE") ? se["CHECK_IOS_REQUIRE"] : map(job["env"])["CHECK_IOS_REQUIRE"]
+  err(p + "runs " + RUN + " without CHECK_IOS_REQUIRE: 1 in that step or job env:") unless [1, "1"].include?(v)
+end
+exit($bad ? 1 : 0)
+'
 jobs_ok() {
-	awk '
-		function err(m) { print "job " job ": " m; bad = 1 }
-		function endstep() {
-			if (sl && srun) {
-				rs++
-				if (sif) err("the step that runs scripts/ci-checks.sh has an if: (a condition can skip it)")
-				if (scoe) err("the step that runs scripts/ci-checks.sh has continue-on-error: (its failure would not fail the job)")
-				if (sios) ios = 1
-			}
-			if (sl && sco) {
-				nco++
-				if (!sdepth) shallow = 1
-			}
-			sl = 0; srun = 0; sif = 0; scoe = 0; sios = 0; sco = 0; sdepth = 0; smap = ""
-		}
-		function finish() {
-			endstep()
-			if (job != "" && run) {
-				runs++
-				if (jif) err("runs scripts/ci-checks.sh under a job-level if: (a condition can skip it)")
-				if (jcoe) err("runs scripts/ci-checks.sh with a job-level continue-on-error: (its failure would not fail the run)")
-				if (!rs) err("runs scripts/ci-checks.sh outside a step this check can read")
-				if (!nco || shallow) err("runs scripts/ci-checks.sh on a shallow checkout (no fetch-depth: 0 on its actions/checkout step)")
-				if (!ios && !jios) err("runs scripts/ci-checks.sh without CHECK_IOS_REQUIRE: 1 in that step or job env:")
-			}
-			job = ""; run = 0; jif = 0; jcoe = 0; jios = 0; jmap = ""; rs = 0; nco = 0; shallow = 0; ios = 0
-		}
-		/^[ \t]*#/ { next }
-		/^jobs:/ { injobs = 1; next }
-		injobs && /^  [A-Za-z0-9_-]+:[ \t]*$/ { finish(); job = $1; sub(/:$/, "", job); next }
-		injobs && /^[^ \t]/ { finish(); injobs = 0 }
-		job == "" { next }
-		/scripts\/ci-checks\.sh/ { run = 1; if (sl) srun = 1 }
-		/^    - / {
-			endstep()
-			if (jmap == "steps") sl = NR
-			s = $0
-			sub(/^    - /, "      ", s)
-		}
-		!/^    - / { s = $0 }
-		s ~ /^    [A-Za-z0-9_-]+:/ {
-			endstep()
-			jmap = s; sub(/^ */, "", jmap); sub(/:.*/, "", jmap)
-			if (jmap == "if") jif = 1
-			if (jmap == "continue-on-error") jcoe = 1
-			next
-		}
-		sl && s ~ /^      [A-Za-z0-9_-]+:/ {
-			smap = s; sub(/^ */, "", smap); sub(/:.*/, "", smap)
-			if (smap == "if") sif = 1
-			if (smap == "continue-on-error") scoe = 1
-			if (smap == "uses" && s ~ /:[ \t]*actions\/checkout@/) sco = 1
-			next
-		}
-		sl && smap == "with" && s ~ /^        fetch-depth:[ \t]*["\047]?0["\047]?[ \t]*(#.*)?$/ { sdepth = 1 }
-		sl && smap == "env" && s ~ /^        CHECK_IOS_REQUIRE:[ \t]*["\047]?1["\047]?[ \t]*(#.*)?$/ { sios = 1 }
-		!sl && jmap == "env" && s ~ /^      CHECK_IOS_REQUIRE:[ \t]*["\047]?1["\047]?[ \t]*(#.*)?$/ { jios = 1 }
-		END {
-			finish()
-			if (!runs) { print "no job runs scripts/ci-checks.sh"; bad = 1 }
-			exit bad
-		}' "$1"
+	if ! command -v ruby > /dev/null 2>&1; then
+		echo "no ruby on PATH (its yaml parses the workflow); nothing was checked"
+		return 1
+	fi
+	_s=0
+	ruby --disable-gems -e "$jobs_prog" -- "$1" || _s=$?
+	if [ "$_s" -gt 1 ]; then
+		echo "ruby failed (status $_s); the workflow was not checked"
+	fi
+	[ "$_s" -eq 0 ]
 }
 
 # parity <root>: prints every problem of the tree at <root>; fails on any
@@ -576,6 +593,12 @@ check() {
 # after <file> <line> <new>: writes <new> after the first line equal to <line>
 after() {
 	AFTER_L=$2 AFTER_N=$3 awk '{ print } !d && $0 == ENVIRON["AFTER_L"] { print ENVIRON["AFTER_N"]; d = 1 } END { exit !d }' "$1" > "$1.new" || { echo "$me: selftest: no line '$2' in $1"; return 1; }
+	mv "$1.new" "$1"
+}
+# swap <file> <line> <new>: writes <new> in place of the first line equal to
+# <line>
+swap() {
+	SWAP_L=$2 SWAP_N=$3 awk '!d && $0 == ENVIRON["SWAP_L"] { print ENVIRON["SWAP_N"]; d = 1; next } { print } END { exit !d }' "$1" > "$1.new" || { echo "$me: selftest: no line '$2' in $1"; return 1; }
 	mv "$1.new" "$1"
 }
 # refused <name> <expected text>...: the mutant in $tmp/<name> is refused,
@@ -707,7 +730,7 @@ if [ "$fail" = 0 ]; then
 	# CHECK_IOS_REQUIRE in the job, but on another step
 	copy "$tmp/iosmoved"
 	grep -v 'CHECK_IOS_REQUIRE: ' "$wf" > "$tmp/iosmoved/$wf"
-	after "$tmp/iosmoved/$wf" '        fetch-depth: 0' '    - name: Other
+	after "$tmp/iosmoved/$wf" '        persist-credentials: false' '    - name: Other
       env:
         CHECK_IOS_REQUIRE: 1
       run: true'
@@ -732,6 +755,96 @@ if [ "$fail" = 0 ]; then
 	copy "$tmp/stepcoe"
 	after "$tmp/stepcoe/$wf" '    - name: Invariants' '      continue-on-error: true'
 	refused stepcoe "step that runs scripts/ci-checks.sh has continue-on-error:"
+
+	# round 3: the keys in any quoting, as YAML reads them
+	copy "$tmp/jobifq"
+	after "$tmp/jobifq/$wf" '  invariants_macos:' '    "if": false'
+	refused jobifq "under a job-level if:"
+
+	copy "$tmp/stepifq"
+	after "$tmp/stepifq/$wf" '    - name: Invariants' '      "if": false'
+	refused stepifq "step that runs scripts/ci-checks.sh has an if:"
+
+	copy "$tmp/stepcoeq"
+	after "$tmp/stepcoeq/$wf" '    - name: Invariants' "      'continue-on-error': true"
+	refused stepcoeq "step that runs scripts/ci-checks.sh has continue-on-error:"
+
+	# the run line is scripts/ci-checks.sh alone
+	copy "$tmp/ortrue"
+	swap "$tmp/ortrue/$wf" '        scripts/ci-checks.sh' '        scripts/ci-checks.sh || true'
+	refused ortrue "its run is not that line alone" "no job runs scripts/ci-checks.sh"
+
+	copy "$tmp/commented"
+	swap "$tmp/commented/$wf" '        scripts/ci-checks.sh' '        true # scripts/ci-checks.sh'
+	refused commented "its run is not that line alone" "no job runs scripts/ci-checks.sh"
+
+	copy "$tmp/envprefix"
+	swap "$tmp/envprefix/$wf" '        scripts/ci-checks.sh' '        CHECK_IOS_REQUIRE=0 scripts/ci-checks.sh'
+	refused envprefix "its run is not that line alone" "no job runs scripts/ci-checks.sh"
+
+	copy "$tmp/nopersist"
+	grep -v 'persist-credentials: false' "$wf" > "$tmp/nopersist/$wf"
+	refused nopersist "no persist-credentials: false"
+
+	# (c) round 3: a <<EOF in a string or a comment is no here-document, and
+	# one never closed is refused
+	check hdstring 'echo "a <<EOF b"' 'if ! command -v zz >/dev/null 2>&1; then' '	echo "check-y: skipped: no zz"' '	exit 0' 'fi'
+	refused hdstring "tests/check-y.sh:4:"
+
+	check hdcomment '# like cat <<EOF' 'if ! command -v zz >/dev/null 2>&1; then' '	echo "check-y: skipped: no zz"' '	exit 0' 'fi'
+	refused hdcomment "tests/check-y.sh:4:"
+
+	check hdopen 'cat <<EOF' 'echo "check-y: skipped: no zz"'
+	refused hdopen "tests/check-y.sh:0:"
+
+	# a guard must fail: round 1's || bad then return 0 in check-bench,
+	# where bad only counts and a test fails by its status
+	check benchbad 'fails=0' 'bad() {' '	echo "check-y: $*"' '	fails=$((fails + 1))' '	if [ -n "$MUTANT" ]; then exit 1; fi' '}' 't_y() {' '	if ! command -v zz >/dev/null 2>&1; then' '		[ "${CHECK_Y_REQUIRE:-0}" != 1 ] || bad "t_y: CHECK_Y_REQUIRE=1 and no zz"' '		echo "check-y: t_y skipped: no zz"' '		return 0' '	fi' '	[ "$fails" -eq 0 ]' '}'
+	refused benchbad "tests/check-y.sh:11:"
+
+	check echoreq 'if ! command -v zz >/dev/null 2>&1; then' '	[ "${CHECK_Y_REQUIRE:-0}" != 1 ] || echo required' '	echo "check-y: skipped: no zz"' '	exit 0' 'fi'
+	refused echoreq "tests/check-y.sh:4:"
+
+	check bareexit 'if ! command -v zz >/dev/null 2>&1; then' '	[ "${CHECK_Y_REQUIRE:-0}" != 1 ] || { echo "check-y: required"; exit; }' '	echo "check-y: skipped: no zz"' '	exit 0' 'fi'
+	refused bareexit "tests/check-y.sh:4:"
+
+	check inverted 'if [ "${CHECK_Y_REQUIRE:-0}" = 1 ]; then' '	echo "check-y: skipped: no zz"' 'fi'
+	refused inverted "tests/check-y.sh:3:"
+
+	check invertedand '[ "${CHECK_Y_REQUIRE:-0}" = 1 ] && echo "check-y: skipped: no zz"'
+	refused invertedand "tests/check-y.sh:2:"
+
+	# a following line exempts a skip only with a literal failure
+	check exitvar 'echo "check-y: skipped: no zz"' 'exit $rc'
+	refused exitvar "tests/check-y.sh:2:"
+
+	check fail0 'echo "check-y: skipped: no zz"' 'fail=0'
+	refused fail0 "tests/check-y.sh:2:"
+
+	check fails0 'echo "check-y: skipped: no zz"' 'fails=0'
+	refused fails0 "tests/check-y.sh:2:"
+
+	check condexit 'echo "check-y: skipped: no zz"' '[ -n "$x" ] || exit 1'
+	refused condexit "tests/check-y.sh:2:"
+
+	# the terminal, by another name
+	check devstderr 'echo "check-y: skipped: no zz" >/dev/stderr'
+	refused devstderr "tests/check-y.sh:2:"
+
+	check devtty 'echo "check-y: skipped: no zz" > /dev/tty'
+	refused devtty "tests/check-y.sh:2:"
+
+	check fdn 'echo "check-y: skipped: no zz" >&3'
+	refused fdn "tests/check-y.sh:2:"
+
+	# an allow-list entry matches exactly one line
+	check allowone 'echo "check-y: zz skipped here"'
+	echo 'check-y.sh|zz skipped here|a reason' >> "$tmp/allowone/tests/ci-skip-allow.txt"
+	passes allowone
+
+	check allowtwo 'echo "check-y: zz skipped here"' 'echo "check-y: zz skipped here, again"'
+	echo 'check-y.sh|zz skipped here|a reason' >> "$tmp/allowtwo/tests/ci-skip-allow.txt"
+	refused allowtwo "matches 2 lines"
 fi
 
 if [ "$fail" != 0 ]; then
