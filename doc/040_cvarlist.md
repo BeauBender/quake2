@@ -867,6 +867,22 @@ The items write their cvars with `apply`, which restarts the renderer, and
 show what the renderer kept. A scaler mode that `r_metalfx_modes` lacks is
 marked `(n/a)` and skipped.
 
+* **r_hdr**: The Metal renderer's high dynamic range output. `0` (the
+  default) draws as before, in 8 bits, byte for byte. `1` draws the
+  frame into a 16-bit floating-point target and shows it on a layer in
+  extended linear sRGB with extended dynamic range on, so the parts of
+  the picture the 8-bit target clipped above white (the sums of additive
+  effects) are kept; everything at or below white looks as it does at
+  `0`. This version shows the frame at SDR white still (its tone map
+  comes later), turns the MetalFX scalers off with one line, and is
+  taken on a display without extended range too. Under the *Retro*
+  presentation (`r_presentation 2`) it has no effect (the cvar keeps its
+  value, and the console says so once when it is set). The readback of the
+  frame (screenshots, the pins) is the picture clamped to white, in 8
+  bits. Only `0` and `1` are values: any other value is `0`. Other
+  renderers do not have it. Saved with the configuration; applies from
+  the next frame. `metal_hdr_info` prints the layer's state.
+
 * **r_metalfx**: The scaler. `0` (the default) is none. `1` is
   `MTLFXSpatialScaler`, which scales the colour of each frame on its own.
   `2` is `MTLFXTemporalScaler`, which also takes the depth, how far each

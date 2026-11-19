@@ -175,7 +175,9 @@ rmb_gbuf_textures(int path, int w, int h, int scaled, int surf)
 
 	surf = surf && (path == RM_GB_PATH_GBUFFER);
 
-	if ((t_w == w) && (t_h == h) && (t_path == path) && (t_scaled == scaled) && (t_surf == surf) && t_depth)
+	/* t_rcolor is of the colour format in force (r_hdr, TASK196): a change remakes it, as a new size does */
+	if ((t_w == w) && (t_h == h) && (t_path == path) && (t_scaled == scaled) && (t_surf == surf) && t_depth &&
+		(!t_rcolor || ((int)t_rcolor.pixelFormat == rm_hdr_format(rmb_hdr_on()))))
 	{
 		return 1;
 	}
@@ -196,7 +198,7 @@ rmb_gbuf_textures(int path, int w, int h, int scaled, int surf)
 
 	if (scaled)
 	{
-		rmb_gbuf_tex(&t_rcolor, rmb_gbuf_new(MTLPixelFormatBGRA8Unorm, w, h, rd));
+		rmb_gbuf_tex(&t_rcolor, rmb_gbuf_new((MTLPixelFormat)rm_hdr_format(rmb_hdr_on()), w, h, rd));
 	}
 
 	if (surf)
@@ -380,7 +382,7 @@ rmb_gbuf_new_raster(int which, int surf, NSError **e)
 	}
 
 	rmb_gbuf_raster_formats(d, surf);
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 /* a forward pipeline with the motion attachment: the opaque ones write it, the blended ones leave it */
@@ -445,7 +447,7 @@ rmb_gbuf_new_motion(int which, NSError **e)
 	d.colorAttachments[1].pixelFormat = MTLPixelFormatRG16Float;
 	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 	d.stencilAttachmentPixelFormat = MTLPixelFormatStencil8;
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 static id<MTLRenderPipelineState>
@@ -462,7 +464,7 @@ rmb_gbuf_new_simple(NSString *vs, NSString *fs, NSError **e)
 	}
 
 	d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 static void
@@ -802,7 +804,7 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		/* the resolve that adds the shadowed dynamic lights where they were traced, else the stock one */
 		if (!rmb_rts_resolve(enc, r, sizeof(*r), t_albedo, lt, t_material, t_depth, t_normal))
 		{
-			[enc setRenderPipelineState:resolve_pipe];
+			[enc setRenderPipelineState:rmb_fmt_pipe(resolve_pipe)];
 			[enc setFragmentBytes:r length:sizeof(*r) atIndex:0];
 			[enc setFragmentTexture:t_albedo atIndex:0];
 			[enc setFragmentTexture:lt atIndex:1];
@@ -873,7 +875,7 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 
 			if (enc)
 			{
-				[enc setRenderPipelineState:mvd ? show_mv_pipe : show_gb_pipe];
+				[enc setRenderPipelineState:rmb_fmt_pipe(mvd ? show_mv_pipe : show_gb_pipe)];
 				[enc setFragmentBytes:&u length:sizeof(u) atIndex:0];
 				[enc setFragmentTexture:mvd ? t_motion : t_albedo atIndex:0];
 				[enc setFragmentTexture:mvd ? t_depth : t_normal atIndex:1];
@@ -928,7 +930,7 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 		u[6] = (float)((src->x + src->w) / rw);
 		u[7] = (float)((src->y + src->h) / rh);
 
-		[enc setRenderPipelineState:blit_pipe];
+		[enc setRenderPipelineState:rmb_fmt_pipe(blit_pipe)];
 		[enc setViewport:(MTLViewport){ 0, 0, fw, fh, 0, 1 }];
 		[enc setVertexBytes:u length:sizeof(u) atIndex:0];
 		[enc setFragmentTexture:t_rcolor atIndex:0];

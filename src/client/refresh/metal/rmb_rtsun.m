@@ -128,7 +128,7 @@ rmb_rtsun_open(char *err, size_t errlen)
 		}
 
 		RMB_RTSUN_SET(trace_pipe, [rmb_device newComputePipelineStateWithFunction:k error:&e]);
-		RMB_RTSUN_SET(show_pipe, trace_pipe ? [rmb_device newRenderPipelineStateWithDescriptor:d error:&e] : nil);
+		RMB_RTSUN_SET(show_pipe, trace_pipe ? rmb_new_render_pipe(d, &e) : nil);
 		RMB_RTSUN_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTSUN_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
 
@@ -438,7 +438,7 @@ rmb_rtsun_show(id<MTLRenderCommandEncoder> enc)
 		return 0;
 	}
 
-	[enc setRenderPipelineState:show_pipe];
+	[enc setRenderPipelineState:rmb_fmt_pipe(show_pipe)];
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:0];
 	[enc setFragmentTexture:t_class atIndex:0];
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];

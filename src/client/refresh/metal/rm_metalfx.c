@@ -482,5 +482,11 @@ rm_fx_note_format(int note, int mode, const rm_fx_size_t *s, char *buf, size_t l
 				"%dx%d to %dx%d; the view is stretched", rm_fx_name(mode), s->iw, s->ih, s->ow, s->oh);
 	}
 
+	if (note == RM_FX_NOTE_HDR)
+	{
+		return rm_fx_append(buf, len, &used, "ref_metal: the MetalFX %s scaler is off under r_hdr 1 (it takes "
+				"8-bit colour); the view is stretched", rm_fx_name(mode));
+	}
+
 	return 0;
 }
