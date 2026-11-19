@@ -710,8 +710,26 @@ test_encode_png(void)
 					IMGDEC_ResultString(r));
 				CHECK(bw == (int)w && bh == (int)h, "encode %zux%zu kind %d: back as %dx%d",
 					w, h, kind, bw, bh);
-				CHECK(back && bw == (int)w && bh == (int)h && !memcmp(back, rgba, n),
-					"encode %zux%zu kind %d: not the same bytes back", w, h, kind);
+				if (back && bw == (int)w && bh == (int)h)
+				{
+					/* the first pixel that differs, to tell an encode from a decode change */
+					size_t d = 0;
+
+					while (d < n && back[d] == rgba[d])
+					{
+						d++;
+					}
+					d -= d % 4;
+					CHECK(d >= n, "encode %zux%zu kind %d: not the same bytes back: pixel %zu "
+						"is %u %u %u %u, wrote %u %u %u %u", w, h, kind, d / 4,
+						d < n ? back[d] : 0, d < n ? back[d + 1] : 0, d < n ? back[d + 2] : 0,
+						d < n ? back[d + 3] : 0, d < n ? rgba[d] : 0, d < n ? rgba[d + 1] : 0,
+						d < n ? rgba[d + 2] : 0, d < n ? rgba[d + 3] : 0);
+				}
+				else
+				{
+					CHECK(0, "encode %zux%zu kind %d: not the same bytes back", w, h, kind);
+				}
 			}
 #else
 			CHECK(r == IMGDEC_ERR_UNSUPPORTED, "encode: %s off Apple platforms", IMGDEC_ResultString(r));
@@ -1170,12 +1188,15 @@ jpeg_scan_data(const buf_t *b, int n)
  * The refusal of a PNG, JPEG or TGA named as another of the three. From
  * the 27.0 SDK and system on, ImageIO is told the one type it may read
  * and refuses the file itself (IMGDEC_ERR_TYPE); before, the type check
- * behind it does (IMGDEC_ERR_MISMATCH).
+ * behind it does (IMGDEC_ERR_MISMATCH). IMGDEC_TEST_NO_ALLOWABLE_TYPES
+ * builds the decoder as an older SDK does, so the type check alone must
+ * refuse the file (FIX138).
  */
 static imgdec_result_t
 other_type_refusal(void)
 {
-#if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+#if !defined(IMGDEC_TEST_NO_ALLOWABLE_TYPES) && \
+	defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
 	if (__builtin_available(macOS 27.0, *))
 	{
 		return IMGDEC_ERR_TYPE;
