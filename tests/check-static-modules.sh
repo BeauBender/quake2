@@ -63,6 +63,7 @@ case "${1:-}" in
 esac
 
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${CHECK_STATIC_MODULES_REQUIRE:-0}" != 1 ] || { echo "check-static-modules: CHECK_STATIC_MODULES_REQUIRE=1 and this is not macOS"; exit 1; }
 	echo "check-static-modules: skipped: STATIC_MODULES=1 is for macOS only (docs/decisions/0008)"
 	exit 0
 fi

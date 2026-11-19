@@ -7,5 +7,9 @@
 # engine and no game data.
 set -eu
 cd "$(dirname "$0")/.."
-if ! command -v python3 >/dev/null 2>&1; then echo "check-evidence: python3 not found, skipped"; exit 0; fi
+if ! command -v python3 >/dev/null 2>&1; then
+	[ "${CHECK_EVIDENCE_REQUIRE:-0}" != 1 ] || { echo "check-evidence: CHECK_EVIDENCE_REQUIRE=1 and python3 is not found"; exit 1; }
+	echo "check-evidence: python3 not found, skipped"
+	exit 0
+fi
 exec /bin/bash scripts/pins.sh evidence-selftest

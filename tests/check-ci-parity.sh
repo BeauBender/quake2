@@ -19,8 +19,8 @@
 #     printf, at the start of a statement and not in a comment, whose text
 #     holds "skipped:" (the gate's convention for a part that a missing host
 #     tool leaves out), or holds "skip" with "exit 0" on the same line or the
-#     next one. It is paired when that line or one of the three before it
-#     names a variable ending in _REQUIRE.
+#     next one. It is paired when that line or one of the five before it, not
+#     a comment, names a variable ending in _REQUIRE.
 #
 # Then a self-test on scratch copies of those files (never the real tree):
 # the copy passes, and each mutant is refused: an unlisted check, a listed
@@ -52,8 +52,8 @@ skips() {
 				else if (s ~ /skip/ && (s ~ /exit 0/ || l[i + 1] ~ /^[ \t]*exit 0/)) hit = 1
 				if (!hit) continue
 				ok = 0
-				for (j = i; j >= i - 3 && j >= 1; j--)
-					if (l[j] ~ /[A-Z0-9_]_REQUIRE/) ok = 1
+				for (j = i; j >= i - 5 && j >= 1; j--)
+					if (l[j] !~ /^[ \t]*#/ && l[j] ~ /[A-Z0-9_]_REQUIRE/) ok = 1
 				if (!ok) { sub(/^[ \t]*/, "", s); print i ": " s }
 			}
 		}' "$1"

@@ -25,6 +25,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${UPSCALE_METALFX_REQUIRE:-0}" != 1 ] || { echo "check-upscale-metalfx: UPSCALE_METALFX_REQUIRE=1 and this is not macOS"; exit 1; }
 	echo "check-upscale-metalfx: skipped: not macOS"
 	exit 0
 fi
