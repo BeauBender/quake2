@@ -1262,9 +1262,9 @@ Mod_CheckNodes(const byte *mod_base, const dheader_t *header, char *why, size_t 
 
 	for (i = 0; i < numnodes; i++)
 	{
-		/* read as Mod_LoadNodes reads them */
-		long first = LittleShort(in[i].firstface);
-		long count = LittleShort(in[i].numfaces);
+		/* unsigned short on disk, read as Mod_LoadNodes reads them */
+		long first = (unsigned short)LittleShort(in[i].firstface);
+		long count = (unsigned short)LittleShort(in[i].numfaces);
 		qboolean ok = Mod_RangeOk(first, count, numfaces);
 
 		for (k = first; ok && (k < first + count); k++)
