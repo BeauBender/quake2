@@ -131,6 +131,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 		return NULL;
 	}
 
+	/* a refusal below frees the hunk: the caller gets NULL, no hunk (FIX135) */
 	extradata = Hunk_Begin(modfilelen);
 	pheader = Hunk_Alloc(ofs_end);
 
@@ -142,6 +143,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has a skin taller than %d",
 				__func__, mod_name, MAX_LBM_HEIGHT);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -149,6 +151,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has no vertices",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -156,6 +159,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has too many vertices",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -163,6 +167,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has no st vertices",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -170,6 +175,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has no triangles",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -177,6 +183,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has no frames",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -196,6 +203,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has bad counts or frame size\n",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -210,6 +218,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has offsets outside of the file\n",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 #undef MD2_RANGE_BAD
@@ -325,6 +334,7 @@ Mod_LoadSP2 (const char *mod_name, const void *buffer, int modfilelen,
 	int i;
 
 	sprin = (dsprite_t *)buffer;
+	/* a refusal below frees the hunk: the caller gets NULL, no hunk (FIX135) */
 	extradata = Hunk_Begin(modfilelen);
 	sprout = Hunk_Alloc(modfilelen);
 
@@ -336,6 +346,7 @@ Mod_LoadSP2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s has wrong version number (%i should be %i)",
 				mod_name, sprout->version, SPRITE_VERSION);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
