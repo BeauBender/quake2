@@ -95,3 +95,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX115](../runbook/FIX115.md): the gate's invariants in CI (`invariants_macos`), the required status checks of `main-protect`, and a `_REQUIRE` variable for every skip
 - [FIX118](../runbook/FIX118.md): the shared BSP checks of all four renderers: the round-2 red and green runs, the mutants, and every stock map passing
 - [FIX134](../runbook/FIX134.md): the PVS decompressor of gl1, gl3 and soft stops at the visibility lump and its row: the red and green runs and every stock row decoding as before
+- [FIX136](../runbook/FIX136.md): a committed check that forces every skip CI or the gate requires and wants a failure, with mutants of the guards

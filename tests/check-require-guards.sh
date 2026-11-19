@@ -8,7 +8,7 @@
 # NAME_REQUIRE= assignments of scripts/test.sh, outside comments. For each
 # one, a case below forces the check's skip condition with a stub ahead of
 # PATH or a stripped PATH (uname printing Linux, an xcrun that refuses one
-# SDK or the Metal compiler, a git whose cat-file fails, a PATH without
+# SDK or the Metal compiler, a git whose plain cat-file fails, a PATH without
 # python3 or bash), runs the real check with the variable set and wants a
 # non-zero exit and a line naming the variable, then runs it with the
 # variable unset and wants exit 0. Every other NAME_REQUIRE of the caller is
@@ -143,7 +143,12 @@ printf '#!/bin/sh\ncase ${1:-} in "" | -s) echo Linux; exit 0 ;; esac\nexec '\''
 chmod +x "${tmp:?}/bin-linux/uname"
 stub "${tmp:?}/bin-nosim" xcrun iphonesimulator "$real_xcrun"
 stub "${tmp:?}/bin-nometal" xcrun metal "$real_xcrun"
-stub "${tmp:?}/bin-nocatfile" git cat-file "$real_git"
+# A git that fails a plain "git cat-file ...", as check-cvar-docs-selftest.sh
+# asks for the upstream commit; check-cvar-docs.sh's own calls start with -c
+# and pass, so its self-test runs as before.
+mkdir "${tmp:?}/bin-nocatfile"
+printf '#!/bin/sh\n[ "${1:-}" != cat-file ] || exit 1\nexec '\''%s'\'' "$@"\n' "$real_git" > "${tmp:?}/bin-nocatfile/git"
+chmod +x "${tmp:?}/bin-nocatfile/git"
 # A PATH of /usr/bin and /bin without one tool (and /usr/sbin, /sbin).
 stripped() { # stripped <dir> <tool>
 	mkdir "${1:?}"
@@ -198,11 +203,12 @@ while IFS='|' read -r _v _c _f _g _a; do
 		bad "$_c ($_f, $_v=1) failed with status $_st, but no line names $_v"
 	fi
 	# shellcheck disable=SC2086
-	_st=0; run "$_l.unset" "$root" "$_c" "$_f" - $_a || _st=$?
-	if [ "$_st" -ne 0 ]; then
+	_su=0; run "$_l.unset" "$root" "$_c" "$_f" - $_a || _su=$?
+	if [ "$_su" -ne 0 ]; then
 		tail -n 5 "$_l.unset"
-		bad "$_c ($_f, $_v unset) failed with status $_st; it should pass"
+		bad "$_c ($_f, $_v unset) failed with status $_su; it should pass"
 	fi
+	echo "$me: $_c${_a:+ $_a} ($_f): $_v=1 status $_st, unset status $_su"
 done < "${tmp:?}/cases"
 
 # ---- Mutants. -----------------------------------------------------------
@@ -241,6 +247,8 @@ refused() {
 	if [ "$_st" -ne 0 ]; then
 		tail -n 5 "$_md.log"
 		bad "mutant $_mn: the forced run failed (status $_st), so the case would accept it"
+	else
+		echo "$me: mutant $_mn refused: its forced run passed with the variable set"
 	fi
 }
 
