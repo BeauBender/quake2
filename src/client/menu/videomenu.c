@@ -1127,15 +1127,31 @@ RTMenu_Values(void)
 static void
 RTResetDefaults(void *unused)
 {
+	const int available = (Cvar_VariableValue("r_rt_available") != 0);
+	const float pres = Cvar_VariableValue("r_presentation");
+	int kept = 0;
+
 	for (int i = 0; i < s_rt_rows; i++)
 	{
 		const vidrt_control_t *c = VidRules_RTControl(i);
+
+		/* a switch the presentation decides is the user's own: not written */
+		if (VidRules_RTOverridden(i, s_built_renderer, available, pres))
+		{
+			kept = 1;
+			continue;
+		}
 
 		Cvar_Set(c->cvar, c->def);
 	}
 
 	RTMenu_Values();
 	RTMenu_Rules();
+
+	if (kept)
+	{
+		s_rt_defaults_action.generic.statusbar = "the presentation's switches are kept";
+	}
 }
 
 static void

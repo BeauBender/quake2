@@ -1120,6 +1120,32 @@ test_rt_screen_under_presentation(void)
 		"AO switch at mode 0 not live and off");
 	CHECK(RTGreyed("AO range") && !strcmp(RTItem("AO range")->statusbar, "turn on ambient occlusion first"),
 		"AO range at mode 0 says %s", RTItem("AO range")->statusbar);
+
+	/* FIX132: reset under Enhanced keeps the user's four switches, resets every tuning row */
+	SetCv("r_presentation", "1");
+	OpenRT("1");
+	SetCv("r_rt_ao", "1");
+	SetCv("r_rt_shadows", "1");
+	SetCv("r_rt_ao_range", "512");
+	SetCv("r_rt_sunfloor", "0.9");
+	SetCv("r_rt_water_normal", "0.5");
+	RTItem("reset to defaults");
+	Menu_SelectItem(rt_menu);
+	CHECK(!strcmp(Str("r_rt_ao"), "1") && !strcmp(Str("r_rt_shadows"), "1"),
+		"reset under Enhanced wrote a switch: ao %s, shadows %s", Str("r_rt_ao"), Str("r_rt_shadows"));
+	for (int i = 0; i < VidRules_RTNum(); i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+
+		if (c->effect >= 0)
+		{
+			CHECK(!strcmp(Str(c->cvar), c->def), "%s is %s after reset under Enhanced", c->cvar, Str(c->cvar));
+		}
+	}
+	CHECK(RTItem("reset to defaults")->statusbar &&
+		!strcmp(RTItem("reset to defaults")->statusbar, "the presentation's switches are kept"),
+		"reset status says %s", RTItem("reset to defaults")->statusbar ? RTItem("reset to defaults")->statusbar : "(none)");
+	SetCv("r_presentation", "0");
 }
 
 /* TASK183: the "presentation" item: every mode shown, a mode that does not
