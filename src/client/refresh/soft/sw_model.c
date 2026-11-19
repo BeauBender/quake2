@@ -248,11 +248,8 @@ Mod_ClusterPVS
 const byte *
 Mod_ClusterPVS (int cluster, const model_t *model)
 {
-	if (cluster == -1 || !model->vis)
-		return mod_novis;
-	return Mod_DecompressVis ( (byte *)model->vis +
-		model->vis->bitofs[cluster][DVIS_PVS],
-		(model->vis->numclusters+7)>>3);
+	/* the no-vis row for -1 and for a cluster outside the offset table */
+	return Mod_ClusterPVSRow(model->vis, model->vislen, cluster, mod_novis);
 }
 
 /*
@@ -641,7 +638,8 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 	if (!Mod_CheckLumps(mod_base, header, modfilelen, why, sizeof(why)) ||
 		!Mod_CheckVis(mod_base, header, why, sizeof(why)) ||
 		!Mod_CheckNodes(mod_base, header, why, sizeof(why)) ||
-		!Mod_CheckFaceEdges(mod_base, header, why, sizeof(why)))
+		!Mod_CheckFaceEdges(mod_base, header, why, sizeof(why)) ||
+		!Mod_CheckLeafs(mod_base, header, why, sizeof(why)))
 	{
 		Com_Error(ERR_DROP, "%s: %s: %s", __func__, mod->name, why);
 	}
@@ -694,6 +692,7 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 	Mod_LoadFaces (mod, mod_base, &header->lumps[LUMP_FACES]);
 	Mod_LoadMarksurfaces (mod, mod_base, &header->lumps[LUMP_LEAFFACES]);
 	Mod_LoadVisibility (&mod->vis, mod_base, &header->lumps[LUMP_VISIBILITY]);
+	mod->vislen = header->lumps[LUMP_VISIBILITY].filelen;
 	Mod_LoadLeafs (mod, mod_base, &header->lumps[LUMP_LEAFS]);
 	Mod_LoadNodes (mod->name, mod->planes, mod->numplanes, mod->leafs,
 		mod->numleafs, &mod->nodes, &mod->numnodes, mod_base,
