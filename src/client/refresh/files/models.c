@@ -1341,3 +1341,41 @@ Mod_CheckFaceEdges(const byte *mod_base, const dheader_t *header, char *why, siz
 
 	return true;
 }
+
+/*
+ * Every leaf's cluster, when the map has visibility, -1 or one of its
+ * clusters (FIX134): the cluster is a signed short the loaders store as
+ * it is, and ClusterPVS (the offset table) and R_MarkLeaves (the row's
+ * bits) index by it. After Mod_CheckVis. Without visibility no cluster is
+ * read, as ref_metal's rm_leaf_ok has it.
+ */
+qboolean
+Mod_CheckLeafs(const byte *mod_base, const dheader_t *header, char *why, size_t whysize)
+{
+	const lump_t *vl = &header->lumps[LUMP_VISIBILITY];
+	const lump_t *l = &header->lumps[LUMP_LEAFS];
+	const dleaf_t *in = (const dleaf_t *)(mod_base + l->fileofs);
+	long numleafs = (long)((size_t)l->filelen / sizeof(dleaf_t));
+	long numclusters, i;
+
+	if (!vl->filelen)
+	{
+		return true;
+	}
+
+	numclusters = LittleLong(*(const int *)(mod_base + vl->fileofs));
+
+	for (i = 0; i < numleafs; i++)
+	{
+		long cluster = LittleShort(in[i].cluster);
+
+		if ((cluster != -1) && ((cluster < 0) || (cluster >= numclusters)))
+		{
+			snprintf(why, whysize, "leaf %ld has cluster %ld, the visibility has %ld clusters",
+				i, cluster, numclusters);
+			return false;
+		}
+	}
+
+	return true;
+}
