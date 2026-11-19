@@ -59,6 +59,19 @@ int rm_fx_mode_of(float v);
 int rm_fx_supported(int m, unsigned has);
 
 /*
+ * TASK195: whether r_metalfx is written back to got, the supported mode
+ * for asked_v (the value the scenes read): 1 when got is not asked_v (a
+ * NaN never is) and no overlay supplied asked_v, so it is the user's own;
+ * an overlaid value is only read as got, never written. read, when not
+ * NULL, gets the value the next frame reads (got after a write-back, else
+ * asked_v), which rm_fx_same compares so an overlay is not read again.
+ */
+int rm_fx_writeback(float asked_v, int got, int overlaid, float *read);
+
+/* a and b read as the same value: equal, or both NaN */
+int rm_fx_same(float a, float b);
+
+/*
  * The mode a world view runs for r_metalfx's mode m: rm_fx_supported's,
  * with DENOISED run as TEMPORAL when no ray-traced effect is on (and then
  * the best supported at or below that).

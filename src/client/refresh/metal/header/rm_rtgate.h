@@ -200,4 +200,13 @@ int rm_pres_format(float requested, int mode, int why, char *buf, size_t len);
 int rm_ab_value(const char *spec, const char *name, char *out, size_t len);
 int rm_ab_format(const char *spec, char *buf, size_t len);
 
+/*
+ * Whether an overlay supplies the value of the cvar name, as RM_Effect
+ * reads it: the presentation mode decides it (rm_pres_value) or the B side
+ * ab_spec holds it (rm_ab_value, a value of up to RM_AB_MAXVALUE - 1
+ * characters). 0: the value read is the user's own.
+ */
+#define RM_AB_MAXVALUE 64
+int rm_effect_overlaid(int pres_mode, const char *ab_spec, const char *name);
+
 #endif

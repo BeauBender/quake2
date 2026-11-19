@@ -64,6 +64,9 @@ original clients (Vanilla Quake II) commands are still in place.
   loaded pak files will be listed first followed by maps placed in 
   the current game's maps folder.
 
+* **load <name>**: Loads the single-player savegame `save/<name>` from
+  the write directory.
+
 * **ogg <cmd>**: Controls OGG/Vobis music playback. Commands are:
   * **info**: Print informations about the current track.
   * **mute**: Mute playback.
@@ -97,14 +100,19 @@ original clients (Vanilla Quake II) commands are still in place.
   tuning presets, `<writedir>/presets/rt-<name>.cfg`: plain `set` lines
   for every tuning setting (the ray-tracing screen's and the tuning
   screen's, without the debug views and the presentation) under a
-  comment with the engine version and the date. Its first word: save writes the
+  comment with the engine version and the date; a setting the renderer
+  has not registered, or whose value holds a quote or one of `;`, `|`
+  and `=`, gets no line. Its first word: save writes the
   current values, load sets them from the file (only those settings;
-  any other line is passed over) and prints each one it changed, ab
+  any other line, and an empty value, is passed over) and prints each one it changed, ab
   makes the preset the B side of `rt_ab` without writing any setting,
   and list names the presets. The name is refused when it is empty,
   longer than 32 characters, holds `..`, a slash or a backslash, starts
   with a dot, or holds a character other than a letter, a digit, `_` or
   `-`.
+
+* **save <name>**: Saves the single-player game as `save/<name>` in the
+  write directory.
 
 * **spawnentity classname x y z <angle_x angle_y angle_z> <flags>**:
   Spawn new entity of `classname` at `x y z` coordinates.

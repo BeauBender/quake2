@@ -776,6 +776,16 @@ TuneIndex(const vidrt_control_t *c, float v)
 	{
 		v = (float)atof(c->def);
 	}
+
+	/* clamped before the cast: a float out of int's range (r_metalfx 1e30) is undefined to convert */
+	if (!(v >= c->min))
+	{
+		return 0;
+	}
+	if (v > c->max)
+	{
+		return n;
+	}
 	i = (int)((v - c->min) / c->step + 0.5f);
 	return (i < 0) ? 0 : ((i > n) ? n : i);
 }

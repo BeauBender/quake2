@@ -490,6 +490,30 @@ rm_ab_value(const char *spec, const char *name, char *out, size_t len)
 }
 
 int
+rm_effect_overlaid(int pres_mode, const char *ab_spec, const char *name)
+{
+	char b[RM_AB_MAXVALUE];
+
+	if (!name)
+	{
+		return 0;
+	}
+
+	if (pres_mode == RM_PRES_ENHANCED)
+	{
+		for (int i = 0; i < PRES_NENHANCED; i++)
+		{
+			if (!strcmp(pres_enhanced[i], name))
+			{
+				return 1;
+			}
+		}
+	}
+
+	return ab_spec && ab_spec[0] && rm_ab_value(ab_spec, name, b, sizeof(b));
+}
+
+int
 rm_ab_format(const char *spec, char *buf, size_t len)
 {
 	const char *bar = spec ? strchr(spec, '|') : NULL;

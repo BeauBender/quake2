@@ -56,10 +56,18 @@ RTP_ValueOk(const char *v)
 	return 1;
 }
 
-static void
-RTP_Path(const char *name, char *buf, size_t len)
+/* the preset's file; 0, refused with a line, when the path does not fit in buf */
+static int
+RTP_Path(const char *cmd, const char *name, char *buf, size_t len)
 {
-	snprintf(buf, len, "%s/presets/rt-%s.cfg", rtp_dir ? rtp_dir : FS_Gamedir(), name);
+	const int n = snprintf(buf, len, "%s/presets/rt-%s.cfg", rtp_dir ? rtp_dir : FS_Gamedir(), name);
+
+	if ((n < 0) || ((size_t)n >= len))
+	{
+		Com_Printf("%s: refused: the path is too long\n", cmd);
+		return 0;
+	}
+	return 1;
 }
 
 /* the name, refused with its reason when it may not name a file */
@@ -118,16 +126,22 @@ RTPreset_Side(void)
 }
 
 /*
- * Reads preset name into vals (each tuning cvar's value, its current one
- * where the file does not set it). 0 when the file cannot be read.
+ * Reads preset name into vals: each tuning cvar's value, where the file
+ * does not set it its current one, or the row's default when the current
+ * one is unset or may not be held (RTP_ValueOk). set[i] is 1 where the
+ * file sets row i; an empty value is no setting. 0 when the file cannot
+ * be read.
  */
 static int
-RTP_Read(const char *name, char vals[RTP_MAXCVARS][RTP_MAXVALUE])
+RTP_Read(const char *cmd, const char *name, char vals[RTP_MAXCVARS][RTP_MAXVALUE], int set[RTP_MAXCVARS])
 {
 	char path[MAX_OSPATH], line[256];
 	FILE *f;
 
-	RTP_Path(name, path, sizeof(path));
+	if (!RTP_Path(cmd, name, path, sizeof(path)))
+	{
+		return 0;
+	}
 	if (!(f = Q_fopen(path, "r")))
 	{
 		Com_Printf("rt_preset: no preset %s\n", name);
@@ -136,7 +150,11 @@ RTP_Read(const char *name, char vals[RTP_MAXCVARS][RTP_MAXVALUE])
 
 	for (int i = 0; i < VidRules_PresetNum() && i < RTP_MAXCVARS; i++)
 	{
-		Q_strlcpy(vals[i], Cvar_VariableString(VidRules_PresetCvar(i, NULL)), RTP_MAXVALUE);
+		const char *def;
+		const char *v = Cvar_VariableString(VidRules_PresetCvar(i, &def));
+
+		Q_strlcpy(vals[i], (v[0] && RTP_ValueOk(v)) ? v : def, RTP_MAXVALUE);
+		set[i] = 0;
 	}
 
 	while (fgets(line, sizeof(line), f))
@@ -174,9 +192,14 @@ RTP_Read(const char *name, char vals[RTP_MAXCVARS][RTP_MAXVALUE])
 		{
 			if (!strcmp(VidRules_PresetCvar(i, NULL), cv))
 			{
+				if (!val[0])
+				{
+					continue;   /* empty: no setting, as an older save wrote for an unset cvar */
+				}
 				if (RTP_ValueOk(val))
 				{
 					Q_strlcpy(vals[i], val, RTP_MAXVALUE);
+					set[i] = 1;
 				}
 				else
 				{
@@ -195,14 +218,14 @@ RTPreset_Save(const char *name)
 {
 	char path[MAX_OSPATH], date[32];
 	time_t now = time(NULL);
+	int saved = 0;
 	FILE *f;
 
-	if (!RTP_NameOk("rt_preset save", name))
+	if (!RTP_NameOk("rt_preset save", name) || !RTP_Path("rt_preset save", name, path, sizeof(path)))
 	{
 		return 0;
 	}
 
-	RTP_Path(name, path, sizeof(path));
 	FS_CreatePath(path);
 	if (!(f = Q_fopen(path, "w")))
 	{
@@ -221,11 +244,16 @@ RTPreset_Save(const char *name)
 		const char *cv = VidRules_PresetCvar(i, NULL);
 		const char *v = Cvar_VariableString(cv);
 
-		fprintf(f, "set %s \"%s\"\n", cv, RTP_ValueOk(v) ? v : "");
+		/* unset (gl1 registers few of them) or not a value a preset may hold: no line */
+		if (v[0] && RTP_ValueOk(v))
+		{
+			fprintf(f, "set %s \"%s\"\n", cv, v);
+			saved++;
+		}
 	}
 
 	fclose(f);
-	Com_Printf("rt_preset: saved %s (%d settings)\n", name, VidRules_PresetNum());
+	Com_Printf("rt_preset: saved %s (%d settings)\n", name, saved);
 	return 1;
 }
 
@@ -233,9 +261,10 @@ int
 RTPreset_Load(const char *name)
 {
 	char vals[RTP_MAXCVARS][RTP_MAXVALUE];
+	int set[RTP_MAXCVARS];
 	int changed = 0;
 
-	if (!RTP_NameOk("rt_preset load", name) || !RTP_Read(name, vals))
+	if (!RTP_NameOk("rt_preset load", name) || !RTP_Read("rt_preset load", name, vals, set))
 	{
 		return 0;
 	}
@@ -244,7 +273,7 @@ RTPreset_Load(const char *name)
 	{
 		const char *cv = VidRules_PresetCvar(i, NULL);
 
-		if (strcmp(Cvar_VariableString(cv), vals[i]))
+		if (set[i] && strcmp(Cvar_VariableString(cv), vals[i]))
 		{
 			Com_Printf("  %s: \"%s\" -> \"%s\"\n", cv, Cvar_VariableString(cv), vals[i]);
 			Cvar_Set(cv, vals[i]);
@@ -260,8 +289,9 @@ int
 RTPreset_LoadAB(const char *name)
 {
 	char vals[RTP_MAXCVARS][RTP_MAXVALUE];
+	int set[RTP_MAXCVARS];
 
-	if (!RTP_NameOk("rt_preset ab", name) || !RTP_Read(name, vals))
+	if (!RTP_NameOk("rt_preset ab", name) || !RTP_Read("rt_preset ab", name, vals, set))
 	{
 		return 0;
 	}
@@ -288,7 +318,14 @@ RTPreset_List(void)
 	const char *f;
 	int n = 0;
 
-	snprintf(pattern, sizeof(pattern), "%s/presets/rt-*.cfg", rtp_dir ? rtp_dir : FS_Gamedir());
+	n = snprintf(pattern, sizeof(pattern), "%s/presets/rt-*.cfg", rtp_dir ? rtp_dir : FS_Gamedir());
+	if ((n < 0) || ((size_t)n >= sizeof(pattern)))
+	{
+		Com_Printf("rt_preset list: refused: the path is too long\n");
+		return;
+	}
+	n = 0;
+
 	for (f = Sys_FindFirst(pattern, 0, SFF_SUBDIR | SFF_HIDDEN | SFF_SYSTEM); f;
 		f = Sys_FindNext(0, SFF_SUBDIR | SFF_HIDDEN | SFF_SYSTEM))
 	{

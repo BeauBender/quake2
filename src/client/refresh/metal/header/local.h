@@ -334,9 +334,11 @@ int RM_KeepMapped(void);
  * written. TASK195: the user's value is first the tuning harness's B side
  * when r_rt_ab shows it (rm_ab_value), so the scenes read their tuning
  * cvars through it too; RM_EffectString is the same for a cvar read as a
- * string (r_rt_sun_angles), valid until the next call.
+ * string (r_rt_sun_angles), valid until the next call. RM_EffectOverlaid
+ * is 1 when either overlay supplies the value, 0 when it is the user's own.
  */
 float RM_Effect(const cvar_t *cv);
 const char *RM_EffectString(const cvar_t *cv);
+int RM_EffectOverlaid(const cvar_t *cv);
 
 #endif /* RM_LOCAL_H */

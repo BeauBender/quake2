@@ -144,7 +144,7 @@ static cvar_t *r_rt_ab;
 const char *
 RM_EffectString(const cvar_t *cv)
 {
-	static char b[64];
+	static char b[RM_AB_MAXVALUE];
 
 	if (r_rt_ab && r_rt_ab->string[0] && rm_ab_value(r_rt_ab->string, cv->name, b, sizeof(b)))
 	{
@@ -154,10 +154,16 @@ RM_EffectString(const cvar_t *cv)
 	return cv->string;
 }
 
+int
+RM_EffectOverlaid(const cvar_t *cv)
+{
+	return rm_effect_overlaid(rm_presentation, r_rt_ab ? r_rt_ab->string : NULL, cv->name);
+}
+
 float
 RM_Effect(const cvar_t *cv)
 {
-	char b[64];
+	char b[RM_AB_MAXVALUE];
 	float user = cv->value;
 
 	if (r_rt_ab && r_rt_ab->string[0] && rm_ab_value(r_rt_ab->string, cv->name, b, sizeof(b)))
