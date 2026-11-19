@@ -1368,7 +1368,7 @@ t_find_image_refuses(const char *name, imagetype_t type)
 }
 
 /* an image that is found: the load finishes */
-static struct image_s t_image;
+static char t_image_bytes[8];
 
 static struct image_s *
 t_find_image_ok(const char *name, imagetype_t type)
@@ -1376,7 +1376,7 @@ t_find_image_ok(const char *name, imagetype_t type)
 	(void)name;
 	(void)type;
 	t_skin_hunk = mod_loadhunk;
-	return &t_image;
+	return (struct image_s *)t_image_bytes;
 }
 
 static int
@@ -1451,7 +1451,7 @@ alias_skin_refusal_child(void *arg)
 		skins, t_find_image_ok, &type);
 	T_CHECK(slot.extradata != NULL);
 	T_CHECK(t_skin_hunk != NULL);
-	T_CHECK(skins[0] == &t_image);
+	T_CHECK(skins[0] == (struct image_s *)t_image_bytes);
 	T_CHECK(mod_loadhunk == NULL);
 	free(file);
 	printf("yq2test-child: reclaimed\n");
