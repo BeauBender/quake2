@@ -115,6 +115,13 @@ Mod_Init (void)
 	memset (mod_novis, 0xff, sizeof(mod_novis));
 }
 
+/* Mod_Free for Mod_ReclaimUnfinished (FIX135) */
+static void
+Mod_FreeSlot(void *slot)
+{
+	Mod_Free(slot);
+}
+
 /*
 ==================
 Mod_ForName
@@ -128,6 +135,9 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 	model_t	*mod;
 	void	*buf;
 	int	i, modfilelen;
+
+	/* a load a refusal cut short (FIX135): clear its slot, free its file */
+	Mod_ReclaimUnfinished(Mod_FreeSlot, ri.FS_FreeFile);
 
 	if (!name[0])
 	{
@@ -188,6 +198,8 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 		return NULL;
 	}
 
+	Mod_LoadBegin(mod, buf);
+
 	//
 	// fill it in
 	//
@@ -235,6 +247,7 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 
 	mod->extradatasize = Hunk_End();
 
+	Mod_LoadEnd();
 	ri.FS_FreeFile(buf);
 
 	return mod;
@@ -822,6 +835,8 @@ void
 Mod_FreeAll (void)
 {
 	int		i;
+
+	Mod_ReclaimUnfinished(Mod_FreeSlot, ri.FS_FreeFile);
 
 	for (i=0 ; i<mod_numknown ; i++)
 	{

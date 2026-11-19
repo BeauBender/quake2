@@ -27,6 +27,67 @@
 #include "../ref_shared.h"
 
 /*
+ * The model load in progress (FIX135). Mod_ForName names a slot and loads
+ * the file, and a loader refuses a bad model with Com_Error, which longjmps:
+ * nothing after it runs, so the slot would stay named and empty (a
+ * reconnect would get it back from the cache) and the file buffer would
+ * leak. Mod_ForName records the load with Mod_LoadBegin and closes it with
+ * Mod_LoadEnd. A load still open when the next Mod_ForName or Mod_FreeAll
+ * runs was refused: Mod_LoadAbandon returns its slot, for the renderer to
+ * free and clear (Mod_Free), and the file buffer, for ri.FS_FreeFile.
+ * Keeping this here, not at each of the refusals, covers every loader
+ * (BSP, alias, sprite) and the ones added later. ref_metal frees its
+ * unfinished slots itself (RM_FreeUnfinished).
+ */
+static void *mod_loadslot;
+static void *mod_loadbuf;
+
+void
+Mod_LoadBegin(void *slot, void *buf)
+{
+	mod_loadslot = slot;
+	mod_loadbuf = buf;
+}
+
+void
+Mod_LoadEnd(void)
+{
+	mod_loadslot = NULL;
+	mod_loadbuf = NULL;
+}
+
+/* the unfinished load's slot (NULL when none) and, in *buf, its file buffer */
+void *
+Mod_LoadAbandon(void **buf)
+{
+	void *slot = mod_loadslot;
+
+	*buf = mod_loadbuf;
+	Mod_LoadEnd();
+
+	return slot;
+}
+
+/*
+ * What the renderers run at the start of Mod_ForName and Mod_FreeAll: an
+ * unfinished load's slot goes to mod_free (the renderer's Mod_Free, which
+ * unmaps the hunk the load may have begun and clears the slot) and its file
+ * buffer to free_file (ri.FS_FreeFile).
+ */
+void
+Mod_ReclaimUnfinished(void (*mod_free)(void *slot), void (*free_file)(void *buf))
+{
+	void *buf;
+	void *slot = Mod_LoadAbandon(&buf);
+
+	if (slot)
+	{
+		mod_free(slot);
+		free_file(buf);
+	}
+}
+
+/*
 =================
 Mod_LoadAliasModel/Mod_LoadMD2
 =================
@@ -70,6 +131,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 		return NULL;
 	}
 
+	/* a refusal below frees the hunk: the caller gets NULL, no hunk (FIX135) */
 	extradata = Hunk_Begin(modfilelen);
 	pheader = Hunk_Alloc(ofs_end);
 
@@ -81,6 +143,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has a skin taller than %d",
 				__func__, mod_name, MAX_LBM_HEIGHT);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -88,6 +151,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has no vertices",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -95,6 +159,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has too many vertices",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -102,6 +167,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has no st vertices",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -109,6 +175,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has no triangles",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -116,6 +183,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has no frames",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -135,6 +203,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has bad counts or frame size\n",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
@@ -149,6 +218,7 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s: model %s has offsets outside of the file\n",
 				__func__, mod_name);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 #undef MD2_RANGE_BAD
@@ -264,6 +334,7 @@ Mod_LoadSP2 (const char *mod_name, const void *buffer, int modfilelen,
 	int i;
 
 	sprin = (dsprite_t *)buffer;
+	/* a refusal below frees the hunk: the caller gets NULL, no hunk (FIX135) */
 	extradata = Hunk_Begin(modfilelen);
 	sprout = Hunk_Alloc(modfilelen);
 
@@ -275,6 +346,7 @@ Mod_LoadSP2 (const char *mod_name, const void *buffer, int modfilelen,
 	{
 		Com_Printf("%s has wrong version number (%i should be %i)",
 				mod_name, sprout->version, SPRITE_VERSION);
+		Hunk_Free(extradata);
 		return NULL;
 	}
 
