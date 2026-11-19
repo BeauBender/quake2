@@ -1347,7 +1347,8 @@ Mod_CheckFaceEdges(const byte *mod_base, const dheader_t *header, char *why, siz
  * clusters (FIX134): the cluster is a signed short the loaders store as
  * it is, and ClusterPVS (the offset table) and R_MarkLeaves (the row's
  * bits) index by it. After Mod_CheckVis. Without visibility no cluster is
- * read, as ref_metal's rm_leaf_ok has it.
+ * read, but one below -1 is still refused, so the renderers and the
+ * collision model accept the same leaves (FIX137).
  */
 qboolean
 Mod_CheckLeafs(const byte *mod_base, const dheader_t *header, char *why, size_t whysize)
@@ -1356,20 +1357,20 @@ Mod_CheckLeafs(const byte *mod_base, const dheader_t *header, char *why, size_t 
 	const lump_t *l = &header->lumps[LUMP_LEAFS];
 	const dleaf_t *in = (const dleaf_t *)(mod_base + l->fileofs);
 	long numleafs = (long)((size_t)l->filelen / sizeof(dleaf_t));
-	long numclusters, i;
+	long numclusters = 0, i;
 
-	if (!vl->filelen)
+	/* without visibility only a cluster below -1 is refused, as the
+	   collision model's CMod_CheckLeafClusters does (FIX137) */
+	if (vl->filelen)
 	{
-		return true;
+		numclusters = LittleLong(*(const int *)(mod_base + vl->fileofs));
 	}
-
-	numclusters = LittleLong(*(const int *)(mod_base + vl->fileofs));
 
 	for (i = 0; i < numleafs; i++)
 	{
 		long cluster = LittleShort(in[i].cluster);
 
-		if ((cluster != -1) && ((cluster < 0) || (cluster >= numclusters)))
+		if ((cluster < -1) || (vl->filelen && (cluster >= numclusters)))
 		{
 			snprintf(why, whysize, "leaf %ld has cluster %ld, the visibility has %ld clusters",
 				i, cluster, numclusters);
