@@ -406,7 +406,7 @@ section 7: VM, M6, device. Sizes: S under about 300 changed lines, M about
 
 | Id | Title | depends_on | Tier | Size |
 |---|---|---|---|---|
-| HD1 | The headroom readings (macOS, iOS) and `metal_hdr_info`; the M6 display's readings in the runbook, display awake and asleep; no visual change | | VM (build), M6 with the display on | S |
+| HD1 | The headroom readings (macOS, iOS) and `metal_hdr_info`; the M6 display's readings in that slice's runbook (`docs/runbook/<card>.md`), display awake and asleep; no visual change | | VM (build), M6 with the display on | S |
 | HD2 | `r_hdr`: the float16 frame target, the present-slot targets and `t_rcolor` (dropped and remade on a format change), MetalFX off under `r_hdr 1` with `rmb_fx_note` until HD4, their pipelines, the layer's format, extended linear sRGB colour space and EDR property, the linearizing present, the live switch, the SDR-fallback readback (a plain clamp and encode); `r_hdr 0` byte-identical; `doc/040` | HD1 | VM (pins, both values) and M6 (layer state) | M |
 | HD3 | The tone map (shared header, host test) at the Retro seat, `r_hdr_peak` clamped to the headroom, the report line, `metal_hdr_probe`, the `hdr` scenario; the first owner frames; the 5K cost measured | HD2, TASK184 | VM (test, pins), M6 with the display on (probe, frames, timing) | M |
 | HD4 | MetalFX and the denoiser under `r_hdr 1`: float16 formats, the spatial `hdr` mode, the temporal scaler's acceptance of `RGBA16Float` recorded, the fallback note if refused | HD3 | M6 | S |
