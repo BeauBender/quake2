@@ -1665,6 +1665,18 @@ int rmb_pass_3d(int stencil);
 int rmb_pass_2d(void);
 
 /*
+ * TASK184 (PM2): the Retro post-process over the rectangle (x, y, w, h)
+ * of the frame's colour target, in pixels from its top left: the open
+ * pass ends, the rectangle is copied, and one pass writes it back
+ * quantized to RGB565 with the 4 x 4 dither, box-filtered when filter is
+ * set, through the gamma curve (r_retro_gamma's 0 to 2;
+ * common/mtl_retro_math.h). The rectangle is clipped to the target. 0,
+ * the frame untouched, outside a frame, for an empty rectangle or when
+ * the pipeline did not build.
+ */
+int rmb_retro_pass(int x, int y, int w, int h, int filter, int curve);
+
+/*
  * Reads the colour target into bgra (rows top down, w * 4 bytes each,
  * w and h from rmb_target_size); len is the size of bgra. Inside a frame
  * it reads what was drawn so far, outside one the last frame. Returns 0

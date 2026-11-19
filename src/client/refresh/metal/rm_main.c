@@ -44,6 +44,7 @@
 #include "header/rm_rtgate.h"
 #include "common/mtl_matrix.h"
 #include "common/mtl_rate.h"
+#include "common/mtl_retro_math.h"
 #include <time.h>
 
 refimport_t ri;
@@ -137,6 +138,16 @@ static cvar_t *r_rt_available;
  */
 static cvar_t *r_presentation;
 static int rm_presentation = RM_PRES_STOCK;
+/*
+ * Retro's post-process (TASK184, PM2; the plan's section 5.1): its output
+ * filter and its gamma curve, read each frame; the rectangle of the 3D
+ * view RI_RenderFrame drew, which RI_EndWorldRenderpass finishes before
+ * the 2D layer (retro_due).
+ */
+static cvar_t *r_retro_filter;
+static cvar_t *r_retro_gamma;
+static int retro_due;
+static rm_viewport_t retro_rect;
 
 float
 RM_Effect(const cvar_t *cv)
@@ -160,6 +171,8 @@ R_Register(void)
 	metal_stats = ri.Cvar_Get("metal_stats", "0", 0);
 	metal_rate_start = ri.Cvar_Get("metal_rate_start", "1", 0);
 	r_presentation = ri.Cvar_Get("r_presentation", "0", CVAR_ARCHIVE);
+	r_retro_filter = ri.Cvar_Get("r_retro_filter", "0", CVAR_ARCHIVE);
+	r_retro_gamma = ri.Cvar_Get("r_retro_gamma", "0", CVAR_ARCHIVE);
 	metal_lightmap_filter = ri.Cvar_Get("metal_lightmap_filter", "0", CVAR_ARCHIVE);
 
 	/* gl1's, by gl1's names and defaults (gl1_main.c, R_Register) */
@@ -1056,6 +1069,16 @@ RI_RenderFrame(refdef_t *fd)
 		return;
 	}
 
+	/* Retro finishes this view's rectangle at the end of the 3D pass (TASK184); stock never sets it */
+	if (rm_presentation == RM_PRES_RETRO)
+	{
+		int tw = 0, th = 0;
+
+		rmb_target_size(&tw, &th);
+		rm_view_rect(fd->x, fd->y, fd->width, fd->height, vid.width, vid.height, th, &retro_rect);
+		retro_due = 1;
+	}
+
 	/* the acceleration structures of the view, before the raster (design section 3, step 1; TASK53) */
 	RM_RT_Frame(fd);
 
@@ -1094,6 +1117,17 @@ RI_RenderFrame(refdef_t *fd)
 static qboolean
 RI_EndWorldRenderpass(void)
 {
+	/* TASK184: Retro's post-process over the 3D view, after the world and models, before the 2D layer */
+	if (retro_due)
+	{
+		const float curve = r_retro_gamma->value;
+
+		retro_due = 0;
+		rmb_retro_pass((int)retro_rect.x, (int)retro_rect.y, (int)retro_rect.w, (int)retro_rect.h,
+				r_retro_filter->value != 0,
+				((curve >= 0.0f) && (curve < (float)MTL_RETRO_CURVES)) ? (int)curve : 0);
+	}
+
 	rmb_pass_2d();
 	return true;
 }

@@ -34,6 +34,7 @@
 using namespace metal;
 
 #include "common/mtl_shader_math.h"
+#include "common/mtl_retro_math.h"
 
 constant int rm_texenv [[function_constant(0)]];       /* rm_texenv_t */
 constant bool rm_alpha_test [[function_constant(1)]];
@@ -411,4 +412,50 @@ rm_fragment_present(float4 pos [[position]], texture2d<float, access::read> fram
 		constant int2 &ofs [[buffer(0)]])
 {
 	return float4(frame.read(uint2(int2(pos.xy) + ofs)).rgb, 1.0f);
+}
+
+/*
+ * TASK184 (PM2): the Retro post-process over the 3D view's rectangle, as a
+ * 16-bit frame buffer of a 3dfx Voodoo-class board finished it
+ * (common/mtl_retro_math.h): each pixel of the copy of the frame quantized
+ * to RGB565 with the 4 x 4 ordered dither, with the filter on the 2 x 2
+ * box of the quantized pixels (the right and lower ones clamped to the
+ * rectangle), then the gamma curve. p: the rectangle's x, y, width and
+ * height in pixels, the filter (0 or 1) and the curve (r_retro_gamma).
+ */
+static uint3
+rm_retro_quant(texture2d<float, access::read> src, uint2 at)
+{
+	uint3 c = uint3(rint(saturate(src.read(at).rgb) * 255.0f));
+	unsigned r = mtl_retro_bayer(at.x, at.y);
+
+	return uint3(mtl_retro_quant(c.r, 5u, r), mtl_retro_quant(c.g, 6u, r), mtl_retro_quant(c.b, 5u, r));
+}
+
+fragment float4
+rm_fragment_retro(float4 pos [[position]], texture2d<float, access::read> src [[texture(0)]],
+		constant int *p [[buffer(0)]])
+{
+	uint2 at = uint2(pos.xy);
+	uint3 q = rm_retro_quant(src, at);
+	float3 v;
+
+	if (p[4])
+	{
+		uint2 hi = uint2(uint(p[0] + p[2] - 1), uint(p[1] + p[3] - 1));
+		uint2 nx = min(at + uint2(1u, 0u), hi), ny = min(at + uint2(0u, 1u), hi), nxy = min(at + 1u, hi);
+		uint3 a = rm_retro_quant(src, nx), b = rm_retro_quant(src, ny), c = rm_retro_quant(src, nxy);
+
+		q = uint3(mtl_retro_box(q.r, a.r, b.r, c.r), mtl_retro_box(q.g, a.g, b.g, c.g),
+				mtl_retro_box(q.b, a.b, b.b, c.b));
+	}
+
+	v = float3(q) / 255.0f;
+
+	if (p[5] > 0)
+	{
+		v = pow(v, float3(mtl_retro_gamma(p[5])));
+	}
+
+	return float4(v, src.read(at).a);
 }
