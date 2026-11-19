@@ -118,6 +118,15 @@ original clients (Vanilla Quake II) commands are still in place.
   with a dot, or holds a character other than a letter, a digit, `_` or
   `-`.
 
+  From a preset to defaults or a presentation: `scripts/rt/preset-to-table.sh
+  <preset.cfg> [--as defaults|enhanced|retro|raytraced]` reads a saved
+  preset and prints, for `defaults`, each setting that differs from
+  today's default with the source line to change, or, for a
+  presentation, the C rows of that mode's overlay in the format of
+  `rm_rtgate.c`. It refuses any line that is not `set <name> "<value>"`
+  and any name that is not a tuning setting, and never edits a file; the
+  change itself is made in a pull request.
+
 * **save <name>**: Saves the single-player game as `save/<name>` in the
   write directory.
 

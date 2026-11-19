@@ -137,10 +137,32 @@ The suite's cvar table is put back by each new test (the earlier 2 failures are 
 its line left `tests/baselines/undocumented-commands.txt`; restoring it makes the check refuse ("lists commands
 that are now documented or removed; delete these lines: save"), which is its documented rule.
 
+## From a preset to defaults or a presentation (slice 2)
+
+`scripts/rt/preset-to-table.sh <preset.cfg> [--as defaults|enhanced|retro|raytraced]` turns the owner's saved
+preset (`rt_preset save <name>`) into the change a pull request makes. It reads only `set <name> "<value>"`
+lines (blank lines and `//` comments pass), refuses any other line with its number and any name outside the 17
+tuning cvars (exit 1), and never edits a file. The 17 and their defaults are read from the `rt_controls` and
+`rt_tune` tables of `src/client/menu/vidrules.c`.
+
+- `--as defaults` (the default): `<cvar>: <old> -> <new>` for each value that differs from today's default,
+  each followed by the `vidrules.c` line holding the default. Claude changes those string literals in a PR;
+  changing a shipped default needs the owner's yes.
+- `--as enhanced` (or `retro`, `raytraced`): the rows of that mode's overlay as the macro body
+  `RM_PRES_<MODE>_ROWS` (stdout; notes on stderr), `{ "<cvar>", <value>f },`, the format of `pres_row_t` in
+  `src/client/refresh/metal/rm_rtgate.c`. Enhanced's table is `RM_PRES_ENHANCED_ROWS`, which the printed block
+  replaces; `rm_pres_value` now returns each row's own value (the stock rows are the four switches at 1).
+  Only numbers are rows, so `r_rt_sun_angles` (a pair, read as a string) is left out with a note. The other
+  modes have no table in `rm_rtgate.c` yet: add one beside `pres_enhanced`.
+
+Test: `tests/check-ref-metal.sh` runs the script on `tests/fixtures/rt-preset/good.cfg`, compiles the printed
+enhanced rows into `rm_rtgate.c` (`-include`, `RM_PRES_ENHANCED_ROWS`) with `tests/metal/rm_pres_table_test.c`,
+which checks `rm_pres_value` returns each of the preset's values under enhanced and the user's under stock and
+retro; the defaults output must list `r_rt_ao_range: 128 -> 256`; `badline.cfg` (a `bind` line) and
+`badname.cfg` (`r_mode`) must be refused naming line 2.
+
 ## Left for slice 2
 
-- `scripts/rt/preset-to-table.sh <preset.cfg>`: print the `rm_rtgate.c` `pres_*` rows (or the default
-  changes) a preset implies, with a host test that the printed rows parse.
 - The sun angle rows are spin controls of 5-degree steps, not sliders: a slider binds one cvar's whole value,
   and `r_rt_sun_angles` is a pair.
 - A map listed in `scripts/rt/sun-angles.txt` (base1 is) takes its sun from that table, so the angle rows

@@ -330,7 +330,29 @@ rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t *ou
  * device; its post-process decides no cvar, so it overlays nothing here.
  * RT-primary is a later slice and decides nothing here.
  */
-static const char *const pres_enhanced[] = { "r_rt_shadows", "r_rt_sun", "r_rt_ao", "r_rt_water" };
+typedef struct
+{
+	const char *name;
+	float value;
+} pres_row_t;
+
+/*
+ * A mode's overlay is a table of rows, a cvar and the value the mode gives
+ * it. scripts/rt/preset-to-table.sh prints the rows of a saved preset in
+ * this format (TASK195); a host test compiles them in through
+ * RM_PRES_ENHANCED_ROWS.
+ */
+#ifndef RM_PRES_ENHANCED_ROWS
+#define RM_PRES_ENHANCED_ROWS \
+	{ "r_rt_shadows", 1.0f }, \
+	{ "r_rt_sun", 1.0f }, \
+	{ "r_rt_ao", 1.0f }, \
+	{ "r_rt_water", 1.0f },
+#endif
+
+static const pres_row_t pres_enhanced[] = {
+	RM_PRES_ENHANCED_ROWS
+};
 
 #define PRES_NENHANCED ((int)(sizeof(pres_enhanced) / sizeof(pres_enhanced[0])))
 
@@ -384,9 +406,9 @@ rm_pres_value(int mode, const char *name, float user)
 
 	for (i = 0; i < PRES_NENHANCED; i++)
 	{
-		if (!strcmp(pres_enhanced[i], name))
+		if (!strcmp(pres_enhanced[i].name, name))
 		{
-			return 1.0f;
+			return pres_enhanced[i].value;
 		}
 	}
 
@@ -516,7 +538,7 @@ rm_effect_overlaid(int pres_mode, const char *ab_spec, const char *name)
 	{
 		for (int i = 0; i < PRES_NENHANCED; i++)
 		{
-			if (!strcmp(pres_enhanced[i], name))
+			if (!strcmp(pres_enhanced[i].name, name))
 			{
 				return 1;
 			}
