@@ -15,10 +15,17 @@
 #include "test.h"
 #include "../../src/client/menu/header/vidrules.h"
 
+static cvar_t *kept_vars;
+
+/* a fresh table: this start; Restore puts the suite's table back for the tests after this file */
 static void
 FreshTable(void)
 {
-	cvar_vars = NULL;   /* a fresh table: this start */
+	if (!kept_vars)
+	{
+		kept_vars = cvar_vars ? cvar_vars : (cvar_t *)-1;
+	}
+	cvar_vars = NULL;
 
 	for (int i = 0; i < VidRules_PresetNum(); i++)
 	{
@@ -28,6 +35,17 @@ FreshTable(void)
 		Cvar_Get(cv, def, CVAR_ARCHIVE);
 	}
 	RTPreset_SetDir(t_tmpdir());
+}
+
+static void
+Restore(void)
+{
+	RTPreset_SetDir(NULL);
+	if (kept_vars)
+	{
+		cvar_vars = (kept_vars == (cvar_t *)-1) ? NULL : kept_vars;
+		kept_vars = NULL;
+	}
 }
 
 /* a value other than the default for row i, as a slider or a choice would set */
@@ -70,7 +88,7 @@ TEST(rtpreset_name_check)
 	T_CONSOLE_HAS("refused");
 	T_EQ_INT(RTPreset_Load("a/b"), 0);
 	T_EQ_INT(RTPreset_LoadAB(".x"), 0);
-	RTPreset_SetDir(NULL);
+	Restore();
 }
 
 TEST(rtpreset_save_load_round_trip)
@@ -98,7 +116,7 @@ TEST(rtpreset_save_load_round_trip)
 		T_EQ_STR(Cvar_VariableString(VidRules_PresetCvar(i, NULL)), want[i]);
 	}
 	T_CONSOLE_HAS("loaded round");
-	RTPreset_SetDir(NULL);
+	Restore();
 }
 
 TEST(rtpreset_load_writes_only_tuning_cvars)
@@ -122,7 +140,7 @@ TEST(rtpreset_load_writes_only_tuning_cvars)
 	T_EQ_STR(Cvar_VariableString("r_rt_ao_seed"), "0");
 	T_EQ_STR(Cvar_VariableString("r_rt_ao"), "1");
 	T_EQ_STR(Cvar_VariableString("r_rt_sun"), "0");   /* a value with a separator is passed over */
-	RTPreset_SetDir(NULL);
+	Restore();
 }
 
 TEST(rtpreset_ab_writes_no_tuning_cvar)
@@ -173,7 +191,7 @@ TEST(rtpreset_ab_writes_no_tuning_cvar)
 		T_EQ_STR(Cvar_VariableString(VidRules_PresetCvar(i, NULL)), before[i]);
 	}
 	RTPreset_AB();
-	RTPreset_SetDir(NULL);
+	Restore();
 }
 
 TEST(rtpreset_cvars_are_the_look)

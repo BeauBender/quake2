@@ -51,19 +51,81 @@ The ray-tracing screen's own test now counts 14 items (the "tuning..." entry).
 
 ### Mutants
 
-MUTANTS_TABLE
+Each applied to the tree, its test run, the file restored (commit `4a8c1fd3`, then `e0813699`):
+
+| mutant | file | caught by |
+|---|---|---|
+| the name check skipped (`VidRules_PresetNameError` returns NULL) | `vidrules.c` | `rtpreset_name_check`: `the name "" is accepted`, `the name ".." is accepted`, ... |
+| the A/B overlay writes each B value to its cvar too | `rtpreset.c` | `rtpreset_ab_writes_no_tuning_cvar`: `got "0", want "1"` (r_rt_ao), `got "128", want "512"` |
+| a tuning item hidden (water hits not added to the screen) | `videomenu.c` | `test_tuning_screen`: `the tuning screen has 14 items`, `no ray tracing item named "water hits"` |
+
+A first run of the second mutant reused the first's stale test object (make's one-second clock: the
+restore fell in the same second as the build); it was run again with each change two seconds clear.
 
 ## Proof on this Mac
 
-ENGINE_EVIDENCE
+Commit `4a8c1fd3` (runs 1 and 2) and `e0813699` (run 3), `release/quake2 -datadir <datadir> -portable +set
+vid_renderer metal`, 1280x720 windowed, `+map base1`, commands from a config in `<writedir>`. Neither tree had
+the game module built (`make client ref_metal` only), so `+map base1` stopped at "failed to load game DLL" and
+the runs drew the console, not the world: the commands, the cvars and the renderer's A/B line are shown;
+a traced pass's counters are not.
+
+Run 1 (`set r_metalfx 3`, `rt_ab`, `r_metalfx`, `rt_ab`, then two tuning values set and `rt_preset save t195`):
+
+```
+rt_ab: B: stock
+ref_metal: A/B: B: stock (17 settings overlaid, no cvar written)
+"r_metalfx" is "3"
+rt_ab: A: your settings
+ref_metal: A/B: A: your settings
+"r_metalfx" is "3"
+rt_preset: saved t195 (17 settings)
+```
+
+Run 2, a new start (the values set back before run 1 quit): `rt_preset list`, `load`, the values, `ab`,
+`rt_ab` twice, and a refused name:
+
+```
+"r_rt_ao_range" is "128"
+  t195
+rt_preset: 1 preset
+  r_rt_sunscale: "0.35" -> "1.25"
+  r_rt_ao_range: "128" -> "512"
+  r_metalfx: "0" -> "3"
+rt_preset: loaded t195, 3 changed
+"r_rt_ao_range" is "512"
+rt_preset: B is preset t195; rt_ab flips; now A: your settings
+rt_ab: B: preset t195
+ref_metal: A/B: B: preset t195 (17 settings overlaid, no cvar written)
+"r_rt_ao_range" is "512"
+rt_ab: A: your settings
+ref_metal: A/B: A: your settings
+rt_preset load: refused: the name holds ".."
+```
+
+Run 3 (`r_rt_ao 1`, `r_rt_stats 2`, `r_rt_ao_scale` 1 then 0.5, `rt_ab` twice) printed the A/B lines again,
+and no AO counter line, as the world was not drawn.
 
 ## Pin comparison at defaults
 
-PIN_TABLE
+Not done. Every record, base (`git archive` of main `1c91ecbc`, built in scratch) and branch, ended at
+"failed to load game DLL" (the game module was not built in either tree), so no frame was captured and
+nothing was compared. The lane had used its three timing-lock holds. Next run: `make game` in both trees,
+then `PINS_SEED=1 scripts/pins.sh record metal <scenario>` with `PINS_BIN` for the base, and compare the
+hash of the frames' hashes per scenario. The change at defaults: with `r_rt_ab` empty, `RM_Effect` and
+`RM_EffectString` return what they returned before (the cvar's value under the presentation), and
+`r_metalfx` is read on the same frames as before plus a comparison.
 
 ## Checks
 
-CHECKS_TABLE
+The gate at `e0813699`: `check-video-menu`, `check-ref-metal`, `check-cvar-docs`, `check-doc-links`,
+`check-runbook-index` and `check-no-local-identity` ok; `make test` 396 tests, 2 failed
+(`sv_connectionless_packets`, `sv_rcon_log_line`): the new tests started a fresh cvar table and did not
+put the suite's back, so the server tests after them lost their cvars. Fixed after that run (each test
+puts the table back); the gate has not been run on the fix.
+
+`check-cvar-docs`: the word "save" in `rt_preset save` documents the upstream command of that name too, so
+its line left `tests/baselines/undocumented-commands.txt`, as the check asks.
 
 ## Left for slice 2
 
