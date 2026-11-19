@@ -87,7 +87,10 @@ Hunk_Begin(int maxsize)
 		Sys_Error("unable to virtual allocate %d bytes", maxsize);
 	}
 
-	*((size_t *)membase) = curhunksize;
+	/* The whole reservation, so that Hunk_Free of a hunk that never
+	   reached Hunk_End (a load refused with Com_Error halfway) unmaps
+	   all of it. Hunk_End overwrites it with the final size. */
+	*((size_t *)membase) = maxhunksize;
 
 	return membase + sizeof(size_t);
 }
