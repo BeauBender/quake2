@@ -484,7 +484,8 @@ and a float16 frame without its present pipeline present nothing. A detach and a
 `rmb_fmt_pipe(ps) != nil || !rmb_hdr_on()`. After the close, the flag is clear and `ps`'s cache entry is
 gone. The next attach turns the path on, and the variant is built again: a refused build fails anew,
 not from the cache. The older `r_hdr` loop runs its failure sub-case under both modes now, and it no
-longer clears `rmb_hdr_dead` by hand. Result: `rmb_cs_probe: 292 checks, 0 failed`.
+longer clears `rmb_hdr_dead` by hand. Result:
+`rmb_cs_probe: 346 checks, 0 failed` (round 2; 292 in round 1), and nine colour-space mutants refused.
 
 `check-ref-metal.sh` (f) adds five mutants, each reverting one fix, and the probe must fail each:
 
