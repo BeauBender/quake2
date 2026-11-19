@@ -32,6 +32,7 @@ check-pre-push-hook.sh
 check-ref-metal.sh
 check-refrecord.sh
 check-removed-deps.sh
+check-require-guards.sh
 check-rt-variations.sh
 check-runbook-index.sh
 check-savegame-tables.sh
