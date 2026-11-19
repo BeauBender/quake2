@@ -423,7 +423,7 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 	return mod;
 }
 
-/* the lump's record count, after RM_CheckLumps: at most limit, or the map is refused */
+/* the lump's record count, after Mod_CheckLumps: at most limit, or the map is refused */
 static int
 RM_LumpCount(model_t *mod, const lump_t *l, size_t size, int limit, const char *what)
 {
@@ -589,37 +589,6 @@ Mod_CalcSurfaceExtents(model_t *loadmodel, msurface_t *s)
 	}
 }
 
-/* every surfedge of a face names an edge, and both vertices of that edge exist */
-static void
-RM_CheckFaceEdges(model_t *loadmodel, int surfnum, int firstedge, int numedges)
-{
-	int i;
-
-	if (!rm_face_edges_ok(firstedge, numedges, loadmodel->numsurfedges))
-	{
-		RM_Refuse(loadmodel, "face %d has %d edges from %d, the map has %d", surfnum,
-				numedges, firstedge, loadmodel->numsurfedges);
-	}
-
-	for (i = 0; i < numedges; i++)
-	{
-		int e = loadmodel->surfedges[firstedge + i];
-		const medge_t *edge;
-
-		if (!rm_surfedge_ok(e, loadmodel->numedges))
-		{
-			RM_Refuse(loadmodel, "face %d names edge %d, the map has %d", surfnum, e, loadmodel->numedges);
-		}
-
-		edge = &loadmodel->edges[e >= 0 ? e : -e];
-
-		if ((edge->v[0] >= loadmodel->numvertexes) || (edge->v[1] >= loadmodel->numvertexes))
-		{
-			RM_Refuse(loadmodel, "face %d has an edge past the %d vertices", surfnum, loadmodel->numvertexes);
-		}
-	}
-}
-
 /* the slices the faces filled, for RM_BuildWorld, which uploads them */
 static int faces_lm_slices;
 
@@ -668,7 +637,7 @@ Mod_LoadFaces(model_t *loadmodel, byte *mod_base, lump_t *l)
 		out->numedges = LittleShort(in->numedges);
 		out->flags = 0;
 
-		RM_CheckFaceEdges(loadmodel, surfnum, out->firstedge, out->numedges);
+		/* the edges were checked before any lump was read (Mod_CheckFaceEdges) */
 
 		planenum = LittleShort(in->planenum);
 		side = LittleShort(in->side);
@@ -1068,178 +1037,6 @@ Mod_LoadMarksurfaces(model_t *loadmodel, byte *mod_base, lump_t *l)
 	}
 }
 
-/*
- * The checks before the shared loaders read the file: every lump inside
- * it, the counts the loaders size arrays by within the limits, a world
- * with a node and model 0 starting at one, the nodes a tree from node 0,
- * the texinfo names terminated and their chains bounded, the visibility
- * offsets inside their lump.
- */
-static void
-RM_CheckLumps(model_t *mod, byte *mod_base, const dheader_t *header, int len)
-{
-	static int next[MAX_MAP_TEXINFO];
-	const lump_t *l;
-	int i;
-
-	for (i = 0; i < HEADER_LUMPS; i++)
-	{
-		if (!rm_lump_ok(header->lumps[i].fileofs, header->lumps[i].filelen, len))
-		{
-			RM_Refuse(mod, "lump %d (%d bytes at %d) is not inside the %d bytes of the file", i,
-					header->lumps[i].filelen, header->lumps[i].fileofs, len);
-		}
-	}
-
-	/* the loaders' arrays: Mod_LoadNodes numbers leafs and nodes, the edges hold 16-bit vertices */
-	RM_LumpCount(mod, &header->lumps[LUMP_NODES], sizeof(dnode_t), MAX_MAP_NODES, "nodes");
-	RM_LumpCount(mod, &header->lumps[LUMP_PLANES], sizeof(dplane_t), MAX_MAP_PLANES, "planes");
-	RM_LumpCount(mod, &header->lumps[LUMP_VERTEXES], sizeof(dvertex_t), MAX_MAP_VERTS, "vertices");
-	RM_LumpCount(mod, &header->lumps[LUMP_EDGES], sizeof(dedge_t), MAX_MAP_EDGES, "edges");
-	RM_LumpCount(mod, &header->lumps[LUMP_SURFEDGES], sizeof(int), RM_MAX_MAP_SURFEDGES, "surfedges");
-	RM_LumpCount(mod, &header->lumps[LUMP_LEAFFACES], sizeof(short), MAX_MAP_LEAFFACES, "leaf faces");
-
-	/* the world: a node to start from, and model 0 starting at one (Mod_LoadNodes, R_DrawWorld) */
-	l = &header->lumps[LUMP_MODELS];
-
-	{
-		long numnodes = (long)((size_t)header->lumps[LUMP_NODES].filelen / sizeof(dnode_t));
-		long nummodels = (long)((size_t)l->filelen / sizeof(dmodel_t));
-		long headnode = nummodels ? LittleLong(((const dmodel_t *)(mod_base + l->fileofs))->headnode) : -1;
-
-		if (!rm_world_head_ok(numnodes, nummodels, headnode))
-		{
-			RM_Refuse(mod, "%ld nodes and %ld models, model 0 at node %ld", numnodes, nummodels, headnode);
-		}
-	}
-
-	/*
-	 * the nodes a tree from node 0 (rm_node_tree_ok): Mod_SetParent and
-	 * Mod_NumberLeafs recurse through them unchecked, and the draw would
-	 * chain a node's surfaces once per visit
-	 */
-	l = &header->lumps[LUMP_NODES];
-
-	{
-		static int children[2 * MAX_MAP_NODES];
-		static unsigned char seen[MAX_MAP_NODES];
-		const dnode_t *in = (const void *)(mod_base + l->fileofs);
-		long numnodes = (long)((size_t)l->filelen / sizeof(dnode_t));
-		long numleafs = (long)((size_t)header->lumps[LUMP_LEAFS].filelen / sizeof(dleaf_t));
-
-		for (i = 0; i < numnodes; i++)
-		{
-			children[2 * i] = LittleLong(in[i].children[0]);
-			children[2 * i + 1] = LittleLong(in[i].children[1]);
-		}
-
-		if (!rm_node_tree_ok(children, numnodes, numleafs, seen))
-		{
-			RM_Refuse(mod, "the %ld nodes are not a tree from node 0 over %ld leafs", numnodes, numleafs);
-		}
-	}
-
-	if (header->lumps[LUMP_LIGHTING].filelen > MAX_MAP_LIGHTING)
-	{
-		RM_Refuse(mod, "%d bytes of lighting, more than %d", header->lumps[LUMP_LIGHTING].filelen,
-				MAX_MAP_LIGHTING);
-	}
-
-	/* texinfo: Mod_LoadTexinfo prints the name with %s and walks nexttexinfo unchecked */
-	l = &header->lumps[LUMP_TEXINFO];
-
-	if ((l->filelen % sizeof(texinfo_t)) == 0)
-	{
-		const texinfo_t *in = (const void *)(mod_base + l->fileofs);
-		int count = RM_LumpCount(mod, l, sizeof(texinfo_t), MAX_MAP_TEXINFO, "texinfos");
-
-		for (i = 0; i < count; i++)
-		{
-			if (!memchr(in[i].texture, 0, sizeof(in[i].texture)))
-			{
-				RM_Refuse(mod, "texinfo %d has an unterminated texture name", i);
-			}
-
-			next[i] = LittleLong(in[i].nexttexinfo);
-		}
-
-		if (!rm_texinfo_chains_ok(next, count))
-		{
-			RM_Refuse(mod, "a texinfo animation chain leaves the lump or never ends");
-		}
-	}
-
-	/* visibility: Mod_LoadVisibility swaps 2 * numclusters offsets in place */
-	l = &header->lumps[LUMP_VISIBILITY];
-
-	if (l->filelen)
-	{
-		int numclusters;
-
-		if ((l->filelen > MAX_MAP_VISIBILITY) || (l->filelen < 4))
-		{
-			RM_Refuse(mod, "%d bytes of visibility", l->filelen);
-		}
-
-		numclusters = LittleLong(*(const int *)(mod_base + l->fileofs));
-
-		if (!rm_vis_header_ok(numclusters, l->filelen))
-		{
-			RM_Refuse(mod, "visibility of %d clusters in %d bytes", numclusters, l->filelen);
-		}
-	}
-}
-
-/* after Mod_LoadVisibility: every PVS and PHS offset inside the lump */
-static void
-RM_CheckVis(model_t *mod)
-{
-	int i, j;
-
-	if (!mod->vis)
-	{
-		return;
-	}
-
-	for (i = 0; i < mod->vis->numclusters; i++)
-	{
-		for (j = 0; j < 2; j++)
-		{
-			if (!rm_range_ok(mod->vis->bitofs[i][j], 0, mod->vislen))
-			{
-				RM_Refuse(mod, "cluster %d has its visibility at %d, outside %d bytes", i,
-						mod->vis->bitofs[i][j], mod->vislen);
-			}
-		}
-	}
-}
-
-/* after Mod_LoadNodes: each node's surfaces inside the map, each surface in one node only */
-static void
-RM_CheckNodes(model_t *mod)
-{
-	unsigned char *owner = calloc(mod->numsurfaces ? mod->numsurfaces : 1, 1);
-	int i;
-
-	if (!owner)
-	{
-		RM_Refuse(mod, "out of memory");
-	}
-
-	for (i = 0; i < mod->numnodes; i++)
-	{
-		if (!rm_mark_once(owner, mod->numsurfaces, mod->nodes[i].firstsurface, mod->nodes[i].numsurfaces))
-		{
-			free(owner);
-			RM_Refuse(mod, "node %d has surfaces %d to %d of %d, or one of another node", i,
-					mod->nodes[i].firstsurface, mod->nodes[i].firstsurface + mod->nodes[i].numsurfaces,
-					mod->numsurfaces);
-		}
-	}
-
-	free(owner);
-}
-
 /* from gl1_model.c; the hunk holds no polygons (they are the retained buffers) */
 static void
 Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
@@ -1247,6 +1044,7 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 	int i, hunkSize = 0;
 	dheader_t *header;
 	byte *mod_base;
+	char why[256];
 
 	if (mod != mod_known)
 	{
@@ -1275,7 +1073,14 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 		((int *)header)[i] = LittleLong(((int *)header)[i]);
 	}
 
-	RM_CheckLumps(mod, mod_base, header, modfilelen);
+	/* the shared BSP checks, before any lump is read (FIX118) */
+	if (!Mod_CheckLumps(mod_base, header, modfilelen, why, sizeof(why)) ||
+		!Mod_CheckVis(mod_base, header, why, sizeof(why)) ||
+		!Mod_CheckNodes(mod_base, header, why, sizeof(why)) ||
+		!Mod_CheckFaceEdges(mod_base, header, why, sizeof(why)))
+	{
+		RM_Refuse(mod, "%s", why);
+	}
 
 	/* calculate the needed hunksize from the lumps */
 	hunkSize += Mod_CalcLumpHunkSize(&header->lumps[LUMP_VERTEXES], sizeof(dvertex_t), sizeof(mvertex_t), 0);
@@ -1314,12 +1119,10 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 	Mod_LoadMarksurfaces(mod, mod_base, &header->lumps[LUMP_LEAFFACES]);
 	Mod_LoadVisibility(&mod->vis, mod_base, &header->lumps[LUMP_VISIBILITY]);
 	mod->vislen = header->lumps[LUMP_VISIBILITY].filelen;
-	RM_CheckVis(mod);
 	Mod_LoadLeafs(mod, mod_base, &header->lumps[LUMP_LEAFS]);
 	Mod_LoadNodes(mod->name, mod->planes, mod->numplanes, mod->leafs,
 		mod->numleafs, &mod->nodes, &mod->numnodes, mod_base,
 		&header->lumps[LUMP_NODES]);
-	RM_CheckNodes(mod);
 	Mod_LoadSubmodels(mod, mod_base, &header->lumps[LUMP_MODELS]);
 	mod->numframes = 2; /* regular and alternate animation */
 }

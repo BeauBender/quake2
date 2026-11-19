@@ -214,6 +214,15 @@ extern void Mod_LoadPlanes (const char *name, cplane_t **planes, int *numplanes,
 extern void Mod_LoadSurfedges (const char *name, int **surfedges, int *numsurfedges,
 	const byte *mod_base, const lump_t *l, int extra);
 extern int Mod_CalcLumpHunkSize(const lump_t *l, int inSize, int outSize, int extra);
+/* the BSP checks before any lump is read (FIX118): false with the reason in why */
+extern qboolean Mod_CheckLumps(const byte *mod_base, const dheader_t *header, int len,
+	char *why, size_t whysize);
+extern qboolean Mod_CheckVis(const byte *mod_base, const dheader_t *header,
+	char *why, size_t whysize);
+extern qboolean Mod_CheckNodes(const byte *mod_base, const dheader_t *header,
+	char *why, size_t whysize);
+extern qboolean Mod_CheckFaceEdges(const byte *mod_base, const dheader_t *header,
+	char *why, size_t whysize);
 extern mleaf_t *Mod_PointInLeaf(const vec3_t p, mnode_t *node);
 
 /* Surface logic */
