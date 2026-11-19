@@ -1367,6 +1367,18 @@ t_find_image_refuses(const char *name, imagetype_t type)
 	return NULL;
 }
 
+/* an image that is found: the load finishes */
+static struct image_s t_image;
+
+static struct image_s *
+t_find_image_ok(const char *name, imagetype_t type)
+{
+	(void)name;
+	(void)type;
+	t_skin_hunk = mod_loadhunk;
+	return &t_image;
+}
+
 static int
 t_mapped(void *hunk)
 {
@@ -1432,7 +1444,14 @@ alias_skin_refusal_child(void *arg)
 		T_EQ_INT(t_files_freed, pass + 1);
 	}
 
-	/* a finished load leaves nothing recorded */
+	/* a load that succeeds records the hunk for the skin lookup, and clears
+	 * the record on return: nothing is left for a later reclaim to free */
+	t_skin_hunk = NULL;
+	slot.extradata = Mod_LoadMD2("models/ok.md2", file, SIZE, mins, maxs,
+		skins, t_find_image_ok, &type);
+	T_CHECK(slot.extradata != NULL);
+	T_CHECK(t_skin_hunk != NULL);
+	T_CHECK(skins[0] == &t_image);
 	T_CHECK(mod_loadhunk == NULL);
 	free(file);
 	printf("yq2test-child: reclaimed\n");
