@@ -147,7 +147,14 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 		return 0;
 	}
 
-	/* the report line of Retro's upload and view (TASK185), once for each target size and render size */
+	/*
+	 * The report line of Retro's upload and view (TASK185), once for each
+	 * target size and render size. FIX155: on stderr, as the attachments'
+	 * line of rmb_gbuf.m, not the console: printed at the first 3D view, it
+	 * was drawn as a notify line over the frames for con_notifytime seconds
+	 * of wall time, so whether a frame near its end carried it (pin frame
+	 * 12 of retro at the harness's rate) changed from run to run.
+	 */
 	if (RM_PresentationMode() == RM_PRES_RETRO)
 	{
 		if ((fw != said_fw) || (fh != said_fh) || (rw != said_rw) || (rh != said_rh))
@@ -156,7 +163,7 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 
 			RM_RetroImageCounts(&n565, &n4444, &ncap, &maxside);
 			/* rw x rh is the whole target's render size (the view's rectangle maps into it in proportion), not the view's */
-			R_Printf(PRINT_ALL, "ref_metal: retro: 3D layer drawn at %dx%d, the %dx%d target as if %d lines tall, enlarged by a "
+			fprintf(stderr, "ref_metal: retro: 3D layer drawn at %dx%d, the %dx%d target as if %d lines tall, enlarged by a "
 					"bilinear blit, no MetalFX; textures %d RGB565 and %d ARGB4444, %d capped to %dx%d, largest side %d, "
 					"filter %s, no anisotropy\n",
 					rw, rh, fw, fh, rh, n565, n4444, ncap, MTL_RETRO_TEX_CAP, MTL_RETRO_TEX_CAP, maxside, MTL_RETRO_TEXMODE);
