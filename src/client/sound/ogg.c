@@ -396,16 +396,18 @@ OGG_PlayTrack(const char *track, qboolean cdtrack, qboolean immediate)
 	}
 
 	/* A track is a bare file name under music/. The name can come from
-	   the server (CS_CDTRACK), so it must not leave that directory. */
-	if (!FS_TrackNameValid(track))
-	{
-		Com_DPrintf("%s: refusing track name: %.64s\n", __func__,
-				track ? track : "");
+	   the server (CS_CDTRACK), so it must not leave that directory. A
+	   refused name skips only the open below; the track number handling
+	   after the loop (track 0 stops the music) still runs, as for a
+	   track that was not found. */
+	qboolean trackValid = FS_TrackNameValid(track);
 
-		return;
+	if (!trackValid && track != NULL && track[0] != '\0')
+	{
+		Com_DPrintf("%s: refusing track name: %.64s\n", __func__, track);
 	}
 
-	while (1)
+	while (trackValid)
 	{
 		int res = 0;
 		FILE* f;
