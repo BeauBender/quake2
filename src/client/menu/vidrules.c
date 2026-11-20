@@ -706,7 +706,7 @@ VidRules_RTStatus(const char *renderer, int available, float presentation)
 	}
 	if (RTRetroInForce(renderer, presentation))
 	{
-		return "Retro overrides the effects and the scaler: off";
+		return "Retro reads the effects and the scaler as off";
 	}
 	return "Esc: back; each change shows on the next frame";
 }
