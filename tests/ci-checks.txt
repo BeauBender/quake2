@@ -18,6 +18,7 @@ check-doc-links.sh
 check-evidence.sh
 check-gate-parallel.sh
 check-image-decoder.sh
+check-keyboard-sites.sh
 check-input-gate.sh
 check-ios-screen.sh
 check-ios.sh
