@@ -22,12 +22,25 @@ original clients (Vanilla Quake II) commands are still in place.
   buttons and `axis <name> <value>` moves one of its axes (SDL's names:
   `a`, `b`, `start`, `dpup`, `leftx`, `righttrigger`, ...); `key <name>
   <0|1>` pushes the key event of a scancode (`Up`, `Down`, `Left`,
-  `Right`, `Return`, `Escape`: the Siri Remote as keys); `state` prints
-  where input goes, the player's origin, view angles and gun frame.
+  `Right`, `Return`, `Escape`: the Siri Remote as keys); `pads` also
+  prints each joystick's vendor, product, version, GUID, types, path and
+  counts; `state` prints where input goes, the player's origin, view
+  angles, gun frame, gun, crouch flag, layouts and ammo, the right
+  trigger as the engine reads it, the trigger key's state and the bytes
+  left in the command buffer. `mark` keeps those values, and `expect
+  <field> <what>` (`gunframe`, `gun`, `duck`, `z`, `layouts`, `dest`,
+  `ammo`) then prints `ok` if the field changed since and `FAIL` if not;
+  `bound <key>` prints a key's binding; `script <file>` runs a file from
+  the game's filesystem one line a frame, a line only when the command
+  buffer is empty, so the command a press queues runs in the frame after
+  it, and `wait <n>` in it counts n frames (TASK182: a bound key's
+  command goes to the end of the buffer, behind the rest of an exec'd
+  file that waits).
 
 * **menu_probe state|walk**: Only in a test build (compiled with
   `-DYQ2_INPUT_PROBE`, TASK23); a release has no such command. `state`
-  prints the menu's depth, screen and the item under the cursor. `walk`
+  prints the menu's depth, screen and the item under the cursor, and
+  whether a binding item is in bind mode. `walk`
   visits every screen reachable from the main menu with only up, down,
   left, right, select and back, fails a screen whose selectable items are
   not all reached with down and with up or that back does not leave,
