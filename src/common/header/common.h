@@ -759,6 +759,7 @@ strlist_t FS_ListMods(void);
 
 void FS_FreeFile(void *buffer);
 void FS_CreatePath(const char *path);
+qboolean FS_SafeRelativeName(const char *name);
 
 /* MISC */
 

@@ -26,6 +26,7 @@
 
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "test.h"
 
@@ -901,4 +902,45 @@ TEST(fs_missing_data_message)
 	snprintf(dir, sizeof(dir), "%s/msg_ok", t_tmpdir());
 	T_CHECK(!Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)));
 	T_EQ_STR(wrong, "");
+}
+
+/*
+ * condump and record build "<gamedir>/<arg>.ext" from a console
+ * argument. FS_SafeRelativeName is the gate in front of both (FIX154).
+ * The control half shows what the unchecked construction did: a ".."
+ * argument opened a file outside the game directory, since FS_CreatePath
+ * refuses ".." but Q_fopen does not.
+ */
+TEST(fs_safe_relative_name)
+{
+	char gamedir[MAX_OSPATH];
+	char path[MAX_OSPATH];
+	FILE *f;
+
+	T_CHECK(FS_SafeRelativeName("dump"));
+	T_CHECK(FS_SafeRelativeName("sub/dump"));
+	T_CHECK(FS_SafeRelativeName("my.demo"));
+	T_CHECK(!FS_SafeRelativeName(""));
+	T_CHECK(!FS_SafeRelativeName(".."));
+	T_CHECK(!FS_SafeRelativeName("../x"));
+	T_CHECK(!FS_SafeRelativeName("a/../x"));
+	T_CHECK(!FS_SafeRelativeName("a..b"));
+	T_CHECK(!FS_SafeRelativeName("/etc/x"));
+	T_CHECK(!FS_SafeRelativeName(".hidden"));
+	T_CHECK(!FS_SafeRelativeName("c:x"));
+	T_CHECK(!FS_SafeRelativeName("a\\b"));
+
+	/* Control: the unchecked construction escapes the game directory. */
+	Com_sprintf(gamedir, sizeof(gamedir), "%s/fix154/game", t_tmpdir());
+	FS_CreatePath(va("%s/x", gamedir));
+	t_write_file("fix154/game/keep", "k", 1);
+	Com_sprintf(path, sizeof(path), "%s/%s.txt", gamedir, "../escaped");
+	f = Q_fopen(path, "w");
+	T_CHECK(f != NULL);
+	if (f)
+	{
+		fclose(f);
+	}
+	Com_sprintf(path, sizeof(path), "%s/fix154/escaped.txt", t_tmpdir());
+	T_CHECK(access(path, F_OK) == 0);
 }
