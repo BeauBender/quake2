@@ -227,6 +227,15 @@ vidrule_t VidRules_PresentationMode(int mode, const char *renderer, int availabl
  * run, effect_user being the cvar of its switch. Mode 0 is VidRules_RTItem.
  */
 int VidRules_RTOverridden(int i, const char *renderer, int available, float presentation);
+/*
+ * Under Retro (TASK197, plan call P8) the mode reads the five switches
+ * (the four effects and the gun shadow) and r_metalfx as off, whatever
+ * the device: RTOverridden is true for the switches, RTEffective gives 0,
+ * RTRow greys the switches and their tuning rows "set by the presentation".
+ * VidRules_TuneOverridden is the same for the tuning screen's rows: the
+ * scaler and the rows of an effect (under modes 0 and 1: never).
+ */
+int VidRules_TuneOverridden(int i, const char *renderer, float presentation);
 int VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user);
 vidrule_t VidRules_RTRow(int i, const char *renderer, int available, float presentation, float effect_user);
 

@@ -567,22 +567,44 @@ VidRules_RTItem(int i, const char *renderer, int available, int effect_on)
  * TASK183: the switches the presentation in use decides. Enhanced reads
  * rows 0 to 3 (shadows, sun, ambient occlusion, water) as on, as the
  * renderer's RM_Effect does; the rows are the first four of rt_controls.
+ * TASK197 (plan call P8): Retro reads those four and the gun shadow as
+ * off, and runs on every device, so it needs only the Metal renderer.
  */
 int
 VidRules_RTOverridden(int i, const char *renderer, int available, float presentation)
 {
 	const vidrt_control_t *c = VidRules_RTControl(i);
+	const int pres = VidRules_PresentationIndex(presentation);
 
-	return c && (c->effect < 0) && (i < 4) &&
-		(VidRules_PresentationIndex(presentation) == VIDPRES_ENHANCED) &&
+	if (!c || (c->effect >= 0))
+	{
+		return 0;
+	}
+	if (pres == VIDPRES_RETRO)
+	{
+		return (i <= RT_GUNSHADOW) && (VidRules_Renderer(renderer) == VIDREF_METAL);
+	}
+	return (i < 4) && (pres == VIDPRES_ENHANCED) &&
 		VidRules_PresentationMode(VIDPRES_ENHANCED, renderer, available).enabled;
 }
 
-/* the value of a switch as the renderer runs it: 1 when the mode decides it, else the cvar's */
+/* the value of a switch as the renderer runs it: the mode's when it decides it (Enhanced on, Retro off), else the cvar's */
 int
 VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user)
 {
-	return VidRules_RTOverridden(i, renderer, available, presentation) || (user != 0.0f);
+	if (VidRules_RTOverridden(i, renderer, available, presentation))
+	{
+		return VidRules_PresentationIndex(presentation) != VIDPRES_RETRO;
+	}
+	return user != 0.0f;
+}
+
+/* whether Retro reads the effects off, so a switch's tuning rows are no longer the user's to set (TASK197) */
+static int
+RTRetroInForce(const char *renderer, float presentation)
+{
+	return (VidRules_PresentationIndex(presentation) == VIDPRES_RETRO) &&
+		(VidRules_Renderer(renderer) == VIDREF_METAL);
 }
 
 vidrule_t
@@ -596,11 +618,25 @@ VidRules_RTRow(int i, const char *renderer, int available, float presentation, f
 		on = VidRules_RTEffective(c->effect, renderer, available, presentation, effect_user);
 	}
 	if (VidRules_Renderer(renderer) == VIDREF_METAL && available &&
-		VidRules_RTOverridden(i, renderer, available, presentation))
+		(VidRules_RTOverridden(i, renderer, available, presentation) ||
+		(c && (c->effect >= 0) && RTRetroInForce(renderer, presentation))))
 	{
 		return (vidrule_t){ 0, "set by the presentation" };
 	}
 	return VidRules_RTItem(i, renderer, available, on);
+}
+
+/*
+ * TASK197: the tuning rows Retro decides: the scaler (r_metalfx, read as 0)
+ * and every row of an effect it reads off.
+ */
+int
+VidRules_TuneOverridden(int i, const char *renderer, float presentation)
+{
+	const vidrt_control_t *c = VidRules_TuneControl(i);
+
+	return c && RTRetroInForce(renderer, presentation) &&
+		(!strcmp(c->cvar, "r_metalfx") || (c->effect >= 0));
 }
 
 /* TASK183: the names in the order of r_presentation's values, never renumbered */
@@ -667,6 +703,10 @@ VidRules_RTStatus(const char *renderer, int available, float presentation)
 		VidRules_PresentationMode(VIDPRES_ENHANCED, renderer, available).enabled)
 	{
 		return "Enhanced overrides the switches; your own values shown";
+	}
+	if (RTRetroInForce(renderer, presentation))
+	{
+		return "Retro overrides the effects and the scaler: off";
 	}
 	return "Esc: back; each change shows on the next frame";
 }

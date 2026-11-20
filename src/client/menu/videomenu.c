@@ -967,7 +967,9 @@ TuneMenu_Rules(void)
 					s_tune_hdr_note, sizeof(s_tune_hdr_note)));
 			continue;
 		}
-		RTSetRule(s_tune_items[i], VidRules_TuneItem(i, s_built_renderer, available, on));
+		RTSetRule(s_tune_items[i], VidRules_TuneOverridden(i, s_built_renderer, pres) ?
+			(vidrule_t){ 0, "set by the presentation" } :
+			VidRules_TuneItem(i, s_built_renderer, available, on));
 	}
 
 	snprintf(s_tune_ab_text, sizeof(s_tune_ab_text), "A/B: %s", TuneSide());
