@@ -40,6 +40,7 @@
 #include <string.h>
 
 #include "header/rmb.h"
+#include "header/rmb_internal.h"
 #include "common/mtl_ring.h"
 
 #if !__has_feature(objc_arc)
@@ -51,12 +52,9 @@ extern id<MTLDevice> rmb_device;
 extern id<MTLCommandQueue> rmb_queue;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
-void rmb_watch(id<MTLCommandBuffer> cmd);
-int rmb_commit_wait(id<MTLCommandBuffer> cmd);
 
 /* rmb_encode.m */
 extern unsigned long rmb_frame_serial;
-void rmb_encode_split(void);
 
 static id<MTLLibrary> library;
 static id<MTLRenderPipelineState> pipes[RM_PIPE_2D_COUNT];

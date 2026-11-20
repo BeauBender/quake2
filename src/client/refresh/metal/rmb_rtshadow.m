@@ -39,6 +39,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rt.h"
 #include "header/rm_rtshadow.h"
+#include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_rtshadow.m is written for ARC: compile it with -fobjc-arc"
@@ -49,11 +50,7 @@ extern id<MTLDevice> rmb_device;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
-/* rmb_resource.m */
-id<MTLLibrary> rmb_library(void);
-
 /* rmb_encode.m */
-id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
 
 #define RMB_RTS_GROUP 8         /* the kernel's threadgroup side */
 #define RMB_RTS_COUNTS 4        /* in range, traced, shadowed, rays */

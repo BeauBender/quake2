@@ -1087,7 +1087,74 @@ for rate_mut in 's/rm_rate_start);/metal_rate_start->value);/' 's/&rm_rate, rm_r
 	fi
 done
 
+# (h) FIX119: one internal header for ref_metal's backend files. A function one rmb_*.m file
+# defines and another calls is declared once, in header/rmb_internal.h, and the file that
+# defines it includes that header; a hand-written prototype in a .m file (copies drift: the
+# five rmb_watch ones, and a rmb_frame_ring_take that lost its __strong) is refused. protos
+# <file>: prints "file:line: text" for each non-static file-scope function prototype in the
+# file's code (comments and literals stripped, preprocessor lines and Objective-C @ lines
+# skipped): a statement ending in ";" at brace depth 0 that has the shape name(...), no "="
+# before its first "(", and does not start with static, typedef or _Static_assert. It sees a
+# prototype over several lines, one with extern, and one with an attribute; a function
+# definition ends in a brace, not in ";", and a static prototype is skipped by its keyword.
+protos() {
+	strip "$1" | awk -v f="$1" '
+	function flush(   s, p, q) {
+		s = stmt; stmt = ""
+		if (s == "") return
+		while (match(s, /__attribute__[ \t]*\(\(([^()]|\([^()]*\))*\)\)/)) s = substr(s, 1, RSTART - 1) " " substr(s, RSTART + RLENGTH)
+		sub(/^[ \t]+/, "", s); gsub(/[ \t]+/, " ", s)
+		if (s ~ /^(static|typedef|_Static_assert)[ (]/ || s ~ /^[-+@]/) return
+		p = index(s, "(")
+		if (p == 0) return
+		q = substr(s, 1, p - 1)
+		if (q ~ /=/ || q !~ /[A-Za-z_0-9] ?$/) return
+		if (s !~ /\) ?$/) return
+		print f ":" first ": " s
+	}
+	{
+		line = $0
+		if (cont) { cont = (line ~ /\\[ \t\r]*$/); next }
+		if (line ~ /^[ \t]*#/) { cont = (line ~ /\\[ \t\r]*$/); next }
+		if (depth == 0 && line ~ /^[ \t]*@[A-Za-z]/) { stmt = ""; next }
+		n = length(line)
+		for (i = 1; i <= n; i++) {
+			c = substr(line, i, 1)
+			if (c == "{") { depth++; continue }
+			if (c == "}") { if (depth > 0) depth--; if (depth == 0) stmt = ""; continue }
+			if (depth > 0) continue
+			if (c == ";") { flush(); continue }
+			if (stmt == "" && c ~ /[ \t]/) continue
+			if (stmt == "") first = NR
+			stmt = stmt c
+		}
+		if (stmt != "") stmt = stmt " "
+	}'
+}
+proto_mutants=0
+mkdir -p "${tmp:?}/pm"
+printf '%s\n' 'static void s(void);' 'static void t(int a,' '	int b);' 'void f(void)' '{' '	int x = g(1);' '	h(2);' '}' 'typedef void (*cb)(int);' 'int v = g(3);' '_Static_assert(sizeof(int) == 4, "x");' 'extern int e;' '#define M(a) \' '	void m(a);' '// void c(void);' > "${tmp:?}/pm/ok.m"
+if [ -n "$(protos "${tmp:?}/pm/ok.m")" ]; then
+	protos "${tmp:?}/pm/ok.m"
+	bad "the prototype check flags a static prototype, a definition, a typedef, a macro or a comment"
+fi
+for proto_mut in 'void f(void);' 'extern void f(void);' 'id<MTLDevice> f(int a,' '__attribute__((unused)) void f(void);' 'void *f(size_t n, __strong id<MTLBuffer> *buf);'; do
+	case $proto_mut in *,) printf '%s\n' "$proto_mut" '	int b);' > "${tmp:?}/pm/mut.m";; *) printf '%s\n' "$proto_mut" > "${tmp:?}/pm/mut.m";; esac
+	if [ -z "$(protos "${tmp:?}/pm/mut.m")" ]; then
+		bad "the prototype check passes a mutant ($proto_mut)"
+	else
+		proto_mutants=$((proto_mutants + 1))
+	fi
+done
+for pf in "$rm_dir"/*.m; do
+	pout=$(protos "$pf")
+	if [ -n "$pout" ]; then
+		printf '%s\n' "$pout"
+		bad "$pf declares a function by hand: put it in $rm_dir/header/rmb_internal.h"
+	fi
+done
+
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused; $build)"
 fi
 exit $fail

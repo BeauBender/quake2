@@ -51,6 +51,7 @@
 
 #include "header/rmb.h"
 #include "header/rm_metalfx.h"
+#include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_metalfx.m is written for ARC: compile it with -fobjc-arc"
@@ -60,10 +61,6 @@
 
 extern id<MTLDevice> rmb_device;
 extern id<MTLCommandQueue> rmb_queue;
-
-id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
-int rmb_frame_cut(void);
-void rmb_watch(id<MTLCommandBuffer> cmd);
 
 /* the formats of the G-buffer contract: the render-size colour target and the frame (stock), the depth and motion */
 #define RMB_FX_COLOR MTLPixelFormatBGRA8Unorm
