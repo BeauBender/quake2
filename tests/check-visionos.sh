@@ -153,6 +153,10 @@ assert_plist() # <Info.plist>
 	for k in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
 		v=$(plutil -extract "$k" raw -o - "$1" 2>/dev/null) || v="(none)"
 		[ "$v" = true ] || { echo "$1: $k is $v, not true (the Files app shows Documents only with it)"; rc=1; }
+		# a <string>true</string> prints true too; the type must be a boolean,
+		# and a plutil error refuses
+		t=$(plutil -type "$k" "$1" 2>/dev/null) || t="(none)"
+		[ "$t" = bool ] || { echo "$1: $k is of type $t, not bool (the Files app reads only a boolean)"; rc=1; }
 	done
 	# plutil decides, not the text: a key spelled with a character reference
 	# (<key>UIStatus&#66;arHidden</key>) is the same key. The file passed
@@ -354,6 +358,13 @@ for mk in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
 		bad "mutant: a plist with $mk false passed"
 	elif ! grep -q "$mk is false, not true" "${tmp:?}/o"; then
 		bad "mutant: the plist with $mk false was refused without naming it"
+	fi
+	cp "${tmp:?}/good.plist" "${tmp:?}/m.plist"
+	plutil -replace "$mk" -string true "${tmp:?}/m.plist"
+	if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: a plist with $mk as the string true passed"
+	elif ! grep -q "$mk is of type string, not bool" "${tmp:?}/o"; then
+		bad "mutant: the plist with $mk as the string true was refused without naming the type"
 	fi
 done
 sed 's,<integer>7</integer>,&<integer>1</integer>,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"

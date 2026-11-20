@@ -154,7 +154,7 @@ starts).
   `TARGET_OS_IOS`).
 - The data path: visionOS has the Files app, so the iPhone's `UIFileSharingEnabled` and
   `LSSupportsOpeningDocumentsInPlace` with `Documents/baseq2` may work as they do there; this slice copies the paks
-  with `simctl` and the plist has neither key (`tests/check-visionos.sh` refuses `UIFileSharingEnabled` until then).
+  with `simctl` and the plist has neither key (`tests/check-visionos.sh` refuses `UIFileSharingEnabled` until slice 2a).
   The missing-data text, `Sys_MissingDataMessage` in src/backends/unix/system.c, names "On My iPhone (or iPad)".
 - Resizing: the person can resize a visionOS window. TASK172's live resize (`SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED`
   and `SDL_EVENT_WINDOW_SAFE_AREA_CHANGED`, src/client/input/sdl3.c, and the frame following the window in
@@ -205,7 +205,7 @@ the game-data path. Its run did not start the app (below), so the controller is 
 ### The game-data path: the Files app, as on the iPhone
 
 visionOS takes the iPhone's path. `stuff/ios/Info-visionos.plist.in` now has `UIFileSharingEnabled` and
-`LSSupportsOpeningDocumentsInPlace`, both true, as `stuff/ios/Info.plist.in` has: with both, the Files app shows the
+`LSSupportsOpeningDocumentsInPlace`, both true, as `stuff/ios/Info.plist.in` has: with both, the Files app should show the
 app's `Documents`, where the engine finds `baseq2` with no option. The evidence:
 
 - Apple's documentation gives both keys from visionOS 1.0 (`UIFileSharingEnabled`: iOS and iPadOS 3.2, tvOS 9.0,
@@ -261,5 +261,7 @@ change is needed.
 - The controller run above, and the paks read from `Documents/baseq2` with the keys, once the app starts on the
   simulator again; if the visionOS simulator has its own `Gamepad`, the tvOS preference may need
   `TARGET_OS_VISION` too.
+- The launch-stall diagnosis (the "next run" step above): an unlocked screen, `simctl launch` without
+  `--console-pty`, and `launchctl list`.
 - The missing-data text, `Sys_MissingDataMessage` (src/backends/unix/system.c), names "On My iPhone (or iPad)";
   on visionOS the Files app calls the place "On My Apple Vision Pro".
