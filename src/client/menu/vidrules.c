@@ -885,3 +885,22 @@ VidRules_PresetNameError(const char *name)
 	}
 	return NULL;
 }
+
+/* TASK196 (HD5): stubs, red first */
+int
+VidRules_HdrItem(const char *cvar)
+{
+	return -1;
+}
+
+int
+VidRules_HdrInForce(float hdr, float presentation)
+{
+	return 0;
+}
+
+vidrule_t
+VidRules_Hdr(int item, const char *renderer, vidhdrplat_t plat, float headroom, float presentation, float hdr)
+{
+	return (vidrule_t){ 1, NULL };
+}
