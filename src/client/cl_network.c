@@ -154,7 +154,7 @@ CL_Drop(void)
 	if (cls.state == ca_disconnected)
 	{
 		/* drop the server's queued text; the command source is reset
-		   where the Com_Error longjmp lands (Cbuf_ResetSource), not
+		   in Com_Error, before its teardown (Cbuf_ResetSource), not
 		   here; CL_Disconnect is not reached (FIX113) */
 		Cbuf_DropServerText();
 		return;
