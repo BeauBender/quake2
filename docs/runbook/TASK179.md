@@ -19,7 +19,7 @@ order (`rm_rtfx_order`, a separate array), the walks over the rows and the pipel
 | `header/rmb_internal.h` | `struct rmb_rtfx_io_s`, under `__OBJC__` (opaque to C) |
 | `rm_rtgate.c` | the gate's sorted table lost its 0/1 column: `rm_rtg_cvar` and `rm_rtg_effect` classify a name as an effect switch by `rm_rtfx_is_switch`, so the switches have one source |
 | `Makefile` | `rm_rtfx.o` in ref_metal's objects (the iOS, tvOS and visionOS static builds take the same list) |
-| `tests/metal/rm_rtfx_test.c` (new), `tests/check-ref-metal.sh` | the host test, its five table mutants, and section (f): the effect-call lint with its four mutants. The gate's two host tests link `rm_rtfx.c` (built with `RM_RTFX_HOST`, every entry point `NULL`) |
+| `tests/metal/rm_rtfx_test.c` (new), `tests/check-ref-metal.sh` | the host test, its five table mutants, and section (i): the effect-call lint with its four mutants. The gate's two host tests link `rm_rtfx.c` (built with `RM_RTFX_HOST`, every entry point `NULL`) |
 
 Not changed: `rmb_metalfx.m`, `rm_pure.c`, `rm_metalfx.c`, `header/rmb.h`, `header/rm_metalfx.h` (TASK196's
 lane), every kernel, every cvar and its default. The card's "init from two places" was already one place at
@@ -53,10 +53,10 @@ the lint printed for it.
 | the AO's switch changed in the gate only (`r_rt_ambient`) | `rm_rtfx_test` (5 failed) | `FAIL tests/metal/rm_rtfx_test.c:113: i >= 0` |
 | the swap rule inverted: the raster's surface choice | `rm_rtfx_test` (48 failed) | `FAIL tests/metal/rm_rtfx_test.c:159: rm_rtfx_pipe(RMB_GB_PASS_RASTER, p, s, fw, NULL) == (s ? RM_RTFX_PIPE_RASTER_SURF : RM_RTFX_PIPE_RASTER)` |
 | the swap rule inverted: the forward pipeline asked for every pipe but the blended world face's | `rm_rtfx_test` (72 failed) | `FAIL tests/metal/rm_rtfx_test.c:165: fw_calls == (p == RM_PIPE_WORLD_TEXC_BLEND)` |
-| `RM_RTW_Frame(fd, RM_RT_SceneReady());` after `rm_rtfx_frame` in `rm_main.c` | section (f) | `<copy>/rm_main.c:1321: RM_RTW_Frame` (on the tree itself the check adds `... rm_main.c names a ray-traced effect outside the effect table: walk it with rm_rtfx_* (rm_rtfx.c)`) |
-| `rmb_rtw_blend(io.enc, t_material);` after `rm_rtfx_post` in `rmb_gbuf.m` | section (f) | `<copy>/rmb_gbuf.m:841: rmb_rtw_blend` |
-| the same call in a comment only | section (f) passes it, as it must | none |
-| a new row `FX(RM_RTGI_Init)` and `RM_RTGI_Frame(...)` in `rm_main.c` | section (f), the prefix taken from the new row | `RM_RTGI_Frame` |
+| `RM_RTW_Frame(fd, RM_RT_SceneReady());` after `rm_rtfx_frame` in `rm_main.c` | section (i) | `<copy>/rm_main.c:1321: RM_RTW_Frame` (on the tree itself the check adds `... rm_main.c names a ray-traced effect outside the effect table: walk it with rm_rtfx_* (rm_rtfx.c)`) |
+| `rmb_rtw_blend(io.enc, t_material);` after `rm_rtfx_post` in `rmb_gbuf.m` | section (i) | `<copy>/rmb_gbuf.m:841: rmb_rtw_blend` |
+| the same call in a comment only | section (i) passes it, as it must | none |
+| a new row `FX(RM_RTGI_Init)` and `RM_RTGI_Frame(...)` in `rm_main.c` | section (i), the prefix taken from the new row | `RM_RTGI_Frame` |
 
 ## No change in what is drawn
 

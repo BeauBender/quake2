@@ -102,6 +102,12 @@
 #     moved below another statement; &caps for &rtcaps; RM_RTG_Init deleted,
 #     moved after ri.Vid_MenuInit; another *_Init(&caps); either function
 #     renamed) must fail it, each naming the rule it breaks.
+# (i) Always: the effect table (TASK179). tests/metal/rm_rtfx_test.c over
+#     rm_rtfx.c (RM_RTFX_HOST: every entry point NULL) and rm_rtgate.c: the
+#     order, the switches against the gate, the pipeline rule; five scratch
+#     mutants of the two files must fail it. Then, comments and literals
+#     stripped, rm_main.c and rmb_gbuf.m name no effect's symbol (a prefix
+#     taken from the table's FX(...) rows); four mutants check the lint.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -1174,7 +1180,7 @@ for pf in "$rm_dir"/*.m; do
 	fi
 done
 
-# (f) TASK179: rm_main.c and rmb_gbuf.m reach the ray-traced effects only through the effect table's walks
+# (i) TASK179: rm_main.c and rmb_gbuf.m reach the ray-traced effects only through the effect table's walks
 # (rm_rtfx.c). fx_vocab <table>: the effects' prefixes, from the identifiers the table's rows name in FX(...),
 # each cut after its second underscore (RM_RTS_Init: RM_RTS_, rmb_rtw_fx_mark: rmb_rtw_), with the pure
 # part's rm_ form of each (RM_RTSun_: rm_rtsun_): a row added for a new effect adds its prefixes. fx_named
