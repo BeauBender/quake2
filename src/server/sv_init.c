@@ -550,6 +550,14 @@ SV_Map(qboolean attractloop, char *levelstring, qboolean loadgame, qboolean isau
 	char spawnpoint[MAX_QPATH];
 	const char *ext;
 
+	/* a demo's text (its svc_stufftext) ends with the demo, as a
+	   server's ends with its connection: it must not reach a game
+	   that is not a demo through Cbuf_CopyToDefer (FIX148) */
+	if (sv.attractloop && !attractloop)
+	{
+		Cbuf_DropServerText();
+	}
+
 	sv.loadgame = loadgame;
 	sv.attractloop = attractloop;
 

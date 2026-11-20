@@ -59,7 +59,9 @@ static char *cmd_null_string = "";
 static char cmd_args[MAX_STRING_CHARS];
 sizebuf_t cmd_text;
 byte cmd_text_buf[32768];
-char defer_text_buf[32768];
+/* one more than cmd_text_buf for the terminator: Cbuf_InsertText can
+   fill cmd_text_buf to the last byte (FIX148) */
+char defer_text_buf[sizeof(cmd_text_buf) + 1];
 
 /*
  * Where each byte of cmd_text_buf and defer_text_buf came from (FIX113):
