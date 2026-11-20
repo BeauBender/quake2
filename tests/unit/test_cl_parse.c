@@ -401,6 +401,53 @@ TEST(cl_gamedir_dotdot_refused)
 	refused_game("..");
 }
 
+TEST(cl_gamedir_colon_refused)
+{
+	refused_game("a:b");
+}
+
+TEST(cl_gamedir_backslash_refused)
+{
+	refused_game("a\\b");
+}
+
+TEST(cl_gamedir_del_refused)
+{
+	refused_game("a\x7f" "b");
+}
+
+TEST(cl_gamedir_lone_dot_refused)
+{
+	refused_game(".");
+}
+
+TEST(cl_gamedir_empty_accepted)
+{
+	extern cvar_t *fs_gamedirvar;
+	char old[MAX_QPATH];
+
+	reset_client();
+	Q_strlcpy(old, fs_gamedirvar->string, sizeof(old));
+	build_serverdata_game("");
+	CL_ParseServerMessage();
+	T_EQ_STR(fs_gamedirvar->string, "");
+	T_EQ_STR(cl.gamedir, "");
+	Cvar_Set("game", old);
+}
+
+TEST(fs_gamedirvalid_table)
+{
+	T_CHECK(FS_GameDirValid(""));
+	T_CHECK(FS_GameDirValid("ctf"));
+	T_CHECK(!FS_GameDirValid("a:b"));
+	T_CHECK(!FS_GameDirValid("a\\b"));
+	T_CHECK(!FS_GameDirValid("a\x7f" "b"));
+	T_CHECK(!FS_GameDirValid("."));
+	T_CHECK(!FS_GameDirValid(".."));
+	T_CHECK(!FS_GameDirValid("a/b"));
+	T_CHECK(!FS_GameDirValid("x\ny"));
+}
+
 TEST(cl_gamedir_plain_accepted)
 {
 	extern cvar_t *fs_gamedirvar;
