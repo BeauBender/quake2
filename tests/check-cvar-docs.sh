@@ -35,7 +35,8 @@
 # table's string literals as cvar names, so a walk cannot add an
 # undocumented name: path:Symbol is an array (the first literal of each
 # {row} is a name; every literal of a flat array of strings is) or a function
-# (every literal in its body is) defined at column 0 of path;
+# (every literal in its body is; a lone struct initialiser gives its first
+# literal) defined at column 0 of path;
 # fmt:pattern:low:high is pattern with %d from low to high, a bound being an
 # integer or MACRO or MACRO-n, the macro one plain-integer #define under src
 # (else the check fails). An entry whose call is not in src fails (a stale entry would
@@ -153,25 +154,44 @@ function slurp(path,   old, x, r) {
 	if (r < 0) die("cannot read " path)
 	return x
 }
-function words(D, W,   t, n, A, i) {
-	t = D
-	gsub(/[^A-Za-z0-9_]+/, " ", t)
-	n = split(t, A, " ")
-	for (i = 1; i <= n; i++) W[A[i]] = 1
-}
-# grep -wF: the name with no word character before or after it
-function documented(name, D, W,   p, off, b, a, L) {
-	if (name ~ /^[A-Za-z0-9_]+$/) return (name in W)
-	L = length(name)
-	off = 1
-	while ((p = index(substr(D, off), name)) > 0) {
-		p += off - 1
-		b = (p == 1) ? "\n" : substr(D, p - 1, 1)
-		a = substr(D, p + L, 1)
-		if (b !~ /[A-Za-z0-9_]/ && a !~ /[A-Za-z0-9_]/) return 1
-		off = p + 1
+# The names a doc opens an entry with: a line that starts "* **" (in doc/040
+# also an indented "  - **" or "  * **" one, nested under another), up to the
+# first "**:" (the header may wrap onto indented lines), and in the header
+# the first word of every **bold** group. "* **a** / **b**: text" and
+# "* **a**, **b**:" give a and b; a name in prose, in a code span or after
+# the colon gives nothing. A name ending in _(x/y) stands for each choice.
+function entries(D, E, nested,   n, L, i, h, on, k, g, A, m, j, base, C, st)
+{
+	n = split(D, L, "\n")
+	on = 0; h = ""
+	for (i = 1; i <= n; i++) {
+		st = (L[i] ~ /^\* \*\*/) || (nested && L[i] ~ /^  [-*] \*\*/)
+		# a header with no "**:" ends where the next entry or a blank line
+		# starts; what it held is prose and counts for nothing
+		if (on && (st || L[i] == "")) on = 0
+		if (!on && !st) continue
+		if (!on) { on = 1; h = ""; k = 0 }
+		h = h " " L[i]
+		k++
+		if ((j = index(h, "**:")) > 0) { h = substr(h, 1, j + 1); on = 0 }
+		else if (k >= 4) { on = 0; continue }
+		else continue
+		while (match(h, /\*\*[^*]+\*\*/)) {
+			g = substr(h, RSTART + 2, RLENGTH - 4)
+			h = substr(h, RSTART + RLENGTH)
+			sub(/^ +/, "", g)
+			split(g, A, " ")
+			if (match(A[1], /_\([A-Za-z0-9\/]+\)$/)) {
+				base = substr(A[1], 1, RSTART)
+				m = split(substr(A[1], RSTART + 2, RLENGTH - 3), C, "/")
+				for (j = 1; j <= m; j++) E[base C[j]] = 1
+			} else E[A[1]] = 1
+		}
 	}
-	return 0
+}
+function documented(name, D, W)
+{
+	return (name in W)
 }
 function section(hdr, A,   k, n) {
 	n = 0
@@ -211,7 +231,7 @@ function bound(b, where,   m, off, cmd, line, v, nd) {
 	return v - off
 }
 # the names of the table sym defined at column 0 of path, into out
-function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit, flat) {
+function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit, flat, single) {
 	on = 0; isarr = 0; body = ""; n = 0
 	while ((r = getline line < path) > 0) {
 		if (!on) {
@@ -242,10 +262,14 @@ function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit, flat) {
 			out[++n] = lit
 		}
 	} else {
+		# a lone struct initialiser (sym = { "name", "label", ... }): the
+		# first literal is the name, the others are its label and default
+		single = (body ~ ("(^|[ *])" sym " *= *\\{"))
 		while (match(body, /"[^"]*"/)) {
 			lit = substr(body, RSTART + 1, RLENGTH - 2)
 			body = substr(body, RSTART + RLENGTH)
 			out[++n] = lit
+			if (single) break
 		}
 	}
 	return n
@@ -255,7 +279,7 @@ BEGIN {
 	pat_cvar = "^[A-Za-z0-9_]+$"
 	pat_cmd = "^[A-Za-z0-9_+-]+$"
 	d40 = slurp(f_d40); d50 = slurp(f_d50)
-	words(d40, W40); words(d50, W50)
+	entries(d40, W40, 1); entries(d50, W50, 0)
 
 	# the upstream names
 	nup = 0; upid = ""
@@ -550,7 +574,7 @@ void F(void)
 			cheatvars[n].value, 0);
 }
 EOF
-	printf 'vr_cvar and ch_one documented here\n' > "$fx/doc/040_cvarlist.md"
+	printf '* **vr_cvar**: x\n* **ch_one**: y\n' > "$fx/doc/040_cvarlist.md"
 	printf 'nothing yet\n' > "$fx/doc/050_commands.md"
 	printf 'up_cvar\n' > "$fx/tests/baselines/undocumented-cvars.txt"
 	printf 'up_cmd\n' > "$fx/tests/baselines/undocumented-commands.txt"
@@ -633,14 +657,35 @@ EOF
 	s_cmd_nl() { printf 'void f(void)\n{\n\tCmd_AddCommand(\n\t\t"zz_cmd", f);\n}\n' > src/common/nl.c; }
 	s_cmd_var() { printf 'void f(void) { Cmd_AddCommand(cmdname, f); }\n' > src/common/v.c; }
 	s_cmd_var_allow() { mkdir -p src/client/refresh; printf 'void f(void) { ri.Cmd_AddCommand(name, f); }\n' > src/client/refresh/rt.c; }
-	s_cmd_var_allow_listed() { s_cmd_var_allow; printf 'src/client/refresh/rt.c|Cmd_AddCommand|name|fmt:zz_cmd%%d:0:1|the same walk\n' >> tests/baselines/nonliteral-calls.txt; printf 'zz_cmd0 zz_cmd1\n' >> doc/050_commands.md; }
+	s_cmd_var_allow_listed() { s_cmd_var_allow; printf 'src/client/refresh/rt.c|Cmd_AddCommand|name|fmt:zz_cmd%%d:0:1|the same walk\n' >> tests/baselines/nonliteral-calls.txt; printf '* **zz_cmd0** / **zz_cmd1**: x.\n' >> doc/050_commands.md; }
 	s_cmd_var_listed_for_cvar_only() { s_cmd_var_allow; printf 'src/client/refresh/rt.c|Cvar_Get|name|src/client/cl_main.c:cheatvars|the cvar walk\n' >> tests/baselines/nonliteral-calls.txt; }
 	s_fork_base() { printf 'zz_fork\nup_cvar\n' > tests/baselines/undocumented-cvars.txt; printf 'void f(void) { Cvar_Get("zz_fork", "0", 0); }\n' > src/common/fork.c; }
 	s_fork_base_cmd() { printf 'zz_forkcmd\nup_cmd\n' > tests/baselines/undocumented-commands.txt; printf 'void f(void) { Cmd_AddCommand("zz_forkcmd", f); }\n' > src/common/fork.c; }
 	s_bullets() { printf 'up_cvar\na_bullets\n' > tests/baselines/undocumented-cvars.txt; printf 'void f(void) { Cvar_Get("a_bullets", "0", 0); }\n' > src/common/fork.c; }
 	s_env_new() { printf 'void f(void) { getenv("ZZ_X"); }\n' > src/common/e.c; }
-	s_env_doc() { s_env_new; printf 'ZZ_X is read by f.\n' >> doc/040_cvarlist.md; }
-	s_literal_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf 'zz_doc is documented\n' >> doc/040_cvarlist.md; }
+	s_env_doc() { s_env_new; printf '* **ZZ_X**: read by f.\n' >> doc/040_cvarlist.md; }
+	s_prose_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf 'The zz_doc cvar is mentioned in prose.\n' >> doc/040_cvarlist.md; }
+	s_span_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **other**: see `zz_doc` and **zz_doc** here.\n\nSet `zz_doc` to 1.\n' >> doc/040_cvarlist.md; }
+	s_prose_cmd() { printf 'void f(void) { Cmd_AddCommand("zz_cmd", f); }\n' > src/common/d.c; printf 'Use zz_cmd to do it.\n' >> doc/050_commands.md; }
+	s_wrap_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **other**, **x**,\n  **zz_doc <val>**: wrapped.\n' >> doc/040_cvarlist.md; }
+	s_nested_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **zz_parent**: x.\n  - **zz_doc**: nested.\n' >> doc/040_cvarlist.md; }
+	s_nested_star_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **zz_parent**: x.\n  * **zz_doc**: nested.\n' >> doc/040_cvarlist.md; }
+	s_nested_cmd() { printf 'void f(void) { Cmd_AddCommand("zz_cmd", f); }\n' > src/common/d.c; printf '* **ogg**: x.\n  - **zz_cmd**: a subcommand.\n' >> doc/050_commands.md; }
+	s_nocolon_next() { printf 'void f(void) { Cvar_Get("zz_a", "0", 0); }\n' > src/common/d.c; printf '* **zz_a** is said here\n* **other**: y.\n' >> doc/040_cvarlist.md; }
+	s_giveup_prose() { printf 'void f(void) { Cvar_Get("zz_b", "0", 0); }\n' > src/common/d.c; printf '* **other** one\n  two\n  three\n  and **zz_b** more\n\n' >> doc/040_cvarlist.md; }
+	s_lone_struct() {
+		printf 'void f(void) { x = Cvar_Get(name, "0", 0); }\n' > src/common/v.c
+		printf 'static zzinfo_t zz_one = { "zz_one", "zz label", "zz def" };\n' > src/common/t.c
+		printf 'src/common/v.c|Cvar_Get|name|src/common/t.c:zz_one|one struct\n' >> tests/baselines/nonliteral-calls.txt
+	}
+	s_lone_struct_doc() { s_lone_struct; printf '* **zz_one**: x.\n' >> doc/040_cvarlist.md; }
+	s_fn_table() {
+		printf 'void f(void) { x = Cvar_Get(name, "0", 0); }\n' > src/common/v.c
+		printf 'const char *zz_fn(int i)\n{\n\tif (i) return "zz_f2";\n\treturn "zz_f1";\n}\n' > src/common/t.c
+		printf 'src/common/v.c|Cvar_Get|name|src/common/t.c:zz_fn|a function\n' >> tests/baselines/nonliteral-calls.txt
+	}
+	s_fn_table_first() { s_fn_table; printf '* **zz_f2**: x.\n' >> doc/040_cvarlist.md; }
+	s_literal_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **zz_doc**: documented.\n' >> doc/040_cvarlist.md; }
 	s_cmt_block() { printf '/* Cvar_Get("zz_c", "0", 0); */\n' > src/common/c.c; }
 	s_cmt_line() { printf '// Cvar_Get("zz_c", "0", 0);\n' > src/common/c.c; }
 	s_odd() { printf 'void f(void) { Cvar_Get("zz odd", "0", 0); }\n' > src/common/o.c; }
@@ -651,7 +696,7 @@ EOF
 	s_up_wrong_id() { sed 's/^# id: .*/# id: 0000000000000000000000000000000000000000/' "$upfile" > "$upfile.n"; mv "$upfile.n" "$upfile"; }
 	s_up_empty() { grep '^#' "$upfile" > "$upfile.n"; mv "$upfile.n" "$upfile"; }
 	s_cheat_row() { sed 's/{NULL, NULL}/{"zz_cheat_undoc", "0"},\n\t{NULL, NULL}/' src/client/cl_main.c > src/client/cl_main.n; mv src/client/cl_main.n src/client/cl_main.c; }
-	s_cheat_row_doc() { s_cheat_row; printf 'zz_cheat_undoc is documented\n' >> doc/040_cvarlist.md; }
+	s_cheat_row_doc() { s_cheat_row; printf '* **zz_cheat_undoc**: documented.\n' >> doc/040_cvarlist.md; }
 	s_cheat_row_split() { sed 's/{NULL, NULL}/{\n\t\t"zz_cheat_undoc", "0"},\n\t{NULL, NULL}/' src/client/cl_main.c > src/client/cl_main.n; mv src/client/cl_main.n src/client/cl_main.c; }
 	s_allow_stale() { printf 'src/client/refresh/rm_main.c|Cvar_Get|name|src/client/cl_main.c:cheatvars|the gate walks its table\n' >> tests/baselines/nonliteral-calls.txt; }
 	s_rm_walk_nolist() {
@@ -662,9 +707,9 @@ EOF
 		s_rm_walk_nolist
 		printf 'src/client/refresh/rm_main.c|Cvar_Get|name|src/client/refresh/rm_main.c:tab|the gate walks its table\n' >> tests/baselines/nonliteral-calls.txt
 	}
-	s_rm_walk_listed_doc() { s_rm_walk_listed; printf 'zz_rm_undoc is documented\n' >> doc/040_cvarlist.md; }
+	s_rm_walk_listed_doc() { s_rm_walk_listed; printf '* **zz_rm_undoc**: documented.\n' >> doc/040_cvarlist.md; }
 	s_set() { printf 'void f(void) { ri.Cvar_Set("zz_set", "1"); }\n' > src/common/s.c; }
-	s_set_doc() { s_set; printf 'zz_set is documented\n' >> doc/040_cvarlist.md; }
+	s_set_doc() { s_set; printf '* **zz_set**: documented.\n' >> doc/040_cvarlist.md; }
 	s_set_upstream() { printf 'void f(void) { Cvar_Set("up_cvar", "1"); }\n' > src/common/s.c; }
 	s_set_var() { printf 'void f(void) { Cvar_Set(name, "1"); gi.cvar_set(var->name, "1"); }\n' > src/common/s.c; }
 	s_set_value() { printf 'void f(void) { Cvar_SetValue("zz_set", 1); }\n' > src/common/s.c; }
@@ -685,24 +730,24 @@ EOF
 		printf 'static const char *rt_gate_cvars[] = {\n\t"zz_rt_a",\n\t"zz_rt_b",\n\t"zz_rt_c"\n};\nvoid f(void) { for (i = 0; i < 3; i++) ri.Cvar_Get(rt_gate_cvars[i], "0", 0); }\n' > src/client/refresh/rt.c
 		printf 'src/client/refresh/rt.c|Cvar_Get|rt_gate_cvars[i]|src/client/refresh/rt.c:rt_gate_cvars|the gate walks its table\n' >> tests/baselines/nonliteral-calls.txt
 	}
-	s_flat_arr_late() { s_flat_arr; printf 'zz_rt_a zz_rt_b\n' >> doc/040_cvarlist.md; }
-	s_flat_arr_lines_first() { s_flat_arr_lines; printf 'zz_rt_a\n' >> doc/040_cvarlist.md; }
-	s_flat_arr_doc() { s_flat_arr; printf 'zz_rt_a zz_rt_b zz_rt_c\n' >> doc/040_cvarlist.md; }
-	s_flat_arr_lines_doc() { s_flat_arr_lines; printf 'zz_rt_a zz_rt_b zz_rt_c\n' >> doc/040_cvarlist.md; }
-	s_prefix_macro() { printf 'void f(void) { x = Cvar_Get("zz_" SUFFIX, "0", 0); }\n' > src/common/v.c; printf 'zz_ is a word here\n' >> doc/040_cvarlist.md; }
-	s_prefix_two() { printf 'void f(void) { x = Cvar_Get("zz_a" "zz_b", "0", 0); }\n' > src/common/v.c; printf 'zz_a zz_b\n' >> doc/040_cvarlist.md; }
-	s_prefix_cmd() { printf 'void f(void) { Cmd_AddCommand("zz_" "c", f); }\n' > src/common/v.c; printf 'zz_ zz_c\n' >> doc/050_commands.md; }
-	s_blank_comma() { printf 'void f(void) { Cvar_Get("zz_doc" , "0", 0); }\n' > src/common/d.c; printf 'zz_doc is documented\n' >> doc/040_cvarlist.md; }
+	s_flat_arr_late() { s_flat_arr; printf '* **zz_rt_a** / **zz_rt_b**: x.\n' >> doc/040_cvarlist.md; }
+	s_flat_arr_lines_first() { s_flat_arr_lines; printf '* **zz_rt_a**: x.\n' >> doc/040_cvarlist.md; }
+	s_flat_arr_doc() { s_flat_arr; printf '* **zz_rt_a**, **zz_rt_b**, **zz_rt_c**: x.\n' >> doc/040_cvarlist.md; }
+	s_flat_arr_lines_doc() { s_flat_arr_lines; printf '* **zz_rt_a**, **zz_rt_b**, **zz_rt_c**: x.\n' >> doc/040_cvarlist.md; }
+	s_prefix_macro() { printf 'void f(void) { x = Cvar_Get("zz_" SUFFIX, "0", 0); }\n' > src/common/v.c; printf '* **zz_**: x.\n' >> doc/040_cvarlist.md; }
+	s_prefix_two() { printf 'void f(void) { x = Cvar_Get("zz_a" "zz_b", "0", 0); }\n' > src/common/v.c; printf '* **zz_a** / **zz_b**: x.\n' >> doc/040_cvarlist.md; }
+	s_prefix_cmd() { printf 'void f(void) { Cmd_AddCommand("zz_" "c", f); }\n' > src/common/v.c; printf '* **zz_** / **zz_c**: x.\n' >> doc/050_commands.md; }
+	s_blank_comma() { printf 'void f(void) { Cvar_Get("zz_doc" , "0", 0); }\n' > src/common/d.c; printf '* **zz_doc**: documented.\n' >> doc/040_cvarlist.md; }
 	s_plus_cmd() { printf 'void f(void) { Cmd_AddCommand("+zz_cmd", f); }\n' > src/common/v.c; }
-	s_plus_cmd_doc() { s_plus_cmd; printf 'The +zz_cmd command.\n' >> doc/050_commands.md; }
+	s_plus_cmd_doc() { s_plus_cmd; printf '* **+zz_cmd**: x.\n' >> doc/050_commands.md; }
 	s_adr_walk() {
 		mkdir -p src/client/header src/client/menu
 		printf '#define NUM_ADDRESSBOOK_ENTRIES 9\n' > src/client/header/client.h
 		printf 'void f(void) { Com_sprintf(buffer, sizeof(buffer), "adr%%d", i); Cvar_Get(buffer, "", 0); }\n' > src/client/menu/ab.c
 		printf 'src/client/menu/ab.c|Cvar_Get|buffer|fmt:adr%%d:0:NUM_ADDRESSBOOK_ENTRIES-1|the address book\n' >> tests/baselines/nonliteral-calls.txt
 	}
-	s_adr_doc() { s_adr_walk; printf 'adr0 adr1 adr2 adr3 adr4 adr5 adr6 adr7 adr8\n' >> doc/040_cvarlist.md; }
-	s_adr_undoc() { s_adr_walk; printf 'adr0 adr1 adr2 adr3 adr4 adr5 adr6 adr7\n' >> doc/040_cvarlist.md; }
+	s_adr_doc() { s_adr_walk; printf '* **adr0**, **adr1**, **adr2**, **adr3**, **adr4**, **adr5**, **adr6**,\n  **adr7**, **adr8**: x.\n' >> doc/040_cvarlist.md; }
+	s_adr_undoc() { s_adr_walk; printf '* **adr0**, **adr1**, **adr2**, **adr3**, **adr4**, **adr5**, **adr6**,\n  **adr7**: x.\n' >> doc/040_cvarlist.md; }
 	s_adr_nomacro() { s_adr_doc; rm src/client/header/client.h; }
 	s_adr_notint() { s_adr_doc; printf '#define NUM_ADDRESSBOOK_ENTRIES (4 + 5)\n' > src/client/header/client.h; }
 
@@ -764,6 +809,17 @@ EOF
 	case_run getenv-new-undocumented refused ZZ_X s_env_new
 	case_run getenv-new-documented accepted "$OK" s_env_doc
 	case_run getenv-upstream accepted "$OK" s_none
+	case_run prose-mention-is-not-documentation refused zz_doc s_prose_doc
+	case_run prose-mention-of-a-command-is-not-documentation refused zz_cmd s_prose_cmd
+	case_run code-span-in-prose-is-not-documentation refused zz_doc s_span_doc
+	case_run wrapped-entry-header-is-documentation accepted "$OK" s_wrap_doc
+	case_run nested-entry-is-documentation accepted "$OK" s_nested_doc
+	case_run nested-star-entry-is-documentation accepted "$OK" s_nested_star_doc
+	case_run nested-item-in-the-commands-doc-is-not-a-command refused zz_cmd s_nested_cmd
+	case_run bullet-with-no-colon-is-not-documentation refused zz_a s_nocolon_next
+	case_run header-that-gives-up-then-bold-prose refused zz_b s_giveup_prose
+	case_run lone-struct-counts-only-its-first-literal accepted "$OK" s_lone_struct_doc
+	case_run function-table-counts-every-literal refused zz_f1 s_fn_table_first
 	case_run literal-documented-one-line accepted "$OK" s_literal_doc
 	case_run commented-out-block-counts refused zz_c s_cmt_block
 	case_run commented-out-line-counts refused zz_c s_cmt_line
