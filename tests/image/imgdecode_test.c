@@ -727,8 +727,11 @@ test_encode_png(void)
 					/* An image whose every pixel has alpha 0 is compared by alpha only:
 					   macOS 26's ImageIO does not keep the colour of a fully transparent
 					   image (it does when any pixel is visible, see the 2x1 control below),
-					   and nothing draws such an image: no renderer reads the colour of a
-					   texture with no visible texel. Every other image compares every byte. */
+					   and no renderer draws the colour of such an image except the soft
+					   renderer on a wall texture, which keeps the RGB whatever the alpha
+					   (sw_image.c, R_Convert32To8bit, transparent false): that case needs
+					   a degenerate all-index-255 wall and is cosmetic. Every other image
+					   compares every byte. */
 					while (d < n && (invisible ? (d % 4 != 3 || back[d] == rgba[d])
 						: back[d] == rgba[d]))
 					{
@@ -771,7 +774,7 @@ test_encode_png(void)
 
 			CHECK(r == IMGDEC_OK && bw == 2 && bh == 1, "encode 2x1 mixed: decodes as %s %dx%d",
 				IMGDEC_ResultString(r), bw, bh);
-			CHECK(back && !memcmp(back, two, 8), "encode 2x1 mixed: not the same bytes back: "
+			CHECK(back && bw == 2 && bh == 1 && !memcmp(back, two, 8), "encode 2x1 mixed: not the same bytes back: "
 				"pixel 0 is %u %u %u %u", back ? back[0] : 0, back ? back[1] : 0,
 				back ? back[2] : 0, back ? back[3] : 0);
 		}
