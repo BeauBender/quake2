@@ -206,5 +206,6 @@ original clients (Vanilla Quake II) commands are still in place.
 * **vstr**: Inserts the current value of a variable as command text.
 
 * **wait**: Stops the rest of the command buffer for about one frame
-  (16 ms, whatever the frame rate), so `bind g "impulse 5; +attack; wait;
-  -attack"` fires for one frame. Any argument is ignored.
+  (16 ms, whatever the frame rate), so the commands before it in a bind
+  or an exec'd file run in one frame and the ones after it in the next.
+  Any argument is ignored.
