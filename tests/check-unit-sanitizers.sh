@@ -32,6 +32,13 @@
 #   is what that runtime does anyway, written out so a platform that has
 #   LSan runs the same check. Whether the suite is leak-free there is not
 #   known and is not what this check is for. Nothing else is relaxed.
+# - log_path: both runtimes write their reports to files in the check's
+#   scratch tree (asan.<pid>, ubsan.<pid>), and after the run the check
+#   fails if any exists and prints the first one. ASan and UBSan share one
+#   runtime in this build, and the last log_path set (UBSan's) wins for
+#   every report, so an ASan report can land in a ubsan.<pid> file. A
+#   forked test child that dies by a signal fails its test; its report is
+#   in the log file, not in the test output.
 # - A run that exits 0 but whose output still holds a sanitizer report
 #   ("runtime error:", "ERROR: AddressSanitizer",
 #   "SUMMARY: UndefinedBehaviorSanitizer") fails too.
@@ -43,7 +50,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-unset MAKEFLAGS GNUMAKEFLAGS MFLAGS CFLAGS LDFLAGS CC ASAN_OPTIONS UBSAN_OPTIONS LSAN_OPTIONS
+unset MAKEFLAGS GNUMAKEFLAGS MFLAGS MAKEFILES CFLAGS LDFLAGS CC ASAN_OPTIONS UBSAN_OPTIONS LSAN_OPTIONS
 
 for t in make cc nm; do
 	if ! command -v "$t" > /dev/null 2>&1; then
@@ -66,8 +73,8 @@ cp -R tests/pins/unit "${tree:?}/tests/pins/"
 jobs=$(sysctl -n hw.ncpu 2> /dev/null || nproc 2> /dev/null || echo 4)
 case $jobs in '' | *[!0-9]*) jobs=4 ;; esac
 
-ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=0
-UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1
+ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=0:log_path="${tmp:?}/run/asan"
+UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1:log_path="${tmp:?}/run/ubsan"
 TMPDIR="${tmp:?}/run"
 export ASAN_OPTIONS UBSAN_OPTIONS TMPDIR
 
@@ -90,6 +97,16 @@ if ! grep -q '__asan_init' "${tmp:?}/syms"; then
 fi
 if ! grep -q '__ubsan_handle_.*_abort' "${tmp:?}/syms"; then
 	echo "check-unit-sanitizers: the test binary has no aborting UBSan handler (built without -fsanitize=undefined -fno-sanitize-recover)"
+	exit 1
+fi
+
+# A report from a forked test child, or from any process whose output does not
+# reach the make log, lands in a log_path file (FIX142).
+logf=$(ls "${tmp:?}"/run/asan.* "${tmp:?}"/run/ubsan.* 2> /dev/null | head -n 1 || :)
+if [ -n "$logf" ]; then
+	echo "check-unit-sanitizers: a sanitizer log file was written: $(basename "$logf")"
+	head -n 60 "$logf"
+	echo "check-unit-sanitizers: FAILED: make ASAN=1 UBSAN=1 test, status $rc, in $((t1 - t0)) s"
 	exit 1
 fi
 
