@@ -939,20 +939,35 @@ else
 		probe_skip_why=
 		fx_spatial_ran=0
 		fx_temporal16=0
-		grep -q 'the MetalFX spatial half under r_hdr 0 and 1, .*: run$' "${tmp:?}/probe.out" && fx_spatial_ran=1
-		grep -q 'the temporal scaler in RGBA16Float colour and output: made$' "${tmp:?}/probe.out" && fx_temporal16=1
-		if grep -q 'the MetalFX temporal half skipped: no temporal scaler' "${tmp:?}/probe.out"; then
-			fx_why16="no temporal scaler"
+		fx_spatial_why=
+		fx_why16=
+		fx_caps=$(sed -n 's/^rmb_cs_probe: scalers: //p' "${tmp:?}/probe.out" | head -n 1)
+		[ -n "$fx_caps" ] || bad "tests/metal/rmb_cs_probe.m printed no 'scalers:' capability line"
+		if grep -q 'the MetalFX spatial half under r_hdr 0 and 1, .*: run$' "${tmp:?}/probe.out"; then
+			fx_spatial_ran=1
 		else
-			fx_why16="no float16 temporal scaler"
+			fx_spatial_why=$(sed -n 's/^rmb_cs_probe: the MetalFX spatial half skipped: //p' "${tmp:?}/probe.out" | head -n 1)
+			fx_spatial_why=${fx_spatial_why% on this GPU}
+			[ -n "$fx_spatial_why" ] || bad "tests/metal/rmb_cs_probe.m printed neither a run nor a skipped line for the MetalFX spatial half"
+		fi
+		if grep -q 'the temporal scaler in RGBA16Float colour and output: made$' "${tmp:?}/probe.out"; then
+			fx_temporal16=1
+		else
+			fx_why16=$(sed -n -e 's/^rmb_cs_probe: the MetalFX temporal half skipped: //p' -e 's/^rmb_cs_probe: the temporal scaler in RGBA16Float skipped: //p' "${tmp:?}/probe.out" | head -n 1)
+			fx_why16=${fx_why16% on this GPU}
+			[ -n "$fx_why16" ] || bad "tests/metal/rmb_cs_probe.m printed neither a run nor a skipped line for the temporal scaler in RGBA16Float"
 		fi
 		for m in nulled kept detached unretained fmtstock unwritten failframe hdrattach hdrkept fxlinear fxtemporal8 fxnonote; do
 			why=
 			case $m in
-				fxlinear|fxnonote) [ "$fx_spatial_ran" = 1 ] || why="no spatial scaler" ;;
-				fxtemporal8) [ "$fx_temporal16" = 1 ] || why=$fx_why16 ;;
+				fxlinear|fxnonote) [ "$fx_spatial_ran" = 1 ] || why=${fx_spatial_why:-unexplained} ;;
+				fxtemporal8) [ "$fx_temporal16" = 1 ] || why=${fx_why16:-unexplained} ;;
 			esac
 			if [ -n "$why" ]; then
+				# a probe that says both scalers are there may not skip an fx mutant for a missing one
+				case "$fx_caps" in
+					"spatial=1 temporal=1") case $why in "no spatial scaler"*|"no temporal scaler"*) bad "mutant $m skipped ($why) but the probe says both scalers are present" ;; esac ;;
+				esac
 				probe_skipped=$((probe_skipped + 1))
 				case ", $probe_skip_why, " in *", $why, "*) ;; *) probe_skip_why=${probe_skip_why:+$probe_skip_why, }$why ;; esac
 				continue
