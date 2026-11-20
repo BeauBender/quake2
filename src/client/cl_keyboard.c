@@ -53,6 +53,9 @@ int history_line = 0;
 
 int key_waiting;
 char *keybindings[K_LAST];
+/* if true, a server line wrote keybindings[] for this key (FIX156): a
+   press queues it as server text and config.cfg leaves it out */
+static qboolean keybindserver[K_LAST];
 qboolean consolekeys[K_LAST]; /* if true, can't be rebound while in console */
 qboolean menubound[K_LAST]; /* if true, can't be rebound while in menu */
 int key_repeats[K_LAST]; /* if > 1, it is autorepeating */
@@ -941,20 +944,39 @@ exit_sdl:
 	return gamepadbtns[key - K_JOY_FIRST_BTN];
 }
 
+/*
+ * A binding a server line writes is the server's (FIX156), as an alias
+ * is (Cmd_Alias_f): pressing the key picks when it runs, the server
+ * picked what, so Key_Event queues it as server text and a command that
+ * refuses a server's use refuses it. Key_WriteBindings leaves it out of
+ * config.cfg, which the next start runs as the player's text. The
+ * player's text binding the key again makes it the player's; a server
+ * line that writes the binding the key already has leaves its owner as
+ * it was, so a server that runs the player's own configuration again
+ * does not take over the player's keys.
+ */
 void
 Key_SetBinding(int keynum, char *binding)
 {
 	char *new;
 	int l;
+	qboolean server;
 
 	if (keynum == -1)
 	{
 		return;
 	}
 
+	server = Cbuf_ExecutingServerText();
+
 	/* free old bindings */
 	if (keybindings[keynum])
 	{
+		if (server && !strcmp(keybindings[keynum], binding))
+		{
+			server = keybindserver[keynum];
+		}
+
 		Z_Free(keybindings[keynum]);
 		keybindings[keynum] = NULL;
 	}
@@ -965,6 +987,21 @@ Key_SetBinding(int keynum, char *binding)
 	strcpy(new, binding);
 	new[l] = 0;
 	keybindings[keynum] = new;
+	keybindserver[keynum] = server;
+}
+
+/* Queues text from key's binding, as the server's if a server wrote it */
+static void
+Key_AddBindingText(int key, const char *text)
+{
+	if (keybindserver[key])
+	{
+		Cbuf_AddServerText(text);
+	}
+	else
+	{
+		Cbuf_AddText(text);
+	}
 }
 
 static void
@@ -1128,7 +1165,8 @@ Key_WriteBindings(FILE *f)
 
 	for (i = 0; i < K_LAST; i++)
 	{
-		if (keybindings[i] && keybindings[i][0])
+		/* a server's binding would come back as the player's text */
+		if (keybindings[i] && keybindings[i][0] && !keybindserver[i])
 		{
 			fprintf(f, "bind %s \"%s\"\n",
 					Key_KeynumToString(i), keybindings[i]);
@@ -1575,7 +1613,7 @@ Key_Event(int key, qboolean down, qboolean special)
 		if (kb && (kb[0] == '+'))
 		{
 			Com_sprintf(cmd, sizeof(cmd), "-%s %i %i\n", kb + 1, key, time);
-			Cbuf_AddText(cmd);
+			Key_AddBindingText(key, cmd);
 		}
 
 		return;
@@ -1593,12 +1631,12 @@ Key_Event(int key, qboolean down, qboolean special)
 			{
 				/* button commands add keynum and time as a parm */
 				Com_sprintf(cmd, sizeof(cmd), "%s %i %i\n", kb, key, time);
-				Cbuf_AddText(cmd);
+				Key_AddBindingText(key, cmd);
 			}
 			else
 			{
-				Cbuf_AddText(kb);
-				Cbuf_AddText("\n");
+				Key_AddBindingText(key, kb);
+				Key_AddBindingText(key, "\n");
 			}
 		}
 
