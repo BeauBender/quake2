@@ -393,8 +393,6 @@ typedef struct cvar_servermark_s
 {
 	struct cvar_servermark_s *next;
 	char *name;
-	char *kept; /* the value the cvar held before the server's write,
-	               NULL if the server created the cvar (FIX168) */
 } cvar_servermark_t;
 
 /*
@@ -408,6 +406,7 @@ typedef struct cvar_serverdefault_s
 {
 	struct cvar_serverdefault_s *next;
 	char *name;
+	char *value; /* the value that created the cvar */
 } cvar_serverdefault_t;
 
 static cvar_serverdefault_t *cvar_serverdefaults;
@@ -434,18 +433,16 @@ static void
 Cvar_FreeServerMark(cvar_servermark_t *m)
 {
 	Z_Free(m->name);
-	Z_Free(m->kept);
 	Z_Free(m);
 }
 
 static void
-Cvar_AddServerMark(const char *var_name, const char *kept)
+Cvar_AddServerMark(const char *var_name)
 {
 	cvar_servermark_t *m;
 
 	m = Z_Malloc(sizeof(*m));
 	m->name = CopyString(var_name);
-	m->kept = kept ? CopyString(kept) : NULL;
 	m->next = cvar_servermarks;
 	cvar_servermarks = m;
 }
@@ -468,12 +465,13 @@ Cvar_FreeServerMarks(void)
 
 		cvar_serverdefaults = d->next;
 		Z_Free(d->name);
+		Z_Free(d->value);
 		Z_Free(d);
 	}
 }
 
-static qboolean
-Cvar_HasServerDefault(const char *var_name)
+static const cvar_serverdefault_t *
+Cvar_FindServerDefault(const char *var_name)
 {
 	const cvar_serverdefault_t *d;
 
@@ -481,11 +479,11 @@ Cvar_HasServerDefault(const char *var_name)
 	{
 		if (!strcmp(d->name, var_name))
 		{
-			return true;
+			return d;
 		}
 	}
 
-	return false;
+	return NULL;
 }
 
 /* A cvar a server line just created: its default is the server's. */
@@ -495,13 +493,14 @@ Cvar_NoteCreated(const cvar_t *var)
 	cvar_serverdefault_t *d;
 
 	if (!var || !Cmd_ExecutingLine() || !Cbuf_ExecutingServerText() ||
-			Cvar_HasServerDefault(var->name))
+			Cvar_FindServerDefault(var->name))
 	{
 		return;
 	}
 
 	d = Z_Malloc(sizeof(*d));
 	d->name = CopyString(var->name);
+	d->value = CopyString(var->default_string);
 	d->next = cvar_serverdefaults;
 	cvar_serverdefaults = d;
 }
@@ -519,13 +518,9 @@ Cvar_NoteCreated(const cvar_t *var)
  *   the player's values;
  * - the engine's own write, outside any line, leaves the owner as it
  *   was: no text chose the value, so nothing makes it the player's.
- * old is the value the cvar held before this write (NULL for a cvar
- * the write created). A server write that first marks a cvar keeps it,
- * so config.cfg still holds the player's value (FIX168). Callers pass
- * it before the write frees it.
  */
 static void
-Cvar_NoteWriter(const cvar_t *var, qboolean changed, const char *old)
+Cvar_NoteWriter(const cvar_t *var, qboolean changed)
 {
 	cvar_servermark_t **found, *m;
 
@@ -552,7 +547,7 @@ Cvar_NoteWriter(const cvar_t *var, qboolean changed, const char *old)
 
 	if (changed && !found)
 	{
-		Cvar_AddServerMark(var->name, old);
+		Cvar_AddServerMark(var->name);
 	}
 }
 
@@ -604,7 +599,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 			{
 				if (strcmp(value, var->latched_string) == 0)
 				{
-					Cvar_NoteWriter(var, false, NULL);
+					Cvar_NoteWriter(var, false);
 					return var;
 				}
 
@@ -615,7 +610,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 			{
 				if (strcmp(value, var->string) == 0)
 				{
-					Cvar_NoteWriter(var, false, NULL);
+					Cvar_NoteWriter(var, false);
 					return var;
 				}
 			}
@@ -623,7 +618,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 			/* the latched value is the one the cvar takes next: its
 			   writer owns the cvar from now (Cvar_GetLatchedVars,
 			   the engine's, keeps the owner) */
-			Cvar_NoteWriter(var, true, var->string);
+			Cvar_NoteWriter(var, true);
 
 			if (Com_ServerState())
 			{
@@ -655,7 +650,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 
 	if (!strcmp(value, var->string))
 	{
-		Cvar_NoteWriter(var, false, NULL);
+		Cvar_NoteWriter(var, false);
 		return var;
 	}
 
@@ -666,9 +661,9 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 		userinfo_modified = true;
 	}
 
-	Cvar_NoteWriter(var, true, var->string);
 	var->string = Cvar_CopyString(var->string, value);
 	var->value = strtod(var->string, (char **)NULL);
+	Cvar_NoteWriter(var, true);
 
 	return var;
 }
@@ -693,7 +688,7 @@ Cvar_Set2(const char *var_name, const char *value, qboolean force)
 	}
 
 	var = Cvar_GetNew(var_name, value, 0);
-	Cvar_NoteWriter(var, true, NULL);
+	Cvar_NoteWriter(var, true);
 	Cvar_NoteCreated(var);
 
 	return var;
@@ -729,7 +724,7 @@ Cvar_FullSet(const char *var_name, const char *value, int flags)
 	if (!var)
 	{
 		var = Cvar_GetNew(var_name, value, flags);
-		Cvar_NoteWriter(var, true, NULL);
+		Cvar_NoteWriter(var, true);
 		Cvar_NoteCreated(var);
 
 		return var;
@@ -750,12 +745,12 @@ Cvar_FullSet(const char *var_name, const char *value, int flags)
 	}
 
 	changed = strcmp(var->string, value) != 0;
-	Cvar_NoteWriter(var, changed, var->string);
 
 	var->string = Cvar_CopyString(var->string, value);
 	var->value = (float)strtod(var->string, (char **)NULL);
 
 	var->flags = flags;
+	Cvar_NoteWriter(var, changed);
 
 	return var;
 }
@@ -916,18 +911,8 @@ Cvar_WriteVariables(const char *path)
 	{
 		if (var->flags & CVAR_ARCHIVE)
 		{
-			cvar_servermark_t **mark = Cvar_FindServerMark(var->name);
-			const char *value = var->string;
-
-			/* a server wrote it: the player's earlier value, or nothing
-			   if the server created the cvar */
-			if (mark)
-			{
-				if (!(*mark)->kept) continue;
-				value = (*mark)->kept;
-			}
-
-			fprintf(f, "set %s \"%s\"\n", var->name, value);
+			if (Cvar_ServerWrote(var->name)) continue;
+			fprintf(f, "set %s \"%s\"\n", var->name, var->string);
 		}
 	}
 
@@ -1086,6 +1071,7 @@ Cvar_Inc_f(void)
 static void
 Cvar_ResetVar(cvar_t *var)
 {
+	const cvar_serverdefault_t *d;
 	const char *was = var->latched_string ? var->latched_string : var->string;
 	qboolean changed = strcmp(was, var->default_string) != 0;
 
@@ -1094,13 +1080,18 @@ Cvar_ResetVar(cvar_t *var)
 	/* a default a server line created is the server's value: the
 	   reset leaves the cvar the server's (FIX168). A reset that
 	   changed nothing changed no owner. */
-	if (changed && Cvar_HasServerDefault(var->name) && !Cvar_FindServerMark(var->name))
+	d = Cvar_FindServerDefault(var->name);
+
+	/* only while the default is still the one the server's line created:
+	   Cvar_Get replaces it when the engine registers the cvar later */
+	if (changed && d && !strcmp(d->value, var->default_string) &&
+			!Cvar_FindServerMark(var->name))
 	{
 		was = var->latched_string ? var->latched_string : var->string;
 
 		if (!strcmp(was, var->default_string))
 		{
-			Cvar_AddServerMark(var->name, NULL);
+			Cvar_AddServerMark(var->name);
 		}
 	}
 }
