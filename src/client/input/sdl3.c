@@ -3630,13 +3630,27 @@ IN_Probe_f(void)
 		char *buf;
 		int len = FS_LoadFile((char *)Cmd_Argv(2), (void **)&buf);
 
-		if (len < 0 || !(probe_script = malloc(len + 1)))
+		char *script;
+
+		if (len < 0 || !(script = malloc(len + 1)))
 		{
+			if (len >= 0)
+			{
+				FS_FreeFile(buf);
+			}
+
 			Com_Printf("in_probe: no script '%s'\n", Cmd_Argv(2));
 			return;
 		}
 
-		memcpy(probe_script, buf, len);
+		free(probe_script);
+		probe_script = script;
+
+		if (len > 0)
+		{
+			memcpy(probe_script, buf, len);
+		}
+
 		probe_script[len] = 0;
 		FS_FreeFile(buf);
 		probe_next = probe_script;

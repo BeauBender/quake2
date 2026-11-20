@@ -450,7 +450,11 @@ bind mode on every binding item, a controller button binds it, and back
 
 The tvOS simulator adds a controller of its own, named `Gamepad`, about
 a second after the start. The engine opens it only when no other
-controller is connected, and turns to a controller connected later.
+controller is connected, and turns to a controller connected later. The match
+is the name `Gamepad` (SDL gives every unidentified controller on tvOS 14 and
+later the same vendor and product), so a real third-party pad that reports
+that name would also be passed over while another gamepad is connected. A real
+Apple TV is not verified.
 
 The Siri Remote drives the menus as keys: a click on the up, down, left
 or right edge of its touch surface (the ring on the second generation)

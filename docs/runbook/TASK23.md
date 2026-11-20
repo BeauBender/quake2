@@ -375,7 +375,7 @@ rest position is -32768.
 
 The probe now has `in_probe script <file>` (test builds only): it feeds a file one line a frame and only when the
 command buffer is empty, so a press's command runs in the frame after it, as when a person presses it, and
-`wait <n>` counts n frames. `in_probe state` also prints the gun, the crouch flag, the layouts, the ammo, the
+`wait <n>` counts n input updates while the command buffer is empty, not frames. `in_probe state` also prints the gun, the crouch flag, the layouts, the ammo, the
 right trigger as the engine reads it, `K_TRIG_RIGHT`'s key state and the bytes left in the command buffer;
 `in_probe mark` and `in_probe expect <field>` print `ok` or `FAIL` for a value that changed or did not;
 `in_probe bound <key>` prints a binding; `in_probe pads` prints each joystick's vendor, product, version, GUID,
@@ -431,7 +431,10 @@ Apple TV was run.
 (`src/client/input/sdl3.c`, tvOS only) matches that device: the name `Gamepad`, not virtual, vendor 0x05ac,
 product 4. `IN_Controller_Init` passes over it while another gamepad is present, as the touch controls are
 passed over on iOS, and `SDL_EVENT_JOYSTICK_ADDED` looks again when a gamepad is added while it is the one in
-use. Alone it is still opened. There is no setting.
+use. Alone it is still opened. There is no setting. On tvOS 14 and later SDL gives every unidentified MFi controller
+vendor 0x05ac and product 4 (`SDL_mfijoystick.m`), so only the name `Gamepad` singles out the simulator's pad: a
+real third-party pad that reports the name `Gamepad` would also be passed over while another gamepad is connected.
+A real Apple TV is not verified.
 
 ### Mutants
 

@@ -11,6 +11,12 @@ original clients (Vanilla Quake II) commands are still in place.
   your inventory or you do not have enough ammo to use it.
   By quickly tapping the bound key, you can navigate the list faster.
 
+* **exec <file>**: Runs a config file. The file is looked up in the
+  game's search path (see `path`), and its lines are executed one after
+  the other, ahead of whatever is already waiting in the command buffer.
+  Prints `execing <file>.`, or `couldn't exec <file>` when no file is
+  found.
+
 * **in_probe <what> [args]**: Only in a test build (compiled with
   `-DYQ2_INPUT_PROBE`, TASK23); a release has no such command. Drives
   input without hands, since a simulator cannot press a controller
@@ -33,7 +39,8 @@ original clients (Vanilla Quake II) commands are still in place.
   `bound <key>` prints a key's binding; `script <file>` runs a file from
   the game's filesystem one line a frame, a line only when the command
   buffer is empty, so the command a press queues runs in the frame after
-  it, and `wait <n>` in it counts n frames (TASK182: a bound key's
+  it, and `wait <n>` in it counts n input updates while the command buffer is
+  empty, not frames (TASK182: a bound key's
   command goes to the end of the buffer, behind the rest of an exec'd
   file that waits).
 
@@ -110,6 +117,10 @@ original clients (Vanilla Quake II) commands are still in place.
     another random track.
   * **stop**: Stop playback.
   * **toggle**: Pause or unpause playback.
+
+* **path**: Prints the filesystem search path: every pak file with its
+  number of files and every directory, in the order they are searched,
+  then the raw search paths, then the files that are open.
 
 * **playermodels**: Lists available multiplayer models.
 
@@ -193,3 +204,7 @@ original clients (Vanilla Quake II) commands are still in place.
 * **viewpos**: Show player position.
 
 * **vstr**: Inserts the current value of a variable as command text.
+
+* **wait**: Stops the rest of the command buffer for about one frame
+  (16 ms, whatever the frame rate), so `bind g "impulse 5; +attack; wait;
+  -attack"` fires for one frame. Any argument is ignored.
