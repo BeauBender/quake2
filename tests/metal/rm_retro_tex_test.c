@@ -320,6 +320,114 @@ test_cap_apply(void)
 	free(ref);
 }
 
+/* one halving of src (sw by sh) into dst, a second buffer: an odd side repeats its last texel */
+static void
+ref_halve(const unsigned char *src, int sw, int sh, unsigned char *dst, int *dw, int *dh)
+{
+	const int nw = (sw + 1) / 2, nh = (sh + 1) / 2;
+	int x, y, c;
+
+	for (y = 0; y < nh; y++)
+	{
+		const int y0 = 2 * y, y1 = (2 * y + 1 < sh) ? 2 * y + 1 : sh - 1;
+
+		for (x = 0; x < nw; x++)
+		{
+			const int x0 = 2 * x, x1 = (2 * x + 1 < sw) ? 2 * x + 1 : sw - 1;
+
+			for (c = 0; c < 4; c++)
+			{
+				const unsigned s = (unsigned)src[((size_t)y0 * sw + x0) * 4 + c] + src[((size_t)y0 * sw + x1) * 4 + c]
+					+ src[((size_t)y1 * sw + x0) * 4 + c] + src[((size_t)y1 * sw + x1) * 4 + c];
+
+				dst[((size_t)y * nw + x) * 4 + c] = (unsigned char)((s + 2) / 4);
+			}
+		}
+	}
+
+	*dw = nw;
+	*dh = nh;
+}
+
+/*
+ * The cap in place at odd and non-square sizes (review TASK185 I1): each
+ * image in a buffer of exactly w * h * 4 bytes, so a read past its last
+ * row or column is a sanitizer error, against a reference halving into a
+ * second buffer; the size is mtl_retro_cap_dims's.
+ */
+static void
+test_cap_odd(void)
+{
+	static const int sizes[][2] = {
+		{ 1, 1000 }, { 1000, 1 }, { 257, 3 }, { 3, 257 }, { 301, 299 },
+		{ 1025, 513 }, { 2049, 1 }, { 512, 64 }, { 257, 257 }, { 4096, 4096 }
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++)
+	{
+		const int w0 = sizes[i][0], h0 = sizes[i][1];
+		const size_t len = (size_t)w0 * (size_t)h0 * 4;
+		unsigned char *px = malloc(len), *a = malloc(len), *b = malloc(len);
+		int w = w0, h = h0, rw = w0, rh = h0, dw, dh, x, y;
+
+		CHECK(px && a && b);
+
+		if (!px || !a || !b)
+		{
+			free(px);
+			free(a);
+			free(b);
+			return;
+		}
+
+		for (y = 0; y < h0; y++)
+		{
+			for (x = 0; x < w0; x++)
+			{
+				unsigned char *p = px + ((size_t)y * w0 + x) * 4;
+
+				p[0] = (unsigned char)(x * 7 + y * 3);
+				p[1] = (unsigned char)(x ^ (y * 5));
+				p[2] = (unsigned char)((x * 13) ^ (y * 11) ^ (x >> 3));
+				p[3] = (unsigned char)(y * 9 + (x >> 2));
+			}
+		}
+
+		memcpy(a, px, len);
+
+		/* the reference: halvings between two buffers until both sides are within the cap */
+		while ((rw > MTL_RETRO_TEX_CAP) || (rh > MTL_RETRO_TEX_CAP))
+		{
+			unsigned char *t;
+
+			ref_halve(a, rw, rh, b, &rw, &rh);
+			t = a;
+			a = b;
+			b = t;
+		}
+
+		mtl_retro_cap_apply(px, &w, &h, MTL_RETRO_TEX_CAP);
+		mtl_retro_cap_dims(w0, h0, MTL_RETRO_TEX_CAP, &dw, &dh);
+
+		{
+			const int before = failures;
+
+			CHECK((w == dw) && (h == dh) && (w == rw) && (h == rh));
+			CHECK((w == rw) && (h == rh) && (memcmp(px, a, (size_t)w * (size_t)h * 4) == 0));
+
+			if (failures != before)
+			{
+				printf("  cap %dx%d: in place %dx%d, reference %dx%d, dims %dx%d\n", w0, h0, w, h, rw, rh, dw, dh);
+			}
+		}
+
+		free(px);
+		free(a);
+		free(b);
+	}
+}
+
 /* the sampler's filter and the 480-line view */
 static void
 test_view(void)
@@ -346,6 +454,7 @@ main(void)
 	test_dither();
 	test_cap_dims();
 	test_cap_apply();
+	test_cap_odd();
 	test_view();
 	printf("rm_retro_tex_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
