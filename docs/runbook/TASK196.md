@@ -716,12 +716,17 @@ no mutant skipped on this GPU).
   ("no headroom reading on visionOS"), Retro ("Retro is a 16-bit SDR look"), no headroom reading
   ("the display's headroom is unavailable"), a potential headroom of 1.0 or less ("this display
   reports no extended range"), and for the peak, `r_hdr` not 1 ("HDR is off"). With headroom, the
-  peak's status bar shows it ("display headroom 3.2; held to it; next frame"). Under `r_hdr 1`
+  peak's status bar shows it ("headroom 3.2; peak held to it", at most 40 characters at headroom 16.0). Under `r_hdr 1`
   (not Retro) the colour space is greyed with "set by HDR" (plan 2.7).
 - The menu learns the headroom from `r_hdr_headroom`, a new cvar ref_metal sets to the display's
   potential headroom when its reading changes, `-1` with no reading. HD1 has not landed, so
   `rmb_hdr_headroom` reads `-1` on every display and the items are greyed "the display's headroom
   is unavailable" everywhere for now; at `r_hdr 0` the cvar is never written, so no frame changes.
+- The colour space choice not yet applied is kept while the page is re-opened and while HDR greys
+  the item; it is re-read from `metal_colorspace` only when the item goes from greyed to enabled
+  with no choice held (`test_colorspace_choice_is_pending`).
+- `scripts/rt/preset-to-table.sh --as <presentation>` leaves `r_hdr` and `r_hdr_peak` out of an
+  overlay (they would force HDR for every user of the mode); the defaults output lists them.
 - The walk (`menu_probe walk`) now checks every greyed spin control and slider, not only actions:
   it prints each with its reason, fails one with none, and fails one whose value (the list's
   choice, the slider's cvar), screen, cursor, status bar or queued commands change on select,

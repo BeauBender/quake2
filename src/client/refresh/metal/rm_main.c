@@ -267,8 +267,9 @@ R_HdrProbeFrame(void)
 
 /*
  * r_hdr_headroom (HD5): the potential headroom, which decides the menu's
- * greying of the HDR items, written only when it changes (the window may
- * move to another display); -1 while there is no reading.
+ * greying of the HDR items, written when its value differs (Cvar_Set ignores
+ * an equal string; the window may move to another display); -1 while there
+ * is no reading.
  */
 static void
 R_HdrHeadroomReport(float potential)

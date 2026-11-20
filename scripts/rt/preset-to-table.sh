@@ -12,6 +12,9 @@
 #                                 pres_row_t in src/client/refresh/metal/rm_rtgate.c, as the macro
 #                                 body RM_PRES_<MODE>_ROWS. The rows go to stdout, the notes to stderr.
 #
+# r_hdr and r_hdr_peak are a player's display setting: the --as overlays leave them out (the defaults
+# output lists them).
+#
 # It reads only `set <name> "<value>"` lines (blank lines and // comments pass), refuses any other line
 # with its number, and refuses a name that is not one of the 19 tuning cvars. It never edits a file.
 # Exit 0 on success, 1 for a refusal, 2 for a usage or source error.
@@ -114,6 +117,11 @@ macro=RM_PRES_$(printf '%s' "$mode" | tr '[:lower:]' '[:upper:]')_ROWS
 rows=""
 while IFS="$tab" read -r name value; do
 	[ -n "$name" ] || continue
+	case $name in
+		r_hdr | r_hdr_peak)
+			echo "preset-to-table: note: $name is left out of the $mode overlay (it would force HDR for every user of the mode); the defaults output lists it" >&2
+			continue ;;
+	esac
 	if ! isnum "$value"; then
 		echo "preset-to-table: note: $name \"$value\" is not a single number, left out of the $mode overlay" >&2
 		continue
