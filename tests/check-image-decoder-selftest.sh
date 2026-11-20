@@ -42,6 +42,14 @@ cleanup()
 			end_own "$_p" "$_n"
 		done < "${tmp:?}/pids"
 	fi
+	# a target a stub stopped, whichever program it was (a red run leaves one)
+	for _f in "${tmp:?}/stop.pids" "${tmp:?}/late.pids"; do
+		[ -f "$_f" ] || continue
+		while read -r _p; do
+			end_own "$_p" leakprobe
+			end_own "$_p" imgdecode_plain
+		done < "$_f"
+	done
 	rm -rf "${tmp:?}"
 }
 trap cleanup EXIT
@@ -179,6 +187,7 @@ fi
 gone "${tmp:?}/late.pids" imgdecode_plain || fail "(c) the leak run's stopped target is still there (or was never started)"
 kill -0 "$decoy" 2>/dev/null || fail "(c) an unrelated imgdecode_plain was killed"
 end_own "$decoy" imgdecode_plain
+{ wait "$decoy"; } 2>/dev/null || :
 
 # (d)
 run good
