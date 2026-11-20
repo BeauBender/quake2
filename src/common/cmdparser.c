@@ -71,7 +71,9 @@ YQ2_STATIC_ASSERT(sizeof(defer_text_buf) > sizeof(cmd_text_buf),
  * CBUF_SERVER for text a server sent with svc_stufftext, for text a
  * server line queues while it runs (an alias it expands, a file it
  * execs) and for the body of an alias a server line defined, whoever
- * runs it (FIX156), CBUF_PLAYER for everything else.
+ * runs it (FIX156), CBUF_PLAYER for everything else, the player's
+ * config files a server line's game directory change execs among them
+ * (Cbuf_AddPlayerText, FIX156).
  * Cbuf_DropServerText discards the server's bytes when the connection
  * they came from ends, so a command the server queued behind a
  * "disconnect" cannot run while the client is disconnected. The
@@ -378,8 +380,14 @@ Cbuf_Execute(void)
 		}
 
 		/* a line with any server byte in it is the server's, and so is
-		   what it queues while it runs */
-		linesrc = cbuf_source;
+		   what it queues while it runs. Its source is its own bytes',
+		   in a Cbuf_Execute nested inside a server line too: the
+		   player's text there (queued before that line, or through
+		   Cbuf_AddPlayerText, as the configs a game directory change
+		   execs) runs as the player's (FIX156). FIX113 had the nested
+		   lines take the current source, which made the player's own
+		   config files the server's there. */
+		linesrc = CBUF_PLAYER;
 
 		for (j = 0; j < i; j++)
 		{
