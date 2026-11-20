@@ -688,6 +688,10 @@ Run on `1a918da2` under the lock:
 - `tests/check-doc-links.sh`: `check-doc-links: ok`
 - `tests/check-metalfx-report.sh`: `check-metalfx-report: ok (118 mutants killed)`
 
+Review round 1, on `22f155d6` under the lock: each of these checks gave the same last line as
+above (`check-ref-metal` with `colour space 736 checks, 0 failed; 12 colour-space mutants refused`,
+no mutant skipped on this GPU).
+
 `scripts/test.sh` was not run here; the orchestrator runs the gate.
 
 ### Left
