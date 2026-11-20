@@ -365,9 +365,10 @@ int CL_UpscalePathInGitTree(upscale_gitcache_t *cache, const char *path);
  * 1 when the command may run: no demo plays (demo, cl.attractloop), and
  * the client is not connected to a server or is connected to the local
  * one. This stops the command when a connected remote server or a demo
- * sends it as stufftext, and nothing more: stufftext is not filtered
- * (by design), so a server that has the client disconnect first can
- * still start it.
+ * sends it as stufftext. Stufftext is not filtered (by design); a
+ * server that has the client disconnect first cannot start it either,
+ * because CL_Disconnect discards the server's text still in the command
+ * buffer (Cbuf_DropServerText, FIX113).
  */
 int CL_UpscaleAllowed(int connected, int local, int demo);
 
