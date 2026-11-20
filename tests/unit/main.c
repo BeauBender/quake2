@@ -835,9 +835,6 @@ main(int argc, char **argv)
 
 		if (YQ2_SETJMP(abortframe))
 		{
-			/* as Qcommon_Frame does: the next test's lines are not
-			   the server's (FIX153) */
-			Cbuf_ResetSource();
 			t_fail(t_current->file, 0, "unexpected Com_Error(ERR_DROP); console:\n%s", t_console());
 		}
 		else
@@ -847,6 +844,14 @@ main(int argc, char **argv)
 			if (setjmp(t_test_jmp) == 0)
 			{
 				t_current->fn();
+			}
+			else
+			{
+				/* A failed assertion's longjmp (t_abort_test) can
+				   leave a server line mid-run with no Com_Error to
+				   reset the source: the next test's lines are not
+				   the server's (FIX153). */
+				Cbuf_ResetSource();
 			}
 		}
 
