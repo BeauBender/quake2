@@ -867,7 +867,9 @@ has) is not drawn.
   and `1` are values: any other value is `0`. Other renderers do not have
   it. Saved with the configuration; applies from the next frame. The
   readback of the frame (screenshots, the pins) is taken before the
-  layer's colour space comes into it and does not change.
+  layer's colour space comes into it and does not change. While `r_hdr 1`
+  is in force, which sets the layer's colour space, the video menu's
+  "colour space" item is greyed with "set by HDR".
 
 * **metal_particle_cap**: How the Metal renderer limits the size of a
   particle point (`gl1_particle_max_size`, 40 pixels by default). `0`
@@ -929,6 +931,25 @@ marked `(n/a)` and skipped.
   path again. Other
   renderers do not have it. Saved with the configuration; applies from
   the next frame. `metal_hdr_info` prints the layer's state.
+  The video menu has an item for it, "HDR", on the "renderer options..."
+  page after the colour space, and the tuning screen of the ray-tracing
+  screen has the same row; both write the cvar at once (no `apply`), and
+  a preset (`rt_preset`) and the A/B toggle (`rt_ab`) hold it with the
+  other tuning settings. The item is always shown, and greyed with its
+  reason where it does not apply: another renderer ("HDR is a Metal
+  renderer feature"), Apple TV ("not built for Apple TV yet"), visionOS
+  ("no headroom reading on visionOS"), the *Retro* presentation ("Retro
+  is a 16-bit SDR look"), no headroom reading (`r_hdr_headroom` below
+  `0`: "the display's headroom is unavailable") and a display whose
+  headroom is `1` or less ("this display reports no extended range").
+  The console takes `r_hdr 1` where the item is greyed.
+
+* **r_hdr_headroom**: The display's potential headroom as the Metal
+  renderer reads it, a multiple of SDR white, for the video menu's HDR
+  items; `-1` while the renderer has no reading. Set by the renderer
+  each frame its reading differs (the window may move to another
+  display), so a value set here lasts until the next frame; it changes
+  no picture, only which items the menu greys. Not saved.
 
 * **r_hdr_peak**: The peak brightness of `r_hdr 1`, as a multiple of SDR
   white: `4` (the default) to show highlights up to four times as bright
@@ -940,7 +961,11 @@ marked `(n/a)` and skipped.
   above SDR white, else that the frame is shown at SDR and why.
   The Metal renderer only; no effect while `r_hdr` is `0` or under the
   *Retro* presentation. Saved with the configuration; applies from the
-  next frame. `metal_hdr_info` prints the peak in force.
+  next frame. `metal_hdr_info` prints the peak in force. The video menu's
+  "HDR peak" slider, after "HDR" and on the tuning screen, sets it live
+  from `1` to `16` in steps of `0.5` and shows the display's headroom in
+  the status bar; it is greyed with "HDR is off" while `r_hdr` is not
+  `1`, and with `r_hdr`'s reasons. Held by a preset and the A/B toggle.
 
 * **r_metalfx**: The scaler. `0` (the default) is none. `1` is
   `MTLFXSpatialScaler`, which scales the colour of each frame on its own.

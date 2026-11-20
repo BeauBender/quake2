@@ -322,6 +322,11 @@ VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler)
 			{
 				return (vidrule_t){ 0, "Metal renderer only" };
 			}
+			/* scaler: whether r_hdr 1 is in force, which sets the layer's colour space (HD5) */
+			if (scaler)
+			{
+				return (vidrule_t){ 0, "set by HDR" };
+			}
 			return (vidrule_t){ 1, "applies on apply" };
 
 		default:
@@ -674,6 +679,7 @@ VidRules_RTStatus(const char *renderer, int available, float presentation)
 static const char *const tune_rays_names[] = { "1 ray", "2 rays", NULL };
 static const char *const tune_hits_names[] = { "picture only", "map surfaces", NULL };
 static const char *const tune_fx_names[] = { "none", "spatial", "temporal", "denoised", NULL };
+static const char *const hdr_names[] = { "off", "on", NULL };
 static const char *const tune_debug_names[] = { "none", "shadows", "sun", "AO", "water", "G-buffer", NULL };
 static const char *const tune_debug_cvars[] = {
 	NULL, "r_rt_shadows_show", "r_rt_sun_show", "r_rt_ao_show", "r_rt_water_show", "r_rt_gbuffer_show"
@@ -689,6 +695,10 @@ static const vidrt_control_t rt_tune[] = {
 	{ "r_metalfx", "scaler", "0", CVAR_ARCHIVE, -1, 0.0f, 3.0f, 1.0f, NULL, tune_fx_names, 0, 0 },
 	{ "r_rt_shadows_show", "debug view", "0", 0, -1, 0.0f, 5.0f, 1.0f, NULL, tune_debug_names, VIDTUNE_PART_DEBUG, 0 },
 	{ "r_presentation", "presentation", "0", CVAR_ARCHIVE, -1, 0.0f, 3.0f, 1.0f, NULL, pres_names, 0, 1 },
+	/* TASK196 (HD5): live, held in the presets and the A/B; greyed by VidRules_Hdr */
+	{ "r_hdr", "HDR", "0", CVAR_ARCHIVE, -1, 0.0f, 1.0f, 1.0f, NULL, hdr_names, 0, 0 },
+	{ "r_hdr_peak", "HDR peak", "4", CVAR_ARCHIVE, -1, VIDHDR_PEAK_MIN, VIDHDR_PEAK_MAX, VIDHDR_PEAK_STEP, "%.1f",
+		NULL, 0, 0 },
 };
 
 int
@@ -715,6 +725,11 @@ VidRules_TuneItem(int i, const char *renderer, int available, int effect_on)
 	if (!c)
 	{
 		return (vidrule_t){ 0, "unknown item" };
+	}
+	/* the HDR rows: the tuning rules have no headroom reading, so greyed; the menu calls VidRules_Hdr with it */
+	if (VidRules_HdrItem(c->cvar) >= 0)
+	{
+		return VidRules_Hdr(VidRules_HdrItem(c->cvar), renderer, VIDHDR_MAC, -1.0f, 0.0f, 0.0f);
 	}
 	if (VidRules_Renderer(renderer) != VIDREF_METAL)
 	{
@@ -884,4 +899,76 @@ VidRules_PresetNameError(const char *name)
 		}
 	}
 	return NULL;
+}
+
+/* TASK196 (HD5): the HDR items (vidrules.h) */
+int
+VidRules_HdrItem(const char *cvar)
+{
+	if (!cvar)
+	{
+		return -1;
+	}
+	if (!strcmp(cvar, "r_hdr"))
+	{
+		return VIDHDR_ITEM_ON;
+	}
+	if (!strcmp(cvar, "r_hdr_peak"))
+	{
+		return VIDHDR_ITEM_PEAK;
+	}
+	return -1;
+}
+
+int
+VidRules_HdrInForce(float hdr, float presentation)
+{
+	/* as rm_hdr_mode reads r_hdr: 1 is on, anything else off; Retro holds it off */
+	return (hdr == 1.0f) && (VidRules_PresentationIndex(presentation) != VIDPRES_RETRO);
+}
+
+vidrule_t
+VidRules_Hdr(int item, const char *renderer, vidhdrplat_t plat, float headroom, float presentation, float hdr)
+{
+	if (item != VIDHDR_ITEM_ON && item != VIDHDR_ITEM_PEAK)
+	{
+		return (vidrule_t){ 0, "unknown item" };
+	}
+	if (VidRules_Renderer(renderer) != VIDREF_METAL)
+	{
+		return (vidrule_t){ 0, "HDR is a Metal renderer feature" };
+	}
+	if (plat == VIDHDR_TVOS)
+	{
+		return (vidrule_t){ 0, "not built for Apple TV yet" };
+	}
+	if (plat == VIDHDR_VISIONOS)
+	{
+		return (vidrule_t){ 0, "no headroom reading on visionOS" };
+	}
+	if (plat != VIDHDR_MAC && plat != VIDHDR_IOS)
+	{
+		return (vidrule_t){ 0, "unknown platform" };
+	}
+	if (VidRules_PresentationIndex(presentation) == VIDPRES_RETRO)
+	{
+		return (vidrule_t){ 0, "Retro is a 16-bit SDR look" };
+	}
+	if (!isfinite(headroom) || headroom < 0.0f)
+	{
+		return (vidrule_t){ 0, "the display's headroom is unavailable" };
+	}
+	if (!(headroom > 1.0f))
+	{
+		return (vidrule_t){ 0, "this display reports no extended range" };
+	}
+	if (item == VIDHDR_ITEM_PEAK)
+	{
+		if (hdr != 1.0f)
+		{
+			return (vidrule_t){ 0, "HDR is off" };
+		}
+		return (vidrule_t){ 1, "held to the display's headroom" };
+	}
+	return (vidrule_t){ 1, "the display's extended range; next frame" };
 }
