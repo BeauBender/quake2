@@ -389,6 +389,11 @@ void Cbuf_DropServerText(void);
 /* line queues while it runs. Cbuf_DropServerText discards all of it, */
 /* and keeps the player's, when the connection it came from ends. */
 
+qboolean Cbuf_ExecutingServerText(void);
+
+/* true while Cbuf_Execute runs a line that holds any of the server's */
+/* bytes: a command that refuses a server's use refuses it then. */
+
 void Cbuf_ExecuteText(int exec_when, char *text);
 
 /* this can be used in place of either Cbuf_AddText or Cbuf_InsertText */

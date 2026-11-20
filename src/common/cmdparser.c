@@ -178,6 +178,19 @@ Cbuf_DropServerText(void)
 }
 
 /*
+ * True while Cbuf_Execute runs a line that holds any of the server's
+ * bytes (FIX151). A command that refuses a server's use reads this, so
+ * it refuses such a line whatever state the line finds: a level change,
+ * a killserver or a demo ending before the line runs does not let it
+ * through.
+ */
+qboolean
+Cbuf_ExecutingServerText(void)
+{
+	return cbuf_source == CBUF_SERVER;
+}
+
+/*
  * Adds command text immediately after the current command
  * Adds a \n to the text
  */

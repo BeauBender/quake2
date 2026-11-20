@@ -20,6 +20,10 @@
  *   `map x.dm2` (attractloop 0) counts as a demo, through gamemap and
  *   map alike, and its text also ends when killserver ends the demo
  *   (FIX151).
+ * - The upscale gate refuses a line the server sent whatever state that
+ *   line finds: after `demomap` to a picture level, after a level change
+ *   and after killserver, while the player's same line runs (FIX151,
+ *   Cbuf_ExecutingServerText).
  * - Cbuf_CopyToDefer stays inside defer_text_buf when the command
  *   buffer is full to the last byte (Cbuf_InsertText can fill it
  *   exactly). The overrun shows under `make ASAN=1 test`.
