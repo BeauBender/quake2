@@ -494,6 +494,9 @@ CL_DownloadFilter(const char *filename)
 		".lib",
 		".so",
 		".a",
+		/* a script the engine runs as commands (exec, and at startup
+		   config.cfg and autoexec.cfg): a download is never run */
+		".cfg",
 		NULL,
 	};
 

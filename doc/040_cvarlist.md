@@ -210,7 +210,9 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   default. Note that some substrings are always forbidden, for security
   reasons these cannot be overridden: '.dll', '.dylib' and '.so' to
   prevent downloading of libraries which could be injected into the
-  Portmanbeau Quake II process. '..' or ':' inside filenames and '/' or '.'
+  Portmanbeau Quake II process. A name ending in '.cfg' is refused too (any
+  case), so that a downloaded script is never run as commands by `exec`
+  or at the next start as `config.cfg` or `autoexec.cfg`. '..' or ':' inside filenames and '/' or '.'
   at the beginning of filenames to prevent downloading files into
   arbitrary directories.
 

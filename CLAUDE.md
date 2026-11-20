@@ -48,7 +48,7 @@ Things that are not obvious from a single file:
 
 ## Security-relevant boundaries
 
-Untrusted input enters through: network messages from servers (`src/client/cl_parse.c`) and clients (`src/server/sv_user.c`), downloaded files (`cl_download.c`, `CL_DownloadFilter` rejects `..`, leading `.`/`/`, `:` and library extensions), and every asset loader under `src/client/refresh/files/` and `src/common/collision.c`. The protocol lets servers execute arbitrary console commands on clients (`svc_stufftext` goes straight to `Cbuf_AddText`); this is by design and not filtered. Any new file-writing console command must validate its path argument against `..` itself; `FS_CreatePath` refuses such paths but `Q_fopen` does not.
+Untrusted input enters through: network messages from servers (`src/client/cl_parse.c`) and clients (`src/server/sv_user.c`), downloaded files (`cl_download.c`, `CL_DownloadFilter` rejects `..`, leading `.`/`/`, `:`, library extensions and `.cfg`, which the engine runs as commands), and every asset loader under `src/client/refresh/files/` and `src/common/collision.c`. The protocol lets servers execute arbitrary console commands on clients (`svc_stufftext` goes straight to `Cbuf_AddText`); this is by design and not filtered. Any new file-writing console command must validate its path argument against `..` itself; `FS_CreatePath` refuses such paths but `Q_fopen` does not.
 
 ## Conventions
 

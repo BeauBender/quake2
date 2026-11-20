@@ -136,6 +136,20 @@ TEST(download_filter_extension_table)
 		{"x.a", true},
 		{"dir/x.A", true},
 		{"a/b/x.a", true},
+		/* a script the engine runs as commands, refused */
+		{"autoexec.cfg", true},
+		{"config.cfg", true},
+		{"foo.CFG", true},
+		{"dir/x.cfg", true},
+		{"default.Cfg", true},
+		{"x.cfg.1", true},
+		/* ordinary assets and cfg text elsewhere, accepted */
+		{"maps/x.bsp", false},
+		{"sound/x.wav", false},
+		{"players/x/y.pcx", false},
+		{"x.cfgs", false},
+		{"cfg/x.wav", false},
+		{"x.cfg.pcx", false},
 		/* the extension text inside a component, accepted */
 		{"maps/a.area.bsp", false},
 		{"x.solid.pcx", false},
