@@ -13,6 +13,7 @@
 #   pins.sh where   <scenario> --off <dir|id> --on <dir|id> --out <dir> [--renderer r]
 #                   [--mask-dir d] [--top N] [--delta n]
 #   pins.sh check-content                      the scenarios README's content tags, against the cfg files
+#   pins.sh check-text <trace> [demo [every]]  a captured frame with text the demo's table does not declare (FIX157)
 #   pins.sh make-demo <name> [--replace]       make demos/<name>.dm2 beside the binary
 #   pins.sh list                               what the store holds
 #   pins.sh selftest [case...]                 no engine, no game data
@@ -367,6 +368,47 @@ difftool() {
     echo "$bin"
 }
 
+# textscan: the path of the trace's character-draw counter (FIX157),
+# tests/refrecord/charscan.c built against the real src/client/vid/refrecord.c
+textscan() {
+    local bin; bin="$(store)/bin/charscan"
+    if [ ! -x "$bin" ] || [ "$root/tests/refrecord/charscan.c" -nt "$bin" ] || [ "$root/src/client/vid/refrecord.c" -nt "$bin" ]; then
+        mkdir -p "$(dirname "$bin")"
+        cc -std=gnu99 -O1 -DYQ2OSTYPE='"pins"' -DYQ2ARCH='"pins"' -o "$bin" "$root/tests/refrecord/charscan.c" \
+            "$root/src/client/vid/refrecord.c" -lm || die "cannot build charscan"
+    fi
+    echo "$bin"
+}
+
+# check_trace_text <trace> <demo> <every>: a demo frame that the run captured
+# and that holds a character draw must be declared in
+# scripts/pins/text/<demo>-every<every>.txt ("pin <k> <count>", k the capture
+# number); no such file declares none. A character draw nobody declared is text
+# whose appearance can depend on the wall clock (console notify lines, FIX155),
+# so the pin would flip from run to run. Prints the difference and returns 1.
+check_trace_text() {
+    local trace=$1 demo=$2 every=$3 decl got want bin
+    decl="$root/scripts/pins/text/$demo-every$every.txt"
+    bin=$(textscan)
+    got=$("$bin" "$trace" | grep '^pin ' || true)
+    want=""
+    if [ -f "$decl" ]; then want=$(grep '^pin ' "$decl" || true); fi
+    if [ "$got" != "$want" ]; then
+        echo "pins: $trace: a captured demo frame draws characters the scenario does not declare (found on the left, declared in $demo-every$every.txt on the right; \"pin <capture> <characters>\"):" >&2
+        diff <(printf '%s\n' "$got") <(printf '%s\n' "$want") >&2 || true
+        return 1
+    fi
+}
+
+cmd_check_text() {
+    need_tools check-text cc diff grep
+    local trace=${1:-} demo=${2:-demo1.dm2} every=${3:-30}
+    [ -f "$trace" ] || die "usage: pins.sh check-text <trace.q2r> [demo [every]]"
+    check_demo "$demo"; check_count every "$every"
+    check_trace_text "$trace" "$demo" "$every" || exit 1
+    echo "pins: $trace: no undeclared text in a captured frame"
+}
+
 # Fills the global array engine_args for <renderer> <scenario> <outdir>.
 build_args() {
     local renderer=$1 scenario=$2 out=$3 line verb name value extra n=0
@@ -397,6 +439,7 @@ build_args() {
     local hd; hd=$(hidpi) || exit 1
     engine_args+=(+set vid_renderer "$(engine_renderer "$renderer")" +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
+        +set con_notifytime -1
         +set s_initsound 0 +set vid_highdpiaware "$hd"
         +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}")
     if [ "${PINS_TRACE:-1}" != 0 ]; then engine_args+=(+set pins_record trace.q2r); fi
@@ -566,6 +609,10 @@ cmd_record() {
     run_engine "$bin" "$out" "$limit"
     judge_pin "$out" "$renderer" "$limit"
     if [ -z "$reason" ]; then judge_frames "$out/timedemo.txt" "$scenario" "${PINS_DEMO:-demo1.dm2}" "the engine"; fi
+    if [ -z "$reason" ] && [ -f "$out/trace.q2r" ]; then
+        check_trace_text "$out/trace.q2r" "${PINS_DEMO:-demo1.dm2}" "${PINS_EVERY:-30}" 2> "$out/text.txt" ||
+            reason="a captured frame draws text the scenario does not declare (see $out/text.txt)"
+    fi
     if [ -n "$reason" ]; then
         echo "$reason" > "$out/incomplete"
         die "$reason; the pin in $out is incomplete (see $out/engine.log)"
@@ -3418,6 +3465,7 @@ case "${1:-}" in
     where)    [ $# -ge 4 ] || die "usage: pins.sh where <scenario> --off <dir|id> --on <dir|id> --out <dir> [--renderer r] [--mask-dir d] [--top N] [--delta n]"; lock_self pins-where "$@"; shift; cmd_where "$@";;
     check-content) check_content "$scen_dir/README.md" "$scen_dir" && echo "pins: content tags ok";;
     make-demo) [ $# -ge 2 ] || die "usage: pins.sh make-demo <name> [--replace]"; [ -n "${PINS_DRYRUN:-}" ] || lock_self pins-make-demo "$@"; shift; cmd_make_demo "$@";;
+    check-text) shift; cmd_check_text "$@";;
     list)     cmd_list;;
     selftest) lock_self pins-selftest "$@"; shift; cmd_selftest "$@";;
     evidence) lock_self pins-evidence "$@"; shift; cmd_evidence "$@";;

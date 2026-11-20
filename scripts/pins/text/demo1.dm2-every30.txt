@@ -1,0 +1,7 @@
+// the text demo1.dm2 draws itself in the frames a run captures (every 30th rendered frame):
+// "pin <capture number> <characters>". Anything else in a captured frame is not declared (FIX157).
+pin 5 11
+pin 14 7
+pin 18 7
+pin 21 7
+pin 22 78
