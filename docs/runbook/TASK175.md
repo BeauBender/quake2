@@ -19,7 +19,8 @@ simulator build (STATIC_MODULES=1, `ref_metal` linked in, the vendored SDL3 buil
   visionOS of the iOS 17 year (the SDK's `MinimumDeploymentTarget`); the other SDKs keep 17.0. MetalFX is
   weak-linked only if the SDK has it, and the visionOS simulator SDK has none, so the build links none.
 - `stuff/ios/Info-visionos.plist.in`: the Apple TV template with `UIDeviceFamily` 7 (Apple Vision): no
-  orientations, no status bar key, no file sharing key (the data path is slice 2).
+  orientations, no status bar key, no file sharing key (the data path is slice 2; slice 2a adds the two keys,
+  below).
 - `third_party/sdl3.make`: unchanged. The visionOS simulator SDK has every framework of the iOS mode's list
   (AVFoundation, AudioToolbox, CoreBluetooth, CoreGraphics, CoreHaptics, CoreMedia, CoreMotion, CoreVideo,
   Foundation, GameController, Metal, OpenGLES, QuartzCore, UIKit, checked in the SDK's `System/Library/Frameworks`),
@@ -195,3 +196,70 @@ object not needing the ImageIO key, a missing and an unreadable one, and the cha
 The `make -n -B` of `ios_objects` for the iOS simulator, the iPhone, the tvOS and the visionOS simulators, and of
 the default macOS goal, is identical before (`5bcecc78`) and after this round, and so are their object lists
 (175 objects each for the four SDKs, 477 for macOS): the round changes no build.
+
+## Slice 2a: the game-data path, and a controller (the run is blocked)
+
+Slice 2a is a controller on the visionOS simulator, through the tvOS lane's probe (TASK23 slice 2, TASK182), and
+the game-data path. Its run did not start the app (below), so the controller is not shown yet.
+
+### The game-data path: the Files app, as on the iPhone
+
+visionOS takes the iPhone's path. `stuff/ios/Info-visionos.plist.in` now has `UIFileSharingEnabled` and
+`LSSupportsOpeningDocumentsInPlace`, both true, as `stuff/ios/Info.plist.in` has: with both, the Files app shows the
+app's `Documents`, where the engine finds `baseq2` with no option. The evidence:
+
+- Apple's documentation gives both keys from visionOS 1.0 (`UIFileSharingEnabled`: iOS and iPadOS 3.2, tvOS 9.0,
+  visionOS 1.0, watchOS 2.0; `LSSupportsOpeningDocumentsInPlace`: iOS and iPadOS 2.0, visionOS 1.0), and neither
+  is marked deprecated or unavailable there.
+- The visionOS 27.2 simulator runtime has the Files app (`Applications/Files.app`, `com.apple.DocumentsApp`) and
+  its DocumentManager and FileProvider frameworks; DocumentManager's English strings hold `On My %@` and `On My
+  Apple Vision Pro`, the name of the place a person puts the paks.
+- `tests/check-visionos.sh` (c) requires both keys true instead of refusing `UIFileSharingEnabled`, with a
+  mutant for each key removed and for each set false (each refused by name); the character-reference mutant
+  now spells `UIStatusBarHidden`. The check fails on the template without the keys (`UIFileSharingEnabled is
+  (none), not true`) and passes with them.
+
+Not shown in a run yet: that the app reads paks placed in its `Documents/baseq2`. Slice 1's run did that with
+`simctl` copies into the same container, before the keys; with the keys no start of the app reached the engine.
+
+### The run: the app does not start
+
+Every simulator start of slice 2a, on the same host and runtime as slice 1 (Xcode 27.2, visionOS 27.2, Apple
+Vision Pro), stalled the same way: `scripts/ios-sim.sh run` built, made and booted the device, copied the paks,
+and launched the app, and then the launch client relayed nothing at all (an empty console log, not even Metal's
+`Metal API Validation Enabled`, which slice 1's first line was), the app did not quit by itself, `simctl
+terminate` timed out after 30 s and a `simctl get_app_container` of the device hung for minutes. Each device was
+shut down and deleted, and each run printed `launcher: no crash` (SurfBoard did not crash). The four runs:
+
+- the probe build with the keys (the pad's script, then the menu walk): no output in 600 s;
+- the plain build with the keys, slice 1's kind of start (`+menu_main`, 300 frames, `+quit`): no output in 240 s;
+- the probe build without the keys (the template before this slice): no output in 300 s;
+- the plain build with the keys again: the same.
+
+So the keys are not the cause: the build without them stalls too. The host's screen was locked during these runs
+(`CGSSessionScreenIsLocked` true in `ioreg`); whether slice 1's run had it unlocked is not recorded. A locked
+screen stalling a visionOS launch is a guess, not shown. The next run should check, with the screen unlocked,
+whether the process starts at all (`simctl launch` without `--console-pty`, then the device's `launchctl list`).
+
+### The controller: prepared, not run
+
+The probe's script, as the tvOS lane's (TASK182): after 60 frames, `in_probe pads`, attach the probe's pad, wait
+150 updates, `in_probe pads` again; `menu_main`, then the pad's d-pad down, down, up, up, A (the game screen), down,
+B (back), A, down, up, with `menu_probe state` after each; A on `easy` (a new game, `base1`); `give all`; Y with
+`in_probe expect gun weapnext`; the right trigger at 32767 with `in_probe expect ammo attack` (`+attack`), released
+at -32768; the sticks; start (the game menu during play), down, B. The same script with `+set in_initjoy 2`, in
+case the visionOS simulator has a `Gamepad` of its own as the tvOS simulator does (TASK182: `IN_IsTVSimulatorPad`
+is `TARGET_OS_TV` only); then `menu_probe walk`. No source was changed for the controller: no run has shown a
+change is needed.
+
+## Left for slice 2b
+
+- Look-and-pinch menu navigation (a pinch reaches a UIKit app as an indirect touch or a pointer; SDL asks for
+  `UIApplicationSupportsIndirectInputEvents`).
+- Resizing beyond the default 1280x720-point window (TASK172's live resize is compiled in, not exercised).
+- The on-screen keyboard (text input never starts: the keyboard follow-up is `TARGET_OS_IOS`).
+- The controller run above, and the paks read from `Documents/baseq2` with the keys, once the app starts on the
+  simulator again; if the visionOS simulator has its own `Gamepad`, the tvOS preference may need
+  `TARGET_OS_VISION` too.
+- The missing-data text, `Sys_MissingDataMessage` (src/backends/unix/system.c), names "On My iPhone (or iPad)";
+  on visionOS the Files app calls the place "On My Apple Vision Pro".
