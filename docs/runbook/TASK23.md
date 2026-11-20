@@ -352,3 +352,31 @@ binding item everywhere, and rebinding from the menus was gone on macOS too.
   shows, bind mode on every binding item and back leaving it. `doc/050_commands.md` says what the walk checks on a
   binding item. The lines above that called the binding items greyed on the iPhone-family targets, or dated that
   from TASK150, are corrected.
+
+## TASK182: the trigger, which gamepad the engine opens, bind mode with the remote
+
+### The trigger: the probe was wrong, not the binding
+
+The press reaches `+attack`. The path, traced in the source: SDL's virtual gamepad maps its trigger axis from the
+joystick's full range (-32768 to 32767, at rest at -32768, `SDL_virtualjoystick.c`) to the gamepad's 0 to 32767
+(`SDL_gamepad.c`); `IN_Update` (`src/client/input/sdl3.c`) turns `SDL_GAMEPAD_AXIS_RIGHT_TRIGGER` above
+`trig_thresh` (`joy_trigger` 0.2, 6553) into a `K_TRIG_RIGHT` press with `IN_VirtualKeyEvent`, a key like any
+other; `Key_DefaultPadBinds` binds `TRIG_RIGHT` to `+attack` on a fresh start; and `Key_Event` queues the bound
+command with `Cbuf_AddText`, at the end of the command buffer.
+
+That last step is what the TASK23 probe missed. Its script was an exec'd file, whose `wait` stops
+`Cbuf_Execute` and leaves the rest of the file in the buffer: the `+attack` the press queued sat behind the
+script's own remaining lines and ran only after the whole file, after every `in_probe state` that looked for it.
+The sticks and start were shown working because they act at once (the stick axes are read in `IN_Move`, and
+start is `K_ESCAPE`, which `Key_Event` hands to the menu directly); every bound button had the same blind spot,
+which is why the other default bindings were shown only by their table. A second error: its release, `in_probe
+axis righttrigger 0`, is not a release, since 0 on the joystick is 16383 on the gamepad, above the threshold; the
+rest position is -32768.
+
+The probe now has `in_probe script <file>` (test builds only): it feeds a file one line a frame and only when the
+command buffer is empty, so a press's command runs in the frame after it, as when a person presses it, and
+`wait <n>` counts n frames. `in_probe state` also prints the gun, the crouch flag, the layouts, the ammo, the
+right trigger as the engine reads it, `K_TRIG_RIGHT`'s key state and the bytes left in the command buffer;
+`in_probe mark` and `in_probe expect <field>` print `ok` or `FAIL` for a value that changed or did not;
+`in_probe bound <key>` prints a binding; `in_probe pads` prints each joystick's vendor, product, version, GUID,
+types, path and counts.
