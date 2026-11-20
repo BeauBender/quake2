@@ -354,6 +354,30 @@ FS_PackQuickSearch(const fsPack_t *pak, const char *name)
 }
 
 /*
+ * Returns true if a name has a ".." component, separated by '/' or '\\'.
+ * Such a name would leave the search paths when joined onto one. "a..b"
+ * and "..foo" are ordinary names, not escapes.
+ */
+static qboolean
+FS_NameEscapes(const char *name)
+{
+	const char *c = name;
+
+	while (*c)
+	{
+		if (c[0] == '.' && c[1] == '.' && (c == name || c[-1] == '/' || c[-1] == '\\')
+				&& (c[2] == '\0' || c[2] == '/' || c[2] == '\\'))
+		{
+			return true;
+		}
+
+		c++;
+	}
+
+	return false;
+}
+
+/*
  * Finds the file in the search path. Returns filesize and an open FILE *. Used
  * for streaming data out of either a pak file or a seperate file.
  */
@@ -424,6 +448,16 @@ FS_FOpenFile(const char *rawname, fileHandle_t *f, qboolean gamedir_only)
 
 		name[output] = rawname[input];
 		output++;
+	}
+
+	// Never leave the search paths: a ".." component is refused as if
+	// the file were missing. Checked after the clean-up above, so
+	// ".//../x" is caught too.
+	if (FS_NameEscapes(name))
+	{
+		Com_DPrintf("%s: refusing name with '..' component: %.64s\n",
+				__func__, name);
+		return -1;
 	}
 
 	file_from_protected_pak = false;

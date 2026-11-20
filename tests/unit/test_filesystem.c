@@ -253,6 +253,47 @@ TEST(fs_refused_paths)
 	}
 }
 
+/*
+ * FS_FOpenFile never opens a path outside its search paths (FIX170): a
+ * name with a ".." component is refused as if missing, after the
+ * clean-up of "./", "//" and a leading "/". Names that only contain two
+ * dots stay valid. cl_cin.c is not linked into the suite, so the
+ * cinematic path (SCR_PlayCinematic -> "video/%s") is tested through
+ * FS_FOpenFile directly.
+ */
+TEST(fs_name_escape)
+{
+	static const char *refused[] = {
+		"../x", "a/../../x", ".//../x", "a\\..\\x", "a/..", "..",
+	};
+	static const char *valid[] = {
+		"a/b.txt", "a..b.txt", "..foo/x.txt",
+	};
+	fileHandle_t f;
+	size_t i;
+
+	FS_BuildGameSpecificSearchPath("");
+	/* data/x is one level above the data/baseq2 search directory. */
+	t_write_file("data/x", "outside", 7);
+	t_write_file("data/baseq2/x", "inside", 6);
+	t_write_file("data/baseq2/a/b.txt", "b", 1);
+	t_write_file("data/baseq2/a..b.txt", "c", 1);
+	t_write_file("data/baseq2/..foo/x.txt", "d", 1);
+
+	for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
+	{
+		f = 1;
+		T_EQ_INT(FS_FOpenFile(refused[i], &f, false), -1);
+		T_EQ_INT(f, 0);
+	}
+
+	for (i = 0; i < sizeof(valid) / sizeof(valid[0]); i++)
+	{
+		T_EQ_INT(FS_FOpenFile(valid[i], &f, false), 1);
+		FS_FCloseFile(f);
+	}
+}
+
 /* Children for the malformed paks: each switches to a mod whose pak0
    is broken, which ends the process. */
 static void
