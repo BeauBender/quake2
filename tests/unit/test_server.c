@@ -544,31 +544,53 @@ fix160_gamemap(void)
 	Com_Printf("mapname %s\n", Cmd_Argv(1));
 }
 
+static void
+fix160_run(const char *text)
+{
+	t_console_reset();
+	SV_GameAddCommandString(text);
+	Cbuf_Execute();
+}
+
 TEST(sv_game_command_text_never_adds_a_command)
 {
 	Cmd_AddCommand("t_probe", fix160_probe);
 	Cmd_AddCommand("t_gamemap", fix160_gamemap);
 
-	/* The stock shapes still reach the buffer as one line. */
-	t_console_reset();
-	SV_GameAddCommandString("t_gamemap \"base2\"\n");
-	Cbuf_Execute();
+	/* The stock shape still reaches the buffer as one line. */
+	fix160_run("t_gamemap \"base2\"\n");
 	T_CONSOLE_HAS("mapname base2");
 	T_CHECK(strstr(t_console(), "probe") == NULL);
+	T_CHECK(strstr(t_console(), "refused") == NULL);
 
 	/* An embedded newline, as ED_NewString makes from "\n" in a map
 	   key, runs nothing at all. */
-	t_console_reset();
-	SV_GameAddCommandString("t_gamemap \"base2\nt_probe\n\"\n");
-	Cbuf_Execute();
-	T_CHECK(strstr(t_console(), "probe") == NULL);
+	fix160_run("t_gamemap \"base2\nt_probe\n\"\n");
+	T_CHECK(strstr(t_console(), "probe ") == NULL);
 	T_CHECK(strstr(t_console(), "mapname") == NULL);
-	T_CONSOLE_HAS("embedded line break");
+	T_CONSOLE_HAS("refused command text");
 
-	t_console_reset();
-	SV_GameAddCommandString("t_gamemap \"base2\rt_probe\"\n");
-	Cbuf_Execute();
-	T_CHECK(strstr(t_console(), "probe") == NULL);
+	/* A quote closed by map data, then ';' outside quotes. */
+	fix160_run("t_gamemap \"base2\";t_probe;\"\"\n");
+	T_CHECK(strstr(t_console(), "probe ") == NULL);
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	/* A bare ';'. */
+	fix160_run("t_gamemap base2;t_probe\n");
+	T_CHECK(strstr(t_console(), "probe ") == NULL);
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	/* A ';' inside quotes is an argument, not a split. */
+	fix160_run("t_gamemap \"a;b\"\n");
+	T_CONSOLE_HAS("mapname a;b");
+	T_CHECK(strstr(t_console(), "refused") == NULL);
+
+	/* CRLF is not a split point for Cbuf_Execute: it runs as on main. */
+	fix160_run("t_gamemap \"base2\"\r\n");
+	T_CONSOLE_HAS("mapname base2");
+	T_CHECK(strstr(t_console(), "refused") == NULL);
 
 	Cmd_RemoveCommand("t_probe");
 	Cmd_RemoveCommand("t_gamemap");
