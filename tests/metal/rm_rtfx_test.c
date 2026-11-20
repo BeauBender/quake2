@@ -20,9 +20,12 @@
  * The host test of ref_metal's effect table (TASK179, AR-17): the order
  * every walk takes, each row's name and switch, the switches against the
  * hardware gate's table (rm_rtgate.c: one source, so neither can change
- * alone), and the rule of the pipeline a 3D draw takes (rm_rtfx_pipe).
+ * alone), the rule of the pipeline a 3D draw takes (rm_rtfx_pipe), and
+ * what every walk calls: the rows' entries in that order, a NULL one
+ * skipped, the first that says yes ending the walks that ask.
  * Built by tests/check-ref-metal.sh with rm_rtfx.c (RM_RTFX_HOST: the
- * rows' entry points NULL, so no backend is linked) and rm_rtgate.c.
+ * rows' entry points are the recording stubs of rm_rtfx_host.h, so no
+ * backend is linked) and rm_rtgate.c.
  *
  * =======================================================================
  */
@@ -178,25 +181,142 @@ test_pipe(void)
 	CHECK(rm_rtfx_pipe(RMB_GB_PASS_MOTION, RM_PIPE_WORLD_TEXC_BLEND, 0, NULL, NULL) == RM_RTFX_PIPE_MOTION);
 }
 
-/* the walks over rows without entry points (RM_RTFX_HOST) do nothing and say no */
+/* the stubs' record (rm_rtfx_host.h, compiled into rm_rtfx.c) */
+extern char rm_rtfx_host_log[1024];
+extern const char *rm_rtfx_host_yes;
+
+static void
+said(const char *yes)
+{
+	rm_rtfx_host_log[0] = '\0';
+	rm_rtfx_host_yes = yes;
+}
+
+/* the walk called exactly want, in that order */
+#define CALLED(want) called(__LINE__, (want))
+
+static void
+called(int line, const char *want)
+{
+	checks++;
+
+	if (strcmp(rm_rtfx_host_log, want))
+	{
+		failures++;
+		printf("FAIL %s:%d: called \"%s\", not \"%s\"\n", __FILE__, line, rm_rtfx_host_log, want);
+	}
+}
+
+/* a walk that asks (wanted, active, show_only): every row while none says yes, up to the first that does */
+static void
+asks(const char *entry, int (*walk)(void))
+{
+	static const char *const name[RM_RTFX_COUNT] = { "shadows", "ao", "sun", "water" };
+	char want[256], yes[64];
+	int k, i;
+
+	for (k = -1; k < RM_RTFX_COUNT; k++)
+	{
+		want[0] = '\0';
+
+		for (i = 0; (i < RM_RTFX_COUNT) && ((k < 0) || (i <= k)); i++)
+		{
+			snprintf(want + strlen(want), sizeof(want) - strlen(want), "%s%s:%s", i ? " " : "", name[i], entry);
+		}
+
+		snprintf(yes, sizeof(yes), "%s:%s", (k < 0) ? "none" : name[k], entry);
+		said(yes);
+		CHECK(walk() == (k >= 0));
+		CALLED(want);
+	}
+
+	/* every row says yes: the first only */
+	snprintf(yes, sizeof(yes), "shadows:%s ao:%s sun:%s water:%s", entry, entry, entry, entry);
+	snprintf(want, sizeof(want), "shadows:%s", entry);
+	said(yes);
+	CHECK(walk() == 1);
+	CALLED(want);
+}
+
+/*
+ * Every walk calls the rows' entries in the order (shadows, AO, sun,
+ * water) and never one the table leaves NULL: the log holds exactly the
+ * entries the table names. resolve and forward stop at the first entry
+ * that draws; when none does they say no, and the caller takes the stock
+ * resolve or the motion pipeline.
+ */
 static void
 test_walks(void)
 {
+	/* the backend's */
+	said("");
 	rm_rtfx_mark(NULL);
+	CALLED("water:mark");
+
+	said("");
 	rm_rtfx_trace(NULL);
+	CALLED("shadows:trace ao:trace sun:trace");
+
+	said("");
 	CHECK(rm_rtfx_resolve(NULL) == 0);
+	CALLED("shadows:resolve");
+
+	said("shadows:resolve");
+	CHECK(rm_rtfx_resolve(NULL) == 1);
+	CALLED("shadows:resolve");
+
+	said("");
 	rm_rtfx_show(NULL);
+	CALLED("ao:show sun:show");
+
+	said("");
 	rm_rtfx_post(NULL);
+	CALLED("water:post");
+
+	said("");
 	CHECK(rm_rtfx_forward(NULL) == 0);
+	CALLED("water:forward");
+
+	said("water:forward");
+	CHECK(rm_rtfx_forward(NULL) == 1);
+	CALLED("water:forward");
+
+	said("");
 	rm_rtfx_bind(NULL);
+	CALLED("water:bind");
+
+	said("");
 	rm_rtfx_view_end();
+	CALLED("water:view_end");
+
+	/* the scene's */
+	said("");
 	rm_rtfx_init(NULL);
+	CALLED("shadows:init ao:init sun:init water:init");
+
+	said("");
 	rm_rtfx_shutdown();
-	CHECK(rm_rtfx_wanted() == 0);
+	CALLED("shadows:shutdown ao:shutdown sun:shutdown water:shutdown");
+
+	said("");
 	rm_rtfx_frame(NULL, 0);
-	CHECK(rm_rtfx_active() == 0);
-	CHECK(rm_rtfx_show_only() == 0);
+	CALLED("shadows:frame ao:frame sun:frame water:frame");
+
+	said("");
 	rm_rtfx_view(NULL);
+	CALLED("shadows:view ao:view sun:view water:view");
+
+	asks("wanted", rm_rtfx_wanted);
+	asks("active", rm_rtfx_active);
+	asks("show_only", rm_rtfx_show_only);
+
+	/* the pipeline rule over the forward walk: the water's forward decides the blended world face */
+	said("water:forward");
+	CHECK(rm_rtfx_pipe(RMB_GB_PASS_MOTION, RM_PIPE_WORLD_TEXC_BLEND, 0, rm_rtfx_forward, NULL) == RM_RTFX_PIPE_FORWARD);
+	CALLED("water:forward");
+	said("");
+	CHECK(rm_rtfx_pipe(RMB_GB_PASS_MOTION, RM_PIPE_WORLD_TEXC_BLEND, 0, rm_rtfx_forward, NULL) == RM_RTFX_PIPE_MOTION);
+	CALLED("water:forward");
 }
 
 int

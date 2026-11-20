@@ -22,7 +22,8 @@
  * row here, its id in rm_rtfx.h and rm_rtfx_order, its switch in the
  * gate's table (rm_rtgate.c, which takes the classification from here),
  * and its own files. tests/metal/rm_rtfx_test.c builds this file with
- * RM_RTFX_HOST, which leaves every entry point NULL.
+ * RM_RTFX_HOST, which names a recording stub of tests/metal/rm_rtfx_host.h
+ * for every entry point (never defined by the real build).
  *
  * =======================================================================
  */
@@ -42,7 +43,8 @@
 #include "header/rm_rtwater.h"
 
 #ifdef RM_RTFX_HOST
-#define FX(f) NULL
+#include "rm_rtfx_host.h"
+#define FX(f) rm_rtfx_host_##f
 #else
 #define FX(f) f
 #endif

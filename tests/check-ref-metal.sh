@@ -278,7 +278,7 @@ fi
 
 # the effect table (TASK179): rm_rtfx.c is built for the host with its entry points NULL (RM_RTFX_HOST),
 # so the gate, which takes its effect switches from it, and the table's test link no backend
-fxhost="-DYQ2OSTYPE=\"host\" -DYQ2ARCH=\"host\" -DRM_RTFX_HOST"
+fxhost="-DYQ2OSTYPE=\"host\" -DYQ2ARCH=\"host\" -DRM_RTFX_HOST -Itests/metal"
 
 # the hardware gate of ray tracing (RT8, TASK60): rm_rtgate.c, with the effect table for its switches
 rtg=""
