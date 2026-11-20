@@ -419,8 +419,8 @@ rmb_fx_upscale(id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion
 
 	fx_ready = 0;
 
-	/* the scaler's format is the frame's and the view's, or nothing is bound (a toggle of r_hdr between) */
-	if (!frame || (frame.pixelFormat != fx_fmt) || ((NSUInteger)(s->ox + s->ow) > frame.width) ||
+	/* the scaler's format is the path's, the frame's and the view's, or nothing is bound (a toggle of r_hdr between) */
+	if (!frame || (fx_fmt != rmb_fx_color()) || (frame.pixelFormat != fx_fmt) || ((NSUInteger)(s->ox + s->ow) > frame.width) ||
 		((NSUInteger)(s->oy + s->oh) > frame.height))
 	{
 		return 0;

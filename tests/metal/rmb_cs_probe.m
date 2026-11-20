@@ -403,6 +403,11 @@ fx_case(CAMetalLayer *layer, int mode)
 	CHECK(!rmb_hdr_on());
 	computes = probe_computes;
 	CHECK(!rmb_fx_upscale(c16, depth, motion, f16) && (probe_computes == computes));
+	CHECK(!rmb_fx_ready());
+	CHECK(rmb_fx_prepare(RM_FX_SPATIAL, &s, 0, 0, 0) && (fx_spatial.outputTextureFormat == MTLPixelFormatBGRA8Unorm));
+	rmb_hdr_set(1);
+	CHECK(!rmb_fx_upscale(c8, depth, motion, f8) && (probe_computes == computes));   /* nor the other way round */
+	rmb_hdr_set(0);
 	CHECK(rmb_fx_prepare(RM_FX_SPATIAL, &s, 0, 0, 1));
 	CHECK(fx_spatial && (fx_spatial.colorTextureFormat == MTLPixelFormatBGRA8Unorm) &&
 		(fx_spatial.colorProcessingMode == MTLFXSpatialScalerColorProcessingModePerceptual));
