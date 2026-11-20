@@ -295,7 +295,8 @@ fx_noted(int *mode)
  * (with the refusal case of the spatial scaler) runs on any GPU with the
  * spatial scaler, the temporal half only when it has the temporal one too
  * (the build VM's paravirtual GPU has the spatial scaler alone).
- * check-ref-metal.sh runs each fx mutant only when the half it needs ran.
+ * check-ref-metal.sh runs each fx mutant only when the half it needs ran, skips it
+ * only on a skipped line, and fails a GPU whose "scalers:" line says both are there.
  */
 static void
 fx_case(CAMetalLayer *layer, int mode)
@@ -306,6 +307,8 @@ fx_case(CAMetalLayer *layer, int mode)
 	int noted_mode = -1, made, computes;
 	const int has_s = (rmb_fx_support() & RM_FX_HAS(RM_FX_SPATIAL)) != 0;
 	const int has_t = has_s && ((rmb_fx_support() & RM_FX_HAS(RM_FX_TEMPORAL)) != 0);
+
+	fprintf(stderr, "rmb_cs_probe: scalers: spatial=%d temporal=%d\n", has_s, has_t);
 
 	if (!has_s)
 	{
@@ -384,6 +387,10 @@ fx_case(CAMetalLayer *layer, int mode)
 		made = rmb_fx_prepare(RM_FX_TEMPORAL, &s, 0.25f, -0.25f, 1);
 		fprintf(stderr, "rmb_cs_probe: the temporal scaler in RGBA16Float colour and output: %s\n",
 			made ? "made" : "refused (nil)");
+		if (!made)
+		{
+			fprintf(stderr, "rmb_cs_probe: the temporal scaler in RGBA16Float skipped: refused in float16 on this GPU\n");
+		}
 	}
 
 	if (has_t && made)
