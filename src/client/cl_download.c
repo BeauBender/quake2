@@ -445,11 +445,28 @@ CL_RequestNextDownload(void)
  * That path is outside the write directory (and outside the
  * existence check) unless the working directory happens to be the
  * game directory, so it is not used any more.
+ *
+ * Fails closed: if the path does not fit in destlen, dest is set to
+ * the empty string (a truncated path could name another file) and
+ * the callers refuse the download.
  */
 void
 CL_DownloadFileName(char *dest, int destlen, char *fn)
 {
-	Com_sprintf(dest, destlen, "%s/%s", FS_Gamedir(), fn);
+	const char *gamedir = FS_Gamedir();
+
+	if (destlen <= 0)
+	{
+		return;
+	}
+
+	if (strlen(gamedir) + 1 + strlen(fn) >= (size_t)destlen)
+	{
+		dest[0] = '\0';
+		return;
+	}
+
+	Com_sprintf(dest, destlen, "%s/%s", gamedir, fn);
 }
 
 /*
@@ -503,6 +520,9 @@ CL_DownloadFilter(const char *filename)
 		/* a container the filesystem mounts (fs_packtypes): its
 		   autoexec.cfg or config.cfg would be run as commands */
 		".pak",
+		/* the temp name of a download is the name without its
+		   extension plus ".tmp": no final name may collide with one */
+		".tmp",
 		NULL,
 	};
 
@@ -591,6 +611,12 @@ CL_CheckOrDownloadFile(const char *filename)
 	   file, if so, try to resume and open the file if
 	   not opened yet */
 	CL_DownloadFileName(name, sizeof(name), cls.downloadtempname);
+
+	if (!name[0])
+	{
+		Com_Printf("Refusing to download a name that is too long: %s\n", filename);
+		return true;
+	}
 
 	fp = Q_fopen(name, "r+b");
 
@@ -716,7 +742,7 @@ CL_ParseDownload(void)
 
 		FS_CreatePath(name);
 
-		cls.download = Q_fopen(name, "wb");
+		cls.download = name[0] ? Q_fopen(name, "wb") : NULL;
 
 		if (!cls.download)
 		{
@@ -751,10 +777,24 @@ CL_ParseDownload(void)
 		CL_DownloadFileName(oldn, sizeof(oldn), cls.downloadtempname);
 		CL_DownloadFileName(newn, sizeof(newn), cls.downloadname);
 
-		/* never replace an existing file */
-		fp = Q_fopen(newn, "rb");
+		if (!oldn[0] || !newn[0])
+		{
+			Com_Printf("failed to rename: name too long.\n");
+			fp = NULL;
+			r = 1;
+		}
+		else
+		{
+			/* never replace an existing file */
+			fp = Q_fopen(newn, "rb");
+			r = 0;
+		}
 
-		if (fp)
+		if (r)
+		{
+			/* nothing to do, reported above */
+		}
+		else if (fp)
 		{
 			fclose(fp);
 			Com_Printf("%s already exists, not replacing it.\n", cls.downloadname);

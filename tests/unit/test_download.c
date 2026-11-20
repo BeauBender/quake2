@@ -153,6 +153,10 @@ TEST(download_filter_extension_table)
 		{"pak5.pak", true},
 		{"dir/X.PAK", true},
 		{"x.pak.1", true},
+		/* the temp name of a download, refused: no final name may equal one */
+		{"maps/x.tmp", true},
+		{"maps/x.TMP", true},
+		{"maps/x.tmp.1", true},
 		/* a name at the top of a game directory, refused: the filesystem
 		   mounts containers only from there, and a case-folding volume
 		   spells ".pak" in more ways than a byte comparison sees */
@@ -166,6 +170,7 @@ TEST(download_filter_extension_table)
 		{"players/x/y.pcx", false},
 		{"maps/x.cfgs", false},
 		{"maps/x.paks", false},
+		{"maps/x.tmpl", false},
 		{"cfg/x.wav", false},
 		{"maps/x.cfg.pcx", false},
 		/* the extension text inside a component, accepted */
@@ -406,8 +411,11 @@ TEST(download_chunk_size)
 static int
 cwd_enter(char *old, size_t len)
 {
+	old[0] = '\0';
+
 	if (!getcwd(old, len))
 	{
+		old[0] = '\0';
 		return 0;
 	}
 
@@ -417,6 +425,11 @@ cwd_enter(char *old, size_t len)
 static void
 cwd_leave(const char *old)
 {
+	if (!old[0])
+	{
+		return;
+	}
+
 	if (chdir(old) != 0)
 	{
 		T_CHECK(!"restore the working directory");
@@ -432,7 +445,7 @@ TEST(download_players_lands_in_gamedir)
 	char path[MAX_OSPATH];
 	char cwd[MAX_OSPATH];
 
-	T_CHECK(cwd_enter(cwd, sizeof(cwd)));
+	T_REQUIRE(cwd_enter(cwd, sizeof(cwd)));
 	reset_client();
 	Q_strlcpy(cls.downloadname, "players/f161m/skin.pcx", sizeof(cls.downloadname));
 	Q_strlcpy(cls.downloadtempname, "players/f161m/skin.tmp", sizeof(cls.downloadtempname));
@@ -477,7 +490,7 @@ TEST(download_players_existing_target_kept)
 	char cwd[MAX_OSPATH];
 	FILE *fp;
 
-	T_CHECK(cwd_enter(cwd, sizeof(cwd)));
+	T_REQUIRE(cwd_enter(cwd, sizeof(cwd)));
 	reset_client();
 	Q_strlcpy(cls.downloadname, "players/f161k/skin.pcx", sizeof(cls.downloadname));
 	Q_strlcpy(cls.downloadtempname, "players/f161k/skin.tmp", sizeof(cls.downloadtempname));
@@ -522,6 +535,38 @@ TEST(download_players_existing_target_kept)
 
 	Sys_Remove(path);
 	cwd_leave(cwd);
+}
+
+/* FIX161: a final name that is also its own temp name is refused by the
+   filter, so the no-replace guard never sees the file it has just written. */
+TEST(download_tmp_name_refused)
+{
+	reset_client();
+	t_console_reset();
+	T_CHECK(CL_CheckOrDownloadFile("maps/f161t.tmp"));
+	T_CHECK(CL_CheckOrDownloadFile("maps/f161t.TMP"));
+	T_EQ_INT(cls.netchan.message.cursize, 0);
+	T_CHECK(strstr(t_console(), ".tmp") != NULL);
+}
+
+/* FIX161: a path that does not fit is never truncated into another name. */
+TEST(download_filename_too_long)
+{
+	static char name[MAX_OSPATH + 64];
+	char dest[MAX_OSPATH];
+
+	memset(name, 'A', sizeof(name) - 1);
+	name[sizeof(name) - 1] = '\0';
+	memcpy(name, "maps/", 5);
+	strcpy(name + sizeof(name) - 5, ".pak");
+
+	memset(dest, 'x', sizeof(dest));
+	dest[sizeof(dest) - 1] = '\0';
+	CL_DownloadFileName(dest, sizeof(dest), name);
+	T_EQ_INT(dest[0], 0);
+
+	CL_DownloadFileName(dest, sizeof(dest), "maps/ok.bsp");
+	T_CHECK(strstr(dest, "/maps/ok.bsp") != NULL);
 }
 
 TEST(loadgame_savedir)
