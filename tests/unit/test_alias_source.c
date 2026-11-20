@@ -217,5 +217,11 @@ TEST(alias_server_defined_exec_now)
 	T_EQ_INT(probe_runs, 1);
 	T_EQ_INT(probe_allowed, 0);
 
+	/* the expansion gave the source back: the player's next line is the
+	   player's, in this test alone */
+	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+	player_line("t_as_probe\n");
+	T_EQ_INT(probe_allowed, 1);
+
 	as_teardown();
 }
