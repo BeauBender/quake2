@@ -661,6 +661,18 @@ Cvar_WriteVariables(const char *path)
 	{
 		if (var->flags & CVAR_ARCHIVE)
 		{
+			/* The tokenizer has no escape: a quote would end the
+			   quoted value early and a ';' after it would start a
+			   second command at the next start, and a newline
+			   always splits. Refuse to write such a value. */
+			if (strpbrk(var->string, "\"\n\r") ||
+				strpbrk(var->name, "\"\n\r"))
+			{
+				Com_Printf("Not saving cvar %s: its value holds a quote or a line break.\n",
+						var->name);
+				continue;
+			}
+
 			fprintf(f, "set %s \"%s\"\n", var->name, var->string);
 		}
 	}

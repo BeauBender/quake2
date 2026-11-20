@@ -545,3 +545,57 @@ TEST(cbuf_overflow_and_long_lines)
 	run("echo $t_long $t_long\n");
 	T_CONSOLE_HAS("Expanded line exceeded");
 }
+
+/* FIX165: Cvar_WriteVariables writes "set name "value"" and the tokenizer
+   has no escape. A value that holds a quote would end the quoted string
+   early and a ';' after it would start a second command at the next
+   start. The word form of "set" reaches such a value, since COM_Parse
+   keeps a quote in the middle of an unquoted word. */
+TEST(cvar_write_refuses_unsafe_values)
+{
+	char path[] = "/tmp/q2ut_cvarwrite_XXXXXX";
+	char buf[4096];
+	FILE *f;
+	size_t n;
+	int fd;
+
+	/* The hostile value is reachable through the command buffer. */
+	run("set t_w_quote a\"b;t_w_inj\"c a\n");
+	T_EQ_STR(Cvar_VariableString("t_w_quote"), "a\"b;t_w_inj\"c");
+
+	/* A lone quote is not: the buffer discards the line. */
+	run("set t_w_lone a\"b;t_w_inj a\n");
+	T_CONSOLE_HAS("unmatched quote");
+	T_EQ_STR(Cvar_VariableString("t_w_lone"), "");
+
+	/* A raw newline from engine code. */
+	Cvar_FullSet("t_w_nl", "x\nquit", CVAR_ARCHIVE);
+	Cvar_FullSet("t_w_cr", "x\rquit", CVAR_ARCHIVE);
+
+	/* Safe values, a ';' inside the quotes included, are written. */
+	Cvar_FullSet("t_w_semi", "a;b", CVAR_ARCHIVE);
+	Cvar_FullSet("t_w_ok", "fine", CVAR_ARCHIVE);
+
+	fd = mkstemp(path);
+	T_REQUIRE(fd >= 0);
+	close(fd);
+
+	t_console_reset();
+	Cvar_WriteVariables(path);
+	T_CONSOLE_HAS("t_w_quote");
+	T_CONSOLE_HAS("t_w_nl");
+	T_CONSOLE_HAS("t_w_cr");
+
+	f = fopen(path, "r");
+	T_REQUIRE(f != NULL);
+	n = fread(buf, 1, sizeof(buf) - 1, f);
+	buf[n] = '\0';
+	fclose(f);
+	unlink(path);
+
+	T_CHECK(strstr(buf, "t_w_quote") == NULL);
+	T_CHECK(strstr(buf, "t_w_nl") == NULL);
+	T_CHECK(strstr(buf, "t_w_cr") == NULL);
+	T_CHECK(strstr(buf, "set t_w_semi \"a;b\"\n") != NULL);
+	T_CHECK(strstr(buf, "set t_w_ok \"fine\"\n") != NULL);
+}
