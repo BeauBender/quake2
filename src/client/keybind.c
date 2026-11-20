@@ -141,13 +141,34 @@ void
 Key_WriteBindingLines(FILE *f)
 {
 	int i;
+	const char *name;
 
 	for (i = 0; i < K_LAST; i++)
 	{
 		if (keybindplayer[i] && keybindplayer[i][0])
 		{
-			fprintf(f, "bind %s \"%s\"\n",
-					Key_KeynumToString(i), keybindplayer[i]);
+			name = Key_KeynumToString(i);
+
+			/* a body with a quote ends its own quoted string, one
+			   with a line break ends the line: the rest would run as
+			   a second command at the next start (FIX166). The key
+			   names are the engine's (a printable character other
+			   than ; " ' $ and space, or a table name), but a name
+			   that is empty or holds one of those is refused too. */
+			if (!name[0] || strpbrk(name, " ;\"$\t\r\n"))
+			{
+				Com_Printf("Not saving bind for a key whose name cannot be written back.\n");
+				continue;
+			}
+
+			if (strpbrk(keybindplayer[i], "\"\n\r"))
+			{
+				Com_Printf("Not saving bind for %s: its body holds a quote or a line break.\n",
+						name);
+				continue;
+			}
+
+			fprintf(f, "bind %s \"%s\"\n", name, keybindplayer[i]);
 		}
 	}
 }

@@ -416,6 +416,7 @@ TEST(keybind_written_lines_round_trip)
 	kb_setup();
 
 	Key_SetBinding('h', "a\"b;t_kb_probe\"c");
+	Key_SetBinding('q', "x\" ; t_kb_probe ; \"y");
 	Key_SetBinding('n', "x\nt_kb_probe");
 	Key_SetBinding('r', "x\rt_kb_probe");
 	Key_SetBinding('f', "+forward");
@@ -429,16 +430,18 @@ TEST(keybind_written_lines_round_trip)
 	probe_runs = 0;
 	player_line(out);
 
-	/* only the plain probe bind exists; pressing it is the one run */
+	/* reading the lines back runs no command but bind */
 	T_EQ_INT(probe_runs, 0);
 	T_EQ_STR(keybindings['f'], "+forward");
 	T_EQ_STR(keybindings['s'], "say a;b");
 	T_EQ_STR(keybindings['p'], "t_kb_probe");
 	T_CHECK(keybindings['h'] == NULL || !keybindings['h'][0]);
+	T_CHECK(keybindings['q'] == NULL || !keybindings['q'][0]);
 	T_CHECK(keybindings['n'] == NULL || !keybindings['n'][0]);
 	T_CHECK(keybindings['r'] == NULL || !keybindings['r'][0]);
 
 	T_CONSOLE_HAS("Not saving bind for h: its body holds a quote or a line break.");
+	T_CONSOLE_HAS("Not saving bind for q: its body holds a quote or a line break.");
 	T_CONSOLE_HAS("Not saving bind for n: its body holds a quote or a line break.");
 	T_CONSOLE_HAS("Not saving bind for r: its body holds a quote or a line break.");
 
