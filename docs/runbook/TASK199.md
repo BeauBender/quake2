@@ -7,8 +7,14 @@ Three follow-ups of the HD3 review (TASK196, "HD3, rework round 2" in `TASK196.m
 - `tests/check-ref-metal.sh`, new section (j), listed in the header. By source, on `rm_main.c` with
   comments and literals stripped: `R_ClearNoWorld();` is the first statement of `R_RenderViewDraw`;
   `R_ClearNoWorld` draws over `&r_view.vp`; `R_SetupGL` and `R_HdrToneMap` each build their rectangle
-  with `rm_view_rect` from the refdef fields `x y width height`, in that order. Four scratch mutants,
-  each refused (below). The host test could not hold this: it does not link `rm_main.c`.
+  with `rm_view_rect` from the refdef fields `x y width height`, in that order, and the whole stripped
+  argument list of the two `rm_view_rect` calls is equal (one call each); `R_HdrToneMap`'s tone-map pass
+  is `rmb_tonemap_pass((int)vp.x, (int)vp.y, (int)vp.w, (int)vp.h)`; `R_ClearNoWorld` begins with the
+  `!(r_newrefdef.rdflags & RDF_NOWORLDMODEL)` guard that returns and has no other `return`, so it always
+  reaches its draw. The probe cancel is held too: `RI_ShutdownContext` (`rm_sdl.c`) calls
+  `RM_HdrProbeCancel();` before `rmb_detach();`, and `RM_HdrProbeCancel` calls
+  `rm_hdr_probe_cancel(&rm_hdr_probe_wait)`. A function body starts at its definition, not at a forward
+  declaration. Ten scratch mutants, each refused (below). The host test could not hold this: it does not link `rm_main.c`.
 - `RI_ShutdownContext` (`rm_sdl.c`) calls `RM_HdrProbeCancel` (`rm_main.c`), which ends a pending
   `metal_hdr_probe` wait (`rm_hdr_probe_cancel`, `rm_pure.c`, so the host test can drive it) and
   prints `ref_metal: hdr: probe cancelled (the renderer was shut down)` when one was pending. A
@@ -19,17 +25,23 @@ Three follow-ups of the HD3 review (TASK196, "HD3, rework round 2" in `TASK196.m
 
 ## The mutants
 
-Each is the check's own scratch copy of `rm_main.c` (`HDR_MUTANT_SHOW=1` prints these lines):
+Each is the check's own scratch copy of `rm_main.c` or `rm_sdl.c` (`HDR_MUTANT_SHOW=1` prints these lines):
 
 ```
 mutant noclear: R_RenderViewDraw does not start with R_ClearNoWorld(); (its first statement is "if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))")
 mutant othervp: R_ClearNoWorld does not draw over &r_view.vp
 mutant fieldsw: R_HdrToneMap builds its rectangle from "x y width width", not "x y width height", of one refdef
 mutant fieldss: R_SetupGL builds its rectangle from "x x width height", not "x y width height", of one refdef
+mutant tmfull: R_HdrToneMap's tone-map pass is not over the (int)vp.x, vp.y, vp.w, vp.h of its rm_view_rect
+mutant thtw: R_HdrToneMap's rm_view_rect arguments ("x,y,width,height,vid.width,vid.height,tw") differ from R_SetupGL's ("x,y,width,height,vid.width,vid.height,th")
+mutant retclear: R_ClearNoWorld returns anywhere but in its RDF_NOWORLDMODEL guard, so it can skip its draw
+mutant guardinv: R_ClearNoWorld does not begin with the !(r_newrefdef.rdflags & RDF_NOWORLDMODEL) guard that returns
+mutant nocancel: RI_ShutdownContext does not call RM_HdrProbeCancel(); before rmb_detach();
+mutant nobody: RM_HdrProbeCancel does not call rm_hdr_probe_cancel(&rm_hdr_probe_wait)
 ```
 
 On the real tree the section prints nothing and the check's last line says
-`tone-map order held, 4 order mutants refused`.
+`tone-map order and probe cancel held, 10 order mutants refused`.
 
 ## The host test
 
@@ -71,7 +83,7 @@ game module first. One hash per scenario: the sha256 of the sorted sha256 list o
 
 Each at the branch's code head, in the holds, last line:
 
-- `tests/check-ref-metal.sh`: `check-ref-metal: ok (13162 checks, 0 failed; ...; tone-map order held, 4 order mutants refused; ...)`
+- `tests/check-ref-metal.sh`: `check-ref-metal: ok (13162 checks, 0 failed; ...; tone-map order and probe cancel held, 10 order mutants refused; ...)`
 - `make test`: `yq2test: 444 tests, 0 failed`
 - `tests/check-doc-links.sh`: `check-doc-links: ok`; `tests/check-runbook-index.sh`: `check-runbook-index: ok`
 - `check-branch.sh` against origin/main: `check-branch: ok (refs/remotes/origin/main..HEAD: no private repository, host name or home path)`
