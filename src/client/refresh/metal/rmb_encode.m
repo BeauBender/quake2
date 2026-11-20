@@ -43,6 +43,9 @@
 #include <string.h>
 
 #include "header/rmb.h"
+#include "header/rm_gbuf.h"
+#include "header/rm_metalfx.h"
+#include "header/rmb_internal.h"
 #include "common/mtl_ring.h"
 
 #if !__has_feature(objc_arc)
@@ -56,33 +59,6 @@ extern CAMetalLayer *rmb_layer;
 extern dispatch_semaphore_t rmb_frame_sem;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
-dispatch_time_t rmb_deadline(long ms);
-long rmb_frame_wait_ms(void);
-void rmb_watch(id<MTLCommandBuffer> cmd);
-int rmb_commit_wait(id<MTLCommandBuffer> cmd);
-
-/* rmb_resource.m */
-void rmb_upload_flush(void);
-id<MTLTexture> rmb_texture_for_draw(int id);
-id<MTLRenderPipelineState> rmb_pipe(int i);
-id<MTLSamplerState> rmb_sampler(int i);
-id<MTLRenderPipelineState> rmb_pipe3d(int i);
-id<MTLRenderPipelineState> rmb_alpha_pipe(void);
-id<MTLRenderPipelineState> rmb_retro_pipe(void);
-id<MTLDepthStencilState> rmb_depth_state(int i);
-id<MTLBuffer> rmb_static_buffer(int bid);
-
-/* rmb_gbuf.m (TASK54): the passes of a MOTION or GBUFFER view and their draws' pipelines and bindings */
-int rmb_gbuf_pass_kind(void);
-int rmb_gbuf_reopen(void);
-id<MTLRenderPipelineState> rmb_gbuf_pipe3d(int pipe);
-void rmb_gbuf_bind_motion(id<MTLRenderCommandEncoder> enc, const float *mvp, const rm_viewport_t *vp);
-int rmb_gbuf_bind_world(id<MTLRenderCommandEncoder> enc, int dynamic, unsigned nv);
-float rmb_gbuf_flatlight(void);
-int rmb_gbuf_bind_alias(id<MTLRenderCommandEncoder> enc, int pipe, const rm_avert_t *v, unsigned nv);
-void rmb_gbuf_frame_reset(void);
-void rmb_gbuf_release(void);
-void rmb_fx_release(void);
 
 /* the frame ring of 2D vertices and indices (RMB_RING_BYTES): one shared buffer per frame in flight */
 static id<MTLBuffer> ring_buf[RMB_FRAMES_IN_FLIGHT];
@@ -95,15 +71,6 @@ static unsigned long frames_begun;
  * was drawn by the open command buffer (rmb_resource.m).
  */
 unsigned long rmb_frame_serial = 1;
-
-/* rmb_device.m: the target of a present slot, and the frame's present (FIX51); rmb_resource.m: its pipeline */
-id<MTLTexture> rmb_present_take(int w, int h);
-id<MTLRenderPipelineState> rmb_present_pipe(void);
-id<CAMetalDrawable> rmb_next_drawable(void);
-int rmb_present_region(int region, int same_format, int hdr, int have_pso);
-int rmb_present_written(id<MTLCommandBuffer> cmd, id<CAMetalDrawable> drawable, int region);
-id<MTLCommandBuffer> rmb_present_begin(id<MTLCommandBuffer> frame);
-void rmb_present_commit(void);
 
 /* kept across frames, rebuilt when the size changes */
 static id<MTLTexture> color;     /* the frame's: own, or with display sync off a present slot's (FIX51) */

@@ -51,6 +51,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rt.h"
 #include "header/rm_rtwater.h"
+#include "header/rmb_internal.h"
 #include "common/mtl_rtw_math.h"
 
 #if !__has_feature(objc_arc)
@@ -62,19 +63,9 @@ extern id<MTLDevice> rmb_device;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
-/* rmb_resource.m */
-id<MTLLibrary> rmb_library(void);
-id<MTLTexture> rmb_texture_for_draw(int tid);
-
 /* rmb_encode.m */
-id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
-
-/* rmb_rt.m (TASK158) */
-unsigned long rmb_rt_bind_water_raster(id<MTLRenderCommandEncoder> enc, int list_at, int idx_at, int vert_at,
-		int geom_at);
 
 /* rmb_gbuf.m (TASK162): the G-buffer raster's attachment formats, with the surface attachment or not */
-void rmb_gbuf_raster_formats(MTLRenderPipelineDescriptor *d, int surf);
 
 #define RMB_RTW_GROUP 8         /* the compaction's threadgroup side */
 #define RMB_RTW_SLOT 16         /* uint32s a frame slot of the counts buffer (rm_rtwater.metal's RM_RTW_C_*) */
