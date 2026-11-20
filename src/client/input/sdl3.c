@@ -624,18 +624,21 @@ static void IN_Probe_Frame(void);
 #if defined(__APPLE__) && TARGET_OS_TV
 /*
  * The tvOS simulator adds a gamepad of its own about a second after the
- * start (TASK182): 'Gamepad', a game controller and not an SDL virtual
- * joystick. IN_Controller_Init would open it before a controller that is
- * really there. It is passed over while another gamepad is present, as
- * the touch controls are, and a gamepad added while it is in use is
- * looked at again. Alone it is still opened.
+ * start (TASK182): a GCController named 'Gamepad' that SDL's MFi driver
+ * reports as vendor 0x05ac (Apple) and product 4, its id for a controller
+ * it reads through the generic input profile, with no path, and not as an
+ * SDL virtual joystick. IN_Controller_Init would open it before a
+ * controller that is really there. It is passed over while another
+ * gamepad is present, as the touch controls are, and a gamepad added
+ * while it is in use is looked at again. Alone it is still opened.
  */
 static bool
 IN_IsTVSimulatorPad(SDL_JoystickID id)
 {
 	const char *name = SDL_GetJoystickNameForID(id);
 
-	return id && name && !strcmp(name, "Gamepad") && !SDL_IsJoystickVirtual(id);
+	return id && name && !strcmp(name, "Gamepad") && !SDL_IsJoystickVirtual(id)
+		&& SDL_GetJoystickVendorForID(id) == 0x05ac && SDL_GetJoystickProductForID(id) == 4;
 }
 #endif
 
