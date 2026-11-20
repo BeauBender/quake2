@@ -79,6 +79,7 @@ map_change_child(void *arg)
 	memset(&fake, 0, sizeof(fake));
 	fake.SpawnEntities = fake_spawn;
 	fake.RunFrame = fake_frame;
+	fake.Shutdown = fake_frame;
 	fake.edicts = edicts;
 	fake.edict_size = sizeof(edict_t);
 	fake.num_edicts = 1;
@@ -90,6 +91,9 @@ map_change_child(void *arg)
 	svs.initialized = true;
 	sv.state = c->from_demo ? ss_demo : ss_game;
 	sv.attractloop = c->from_demo;
+
+	/* SV_Map broadcasts "changing" before SV_SpawnServer sets this up. */
+	SZ_Init(&sv.multicast, sv.multicast_buf, sizeof(sv.multicast_buf));
 
 	Cmd_AddCommand("t_dt_server", T_DtServer_f);
 	Cmd_AddCommand("t_dt_player", T_DtPlayer_f);
