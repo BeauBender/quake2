@@ -68,7 +68,8 @@ TEST(runner_expect_exit_signalled)
 	int ret = t_expect_exit(die_by_abort, NULL, out, sizeof(out));
 	int added = t_failures() - before;
 
-	/* Put the count back first: the failure below is the expected one. */
+	/* Put the count back first: the failure below is the expected one.
+	   A green run's log therefore shows one FAIL line for this test. */
 	t_set_failures(before);
 
 	/* A child killed by a signal returns -1 and fails the calling test
