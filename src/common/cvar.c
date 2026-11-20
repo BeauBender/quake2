@@ -359,7 +359,10 @@ Cvar_Get(const char *var_name, const char *var_value, int flags)
  * server sent may not set either (FIX153), or its text would come back
  * as the player's and pass the commands that refuse a server's use.
  * Every write of a value goes through Cvar_SetVar, Cvar_Set2 or
- * Cvar_FullSet, which ask this first.
+ * Cvar_FullSet, which ask this first. A server line that dropped server
+ * text before the write (SV_Map's demo drop, CL_Drop in SV_InitGame) is
+ * still the server's: Cbuf_DropServerText leaves the running line's
+ * source alone.
  */
 static qboolean
 Cvar_RefusedFromServer(const char *var_name)

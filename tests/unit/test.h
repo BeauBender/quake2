@@ -99,8 +99,10 @@ void t_console_rearm(void);
 /*
  * Expects STMT to raise Com_Error(ERR_DROP or ERR_DISCONNECT): the real
  * Com_Error in src/common/clientserver.c longjmps to the global abortframe,
- * which this macro arms exactly as Qcommon_Frame does. Fails the test when
- * STMT returns normally. The ERR_DROP message is in t_console() afterwards.
+ * which this macro arms exactly as Qcommon_Frame does, and where it lands
+ * it resets the command buffer's source as Qcommon_Frame does
+ * (Cbuf_ResetSource, FIX153). Fails the test when STMT returns normally.
+ * The ERR_DROP message is in t_console() afterwards.
  */
 extern jmp_buf abortframe;
 void t_rearm_abortframe(void);
@@ -116,6 +118,7 @@ void t_rearm_abortframe(void);
 		} \
 		else \
 		{ \
+			Cbuf_ResetSource(); \
 			t_rearm_abortframe(); \
 		} \
 	} while (0)

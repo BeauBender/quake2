@@ -339,6 +339,7 @@ TEST(nextserver_map_suffix_after_cl_drop_not_stored)
    server's. The next line has its own source. */
 static int drop_seen;
 static int srv_runs;
+static int kept_runs;
 
 static void
 T_NsDrop_f(void)
@@ -353,28 +354,34 @@ T_NsSrv_f(void)
 	srv_runs++;
 }
 
+static void
+T_NsKept_f(void)
+{
+	kept_runs++;
+}
+
 TEST(cbuf_server_line_stays_server_after_drop)
 {
 	SZ_Clear(&cmd_text);
 	defer_text_buf[0] = 0;
 	drop_seen = -1;
 	srv_runs = 0;
-	player_runs = 0;
+	kept_runs = 0;
 
 	if (!Cmd_Exists("t_ns_drop"))
 	{
 		Cmd_AddCommand("t_ns_drop", T_NsDrop_f);
 		Cmd_AddCommand("t_ns_srv", T_NsSrv_f);
-		Cmd_AddCommand("t_ns_player", T_NsPlayer_f);
+		Cmd_AddCommand("t_ns_kept", T_NsKept_f);
 	}
 
 	Cbuf_AddServerText("t_ns_drop\nt_ns_srv\n");
-	Cbuf_AddText("t_ns_player\n");
+	Cbuf_AddText("t_ns_kept\n");
 	Cbuf_Execute();
 
 	T_EQ_INT(drop_seen, 1);    /* still the server's line after its drop */
 	T_EQ_INT(srv_runs, 0);     /* the server's queued line was dropped */
-	T_EQ_INT(player_runs, 1);  /* the player's was kept */
+	T_EQ_INT(kept_runs, 1);    /* the player's was kept */
 	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
 
 	/* the player's line that drops stays the player's */
