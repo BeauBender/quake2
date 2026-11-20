@@ -34,6 +34,7 @@ fi
 
 tmpd=$(mktemp -d "${TMPDIR:-/tmp}/kbsites.XXXXXX")
 trap 'rm -rf "${tmpd:?}"' EXIT
+trap 'exit 1' INT TERM
 
 # flat FILE: the file with comments removed and every run of white space a
 # single space, as one line
@@ -41,17 +42,27 @@ flat() {
 	awk '
 	{
 		line = $0
+		n = length(line)
 		out = ""
-		while (length(line) > 0) {
+		i = 1
+		while (i <= n) {
+			c = substr(line, i, 1)
 			if (incom) {
-				i = index(line, "*/")
-				if (i == 0) { line = ""; break }
-				line = substr(line, i + 2); incom = 0
+				if (substr(line, i, 2) == "*/") { incom = 0; i += 2 } else { i++ }
+			} else if (c == "\"" || c == "\047") {
+				# a string or character literal: kept, and no comment opens in it
+				q = c; out = out c; i++
+				while (i <= n) {
+					d = substr(line, i, 1)
+					out = out d
+					if (d == "\\") { out = out substr(line, i + 1, 1); i += 2; continue }
+					i++
+					if (d == q) break
+				}
+			} else if (substr(line, i, 2) == "/*") {
+				out = out " "; incom = 1; i += 2
 			} else {
-				i = index(line, "/*")
-				if (i == 0) { out = out line; line = ""; break }
-				out = out substr(line, 1, i - 1) " "
-				line = substr(line, i + 2); incom = 1
+				out = out c; i++
 			}
 		}
 		print out
@@ -88,6 +99,11 @@ check() { # file: prints a line per broken rule, returns 1 if any
 			echo "check-keyboard-sites: Key_Event has $n Key_AddBindingText calls, wants 4 or more"
 			bad=1
 		fi
+		k=$(printf '%s' "$b" | grep -oE 'Key_AddBindingText ?\( ?key ?,' | wc -l | tr -d ' ')
+		if [ "$k" != "$n" ]; then
+			echo "check-keyboard-sites: a Key_AddBindingText call in Key_Event does not take key first ($k of $n do)"
+			bad=1
+		fi
 		if printf '%s' "$b" | grep -qE 'Cbuf_AddText ?\( ?(kb|cmd|keybindings)'; then
 			echo "check-keyboard-sites: Key_Event queues bound text with Cbuf_AddText"
 			bad=1
@@ -118,8 +134,8 @@ check() { # file: prints a line per broken rule, returns 1 if any
 
 	for fn in Key_Bind_f Key_Unbind_f; do
 		b=$(body "$f" "$fn")
-		if ! printf '%s' "$b" | grep -qE 'if ?\( ?\( ?b ?< ?0 ?\) ?\|\| ?\( ?b ?>= ?K_LAST ?\) ?\)'; then
-			echo "check-keyboard-sites: $fn does not refuse a key number below 0 or at K_LAST and above"
+		if ! printf '%s' "$b" | grep -qE 'if ?\( ?\(? ?b ?< ?0 ?\)? ?\|\| ?\(? ?b ?>= ?K_LAST ?\)? ?\) ?\{[^}]*return ?; ?\}'; then
+			echo "check-keyboard-sites: $fn does not refuse a key number below 0 or at K_LAST and above, and return"
 			bad=1
 		fi
 	done
@@ -144,6 +160,21 @@ mutant() { # name, sed script: the copy must be refused
 	fi
 }
 
+accept() { # name, sed script: an equivalent form, the copy must pass
+	cp "$src" "${tmpd:?}/acc.c"
+	sed -i.bak -e "$2" "${tmpd:?}/acc.c"
+	if cmp -s "$src" "${tmpd:?}/acc.c"; then
+		echo "check-keyboard-sites: form $1 did not change the file"
+		fail=1
+	elif ! check "${tmpd:?}/acc.c" >/dev/null; then
+		echo "check-keyboard-sites: equivalent form $1 was refused"
+		fail=1
+	fi
+}
+
+# The self-check mutates the real file only: a file argument (a reflowed
+# input, say) is checked against the rules alone.
+if [ -z "${1:-}" ]; then
 mutant press-plain-cbuf 's/Key_AddBindingText(key, kb);/Cbuf_AddText(keybindings[key]);/'
 mutant press-button-cbuf '/"%s %i %i/{n;s/Key_AddBindingText(key, cmd);/Cbuf_AddText(cmd);/;}'
 mutant release-cbuf '/"-%s %i %i/{n;s/Key_AddBindingText(key, cmd);/Cbuf_AddText(cmd);/;}'
@@ -153,10 +184,22 @@ mutant writebindings-no-helper 's/Key_WriteBindingLines(f);/fprintf(f, "x\\n");/
 mutant writebindings-inline 's/Key_WriteBindingLines(f);/fprintf(f, "bind %s %s\\n", Key_KeynumToString(0), keybindings[0]);/'
 mutant unbindall-no-helper 's/^\tKey_UnbindAll();/\t;/'
 mutant keynum-signed 's/return (unsigned char)str\[0\];/return str[0];/'
-mutant bind-no-low-bound '/^Key_Bind_f/,/^}/s/if ((b < 0) || (b >= K_LAST))/if (b >= K_LAST)/'
-mutant bind-no-high-bound '/^Key_Bind_f/,/^}/s/if ((b < 0) || (b >= K_LAST))/if (b < 0)/'
-mutant unbind-no-low-bound '/^Key_Unbind_f/,/^}/s/if ((b < 0) || (b >= K_LAST))/if (b >= K_LAST)/'
-mutant unbind-no-high-bound '/^Key_Unbind_f/,/^}/s/if ((b < 0) || (b >= K_LAST))/if (b < 0)/'
+bounds='if *( *( *b *< *0 *) *|| *( *b *>= *K_LAST *) *)'
+mutant bind-no-low-bound "/^Key_Bind_f/,/^}/s/$bounds/if (b >= K_LAST)/"
+mutant bind-no-high-bound "/^Key_Bind_f/,/^}/s/$bounds/if (b < 0)/"
+mutant unbind-no-low-bound "/^Key_Unbind_f/,/^}/s/$bounds/if (b >= K_LAST)/"
+mutant unbind-no-high-bound "/^Key_Unbind_f/,/^}/s/$bounds/if (b < 0)/"
+mutant bind-no-return "/^Key_Bind_f/,/^}/{/isn't a valid key/{n;s/return *;/;/;};}"
+mutant unbind-no-return "/^Key_Unbind_f/,/^}/{/isn't a valid key/{n;s/return *;/;/;};}"
+mutant press-key-zero 's/Key_AddBindingText(key, kb);/Key_AddBindingText(0, kb);/'
+mutant release-key-zero '/"-%s %i %i/{n;s/Key_AddBindingText(key, cmd);/Key_AddBindingText(0, cmd);/;}'
+mutant newline-key-zero 's/Key_AddBindingText(key, "\\n");/Key_AddBindingText(0, "\\n");/'
+mutant hidden-by-string-literal 's/Key_AddBindingText(key, kb);/Key_AddBindingText(key, kb); Cbuf_AddText("\/*"); Cbuf_AddText(kb); Cbuf_AddText("*\/");/'
+mutant hidden-by-char-literal "s/Key_AddBindingText(key, kb);/Key_AddBindingText(key, kb); if (key == '\"') {} Cbuf_AddText(\"\/*\"); Cbuf_AddText(kb); Cbuf_AddText(\"*\/\");/"
+
+# equivalent forms must pass
+accept bounds-unparenthesised "s/$bounds/if (b < 0 || b >= K_LAST)/"
+fi
 
 if [ "$fail" != 0 ]; then
 	exit 1
