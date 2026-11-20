@@ -564,7 +564,7 @@ commits, and counts its calls. The new case, `fx_case`, runs for each of the thr
   remakes it in `BGRA8Unorm` and perceptual, and it runs. A scaler made in 8 bits is not run after a
   toggle to `r_hdr 1`.
 
-Result: @@PROBE@@.
+Result: `rmb_cs_probe: 736 checks, 0 failed` (346 before HD4), with `the temporal scaler in RGBA16Float colour and output: made` printed on each of the six runs.
 
 `check-ref-metal.sh` (f) adds three mutants of `rmb_metalfx.m`, and the probe must fail each one:
 
@@ -572,7 +572,7 @@ Result: @@PROBE@@.
 - `fxtemporal8`: the temporal output stays `BGRA8Unorm` under `r_hdr 1`.
 - `fxnonote`: a scaler refused in float16 tells no note.
 
-@@MUTANTS@@
+`check-ref-metal: ... colour space 736 checks, 0 failed; 12 colour-space mutants refused` (nine before HD4).
 
 `rm_fx_test.c` pins the note's new line; `rm_host_test.c` pins `rm_hdr_fx_note`.
 
@@ -631,11 +631,35 @@ the measurements.
 
 ### Pins
 
-@@PINS@@
+Branch `1a918da2`, Metal, screen locked, `PINS_SEED=1` with the trace, 640 x 480, with the game module
+built, MetalFX at its default (off) in the `r_hdr 0` scenarios, and hashed as in HD3's table
+(`shasum` of the frames, then of the list of hashes):
+
+| scenario | frames | branch | against FIX133's table |
+| --- | --- | --- | --- |
+| `world` | 23 | `b15b40cf1604` | identical |
+| `models` | 23 | `552ee3cb16b8` | identical |
+| `hdr` | 23 | `11b7dcc7968c` | identical |
+| `hdr-metalfx2` (new) | 23 | `966095662f89` | its own reference |
+
+`hdr-metalfx2` is `hdr` with `r_metalfx 2` at `r_metalfx_scale 0.5`: the temporal scaler on the
+float16 view, before the tone map. Its engine log has no MetalFX note, and its teardown counts
+`metalfx 2/2` (the scaler and `fx_out`), so the scaler ran under `r_hdr 1` for the whole demo.
 
 ### Checks
 
-@@CHECKS@@
+Run on `1a918da2` under the lock:
+
+- `make test`: `yq2test: 435 tests, 0 failed`
+- `tests/check-ref-metal.sh`: `check-ref-metal: ok (13194 checks, 0 failed; ...; MetalFX 335 checks, 0 failed; ...; colour space 736 checks, 0 failed; 12 colour-space mutants refused; ...; ref_metal built)`
+- `tests/check-ios.sh`: `check-ios: ok (54 mutants refused; ...)`
+- `tests/check-tvos.sh`: `check-tvos: ok (180 objects for the tvOS simulator, platform 8, the iOS simulator's list)`
+- `tests/check-visionos.sh`: `check-visionos: ok (180 objects for the visionOS simulator, platform 12, the iOS simulator's list)`
+- `tests/check-cvar-docs.sh`: `check-cvar-docs: ok`
+- `tests/check-doc-links.sh`: `check-doc-links: ok`
+- `tests/check-metalfx-report.sh`: `check-metalfx-report: ok (118 mutants killed)`
+
+`scripts/test.sh` was not run here; the orchestrator runs the gate.
 
 ### Left
 
