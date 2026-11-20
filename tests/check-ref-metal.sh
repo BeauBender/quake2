@@ -89,7 +89,9 @@
 #     it had at attach, and the ledger holds no state object. With no device
 #     the probe prints one skip line and passes. Scratch mutants of
 #     rmb_device.m (1 -> 0 sets NULL; 1 -> 0 leaves ours; detach leaves ours)
-#     must fail it.
+#     must fail it. It includes rmb_metalfx.m too (TASK196 HD4): the
+#     MetalFX scalers' formats and modes under r_hdr 0 and 1, the refusal
+#     in float16, the toggle; scratch mutants of it must fail it as well.
 # (g) Always: the call seats of the ray-tracing gate (TASK60), by source
 #     inspection, as for the flush points. In rm_main.c, comments and string
 #     literals stripped: RI_BeginFrame's first statement after its
@@ -890,9 +892,9 @@ probe_run() {
 	# script's other builds; the warnings are -Wall -Wextra -Werror, stricter than rmb_device.m's real
 	# build on purpose (docs/runbook/TASK164.md, FIX99)
 	if ! $cc -fobjc-arc -std=gnu11 -Wall -Wextra -Werror -g -O1 -fno-strict-aliasing -fwrapv ${psan:-} -I"${1:-$rm_dir}" -I"$rm_dir" -I"$rm_dir/header" -I. \
-		'-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "$2" tests/metal/rmb_cs_probe.m "$rm_dir/rm_pure.c" \
+		'-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "$2" tests/metal/rmb_cs_probe.m "$rm_dir/rm_pure.c" "$rm_dir/rm_metalfx.c" \
 		"$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" src/common/shared/shared.c \
-		-framework Foundation -framework Metal -framework QuartzCore -framework CoreGraphics -lm > "${tmp:?}/probe.out" 2>&1; then
+		-framework Foundation -framework Metal -framework QuartzCore -framework CoreGraphics -weak_framework MetalFX -lm > "${tmp:?}/probe.out" 2>&1; then
 		return 99
 	fi
 	rc=0
@@ -926,13 +928,40 @@ else
 		# float16 variant that was not built hands back the stock pipeline (fmtstock), a drawable
 		# nothing wrote is presented (unwritten), the frame of a failed variant is presented
 		# (failframe), rmb_attach clears the failure while its caches stay (hdrattach), the close
-		# empties the caches and keeps the failure (hdrkept)
+		# empties the caches and keeps the failure (hdrkept); TASK196 HD4, rmb_metalfx.m: the spatial
+		# scaler left linear under r_hdr 1 (fxlinear), the temporal output left BGRA8Unorm under
+		# r_hdr 1 (fxtemporal8), a scaler refused in float16 tells no note (fxnonote). Each fx mutant
+		# runs only when the unmutated probe ran the half of its MetalFX case it needs: fxlinear and
+		# fxnonote the spatial half (the spatial scaler; fxnonote is caught by its refusal case),
+		# fxtemporal8 the temporal scaler made in RGBA16Float (the build VM has the spatial scaler alone)
 		probe_mutants=0
-		for m in nulled kept detached unretained fmtstock unwritten failframe hdrattach hdrkept; do
+		probe_skipped=0
+		probe_skip_why=
+		fx_spatial_ran=0
+		fx_temporal16=0
+		grep -q 'the MetalFX spatial half under r_hdr 0 and 1, .*: run$' "${tmp:?}/probe.out" && fx_spatial_ran=1
+		grep -q 'the temporal scaler in RGBA16Float colour and output: made$' "${tmp:?}/probe.out" && fx_temporal16=1
+		if grep -q 'the MetalFX temporal half skipped: no temporal scaler' "${tmp:?}/probe.out"; then
+			fx_why16="no temporal scaler"
+		else
+			fx_why16="no float16 temporal scaler"
+		fi
+		for m in nulled kept detached unretained fmtstock unwritten failframe hdrattach hdrkept fxlinear fxtemporal8 fxnonote; do
+			why=
+			case $m in
+				fxlinear|fxnonote) [ "$fx_spatial_ran" = 1 ] || why="no spatial scaler" ;;
+				fxtemporal8) [ "$fx_temporal16" = 1 ] || why=$fx_why16 ;;
+			esac
+			if [ -n "$why" ]; then
+				probe_skipped=$((probe_skipped + 1))
+				case ", $probe_skip_why, " in *", $why, "*) ;; *) probe_skip_why=${probe_skip_why:+$probe_skip_why, }$why ;; esac
+				continue
+			fi
 			rm -rf "${tmp:?}/csmut"
 			mkdir "${tmp:?}/csmut"
 			case $m in
 				fmtstock|hdrkept) mf=rmb_resource.m ;;
+				fx*) mf=rmb_metalfx.m ;;
 				*) mf=rmb_device.m ;;
 			esac
 			case $m in
@@ -945,6 +974,9 @@ else
 				failframe) sed 's|(hdr \&\& (!have_pso \|\| rmb_hdr_dead))|(hdr \&\& !have_pso)|' "$rm_dir/$mf" ;;
 				hdrattach) sed 's|rmb_detach();   /\* a failed float16 path stays off|rmb_detach(); rmb_hdr_dead = 0;   /* a failed float16 path stays off|' "$rm_dir/$mf" ;;
 				hdrkept) sed 's|rmb_hdr_retry();   /\* with the caches|(void)0;   /* with the caches|' "$rm_dir/$mf" ;;
+				fxlinear) sed 's|MTLFXSpatialScalerColorProcessingModeHDR;|MTLFXSpatialScalerColorProcessingModeLinear;|' "$rm_dir/$mf" ;;
+				fxtemporal8) sed 's|d.outputTextureFormat = f;   /\* the temporal output|d.outputTextureFormat = RMB_FX_COLOR;   /* the temporal output|' "$rm_dir/$mf" ;;
+				fxnonote) sed 's|rmb_fx_tell(rm_hdr_fx_note((int)f), mode, s);|(void)0;|' "$rm_dir/$mf" ;;
 			esac > "${tmp:?}/csmut/$mf"
 			if cmp -s "$rm_dir/$mf" "${tmp:?}/csmut/$mf"; then
 				bad "the colour-space mutant ($m) of $mf changed nothing"
@@ -962,6 +994,7 @@ else
 			fi
 		done
 		probe="$probe; $probe_mutants colour-space mutants refused"
+		[ "$probe_skipped" = 0 ] || probe="$probe, $probe_skipped skipped ($probe_skip_why)"
 	fi
 fi
 

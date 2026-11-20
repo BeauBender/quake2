@@ -243,7 +243,7 @@ void rm_fx_refusal_clear(rm_fx_refusal_t *r);
 #define RM_FX_NOTE_NONE 0
 #define RM_FX_NOTE_UNMADE 1     /* the scaler cannot be made */
 #define RM_FX_NOTE_UNFIT 2      /* the view's targets do not fit the scaler */
-#define RM_FX_NOTE_HDR 3        /* r_hdr's float16 path is on: no scaler until HD4 (TASK196) */
+#define RM_FX_NOTE_HDR 3        /* the scaler cannot be made in r_hdr's float16 colour: MetalFX off (TASK196 HD4) */
 
 /*
  * The line of a back end's note (without a newline): the mode and the
