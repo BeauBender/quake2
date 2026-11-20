@@ -290,6 +290,12 @@ fx_noted(int *mode)
  * r_hdr remakes it. A scaler the GPU will not make (fx_refuse) leaves
  * MetalFX off with r_hdr's note at r_hdr 1 (the stock note at 0), told
  * once, nothing kept and nothing encoded.
+ *
+ * Two halves, each with its own line, run or skipped: the spatial half
+ * (with the refusal case of the spatial scaler) runs on any GPU with the
+ * spatial scaler, the temporal half only when it has the temporal one too
+ * (the build VM's paravirtual GPU has the spatial scaler alone).
+ * check-ref-metal.sh runs each fx mutant only when the half it needs ran.
  */
 static void
 fx_case(CAMetalLayer *layer, int mode)
@@ -298,14 +304,26 @@ fx_case(CAMetalLayer *layer, int mode)
 	const rm_fx_size_t s = { 320, 240, 640, 480, 0, 0 };
 	id<MTLTexture> c8, f8, c16, f16, depth, motion;
 	int noted_mode = -1, made, computes;
+	const int has_s = (rmb_fx_support() & RM_FX_HAS(RM_FX_SPATIAL)) != 0;
+	const int has_t = has_s && ((rmb_fx_support() & RM_FX_HAS(RM_FX_TEMPORAL)) != 0);
 
-	if (!(rmb_fx_support() & RM_FX_HAS(RM_FX_SPATIAL)) || !(rmb_fx_support() & RM_FX_HAS(RM_FX_TEMPORAL)))
+	if (!has_s)
 	{
-		fprintf(stderr, "rmb_cs_probe: the MetalFX case skipped: no spatial and temporal scaler on this GPU\n");
+		fprintf(stderr, "rmb_cs_probe: the MetalFX spatial half skipped: no spatial scaler on this GPU\n");
+		fprintf(stderr, "rmb_cs_probe: the MetalFX temporal half skipped: no spatial scaler on this GPU\n");
 		return;
 	}
 
-	fprintf(stderr, "rmb_cs_probe: the MetalFX scalers under r_hdr 0 and 1, metal_colorspace %d\n", mode);
+	fprintf(stderr, "rmb_cs_probe: the MetalFX spatial half under r_hdr 0 and 1, metal_colorspace %d: run\n", mode);
+	if (has_t)
+	{
+		fprintf(stderr, "rmb_cs_probe: the MetalFX temporal half under r_hdr 0 and 1, metal_colorspace %d: run\n", mode);
+	}
+	else
+	{
+		fprintf(stderr, "rmb_cs_probe: the MetalFX temporal half skipped: no temporal scaler on this GPU\n");
+	}
+
 	rmb_colorspace_set(mode);
 	CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
 	c8 = fx_tex(MTLPixelFormatBGRA8Unorm, s.iw, s.ih, MTLStorageModePrivate);
@@ -325,9 +343,16 @@ fx_case(CAMetalLayer *layer, int mode)
 	CHECK(fx_spatial.colorProcessingMode == MTLFXSpatialScalerColorProcessingModePerceptual);
 	CHECK(fx_out.pixelFormat == MTLPixelFormatBGRA8Unorm);
 	CHECK(rmb_fx_upscale(c8, depth, motion, f8) && fx_commit());
-	CHECK(rmb_fx_prepare(RM_FX_TEMPORAL, &s, 0.25f, -0.25f, 1));
-	CHECK(fx_temporal && (fx_temporal.colorTextureFormat == MTLPixelFormatBGRA8Unorm) &&
-		(fx_temporal.outputTextureFormat == MTLPixelFormatBGRA8Unorm));
+	if (has_t)
+	{
+		CHECK(rmb_fx_prepare(RM_FX_TEMPORAL, &s, 0.25f, -0.25f, 1));
+		CHECK(fx_temporal && (fx_temporal.colorTextureFormat == MTLPixelFormatBGRA8Unorm) &&
+			(fx_temporal.outputTextureFormat == MTLPixelFormatBGRA8Unorm));
+	}
+	else
+	{
+		CHECK(rmb_fx_prepare(RM_FX_SPATIAL, &s, 0, 0, 0));   /* a BGRA8 scaler prepared for the toggle below */
+	}
 	CHECK(fx_out.pixelFormat == MTLPixelFormatBGRA8Unorm);
 
 	/* r_hdr 1 with the BGRA8 scaler still prepared: the float16 view and frame are not bound to it */
@@ -353,24 +378,28 @@ fx_case(CAMetalLayer *layer, int mode)
 	CHECK(rmb_fx_prepare(RM_FX_SPATIAL, &s, 0, 0, 1));
 	CHECK(rmb_fx_upscale(c16, depth, motion, f16) && fx_commit());
 
-	made = rmb_fx_prepare(RM_FX_TEMPORAL, &s, 0.25f, -0.25f, 1);
-	fprintf(stderr, "rmb_cs_probe: the temporal scaler in RGBA16Float colour and output: %s\n",
-		made ? "made" : "refused (nil)");
+	made = 0;
+	if (has_t)
+	{
+		made = rmb_fx_prepare(RM_FX_TEMPORAL, &s, 0.25f, -0.25f, 1);
+		fprintf(stderr, "rmb_cs_probe: the temporal scaler in RGBA16Float colour and output: %s\n",
+			made ? "made" : "refused (nil)");
+	}
 
-	if (made)
+	if (has_t && made)
 	{
 		CHECK(fx_temporal && (fx_temporal.colorTextureFormat == MTLPixelFormatRGBA16Float) &&
 			(fx_temporal.outputTextureFormat == MTLPixelFormatRGBA16Float));
 		CHECK(fx_out.pixelFormat == MTLPixelFormatRGBA16Float);
 		CHECK(rmb_fx_upscale(c16, depth, motion, f16) && fx_commit());
 	}
-	else
+	else if (has_t)
 	{
 		CHECK(!fx_temporal && !fx_out && (fx_noted(&noted_mode) == RM_FX_NOTE_HDR));
 	}
 
-	/* a scaler the GPU will not make in float16: off, with r_hdr's note, once; nothing bound */
-	for (int m = RM_FX_SPATIAL; m <= RM_FX_TEMPORAL; m++)
+	/* a scaler the GPU will not make in float16: off, with r_hdr's note, once; nothing bound (spatial: the spatial half) */
+	for (int m = RM_FX_SPATIAL; m <= (has_t ? RM_FX_TEMPORAL : RM_FX_SPATIAL); m++)
 	{
 		CHECK(rmb_fx_prepare(RM_FX_OFF, NULL, 0, 0, 0) == 0);
 		(void)fx_noted(&noted_mode);

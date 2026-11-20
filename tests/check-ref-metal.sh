@@ -857,9 +857,33 @@ else
 		# (failframe), rmb_attach clears the failure while its caches stay (hdrattach), the close
 		# empties the caches and keeps the failure (hdrkept); TASK196 HD4, rmb_metalfx.m: the spatial
 		# scaler left linear under r_hdr 1 (fxlinear), the temporal output left BGRA8Unorm under
-		# r_hdr 1 (fxtemporal8), a scaler refused in float16 tells no note (fxnonote)
+		# r_hdr 1 (fxtemporal8), a scaler refused in float16 tells no note (fxnonote). Each fx mutant
+		# runs only when the unmutated probe ran the half of its MetalFX case it needs: fxlinear and
+		# fxnonote the spatial half (the spatial scaler; fxnonote is caught by its refusal case),
+		# fxtemporal8 the temporal scaler made in RGBA16Float (the build VM has the spatial scaler alone)
 		probe_mutants=0
+		probe_skipped=0
+		probe_skip_why=
+		fx_spatial_ran=0
+		fx_temporal16=0
+		grep -q 'the MetalFX spatial half under r_hdr 0 and 1, .*: run$' "${tmp:?}/probe.out" && fx_spatial_ran=1
+		grep -q 'the temporal scaler in RGBA16Float colour and output: made$' "${tmp:?}/probe.out" && fx_temporal16=1
+		if grep -q 'the MetalFX temporal half skipped: no temporal scaler' "${tmp:?}/probe.out"; then
+			fx_why16="no temporal scaler"
+		else
+			fx_why16="no float16 temporal scaler"
+		fi
 		for m in nulled kept detached unretained fmtstock unwritten failframe hdrattach hdrkept fxlinear fxtemporal8 fxnonote; do
+			why=
+			case $m in
+				fxlinear|fxnonote) [ "$fx_spatial_ran" = 1 ] || why="no spatial scaler" ;;
+				fxtemporal8) [ "$fx_temporal16" = 1 ] || why=$fx_why16 ;;
+			esac
+			if [ -n "$why" ]; then
+				probe_skipped=$((probe_skipped + 1))
+				case ", $probe_skip_why, " in *", $why, "*) ;; *) probe_skip_why=${probe_skip_why:+$probe_skip_why, }$why ;; esac
+				continue
+			fi
 			rm -rf "${tmp:?}/csmut"
 			mkdir "${tmp:?}/csmut"
 			case $m in
@@ -897,6 +921,7 @@ else
 			fi
 		done
 		probe="$probe; $probe_mutants colour-space mutants refused"
+		[ "$probe_skipped" = 0 ] || probe="$probe, $probe_skipped skipped ($probe_skip_why)"
 	fi
 fi
 
