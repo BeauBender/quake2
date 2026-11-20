@@ -357,6 +357,9 @@ CL_Disconnect(void)
 {
 	byte final[32];
 
+	/* what the server queued does not outlive its connection (FIX113) */
+	Cbuf_DropServerText();
+
 	if (cls.state == ca_disconnected)
 	{
 		return;

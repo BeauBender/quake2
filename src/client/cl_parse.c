@@ -1459,7 +1459,7 @@ CL_ParseServerMessage(void)
 			case svc_stufftext:
 				s = MSG_ReadString(&net_message);
 				Com_DPrintf("stufftext: %s\n", s);
-				Cbuf_AddText(s);
+				Cbuf_AddServerText(s);
 				break;
 
 			case svc_serverdata:
