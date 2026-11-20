@@ -47,6 +47,7 @@ typedef struct cmdalias_s
 	struct cmdalias_s *next;
 	char name[MAX_ALIAS_NAME];
 	char *value;
+	qboolean server; /* a server line wrote value (FIX156) */
 } cmdalias_t;
 
 char retval[256];
@@ -67,12 +68,14 @@ YQ2_STATIC_ASSERT(sizeof(defer_text_buf) > sizeof(cmd_text_buf),
 
 /*
  * Where each byte of cmd_text_buf and defer_text_buf came from (FIX113):
- * CBUF_SERVER for text a server sent with svc_stufftext and for text a
+ * CBUF_SERVER for text a server sent with svc_stufftext, for text a
  * server line queues while it runs (an alias it expands, a file it
- * execs), CBUF_PLAYER for everything else. Cbuf_DropServerText discards
- * the server's bytes when the connection they came from ends, so a
- * command the server queued behind a "disconnect" cannot run while the
- * client is disconnected. The player's bytes are kept.
+ * execs) and for the body of an alias a server line defined, whoever
+ * runs it (FIX156), CBUF_PLAYER for everything else.
+ * Cbuf_DropServerText discards the server's bytes when the connection
+ * they came from ends, so a command the server queued behind a
+ * "disconnect" cannot run while the client is disconnected. The
+ * player's bytes are kept.
  */
 #define CBUF_PLAYER 0
 #define CBUF_SERVER 1
@@ -559,6 +562,15 @@ Cmd_Echo_f(void)
 /*
  * Creates a new command that executes
  * a command string (possibly ; seperated)
+ *
+ * An alias a server line defines is the server's (FIX156): its body
+ * runs as server text whenever it is expanded (Cmd_ExecuteString), so
+ * the player's own use of the name, typed, bound or named by another
+ * alias, does not run the server's body as the player's. It stays the
+ * server's until the player's text defines it again. A server line
+ * that writes the body the alias already has leaves its owner as it
+ * was, so a server that runs the player's own configuration again does
+ * not take over the player's aliases.
  */
 static void
 Cmd_Alias_f(void)
@@ -567,6 +579,7 @@ Cmd_Alias_f(void)
 	char cmd[1024];
 	int i, c;
 	char *s;
+	qboolean server;
 
 	if (Cmd_Argc() == 1)
 	{
@@ -593,7 +606,6 @@ Cmd_Alias_f(void)
 	{
 		if (!strcmp(s, a->name))
 		{
-			Z_Free(a->value);
 			break;
 		}
 	}
@@ -623,7 +635,22 @@ Cmd_Alias_f(void)
 
 	Q_strlcat(cmd, "\n", sizeof(cmd));
 
+	/* the player's text makes it the player's; the server's makes it
+	   the server's unless the body is the one already there */
+	server = Cbuf_ExecutingServerText();
+
+	if (a->value)
+	{
+		if (server && !strcmp(a->value, cmd))
+		{
+			server = a->server;
+		}
+
+		Z_Free(a->value);
+	}
+
 	a->value = CopyString(cmd);
+	a->server = server;
 }
 
 int
@@ -1212,6 +1239,7 @@ Cmd_ExecuteString(char *text)
 {
 	cmd_function_t *cmd;
 	cmdalias_t *a;
+	byte saved;
 
 	Cmd_TokenizeString(text, true);
 
@@ -1257,7 +1285,19 @@ Cmd_ExecuteString(char *text)
 				return;
 			}
 
+			/* a server's body is queued as the server's, whoever
+			   names it; a player's as the line that names it, so a
+			   server line that names it still queues server text
+			   (FIX156). The text behind it keeps its own source. */
+			saved = cbuf_source;
+
+			if (a->server)
+			{
+				cbuf_source = CBUF_SERVER;
+			}
+
 			Cbuf_InsertText(a->value);
+			cbuf_source = saved;
 			return;
 		}
 	}
