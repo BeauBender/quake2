@@ -497,6 +497,9 @@ CL_DownloadFilter(const char *filename)
 		/* a script the engine runs as commands (exec, and at startup
 		   config.cfg and autoexec.cfg): a download is never run */
 		".cfg",
+		/* a container the filesystem mounts (fs_packtypes): its
+		   autoexec.cfg or config.cfg would be run as commands */
+		".pak",
 		NULL,
 	};
 

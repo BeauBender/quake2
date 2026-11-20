@@ -208,11 +208,15 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 * **cl_nodownload_list**: Whitespace separated list of substrings, files
   having one these strings in their name are never downloaded. Empty by
   default. Note that some substrings are always forbidden, for security
-  reasons these cannot be overridden: '.dll', '.dylib' and '.so' to
-  prevent downloading of libraries which could be injected into the
-  Portmanbeau Quake II process. A name ending in '.cfg' is refused too (any
-  case), so that a downloaded script is never run as commands by `exec`
-  or at the next start as `config.cfg` or `autoexec.cfg`. '..' or ':' inside filenames and '/' or '.'
+  reasons these cannot be overridden: '.dll', '.dylib', '.lib', '.so' and
+  '.a' to prevent downloading of libraries which could be injected into
+  the Portmanbeau Quake II process. A name ending in '.cfg' is refused too
+  (any case), so that a downloaded script is never run as commands by
+  `exec`, at the next start or on every `game` change as `config.cfg` or
+  `autoexec.cfg`. A name ending in '.pak' is refused as well: the
+  filesystem mounts such a container ahead of the loose files of its
+  directory, so a `config.cfg` or `autoexec.cfg` inside it would be run
+  the same way. '..' or ':' inside filenames and '/' or '.'
   at the beginning of filenames to prevent downloading files into
   arbitrary directories.
 

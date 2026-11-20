@@ -143,11 +143,17 @@ TEST(download_filter_extension_table)
 		{"dir/x.cfg", true},
 		{"default.Cfg", true},
 		{"x.cfg.1", true},
+		/* a container the filesystem mounts, refused */
+		{"x.pak", true},
+		{"pak5.pak", true},
+		{"dir/X.PAK", true},
+		{"x.pak.1", true},
 		/* ordinary assets and cfg text elsewhere, accepted */
 		{"maps/x.bsp", false},
 		{"sound/x.wav", false},
 		{"players/x/y.pcx", false},
 		{"x.cfgs", false},
+		{"x.paks", false},
 		{"cfg/x.wav", false},
 		{"x.cfg.pcx", false},
 		/* the extension text inside a component, accepted */
@@ -201,6 +207,52 @@ TEST(download_filter_extension_table)
 				(int)table[i].refused);
 		}
 	}
+}
+
+static byte f159buf[512];
+
+/* A hostile server offers a pak holding autoexec.cfg: it must not be
+   downloaded, so the config is not run when the search path is rebuilt. */
+TEST(download_pak_cfg_never_runs)
+{
+	static byte pak[12 + 18 + 64];
+
+	memset(pak, 0, sizeof(pak));
+	memcpy(pak, "PACK", 4);
+	pak[4] = 30;
+	pak[8] = 64;
+	memcpy(pak + 12, "set f159probe pak\n", 18);
+	memcpy(pak + 30, "autoexec.cfg", 12);
+	pak[86] = 12;
+	pak[90] = 18;
+
+	/* a pak left by an earlier run would be mounted below */
+	FS_BuildGameSpecificSearchPath("t_f159");
+	Sys_Remove(va("%s/evil.pak", FS_Gamedir()));
+	FS_BuildGameSpecificSearchPath("t_f159");
+	Cbuf_Execute();
+	T_EQ_STR(Cvar_VariableString("f159probe"), "");
+
+	reset_client();
+	Cmd_TokenizeString("download evil.pak", false);
+	CL_Download_f();
+	T_EQ_INT(cls.netchan.message.cursize, 0);
+
+	/* A server that streams it anyway (the old behaviour) is shown up
+	   by the config running after the rebuild. */
+	if (cls.netchan.message.cursize != 0)
+	{
+		SZ_Init(&net_message, f159buf, sizeof(f159buf));
+		MSG_WriteShort(&net_message, sizeof(pak));
+		MSG_WriteByte(&net_message, 100);
+		SZ_Write(&net_message, pak, sizeof(pak));
+		MSG_BeginReading(&net_message);
+		CL_ParseDownload();
+	}
+
+	FS_BuildGameSpecificSearchPath("t_f159");
+	Cbuf_Execute();
+	T_EQ_STR(Cvar_VariableString("f159probe"), "");
 }
 
 TEST(download_filter_nodownload_list_and_existing)
