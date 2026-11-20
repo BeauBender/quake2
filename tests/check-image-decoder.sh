@@ -133,6 +133,7 @@ stopped()
 	trap - TERM INT
 	if [ -n "$dog" ]; then
 		kill "$dog" 2>/dev/null || :
+		wait "$dog" 2>/dev/null || :
 	fi
 	if [ -n "$run" ]; then
 		reap "$run" "$name" 2>&3
@@ -167,6 +168,8 @@ bounded()
 		fi
 	) < /dev/null > /dev/null 2>&1 3>&- &
 	dog=$!
+	# the self-test's hook (FIX150): where to record the watchdog's PID
+	[ -z "${IMGDEC_SELFTEST_DOGFILE:-}" ] || echo "$dog" >> "$IMGDEC_SELFTEST_DOGFILE"
 	rc=0
 	wait "$run" || rc=$?
 	run=
