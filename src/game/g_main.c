@@ -431,8 +431,19 @@ ExitLevel(void)
 	edict_t *ent;
 	char command[256];
 
-	Com_sprintf(command, sizeof(command), "gamemap \"%s\"\n", level.changemap);
-	gi.AddCommandString(command);
+	/* A level name only names a level: map data must not close the
+	   quote or end the command with ';' (the engine refuses line breaks). */
+	if (strpbrk(level.changemap, "\";\n\r") != NULL)
+	{
+		gi.dprintf("ExitLevel: refused level name with a quote, ';' or line break\n");
+	}
+	else
+	{
+		Com_sprintf(command, sizeof(command), "gamemap \"%s\"\n", level.changemap);
+		gi.AddCommandString(command);
+	}
+
+
 	level.changemap = NULL;
 	level.exitintermission = 0;
 	level.intermissiontime = 0;

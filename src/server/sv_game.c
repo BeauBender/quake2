@@ -446,6 +446,28 @@ GI_FreeTags(int tag)
 	Z_FreeTags((unsigned short)tag);
 }
 
+/*
+ * The game module's AddCommandString. Text from the game may hold a
+ * line break only as its last character: Cbuf_Execute splits lines at
+ * a newline even inside quotes, so a level name from map data that
+ * holds one (the "gamemap" ExitLevel builds from level.changemap)
+ * would start a new command. Such text is refused whole. The stock
+ * game sends "gamemap \"<name>\"\n" and "menu_loadgame\n", both fine.
+ */
+void
+SV_GameAddCommandString(const char *text)
+{
+	const char *nl = strpbrk(text, "\n\r");
+
+	if (nl != NULL && nl[1] != '\0')
+	{
+		Com_Printf("%s: refused command text with an embedded line break.\n", __func__);
+		return;
+	}
+
+	Cbuf_AddText(text);
+}
+
 void
 SV_InitGameProgs(void)
 {
@@ -507,7 +529,7 @@ SV_InitGameProgs(void)
 	import.argc = Cmd_Argc;
 	import.argv = Cmd_Argv;
 	import.args = Cmd_Args;
-	import.AddCommandString = Cbuf_AddText;
+	import.AddCommandString = SV_GameAddCommandString;
 
 #ifndef DEDICATED_ONLY
 	import.DebugGraph = SCR_DebugGraph;
