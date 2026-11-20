@@ -1341,6 +1341,47 @@ Hardware intersection (apple9) is used automatically when present for the
 compute path too; the apple6 to apple8 fallback is the software traverser
 Metal provides, no separate code path.
 
+### Adding an effect (TASK179)
+
+Every ray-traced effect is one row of the effect table,
+`src/client/refresh/metal/rm_rtfx.c`, and its own files (a pure part
+`rm_rt<x>.c` with its host test, a scene `rm_rt<x>scene.c`, a backend
+`rmb_rt<x>.m` and its kernels). A row names the effect, its switch (the
+cvar the gate above forces to 0: `rm_rtgate.c` classifies a name as an
+effect switch only when it is a row's, so the two cannot drift) and its
+entry points, `NULL` where the effect has none:
+
+| Entry | Called from | When |
+|---|---|---|
+| `init`, `shutdown` | `RM_RT_Init`, `RM_RT_FreeAll` (`rm_rtscene.c`) | the cvars at `RI_Init` (with the gate's `rtcaps`); the objects at shutdown |
+| `wanted` | `rm_rtscene.c` | whether the structures are built and the frame's scene kept |
+| `frame` | `RI_RenderFrame` (`rm_main.c`) | whether this frame traces the effect |
+| `active` | `RM_GB_Choose` (`rm_gbufscene.c`) | an effect on takes the G-buffer path |
+| `view`, `show_only` | `R_RenderViewGB` (`rm_main.c`) | the view handed over; a development view that drops the forward pass |
+| `mark` | `rmb_gbuf_resolve` (`rmb_gbuf.m`) | on the raster's last draw |
+| `trace` | the same | between the raster and the resolve; may replace the light the resolve reads |
+| `resolve`, `show` | the same | in the resolve's pass: the first effect that draws the resolve replaces the stock one; overlays after it |
+| `post` | the same | after the resolve, from its lit result, in a pass it opens through the walk's io |
+| `forward`, `bind` | `rmb_gbuf_pipe3d`, `rmb_gbuf_bind_motion` | a forward pipeline for the blended world face, and what it reads |
+| `view_end` | `rmb_gbuf_view_end`, `rmb_gbuf_frame_reset` | the view's passes ended |
+
+Every walk takes the rows in `rm_rtfx_order` (shadows, AO, sun, water: the
+sun adds its term to the AO's light, the water reads the resolve). The
+backend entries take one `rmb_rtfx_io_t` (defined in `rmb_internal.h`
+under `__OBJC__`, opaque to C), so each effect's `rmb_rt<x>.m` holds small
+wrappers over its own functions, declared in its header. The pipeline a 3D
+draw takes is `rm_rtfx_pipe`, pure C. `tests/metal/rm_rtfx_test.c` holds
+the order, the switches against the gate and that rule, and
+`tests/check-ref-metal.sh` refuses any effect's symbol (a prefix taken
+from the table's rows) named in `rm_main.c` or `rmb_gbuf.m`. Adding an
+effect is: its id in `header/rm_rtfx.h`, its row and its place in the
+order, its switch in the gate's sorted table, its files, and the Makefile
+lines for them. An effect that needs a hook the walks do not have also
+touches the scene files, as the shadows do: `RM_RTS_MapBuilt`,
+`RM_RTS_Wanted` and `rm_rts_carried` are called from `rm_rtscene.c` and
+`RM_RTS_Active` from `rm_gbufscene.c`, directly; the lint covers only
+`rm_main.c` and `rmb_gbuf.m`.
+
 ## 5. Verification with the pin harness
 
 1. **RT off keeps every gl1 pin.** The four scenarios in
