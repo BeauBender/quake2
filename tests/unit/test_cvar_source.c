@@ -28,6 +28,7 @@
 #include "test.h"
 #include "../../src/server/header/server.h"
 #include "../../src/client/header/upscale.h"
+#include "../../src/client/menu/header/vidrules.h"
 
 extern sizebuf_t cmd_text;      /* src/common/cmdparser.c */
 extern char defer_text_buf[];   /* src/common/cmdparser.c */
@@ -476,6 +477,46 @@ TEST(cvar_fix168_keeps_players_earlier_value)
 	T_CHECK(file_has(path, "set t_cs20 \"Q\""));
 	T_CHECK(!file_has(path, "\"P\""));
 
+	cs_teardown();
+}
+
+/* FIX168 step 4: the RT preset save writes no value a server wrote,
+   and writes the player's own. */
+TEST(cvar_fix168_rt_preset_save_skips_marked)
+{
+	char path[MAX_OSPATH], text[4096];
+	cvar_t *saved = cvar_vars;
+	size_t got;
+	FILE *f;
+
+	cs_setup();
+	cvar_vars = NULL;
+	Cvar_Get("r_rt_ao", "1", CVAR_ARCHIVE);
+	RTPreset_SetDir(t_tmpdir());
+	server_line("set r_rt_ao \"2\"\n");
+	T_CHECK(Cvar_ServerWrote("r_rt_ao"));
+
+	T_EQ_INT(RTPreset_Save("srv"), 1);
+	snprintf(path, sizeof(path), "%s/presets/rt-srv.cfg", t_tmpdir());
+	f = fopen(path, "r");
+	T_REQUIRE(f != NULL);
+	got = fread(text, 1, sizeof(text) - 1, f);
+	fclose(f);
+	text[got] = '\0';
+	T_CHECK(strstr(text, "r_rt_ao") == NULL);
+
+	/* the player's own write is saved */
+	player_line("set r_rt_ao \"3\"\n");
+	T_EQ_INT(RTPreset_Save("srv"), 1);
+	f = fopen(path, "r");
+	T_REQUIRE(f != NULL);
+	got = fread(text, 1, sizeof(text) - 1, f);
+	fclose(f);
+	text[got] = '\0';
+	T_CHECK(strstr(text, "set r_rt_ao \"3\"") != NULL);
+
+	RTPreset_SetDir(NULL);
+	cvar_vars = saved;
 	cs_teardown();
 }
 
