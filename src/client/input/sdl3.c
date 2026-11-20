@@ -621,6 +621,24 @@ static void IN_Controller_Shutdown(qboolean notify_user);
 static void IN_Probe_Frame(void);
 #endif
 
+#if defined(__APPLE__) && TARGET_OS_TV
+/*
+ * The tvOS simulator adds a gamepad of its own about a second after the
+ * start (TASK182): 'Gamepad', a game controller and not an SDL virtual
+ * joystick. IN_Controller_Init would open it before a controller that is
+ * really there. It is passed over while another gamepad is present, as
+ * the touch controls are, and a gamepad added while it is in use is
+ * looked at again. Alone it is still opened.
+ */
+static bool
+IN_IsTVSimulatorPad(SDL_JoystickID id)
+{
+	const char *name = SDL_GetJoystickNameForID(id);
+
+	return id && name && !strcmp(name, "Gamepad") && !SDL_IsJoystickVirtual(id);
+}
+#endif
+
 /*
  * Sets the gamepad buttons' style of labels (SDL, Xbox, PS, Switch).
  * They are only visible in the gamepad binding options.
@@ -1563,7 +1581,13 @@ IN_Update(void)
 					break;
 				}
 				// a physical device is preferred over the touch controls: look again
-				if (!controller || (touch_in_use && event.jdevice.which != touch_joy_id))
+				if (!controller || (touch_in_use && event.jdevice.which != touch_joy_id)
+#if defined(__APPLE__) && TARGET_OS_TV
+					/* and a gamepad over the tvOS simulator's own */
+					|| (IN_IsTVSimulatorPad(SDL_GetJoystickID(SDL_GetGamepadJoystick(controller)))
+						&& !IN_IsTVSimulatorPad(event.jdevice.which))
+#endif
+					)
 				{
 					// This should be lower, but some controllers just don't want to get detected by the OS
 					updates_countdown = 100;
@@ -3107,6 +3131,19 @@ IN_Controller_Init(qboolean notify_user)
 		}
 	}
 
+#if defined(__APPLE__) && TARGET_OS_TV
+	// and a gamepad over the tvOS simulator's own
+	bool other_pad = false;
+
+	for (i = 0; joysticks != NULL && i < numjoysticks; i++)
+	{
+		if (SDL_IsGamepad(joysticks[i]) && !IN_IsTVSimulatorPad(joysticks[i]))
+		{
+			other_pad = true;
+		}
+	}
+#endif
+
 	if (numjoysticks == 0)
 	{
 		joystick_haptic = SDL_OpenHapticFromMouse();
@@ -3134,6 +3171,14 @@ IN_Controller_Init(qboolean notify_user)
 			Com_Printf ("Skipping the touch controls, a gamepad is connected.\n");
 			goto next_joy;
 		}
+
+#if defined(__APPLE__) && TARGET_OS_TV
+		if (other_pad && IN_IsTVSimulatorPad(joysticks[i]))
+		{
+			Com_Printf ("Skipping joystick %d, the tvOS simulator's own gamepad: another gamepad is connected.\n", i+1);
+			goto next_joy;
+		}
+#endif
 
 		joystick = SDL_OpenJoystick(joysticks[i]);
 		if (!joystick)
