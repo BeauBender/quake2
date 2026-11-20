@@ -659,6 +659,14 @@ Cvar_WriteSafe(const char *name, const char *value)
 		return false;
 	}
 
+	/* Cbuf_Execute truncates a line of 1024 bytes or more, so the
+	   read-back would run no set. The line is "set ", the name, a
+	   space, a quote, the value, a quote and the newline. */
+	if (strlen(name) + strlen(value) + 8 >= 1024)
+	{
+		return false;
+	}
+
 	for (c = (const unsigned char *)name; *c; c++)
 	{
 		if (*c <= ' ' || *c >= 0x7f || *c == ';' || *c == '"' || *c == '$')
