@@ -39,6 +39,7 @@
 #include <stddef.h>
 
 #include "rmb.h"
+#include "rm_rtfx.h"
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_rts_math.h"
 
@@ -306,6 +307,10 @@ void rmb_rts_set_view(const rm_rts_view_t *v, const rm_rts_light_t *lights, int 
 
 /* the stats of the frames whose pass completed since the last call, at most cap; their number */
 int rmb_rts_stats(rm_rts_stats_t *s, int cap);
+
+/* TASK179: the effect table's backend rows (rm_rtfx.c): rmb_rts_trace and rmb_rts_resolve over the walk's io */
+void rmb_rts_fx_trace(rmb_rtfx_io_t *io);
+int rmb_rts_fx_resolve(rmb_rtfx_io_t *io);
 
 #ifdef __OBJC__
 /*

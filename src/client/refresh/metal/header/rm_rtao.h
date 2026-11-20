@@ -40,6 +40,7 @@
 #include <stddef.h>
 
 #include "rmb.h"
+#include "rm_rtfx.h"
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_rtao_math.h"
 
@@ -181,6 +182,10 @@ void rmb_rtao_set_view(const rm_rtao_view_t *v);
 
 /* the stats of the frames whose pass completed since the last call, at most cap; their number */
 int rmb_rtao_stats(rm_rtao_stats_t *s, int cap);
+
+/* TASK179: the effect table's backend rows (rm_rtfx.c): rmb_rtao_trace, its light in io's place, and rmb_rtao_show */
+void rmb_rtao_fx_trace(rmb_rtfx_io_t *io);
+void rmb_rtao_fx_show(rmb_rtfx_io_t *io);
 
 #ifdef __OBJC__
 /*

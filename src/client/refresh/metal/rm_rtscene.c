@@ -37,6 +37,7 @@
 #include "header/rm_rtaoscene.h"
 #include "header/rm_rtsunscene.h"
 #include "header/rm_rtwaterscene.h"
+#include "header/rm_rtfx.h"
 
 #define RT_MAX_AMODELS 512   /* rm_model.c's MAX_MOD_KNOWN */
 #define RT_TIMES 8192        /* the frames whose GPU times the summary spreads */
@@ -88,10 +89,7 @@ RM_RT_Init(const rmb_caps_t *caps)
 	memset(rt_amodels, 0, sizeof(rt_amodels));
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
 	rt_scene_ready = 0;
-	RM_RTS_Init(caps);   /* r_rt_shadows (RT3, TASK55) */
-	RM_RTAO_Init(caps);  /* r_rt_ao (RT5, TASK57) */
-	RM_RTSun_Init(caps); /* r_rt_sun (RT4, TASK56) */
-	RM_RTW_Init(caps);   /* r_rt_water (RT6, TASK58) */
+	rm_rtfx_init(caps);   /* each ray-traced effect's cvars, in the table's order (rm_rtfx.c, TASK179) */
 }
 
 /* the summary of the frames since the map's structures were built, when there were any; the counts start again */
@@ -120,10 +118,7 @@ static void
 RM_RT_FreeAll(void)
 {
 	RM_RT_Summary();
-	RM_RTS_Shutdown();   /* the shadows' objects first: they use the structures */
-	RM_RTAO_Shutdown();  /* and the AO's (RT5) */
-	RM_RTSun_Shutdown(); /* and the sun's (RT4) */
-	RM_RTW_Shutdown();   /* and the water's (RT6) */
+	rm_rtfx_shutdown();   /* each effect's objects first, in the table's order: they use the structures */
 
 	if (rt_opened)
 	{
@@ -196,8 +191,7 @@ RM_RT_ModelFree(const model_t *mod)
 static int
 RM_RT_Wanted(void)
 {
-	return (r_rt_stats && rm_rt_wanted(r_rt_stats->value, rt_device)) || RM_RTS_Wanted() || RM_RTAO_Wanted() ||
-		RM_RTW_Wanted() || RM_RTSun_Wanted();
+	return (r_rt_stats && rm_rt_wanted(r_rt_stats->value, rt_device)) || rm_rtfx_wanted();
 }
 
 int
@@ -568,8 +562,7 @@ RM_RT_Frame(const refdef_t *fd)
 	fs.alias_ms = fs.ias_ms = -1;
 
 	/* the frame's scene kept for the ray queries of RT3's shadows, RT4's sun, RT5's AO and RT6's reflections */
-	if (!rmb_rt_frame(inst, n, lerps, nl, RM_RTS_Wanted() || RM_RTAO_Wanted() || RM_RTW_Wanted() || RM_RTSun_Wanted(),
-			&fs))
+	if (!rmb_rt_frame(inst, n, lerps, nl, rm_rtfx_wanted(), &fs))
 	{
 		return;
 	}

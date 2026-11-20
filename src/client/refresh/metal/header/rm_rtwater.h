@@ -45,6 +45,7 @@
 #include <stddef.h>
 
 #include "rmb.h"
+#include "rm_rtfx.h"
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_gbuf_math.h"
 #include "../common/mtl_rtao_math.h"
@@ -290,6 +291,17 @@ void rmb_rtw_set_textures(const int *tids, int n, int lmtex, const int *sky);
 
 /* TASK158: the dynamic lights the lightmaps left out, 8 floats each (origin, intensity, colour, 0), at most MTL_RTS_MAX_LIGHTS */
 void rmb_rtw_set_lights(const float *l, int n);
+
+/*
+ * TASK179: the effect table's backend rows (rm_rtfx.c): rmb_rtw_mark on
+ * io's raster; rmb_rtw_trace, then rmb_rtw_blend in the pass io opens;
+ * rmb_rtw_forward_pipe put in io (1 when there is one); rmb_rtw_bind_forward
+ * on io's encoder. rmb_rtw_view_end is the row's view end as it is.
+ */
+void rmb_rtw_fx_mark(rmb_rtfx_io_t *io);
+void rmb_rtw_fx_post(rmb_rtfx_io_t *io);
+int rmb_rtw_fx_forward(rmb_rtfx_io_t *io);
+void rmb_rtw_fx_bind(rmb_rtfx_io_t *io);
 
 #ifdef __OBJC__
 /*

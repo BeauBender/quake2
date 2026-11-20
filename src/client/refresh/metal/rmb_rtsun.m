@@ -446,3 +446,23 @@ rmb_rtsun_show(id<MTLRenderCommandEncoder> enc)
 	rmb_counts.draws++;
 	return 1;
 }
+
+/* ---- TASK179: the effect table's rows (rm_rtfx.c) ---------------------------------- */
+
+/* the sun's term added to the light the resolve would read (after the AO's); its floor gate reads the lightmap */
+void
+rmb_rtsun_fx_trace(rmb_rtfx_io_t *io)
+{
+	id<MTLTexture> sl = rmb_rtsun_trace(io->depth, io->normal, io->material, io->lightmap, io->light);
+
+	if (sl)
+	{
+		io->light = sl;
+	}
+}
+
+void
+rmb_rtsun_fx_show(rmb_rtfx_io_t *io)
+{
+	rmb_rtsun_show(io->enc);
+}
