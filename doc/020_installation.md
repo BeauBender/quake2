@@ -435,17 +435,22 @@ Apple TV. Shown in the simulator, with a test build's virtual controller:
 the left stick moves, the right stick turns and the menu button (options,
 start) opens and closes the game menu; the Siri Remote drives the menus
 (below). A fresh start also binds the rest of the controller from the
-default table, which is unit-tested but not yet shown working in the
-simulator (the right trigger firing among them): the right trigger to
-attack, A (cross) to jump, B (circle) to crouch, Y (triangle) and the right
+default table, which is unit-tested: the right trigger to attack, A
+(cross) to jump, B (circle) to crouch, Y (triangle) and the right
 shoulder to the next weapon, the left shoulder to the previous one, X
 (square) to use the selected item and the view button to the inventory.
-A binding that is already there, and every binding once a `config.cfg`
-exists, is kept. In the menus the d-pad or the left stick moves, A selects
-and B goes back. On the key and controller binding screens select waits
-for the new key, as on every platform: in the tvOS simulator the walk of
-the menus enters bind mode on every binding item, and back (Escape)
-leaves it without binding anything.
+In the simulator, with the test build's controller, each of those but X
+is shown firing (*docs/runbook/TASK23.md*). A binding that is already
+there, and every binding once a `config.cfg` exists, is kept. In the
+menus the d-pad or the left stick moves, A selects and B goes back. On
+the key and controller binding screens select waits for the new key, as
+on every platform: in the tvOS simulator the walk of the menus enters
+bind mode on every binding item, a controller button binds it, and back
+(Escape) leaves it without binding anything.
+
+The tvOS simulator adds a controller of its own, named `Gamepad`, about
+a second after the start. The engine opens it only when no other
+controller is connected, and turns to a controller connected later.
 
 The Siri Remote drives the menus as keys: a click on the up, down, left
 or right edge of its touch surface (the ring on the second generation)
