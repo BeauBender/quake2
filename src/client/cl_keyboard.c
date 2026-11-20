@@ -52,10 +52,7 @@ int edit_line = 0;
 int history_line = 0;
 
 int key_waiting;
-char *keybindings[K_LAST];
-/* if true, a server line wrote keybindings[] for this key (FIX156): a
-   press queues it as server text and config.cfg leaves it out */
-static qboolean keybindserver[K_LAST];
+/* keybindings[] and who wrote each binding are in keybind.c (FIX156) */
 qboolean consolekeys[K_LAST]; /* if true, can't be rebound while in console */
 qboolean menubound[K_LAST]; /* if true, can't be rebound while in menu */
 int key_repeats[K_LAST]; /* if > 1, it is autorepeating */
@@ -944,66 +941,6 @@ exit_sdl:
 	return gamepadbtns[key - K_JOY_FIRST_BTN];
 }
 
-/*
- * A binding a server line writes is the server's (FIX156), as an alias
- * is (Cmd_Alias_f): pressing the key picks when it runs, the server
- * picked what, so Key_Event queues it as server text and a command that
- * refuses a server's use refuses it. Key_WriteBindings leaves it out of
- * config.cfg, which the next start runs as the player's text. The
- * player's text binding the key again makes it the player's; a server
- * line that writes the binding the key already has leaves its owner as
- * it was, so a server that runs the player's own configuration again
- * does not take over the player's keys.
- */
-void
-Key_SetBinding(int keynum, char *binding)
-{
-	char *new;
-	int l;
-	qboolean server;
-
-	if (keynum == -1)
-	{
-		return;
-	}
-
-	server = Cbuf_ExecutingServerText();
-
-	/* free old bindings */
-	if (keybindings[keynum])
-	{
-		if (server && !strcmp(keybindings[keynum], binding))
-		{
-			server = keybindserver[keynum];
-		}
-
-		Z_Free(keybindings[keynum]);
-		keybindings[keynum] = NULL;
-	}
-
-	/* allocate memory for new binding */
-	l = strlen(binding);
-	new = Z_Malloc(l + 1);
-	strcpy(new, binding);
-	new[l] = 0;
-	keybindings[keynum] = new;
-	keybindserver[keynum] = server;
-}
-
-/* Queues text from key's binding, as the server's if a server wrote it */
-static void
-Key_AddBindingText(int key, const char *text)
-{
-	if (keybindserver[key])
-	{
-		Cbuf_AddServerText(text);
-	}
-	else
-	{
-		Cbuf_AddText(text);
-	}
-}
-
 static void
 Key_Unbind_f(void)
 {
@@ -1029,15 +966,7 @@ Key_Unbind_f(void)
 static void
 Key_Unbindall_f(void)
 {
-	int i;
-
-	for (i = 0; i < K_LAST; i++)
-	{
-		if (keybindings[i])
-		{
-			Key_SetBinding(i, "");
-		}
-	}
+	Key_UnbindAll();
 }
 
 /* ugly hack, set in Cmd_ExecuteString() when yq2.cfg is executed
@@ -1156,22 +1085,12 @@ Key_DefaultPadBinds(void)
 void
 Key_WriteBindings(FILE *f)
 {
-	int i;
-
 	if (cfg_unbindall->value)
 	{
 		fprintf(f, "unbindall\n");
 	}
 
-	for (i = 0; i < K_LAST; i++)
-	{
-		/* a server's binding would come back as the player's text */
-		if (keybindings[i] && keybindings[i][0] && !keybindserver[i])
-		{
-			fprintf(f, "bind %s \"%s\"\n",
-					Key_KeynumToString(i), keybindings[i]);
-		}
-	}
+	Key_WriteBindingLines(f);
 }
 
 void
@@ -1370,15 +1289,7 @@ Key_Init(void)
 void
 Key_Shutdown(void)
 {
-	int i;
-	for (i = 0; i < K_LAST; ++i)
-	{
-		if (keybindings[i])
-		{
-			Z_Free(keybindings[i]);
-			keybindings[i] = NULL;
-		}
-	}
+	Key_FreeBindings();
 }
 
 /*
