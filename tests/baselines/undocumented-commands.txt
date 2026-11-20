@@ -52,7 +52,6 @@ download
 drop
 dumpuser
 echo
-exec
 force_centerview
 gamemap
 give
@@ -105,7 +104,6 @@ modellist
 noclip
 notarget
 packet
-path
 pause
 pingservers
 precache
@@ -142,7 +140,6 @@ unbindall
 userinfo
 vid_listmodes
 vid_restart
-wait
 wave
 weapnext
 weapprev

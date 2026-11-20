@@ -617,6 +617,30 @@ IN_TranslateScancodeToQ2Key(SDL_Scancode sc)
 
 static void IN_Controller_Init(qboolean notify_user);
 static void IN_Controller_Shutdown(qboolean notify_user);
+#ifdef YQ2_INPUT_PROBE
+static void IN_Probe_Frame(void);
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_TV
+/*
+ * The tvOS simulator adds a gamepad of its own about a second after the
+ * start (TASK182): a GCController named 'Gamepad' that SDL's MFi driver
+ * reports as vendor 0x05ac (Apple) and product 4, its id for a controller
+ * it reads through the generic input profile, with no path, and not as an
+ * SDL virtual joystick. IN_Controller_Init would open it before a
+ * controller that is really there. It is passed over while another
+ * gamepad is present, as the touch controls are, and a gamepad added
+ * while it is in use is looked at again. Alone it is still opened.
+ */
+static bool
+IN_IsTVSimulatorPad(SDL_JoystickID id)
+{
+	const char *name = SDL_GetJoystickNameForID(id);
+
+	return id && name && !strcmp(name, "Gamepad") && !SDL_IsJoystickVirtual(id)
+		&& SDL_GetJoystickVendorForID(id) == 0x05ac && SDL_GetJoystickProductForID(id) == 4;
+}
+#endif
 
 /*
  * Sets the gamepad buttons' style of labels (SDL, Xbox, PS, Switch).
@@ -1560,7 +1584,13 @@ IN_Update(void)
 					break;
 				}
 				// a physical device is preferred over the touch controls: look again
-				if (!controller || (touch_in_use && event.jdevice.which != touch_joy_id))
+				if (!controller || (touch_in_use && event.jdevice.which != touch_joy_id)
+#if defined(__APPLE__) && TARGET_OS_TV
+					/* and a gamepad over the tvOS simulator's own */
+					|| (IN_IsTVSimulatorPad(SDL_GetJoystickID(SDL_GetGamepadJoystick(controller)))
+						&& !IN_IsTVSimulatorPad(event.jdevice.which))
+#endif
+					)
 				{
 					// This should be lower, but some controllers just don't want to get detected by the OS
 					updates_countdown = 100;
@@ -1693,6 +1723,10 @@ IN_Update(void)
 		IN_GamepadTrigger_Changed();
 	}
 	IN_CheckGyroModified();
+
+#ifdef YQ2_INPUT_PROBE
+	IN_Probe_Frame();
+#endif
 
 	if (touch_joy)
 	{
@@ -3100,6 +3134,19 @@ IN_Controller_Init(qboolean notify_user)
 		}
 	}
 
+#if defined(__APPLE__) && TARGET_OS_TV
+	// and a gamepad over the tvOS simulator's own
+	bool other_pad = false;
+
+	for (i = 0; joysticks != NULL && i < numjoysticks; i++)
+	{
+		if (SDL_IsGamepad(joysticks[i]) && !IN_IsTVSimulatorPad(joysticks[i]))
+		{
+			other_pad = true;
+		}
+	}
+#endif
+
 	if (numjoysticks == 0)
 	{
 		joystick_haptic = SDL_OpenHapticFromMouse();
@@ -3127,6 +3174,14 @@ IN_Controller_Init(qboolean notify_user)
 			Com_Printf ("Skipping the touch controls, a gamepad is connected.\n");
 			goto next_joy;
 		}
+
+#if defined(__APPLE__) && TARGET_OS_TV
+		if (other_pad && IN_IsTVSimulatorPad(joysticks[i]))
+		{
+			Com_Printf ("Skipping joystick %d, the tvOS simulator's own gamepad: another gamepad is connected.\n", i+1);
+			goto next_joy;
+		}
+#endif
 
 		joystick = SDL_OpenJoystick(joysticks[i]);
 		if (!joystick)
@@ -3303,9 +3358,85 @@ IN_MatchJoyPreset(void)
  *   in_probe pads                 lists the joysticks SDL has, and which
  *                                 one is the engine's gamepad
  *   in_probe state                prints where input goes, the player's
- *                                 origin, view angles and gun frame
+ *                                 origin, view angles, gun, crouch and
+ *                                 layouts, the right trigger as the
+ *                                 engine reads it and what the command
+ *                                 buffer still holds
+ *   in_probe mark                 keeps those values; "in_probe expect
+ *                                 <field>" then says whether one changed
+ *                                 (gunframe, gun, duck, z, layouts, dest,
+ *                                 ammo)
+ *   in_probe bound <key>          prints a key's binding
+ *   in_probe script <file>        runs a file one line a frame (TASK182)
+ *
+ * A key's bound command is appended to the end of the command buffer
+ * (Key_Event), and "wait" leaves the rest of an exec'd file in the
+ * buffer: a press inside an exec'd file with waits after it runs its
+ * command only after the whole file. "script" feeds a line only when the
+ * buffer is empty, so a press's command runs in the frame after it, as
+ * when a person presses it; "wait <n>" there counts n frames.
  */
+extern sizebuf_t cmd_text; /* src/common/cmdparser.c */
+
 static SDL_Joystick *probe_joy;
+static char *probe_script, *probe_next;
+static int probe_frames;
+static int probe_mark[7];
+
+static void
+IN_Probe_Values(int *v)
+{
+	v[0] = cl.frame.playerstate.gunframe;
+	v[1] = cl.frame.playerstate.gunindex;
+	v[2] = (cl.frame.playerstate.pmove.pm_flags & PMF_DUCKED) != 0;
+	v[3] = cl.frame.playerstate.pmove.origin[2] / 8;
+	v[4] = cl.frame.playerstate.stats[STAT_LAYOUTS];
+	v[5] = cls.key_dest;
+	v[6] = cl.frame.playerstate.stats[STAT_AMMO];
+}
+
+/* called once a frame from IN_Update */
+static void
+IN_Probe_Frame(void)
+{
+	char line[256];
+	size_t n;
+
+	if (!probe_next || cmd_text.cursize)
+	{
+		return;
+	}
+
+	if (probe_frames > 0)
+	{
+		probe_frames--;
+		return;
+	}
+
+	probe_next += strspn(probe_next, "\r\n");
+
+	if (!*probe_next)
+	{
+		Com_Printf("in_probe: script done\n");
+		free(probe_script);
+		probe_script = probe_next = NULL;
+		return;
+	}
+
+	n = strcspn(probe_next, "\r\n");
+	Q_strlcpy(line, probe_next, n + 1 < sizeof(line) ? n + 1 : sizeof(line));
+	probe_next += n;
+
+	if (!strncmp(line, "wait", 4) && (line[4] == ' ' || !line[4]))
+	{
+		probe_frames = line[4] ? (int)strtol(line + 5, NULL, 10) : 1;
+	}
+	else if (line[0] && strncmp(line, "//", 2))
+	{
+		Cbuf_AddText(line);
+		Cbuf_AddText("\n");
+	}
+}
 
 static void
 IN_Probe_f(void)
@@ -3409,23 +3540,127 @@ IN_Probe_f(void)
 		{
 			const char *name = SDL_GetJoystickNameForID(ids[i]);
 
+			const char *path = SDL_GetJoystickPathForID(ids[i]);
+			char guid[33];
+			SDL_Joystick *j = SDL_GetJoystickFromID(ids[i]);
+			SDL_Joystick *o = j ? NULL : SDL_OpenJoystick(ids[i]);
+
+			SDL_GUIDToString(SDL_GetJoystickGUIDForID(ids[i]), guid, sizeof(guid));
 			Com_Printf("in_probe: joystick %d, id %u, '%s', gamepad %d, virtual %d%s%s\n", i + 1,
 					(unsigned)ids[i], name ? name : "", SDL_IsGamepad(ids[i]), SDL_IsJoystickVirtual(ids[i]),
 					ids[i] == used ? ", the engine's gamepad" : "", ids[i] == mine ? ", the probe's pad" : "");
+			Com_Printf("in_probe:   vendor 0x%04x, product 0x%04x, version 0x%04x, guid %s, type %d, "
+					"gamepad type '%s', path '%s', buttons %d, axes %d, hats %d, connection %d\n",
+					SDL_GetJoystickVendorForID(ids[i]), SDL_GetJoystickProductForID(ids[i]),
+					SDL_GetJoystickProductVersionForID(ids[i]), guid, (int)SDL_GetJoystickTypeForID(ids[i]),
+					SDL_GetGamepadStringForType(SDL_GetGamepadTypeForID(ids[i])), path ? path : "",
+					SDL_GetNumJoystickButtons(j ? j : o), SDL_GetNumJoystickAxes(j ? j : o),
+					SDL_GetNumJoystickHats(j ? j : o), (int)SDL_GetJoystickConnectionState(j ? j : o));
+
+			if (o)
+			{
+				SDL_CloseJoystick(o);
+			}
 		}
 
 		SDL_free(ids);
 	}
 	else if (!strcmp(what, "state"))
 	{
-		Com_Printf("in_probe: key_dest %d, origin %d %d %d, angles %.0f %.0f, gunframe %d\n",
+		int gun = cl.frame.playerstate.gunindex;
+
+		Com_Printf("in_probe: key_dest %d, origin %d %d %d, angles %.0f %.0f, gunframe %d, gun %d '%s', duck %d, "
+				"layouts %d, ammo %d, trigger axis %d, TRIG_RIGHT %s, buffer %d bytes\n",
 				cls.key_dest, cl.frame.playerstate.pmove.origin[0] / 8,
 				cl.frame.playerstate.pmove.origin[1] / 8, cl.frame.playerstate.pmove.origin[2] / 8,
-				cl.viewangles[PITCH], cl.viewangles[YAW], cl.frame.playerstate.gunframe);
+				cl.viewangles[PITCH], cl.viewangles[YAW], cl.frame.playerstate.gunframe, gun,
+				gun > 0 && gun < MAX_MODELS ? cl.configstrings[CS_MODELS + gun] : "",
+				(cl.frame.playerstate.pmove.pm_flags & PMF_DUCKED) != 0,
+				cl.frame.playerstate.stats[STAT_LAYOUTS], cl.frame.playerstate.stats[STAT_AMMO],
+				controller ? SDL_GetGamepadAxis(controller, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) : 0,
+				keydown[K_TRIG_RIGHT] ? "down" : "up", (int)cmd_text.cursize);
+	}
+	else if (!strcmp(what, "mark"))
+	{
+		IN_Probe_Values(probe_mark);
+		Com_Printf("in_probe: mark\n");
+	}
+	else if (!strcmp(what, "expect"))
+	{
+		static const char *fields[7] = {"gunframe", "gun", "duck", "z", "layouts", "dest", "ammo"};
+		int v[7], i;
+
+		IN_Probe_Values(v);
+
+		for (i = 0; i < 7 && strcmp(Cmd_Argv(2), fields[i]); i++)
+		{
+		}
+
+		if (i == 7)
+		{
+			Com_Printf("in_probe: no field '%s'\n", Cmd_Argv(2));
+		}
+		else if (v[i] != probe_mark[i])
+		{
+			Com_Printf("in_probe: expect %s %s: ok, %d -> %d\n", fields[i], Cmd_Argv(3), probe_mark[i], v[i]);
+		}
+		else
+		{
+			Com_Printf("in_probe: expect %s %s: FAIL, unchanged at %d\n", fields[i], Cmd_Argv(3), v[i]);
+		}
+	}
+	else if (!strcmp(what, "bound"))
+	{
+		int k;
+
+		for (k = 0; k < K_LAST && Q_stricmp(Key_KeynumToString(k), Cmd_Argv(2)); k++)
+		{
+		}
+
+		if (k == K_LAST)
+		{
+			Com_Printf("in_probe: no key '%s'\n", Cmd_Argv(2));
+			return;
+		}
+
+		Com_Printf("in_probe: %s bound to \"%s\"\n", Cmd_Argv(2), keybindings[k] ? keybindings[k] : "");
+	}
+	else if (!strcmp(what, "script"))
+	{
+		char *buf;
+		int len = FS_LoadFile((char *)Cmd_Argv(2), (void **)&buf);
+
+		char *script;
+
+		if (len < 0 || !(script = malloc(len + 1)))
+		{
+			if (len >= 0)
+			{
+				FS_FreeFile(buf);
+			}
+
+			Com_Printf("in_probe: no script '%s'\n", Cmd_Argv(2));
+			return;
+		}
+
+		free(probe_script);
+		probe_script = script;
+
+		if (len > 0)
+		{
+			memcpy(probe_script, buf, len);
+		}
+
+		probe_script[len] = 0;
+		FS_FreeFile(buf);
+		probe_next = probe_script;
+		probe_frames = 0;
+		Com_Printf("in_probe: script %s, %d bytes\n", Cmd_Argv(2), len);
 	}
 	else
 	{
-		Com_Printf("Usage: in_probe pad|pads|button <name> <0|1>|axis <name> <value>|key <name> <0|1>|state\n");
+		Com_Printf("Usage: in_probe pad|pads|button <name> <0|1>|axis <name> <value>|key <name> <0|1>|state|"
+				"mark|expect <field> <what>|bound <key>|script <file>\n");
 	}
 }
 #endif
