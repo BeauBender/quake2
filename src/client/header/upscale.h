@@ -362,7 +362,9 @@ int CL_UpscaleCachedInGitTree(upscale_gitcache_t *cache, const char *dir,
 int CL_UpscalePathInGitTree(upscale_gitcache_t *cache, const char *path);
 
 /*
- * 1 when the command may run: no demo plays (demo, cl.attractloop), and
+ * 1 when the command may run: no demo plays (demo, cl.attractloop, nor
+ * a local server in ss_demo, which `map x.dm2` starts with attractloop
+ * 0 and whose demo sets cl.attractloop itself; FIX151), and
  * the client is not connected to a server or is connected to the local
  * one. This stops the command when a connected remote server or a demo
  * sends it as stufftext. Stufftext is not filtered (by design); a
