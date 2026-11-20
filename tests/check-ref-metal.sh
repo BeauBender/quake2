@@ -273,8 +273,9 @@ fi
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)
 rtl=""
-# shellcheck disable=SC2086 # flags is a word list
-if ! $cc $flags -o "${tmp:?}/rm_rtlights_test" tests/metal/rm_rtlights_test.c "$rm_dir/rm_rtlights.c" -lm \
+# no -fwrapv here: the lights parser must not overflow a signed integer, and UBSAN reports it only without it
+# shellcheck disable=SC2086 # psan is a word list
+if ! $cc -std=gnu99 -Wall -Wextra -Werror -g -O1 -fno-strict-aliasing ${psan:-} -o "${tmp:?}/rm_rtlights_test" tests/metal/rm_rtlights_test.c "$rm_dir/rm_rtlights.c" -lm \
 	> "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
 	bad "tests/metal/rm_rtlights_test.c does not compile"

@@ -25,7 +25,10 @@
  *   light at spawn);
  * - the SURF_LIGHT faces from the raw texinfo and faces lumps (the loaded
  *   mtexinfo_t drops the texinfo value), each distinct texture's average
- *   colour read once from its .wal through the palette, as qrad3 takes it.
+ *   colour read once from its .wal through the palette: the raw texel mean,
+ *   0.5 for a texture that cannot be read. (qrad3 normalizes the mean and
+ *   doubles it when small, and leaves an unread texture at 0; whether
+ *   PM6 follows it is open.)
  *   The texels the image loader had are freed after the upload, so this
  *   is one read of textures/<name>.wal a distinct emitter texture, the
  *   path Mod_LoadTexinfo already loads;

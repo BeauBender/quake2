@@ -34,16 +34,35 @@ data the ray-traced presentation will light the world with is gathered at map lo
 - **Emitters**: the faces whose texinfo has `SURF_LIGHT`, no `SURF_SKY` (the sky is its own term) and a
   value above 0. They come from the raw texinfo and faces lumps, because the loaded `mtexinfo_t` drops the
   value. The texinfo value is the intensity. Each distinct texture name has one slot in a per-texture
-  cache (at most 1024). The slot holds the texture's average colour through the palette, as qrad3 takes
-  it. The texels the image loader had are freed after the upload, so the colour comes from one read of
+  cache (at most 1024). The slot holds the texture's average colour through the palette: the raw
+  texel mean, not qrad3's normalized and doubled value. The texels the image loader had are freed after the upload, so the colour comes from one read of
   `textures/<name>.wal` for each distinct emitter texture. That is the path `Mod_LoadTexinfo` already loads.
   The header and the body are checked against the file's length. A texture that cannot be read keeps
-  qrad3's grey 0.5 and is counted `unread`.
+  the grey 0.5 and is counted `unread` (qrad3 leaves such a texture at 0, except texinfo 0).
 - **The sky colour**: `ref_metal` holds the six sky images, not a `SURF_SKY` texture's texels. The colour is
   the mean of the faces' means as uploaded (`image_t.mean`, TASK56).
 - **The hooks**: `rm_rtdata.c` is called from the end of `Mod_LoadBrushModel` and from
   `RI_EndRegistration`, where the sky is set. Both return at once while `r_rt_stats` is 0. So the stock path
   runs none of it, and no scenario in `scripts/pins/scenarios/` sets `r_rt_stats`.
+
+## PM6 decides
+
+Choices the data makes that PM6 should settle knowingly, since nothing consumes the data yet:
+
+- **The emitter colour.** The value stored is the raw texel mean, 0.5 for an unread texture. qrad3
+  normalizes the mean and doubles it when its scale is under 0.5, and leaves an unread texture at 0. Which
+  to use as emission is open.
+- **Empty values.** `"light" ""` and `"_color" ""` drop the whole light here; qrad3 reads them as `atof` 0
+  (so 300) and as white.
+- **A short `_color`.** `"_color" "1 1"` drops the light; qrad3's `sscanf` would keep two channels.
+- **A spotlight with a missing target.** It points down (0 0 -1); qrad3 leaves its normal at zero, so its
+  cone test lights nothing.
+- **A fractional `_style`.** One such as 0.5 wins over `style` here; qrad3 truncates `_style` to an int
+  before its `!dl->style` fallback.
+
+A cached world reload (`flushmap 0`, or `r_rt_stats` turned on and the same map loaded again) prints no
+`rt-data` line: the model cache keeps the world, so `Mod_LoadBrushModel` and the hook do not run. This
+affects the stats line only.
 
 ## The host test
 
@@ -73,6 +92,20 @@ float range unchecked: exit 1: FAIL tests/metal/rm_rtlights_test.c:276: | rm_rtl
 green:
 rm_rtlights_test: 160 checks, 0 failed
 ```
+
+Round 2 added `test_texture_cap` (1100 distinct emitter textures), `test_emitter_cap` (one face past
+`RM_RTL_MAX_EMITTERS`) and the all-zero `_color` check, 170 checks in all. Each fails on a scratch copy with
+its guard removed:
+
+```
+texture cap deleted: ERROR: AddressSanitizer: global-buffer-overflow
+emitter cap deleted: runtime error: index 65536 out of bounds for type 'rm_rtl_emit_t[65536]'
+all-zero colour divided by its max: FAIL rm_rtlights_test.c:148 | rm_rtlights_test: 170 checks, 1 failed
+real: rm_rtlights_test: 170 checks, 0 failed
+```
+
+The host test is built without `-fwrapv` (the other host tests keep it), so UBSAN reports signed overflow
+in `rm_rtlights.c`.
 
 ## The counts on this Mac (the owner's game data)
 

@@ -143,6 +143,10 @@ test_defaults(void)
 	CHECK(a->style == 0 && L.styled == 0);
 	CHECK(NEAR(a->color[0], 0.5) && NEAR(a->color[1], 1) && NEAR(a->color[2], 0.25));
 
+	/* an all-zero colour is left as given: no division by its largest channel, no NaN */
+	CHECK(parse("{ \"classname\" \"light\" \"_color\" \"0 0 0\" }") == RM_RTL_OK && L.nlights == 1);
+	CHECK(NEAR(a->color[0], 0) && NEAR(a->color[1], 0) && NEAR(a->color[2], 0));
+
 	CHECK(parse("{ \"classname\" \"light\" \"style\" \"-1\" }") == RM_RTL_OK && L.light[0].style == 0);
 
 	/* a light_spot with no target is aimed by its angle, with the default cone */
@@ -454,6 +458,51 @@ test_emitters(void)
 }
 
 static void
+test_texture_cap(void)
+{
+	/* more distinct emitter textures than the cache holds: a crafted BSP may have 8192 texinfos */
+	enum { N = RM_RTL_MAX_TEXTURES + 76 };
+	static unsigned char ti[N * RM_RTL_TEXINFO_SIZE], fa[N * RM_RTL_FACE_SIZE];
+	char name[RM_RTL_TEXNAME + 1];
+	int i;
+
+	for (i = 0; i < N; i++)
+	{
+		snprintf(name, sizeof(name), "e/l%d", i);
+		texinfo(ti, i, RM_RTL_SURF_LIGHT, 1, name);
+		face(fa, i, i);
+	}
+
+	rm_rtl_emitters(ti, sizeof(ti), fa, sizeof(fa), &E);
+	CHECK(E.n == N);
+	CHECK(E.ntex == RM_RTL_MAX_TEXTURES);
+	CHECK(E.tex_over == N - RM_RTL_MAX_TEXTURES);
+	CHECK(E.emit[RM_RTL_MAX_TEXTURES - 1].tex == RM_RTL_MAX_TEXTURES - 1);
+	CHECK(E.emit[N - 1].tex == -1);
+}
+
+static void
+test_emitter_cap(void)
+{
+	/* one face too many on one emitting texinfo: the list stops at the cap */
+	enum { N = RM_RTL_MAX_EMITTERS + 1 };
+	static unsigned char ti[RM_RTL_TEXINFO_SIZE], fa[N * RM_RTL_FACE_SIZE];
+	int i;
+
+	texinfo(ti, 0, RM_RTL_SURF_LIGHT, 5, "e/cap");
+
+	for (i = 0; i < N; i++)
+	{
+		face(fa, i, 0);
+	}
+
+	rm_rtl_emitters(ti, sizeof(ti), fa, sizeof(fa), &E);
+	CHECK(E.n == RM_RTL_MAX_EMITTERS);
+	CHECK(E.ntex == 1);
+	CHECK(E.emit[RM_RTL_MAX_EMITTERS - 1].face == RM_RTL_MAX_EMITTERS - 1);
+}
+
+static void
 test_wal(void)
 {
 	static unsigned palette[256];
@@ -560,6 +609,8 @@ main(void)
 	test_cap();
 	test_numbers();
 	test_emitters();
+	test_texture_cap();
+	test_emitter_cap();
 	test_wal();
 	test_sky_and_line();
 
