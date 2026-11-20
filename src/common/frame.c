@@ -532,9 +532,11 @@ Qcommon_Frame(int usec)
 
 	/* In case of ERR_DROP we're jumping here. Don't know
 	   if that's really save but it seems to work. So leave
-	   it alone. */
+	   it alone. A server line the error left keeps its
+	   source until here (FIX153). */
 	if (YQ2_SETJMP(abortframe))
 	{
+		Cbuf_ResetSource();
 		return;
 	}
 
@@ -823,9 +825,11 @@ Qcommon_Frame(int usec)
 
 	/* In case of ERR_DROP we're jumping here. Don't know
 	   if that' really save but it seems to work. So leave
-	   it alone. */
+	   it alone. A server line the error left keeps its
+	   source until here (FIX153). */
 	if (YQ2_SETJMP(abortframe))
 	{
+		Cbuf_ResetSource();
 		return;
 	}
 

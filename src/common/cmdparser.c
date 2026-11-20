@@ -162,6 +162,13 @@ Cbuf_StripServer(byte *buf, byte *src, int len)
  * Discards every byte of server text still in the command buffer and
  * the defer buffer. Called when the connection the text came from ends
  * (CL_Disconnect). Text the player queued stays, in its order.
+ *
+ * It does not change the source of the line that runs now: a server
+ * line that drops stays the server's for the rest of its run, so what
+ * it does after the drop is still refused where a server's use is
+ * (FIX153). The source is the player's again at the next line, which
+ * Cbuf_Execute tags itself, or where a Com_Error longjmp lands
+ * (Cbuf_ResetSource).
  */
 void
 Cbuf_DropServerText(void)
@@ -174,9 +181,16 @@ Cbuf_DropServerText(void)
 	len = Cbuf_StripServer((byte *)defer_text_buf, defer_text_src,
 			strlen(defer_text_buf));
 	defer_text_buf[len] = 0;
+}
 
-	/* A server line that dropped the connection through Com_Error
-	   never returns to Cbuf_Execute to restore the source. */
+/*
+ * Called where a Com_Error longjmp lands (Qcommon_Frame's abortframe):
+ * a line the error left never returned to Cbuf_Execute to restore the
+ * source, and the next frame's lines would inherit it.
+ */
+void
+Cbuf_ResetSource(void)
+{
 	cbuf_source = CBUF_PLAYER;
 }
 
