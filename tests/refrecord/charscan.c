@@ -22,6 +22,14 @@
  *                             <chars> characters; every 3rd demo frame
  *                             from the first is captured
  *
+ *   charscan --make-table <trace> <table>
+ *                             writes a trace whose captured demo frames
+ *                             draw exactly what the table's "pin <k> <n>"
+ *                             lines declare (the selftest's stub engine)
+ *
+ * A trace with REFREC_FLAG_TRUNCATED set is refused: the recorder stopped
+ * at its limit, as replay refuses it.
+ *
  * Exits 0 on a trace read to its end, 1 when it is refused.
  */
 
@@ -68,6 +76,12 @@ Scan(const char *path)
 	if (!RefRec_ReadHeader(&r, &h) || !RefRec_CheckLayout(&h, len, NULL))
 	{
 		fprintf(stderr, "charscan: %s: bad header, or an unfinished trace\n", path);
+		return 1;
+	}
+
+	if (h.flags & REFREC_FLAG_TRUNCATED)
+	{
+		fprintf(stderr, "charscan: %s: the recorder stopped at its limit (REFREC_FLAG_TRUNCATED), the trace is not whole\n", path);
 		return 1;
 	}
 
@@ -212,9 +226,52 @@ Make(const char *path, int demo, int chars, int at)
 	return 0;
 }
 
+/* a trace that draws exactly the characters a table of "pin <k> <n>" lines declares */
+static int
+MakeTable(const char *path, const char *table)
+{
+	char line[256];
+	int chars[4096] = { 0 }, k, n, top = 0, i;
+	FILE *f = fopen(table, "r");
+
+	if (!f)
+	{
+		return 1;
+	}
+
+	while (fgets(line, sizeof(line), f))
+	{
+		if (sscanf(line, "pin %d %d", &k, &n) == 2 && k >= 0 && k < 1000)
+		{
+			chars[k] = n;
+			top = k > top ? k : top;
+		}
+	}
+
+	fclose(f);
+	RefRec_StartRecord(path, 640, 480, 30);
+	Frame(0, 40, -1);
+	Frame(0, 40, -1);
+
+	for (i = 0; i < 3 * (top + 1); i++)
+	{
+		Frame(1, i % 3 == 0 ? chars[i / 3] : 0, i % 3 == 0 ? i / 3 : -1);
+	}
+
+	Frame(0, 8, -1);
+	RefRec_StopRecord();
+
+	return 0;
+}
+
 int
 main(int argc, char **argv)
 {
+	if (argc == 4 && strcmp(argv[1], "--make-table") == 0)
+	{
+		return MakeTable(argv[2], argv[3]);
+	}
+
 	if (argc == 6 && strcmp(argv[1], "--make") == 0)
 	{
 		return Make(argv[2], atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));

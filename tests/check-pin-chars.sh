@@ -36,6 +36,8 @@ cc -std=gnu99 -Wall -Werror -O1 -DYQ2OSTYPE='"test"' -DYQ2ARCH='"test"' -o "$tmp
 "$tmp/make" --make "$tmp/quiet-frame.q2r" 10 312 4 > /dev/null 2>&1
 "$tmp/make" --make "$tmp/none.q2r" 10 0 0 > /dev/null 2>&1
 printf 'not a trace\n' > "$tmp/junk.q2r"
+# a trace the recorder cut short (REFREC_FLAG_TRUNCATED, header byte 16) is refused, as replay refuses it
+cp "$tmp/none.q2r" "$tmp/trunc.q2r"; printf '\001' | dd of="$tmp/trunc.q2r" bs=1 seek=16 count=1 conv=notrunc 2>/dev/null
 
 if /bin/bash scripts/pins.sh check-text "$tmp/stray.q2r" synth.dm2 > "$tmp/out" 2>&1; then
 	bad "text in a captured demo frame was accepted"
@@ -56,6 +58,14 @@ for t in junk half; do
 			cat "$tmp/out"; bad "$t.q2r with $d was refused, but not for being unreadable"
 		fi
 	done
+done
+
+for d in synth.dm2 demo1.dm2; do
+	if /bin/bash scripts/pins.sh check-text "$tmp/trunc.q2r" "$d" > "$tmp/out" 2>&1; then
+		bad "a truncated trace was accepted with $d"
+	elif ! grep -q 'recorder stopped at its limit' "$tmp/out"; then
+		cat "$tmp/out"; bad "a truncated trace with $d was refused, but not for the recorder's limit"
+	fi
 done
 
 # the declared tables hold only "pin <number> <number>" lines and comments
