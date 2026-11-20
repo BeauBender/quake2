@@ -232,7 +232,10 @@ Cbuf_InsertFromDefer(void)
 
 	Cbuf_InsertText(defer_text_buf);
 
-	/* the deferred text keeps where it came from */
+	/* the deferred text keeps where it came from. Cbuf_InsertText put
+	   it at the start only if the buffer grew by exactly its length:
+	   when Cbuf_AddText refuses it as an overflow, the buffer keeps its
+	   old size and its own tags are already right. */
 	if (cmd_text.cursize == before + len)
 	{
 		memcpy(cmd_text_src, defer_text_src, len);

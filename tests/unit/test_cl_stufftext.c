@@ -219,6 +219,24 @@ TEST(cl_stufftext_before_reconnect_dropped)
 	T_EQ_INT(cmd_text.cursize, 0);
 }
 
+/* The same with the stufftext after svc_reconnect in the message: the
+   parse loop goes on after svc_reconnect, and the text is not queued. */
+TEST(cl_stufftext_after_reconnect_dropped)
+{
+	setup();
+	cls.state = ca_active;
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_reconnect);
+	MSG_WriteByte(&net_message, svc_stufftext);
+	MSG_WriteString(&net_message, "t_gated\n");
+	MSG_BeginReading(&net_message);
+	CL_ParseServerMessage();
+	T_EQ_INT(cls.state, ca_connecting);
+	Cbuf_Execute();
+	T_EQ_INT(gated_runs, 0);
+	T_EQ_INT(cmd_text.cursize, 0);
+}
+
 /* After a server line drops the connection, the buffer's source is the
    player again: player text queued after the drop is the player's and
    survives a later CL_Disconnect. */
