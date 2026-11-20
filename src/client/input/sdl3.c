@@ -3329,7 +3329,6 @@ IN_MatchJoyPreset(void)
  * when a person presses it; "wait <n>" there counts n frames.
  */
 extern sizebuf_t cmd_text; /* src/common/cmdparser.c */
-int Key_StringToKeynum(char *str); /* src/client/cl_keyboard.c */
 
 static SDL_Joystick *probe_joy;
 static char *probe_script, *probe_next;
@@ -3564,9 +3563,13 @@ IN_Probe_f(void)
 	}
 	else if (!strcmp(what, "bound"))
 	{
-		int k = Key_StringToKeynum((char *)Cmd_Argv(2));
+		int k;
 
-		if (k < 0 || k >= K_LAST)
+		for (k = 0; k < K_LAST && Q_stricmp(Key_KeynumToString(k), Cmd_Argv(2)); k++)
+		{
+		}
+
+		if (k == K_LAST)
 		{
 			Com_Printf("in_probe: no key '%s'\n", Cmd_Argv(2));
 			return;
