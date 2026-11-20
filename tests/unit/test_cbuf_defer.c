@@ -32,6 +32,7 @@
 
 #include "test.h"
 #include "../../src/server/header/server.h"
+#include "../../src/client/header/upscale.h"
 
 extern sizebuf_t cmd_text;      /* src/common/cmdparser.c */
 extern char defer_text_buf[];   /* src/common/cmdparser.c */
@@ -283,6 +284,158 @@ TEST(cbuf_demo_text_dropped_by_killserver)
 TEST(cbuf_local_text_kept_by_killserver)
 {
 	killserver(0);
+}
+
+/*
+ * The gate refuses a line the server sent, whatever state that line
+ * finds (FIX151, review round 3). Each case leaves a demo by another
+ * route, then runs server text and the same text typed by the player
+ * through the real Cbuf_Execute.
+ */
+static int gated_runs;
+
+/* Stands in for upscale_textures: it counts the runs the real gate lets
+   through on the local server over loopback, with the demo's
+   attractloop byte 0, the case where cl.attractloop does not refuse. */
+static void
+T_DtGated_f(void)
+{
+	if (CL_UpscaleAllowed(1, 1, 0))
+	{
+		gated_runs++;
+	}
+}
+
+/* How the demo is left. */
+#define ROUTE_DEMOMAP 0  /* the demo's text runs `demomap` to a picture */
+#define ROUTE_LEVEL   1  /* SV_Map to a level that is not a demo, then
+                            server text that arrives later (the next
+                            chunk the demo sends) */
+#define ROUTE_KILL    2  /* killserver, then server text that arrives
+                            later */
+
+typedef struct
+{
+	qboolean attractloop;  /* SV_Map's for the demo: 1 for demomap */
+	const char *start;     /* the level the demo is started with */
+	int route;             /* ROUTE_DEMOMAP, ROUTE_LEVEL or ROUTE_KILL */
+	int want_state;        /* Com_ServerState() once the demo is left */
+} t_route_t;
+
+static void
+route_child(void *arg)
+{
+	const t_route_t *c = arg;
+	static edict_t edicts[1];
+	static game_export_t fake;
+
+	memset(edicts, 0, sizeof(edicts));
+	memset(&fake, 0, sizeof(fake));
+	fake.SpawnEntities = fake_spawn;
+	fake.RunFrame = fake_frame;
+	fake.Shutdown = fake_frame;
+	fake.edicts = edicts;
+	fake.edict_size = sizeof(edict_t);
+	fake.num_edicts = 1;
+	fake.max_edicts = 1;
+	ge = &fake;
+
+	/* SV_Shutdown frees them. */
+	Cvar_FullSet("maxclients", "1", CVAR_SERVERINFO | CVAR_LATCH);
+	svs.clients = Z_Malloc(sizeof(client_t));
+	svs.initialized = true;
+	sv.state = ss_game;
+	sv.attractloop = false;
+	SZ_Init(&sv.multicast, sv.multicast_buf, sizeof(sv.multicast_buf));
+
+	/* The demo: `map x.dm2` (ss_demo, attractloop 0) or `demomap x.pcx`
+	   (ss_pic, attractloop 1). */
+	SV_Map(c->attractloop, (char *)c->start, false, false);
+	T_CHECK(sv.attractloop || (Com_ServerState() == ss_demo));
+
+	Cmd_AddCommand("t_dt_server", T_DtServer_f);
+	Cmd_AddCommand("t_gated", T_DtGated_f);
+	SZ_Clear(&cmd_text);
+	defer_text_buf[0] = 0;
+	server_runs = 0;
+	gated_runs = 0;
+
+	if (c->route == ROUTE_DEMOMAP)
+	{
+		Cbuf_AddServerText("demomap t_route.pcx\nt_gated\n");
+		Cbuf_Execute();
+	}
+	else if (c->route == ROUTE_LEVEL)
+	{
+		Cbuf_AddServerText("t_dt_server\n");
+		SV_Map(false, "t_route.pcx", false, false);
+		Cbuf_Execute();
+		Cbuf_AddServerText("t_gated\n");
+		Cbuf_Execute();
+	}
+	else
+	{
+		Cbuf_AddServerText("killserver\nt_dt_server\n");
+		Cbuf_Execute();
+		Cbuf_AddServerText("t_gated\n");
+		Cbuf_Execute();
+	}
+
+	T_EQ_INT(Com_ServerState(), c->want_state);  /* the demo was left */
+	T_EQ_INT(server_runs, 0);  /* the demo's own text ended with it */
+	T_EQ_INT(gated_runs, 0);   /* the server's line was refused */
+
+	/* The player's, in the same state, runs. */
+	Cbuf_AddText("t_gated\n");
+	Cbuf_Execute();
+	T_EQ_INT(gated_runs, 1);
+}
+
+static void
+route(t_route_t c)
+{
+	char out[8192];
+	int status = t_expect_exit(route_child, &c, out, sizeof(out));
+
+	if (status != 0)
+	{
+		printf("%s", out);
+	}
+
+	T_EQ_INT(status, 0);
+}
+
+/* A `map x.dm2` demo whose text runs `demomap` to a picture level and
+   then the gated command, in one Cbuf_Execute. */
+TEST(cbuf_gate_refuses_server_text_after_demomap_pic)
+{
+	route((t_route_t){ false, "t_route.dm2", ROUTE_DEMOMAP, ss_pic });
+}
+
+/* Server text that arrives after a level change to a level that is not
+   a demo. */
+TEST(cbuf_gate_refuses_server_text_after_level_change)
+{
+	route((t_route_t){ false, "t_route.dm2", ROUTE_LEVEL, ss_pic });
+}
+
+/* Server text that arrives after killserver. */
+TEST(cbuf_gate_refuses_server_text_after_killserver)
+{
+	route((t_route_t){ false, "t_route.dm2", ROUTE_KILL, ss_dead });
+}
+
+/* A demo started by `demomap x.pcx` (attractloop 1, ss_pic): the
+   sv.attractloop half of SV_Map's drop and of SV_Shutdown's, which no
+   ss_demo case reaches. */
+TEST(cbuf_pic_demo_text_dropped_by_level_change)
+{
+	route((t_route_t){ true, "t_route0.pcx", ROUTE_LEVEL, ss_pic });
+}
+
+TEST(cbuf_pic_demo_text_dropped_by_killserver)
+{
+	route((t_route_t){ true, "t_route0.pcx", ROUTE_KILL, ss_dead });
 }
 
 static void
