@@ -186,6 +186,8 @@ RM_Effect(const cvar_t *cv)
  * each frame (mtl_hdr_peak).
  */
 static cvar_t *r_hdr, *r_hdr_peak;
+/* HD5: the display's potential headroom as read (rmb_hdr_headroom), for the menu's greying; -1 for no reading */
+static cvar_t *r_hdr_headroom;
 static int rm_hdr_applied = -1;
 
 /* metal_hdr_probe: frames since the ask, 0 when none is pending (a drawable is read within RM_HDR_PROBE_FRAMES) */
@@ -261,12 +263,33 @@ R_HdrProbeFrame(void)
 	}
 }
 
+/*
+ * r_hdr_headroom (HD5): the potential headroom, which decides the menu's
+ * greying of the HDR items, written when its value differs (Cvar_Set ignores
+ * an equal string; the window may move to another display); -1 while there
+ * is no reading.
+ */
+static void
+R_HdrHeadroomReport(float potential)
+{
+	const float v = (isfinite(potential) && (potential >= 0.0f)) ? potential : -1.0f;
+	char buf[32];
+
+	if (r_hdr_headroom && (r_hdr_headroom->value != v || !r_hdr_headroom->string[0]))
+	{
+		snprintf(buf, sizeof(buf), "%g", (double)v);
+		ri.Cvar_Set("r_hdr_headroom", buf);
+	}
+}
+
 /* r_hdr and the presentation (Retro runs the stock formats) into the layer, between frames */
 static void
 R_HdrFrame(void)
 {
 	/* Retro holds r_hdr 1 off; a failed float16 pipeline (rmb_hdr_fail) holds it off until the next renderer start (vid_restart) */
-	const int asked = rm_hdr_mode(r_hdr->value);
+	/* through the tuning harness's B side (RM_Effect, TASK195; HD5), which is empty outside an A/B */
+	const int asked = rm_hdr_mode(RM_Effect(r_hdr));
+	const float peak = RM_Effect(r_hdr_peak);
 	const int retro = asked && (rm_presentation == RM_PRES_RETRO);
 	const int active = rm_hdr_active(asked, rm_presentation == RM_PRES_RETRO) && !rmb_hdr_failed();
 	const int live = rm_hdr_applied >= 0;
@@ -281,7 +304,8 @@ R_HdrFrame(void)
 
 	/* the peak in force this frame: r_hdr_peak held to [1, 16] and to the headroom now */
 	rmb_hdr_headroom(&now, &potential);
-	rmb_hdr_peak_set(mtl_hdr_peak(r_hdr_peak->value, now));
+	rmb_hdr_peak_set(mtl_hdr_peak(peak, now));
+	R_HdrHeadroomReport(potential);
 
 	/*
 	 * said on a live change only: neither a stock run nor a start with
@@ -306,7 +330,7 @@ R_HdrFrame(void)
 	if (active == rm_hdr_applied)
 	{
 		/* the report again on a live r_hdr_peak change while the float16 path is on */
-		if (active && live && peak_changed && rm_hdr_report(1, r_hdr_peak->value, now, potential, line, sizeof(line)))
+		if (active && live && peak_changed && rm_hdr_report(1, peak, now, potential, line, sizeof(line)))
 		{
 			R_Printf(PRINT_ALL, "%s\n", line);
 		}
@@ -317,7 +341,7 @@ R_HdrFrame(void)
 	rmb_hdr_set(active);
 
 	/* on a live change only, and "off" only from on (a Retro hold says its own line above) */
-	if (live && (active || (rm_hdr_applied > 0)) && rm_hdr_report(active, r_hdr_peak->value, now, potential, line, sizeof(line)))
+	if (live && (active || (rm_hdr_applied > 0)) && rm_hdr_report(active, peak, now, potential, line, sizeof(line)))
 	{
 		R_Printf(PRINT_ALL, "%s\n", line);
 	}
@@ -364,6 +388,7 @@ R_Register(void)
 	metal_colorspace->modified = false;
 	r_hdr = ri.Cvar_Get("r_hdr", "0", CVAR_ARCHIVE);
 	r_hdr_peak = ri.Cvar_Get("r_hdr_peak", "4", CVAR_ARCHIVE);
+	r_hdr_headroom = ri.Cvar_Get("r_hdr_headroom", "-1", 0);
 	r_farsee = ri.Cvar_Get("r_farsee", "0", CVAR_LATCH | CVAR_ARCHIVE);
 	r_fullbright = ri.Cvar_Get("r_fullbright", "0", 0);
 	r_drawworld = ri.Cvar_Get("r_drawworld", "1", 0);

@@ -75,6 +75,9 @@ static menulist_s s_mfx_scale_list;
 static menulist_s s_mfx_interp_list;
 static menulist_s s_denoiser_list;
 static menulist_s s_colorspace_list;   /* TASK121: metal_colorspace */
+static int s_colorspace_pending = -1;  /* the choice held while HDR greys the item; -1 none */
+static menulist_s s_hdr_list;          /* TASK196 (HD5): r_hdr, live */
+static menuslider_s s_hdr_peak_slider; /* TASK196 (HD5): r_hdr_peak, live */
 static menulist_s s_rtw_hits_list;   /* TASK158: r_rt_water_hits */
 static menulist_s s_ao_scale_list;
 static menulist_s s_ao_rays_list;
@@ -686,9 +689,73 @@ RestartNeededForAllMsg(void *unused)
  * the banner and above the bottom edge down to that height;
  * tests/menu/videomenu_test.c asserts it.
  */
+static char s_hdr_peak_note[64];
+
+static void RTSetRule(menucommon_s *item, vidrule_t rule);
+static vidrule_t HdrRule(int item, const char *renderer, char *note, size_t len);
+
+/* the HDR items' greying and the colour space's, which r_hdr 1 sets, from the cvars as they are now */
+static void
+HdrMenu_Rules(void)
+{
+	static const char *cs_names[] = { "untagged", "sRGB", NULL };
+	static const char *cs_na_names[] = { "n/a", NULL };
+	const int metal = (VidRules_Renderer(s_built_renderer) == VIDREF_METAL);
+
+	RTSetRule(&s_hdr_list.generic, HdrRule(VIDHDR_ITEM_ON, s_built_renderer, NULL, 0));
+	RTSetRule(&s_hdr_peak_slider.generic, HdrRule(VIDHDR_ITEM_PEAK, s_built_renderer,
+			s_hdr_peak_note, sizeof(s_hdr_peak_note)));
+	s_hdr_list.curvalue = (Cvar_VariableValue("r_hdr") == 1.0f);
+
+	const int was_grayed = (s_colorspace_list.generic.flags & QMF_GRAYED) != 0;
+
+	SetRule(&s_colorspace_list.generic, VIDITEM_COLORSPACE,
+		metal && VidRules_HdrInForce(Cvar_VariableValue("r_hdr"), Cvar_VariableValue("r_presentation")));
+	if (s_colorspace_list.generic.flags & QMF_GRAYED)
+	{
+		/* keep a pending choice while the item shows n/a */
+		if (!was_grayed)
+		{
+			s_colorspace_pending = s_colorspace_list.curvalue;
+		}
+		s_colorspace_list.itemnames = cs_na_names;
+		s_colorspace_list.curvalue = 0;
+	}
+	else
+	{
+		s_colorspace_list.itemnames = cs_names;
+		if (was_grayed)
+		{
+			/* back from greyed: the choice held while it was, else the cvar */
+			s_colorspace_list.curvalue = (s_colorspace_pending >= 0) ? s_colorspace_pending :
+				(Cvar_VariableValue("metal_colorspace") == 1.0f);
+			s_colorspace_pending = -1;
+		}
+	}
+}
+
+/* r_hdr from the menu: written at once, so the renderer switches at the next frame */
+static void
+HdrChanged(void *unused)
+{
+	if (!(s_hdr_list.generic.flags & QMF_GRAYED))
+	{
+		Cvar_SetValue("r_hdr", (float)(s_hdr_list.curvalue == 1));
+	}
+	HdrMenu_Rules();
+}
+
+/* the slider writes r_hdr_peak itself; the note follows */
+static void
+HdrPeakChanged(void *unused)
+{
+	HdrMenu_Rules();
+}
+
 static void
 OpenRendererOptions(void *unused)
 {
+	HdrMenu_Rules();   /* a change on the tuning screen or the console shows here */
 	s_ropts_menu.draw = Default_MenuDraw;
 	s_ropts_menu.key = Default_MenuKey;
 
@@ -734,6 +801,46 @@ RTSetRule(menucommon_s *item, vidrule_t rule)
 }
 
 /*
+ * The HDR items (TASK196, HD5; vidrules.h): the platform the HDR rules
+ * take, the display's potential headroom as ref_metal publishes it
+ * (r_hdr_headroom; empty, below 0 or not finite is no reading), and the
+ * peak's note with that headroom beside it.
+ */
+#ifndef VID_HDRPLAT   /* the menu test builds this file for the Mac */
+#if defined(__APPLE__) && defined(TARGET_OS_TV) && TARGET_OS_TV
+#define VID_HDRPLAT VIDHDR_TVOS
+#elif defined(__APPLE__) && defined(TARGET_OS_VISION) && TARGET_OS_VISION
+#define VID_HDRPLAT VIDHDR_VISIONOS
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+#define VID_HDRPLAT VIDHDR_IOS
+#else
+#define VID_HDRPLAT VIDHDR_MAC
+#endif
+#endif
+
+static float
+HdrHeadroom(void)
+{
+	const char *v = Cvar_VariableString("r_hdr_headroom");
+
+	return (v && v[0]) ? (float)atof(v) : -1.0f;
+}
+
+static vidrule_t
+HdrRule(int item, const char *renderer, char *note, size_t len)
+{
+	const vidrule_t rule = VidRules_Hdr(item, renderer, VID_HDRPLAT, HdrHeadroom(),
+			Cvar_VariableValue("r_presentation"), Cvar_VariableValue("r_hdr"));
+
+	if (rule.enabled && item == VIDHDR_ITEM_PEAK)
+	{
+		snprintf(note, len, "headroom %.1f; peak held to it", HdrHeadroom());
+		return (vidrule_t){ 1, note };
+	}
+	return rule;
+}
+
+/*
  * The tuning screen (TASK195): vidrules.c's rt_tune rows, each written to
  * its cvar at once (live), then the A/B toggle and the presets, which run
  * the console commands of rtpreset.c (rt_ab, rt_preset), and "apply
@@ -752,7 +859,7 @@ static char s_tune_steps[2][TUNE_MAX_STEPS][8];
 static const char *s_tune_step_names[2][TUNE_MAX_STEPS + 1];
 static menuaction_s s_tune_ab, s_tune_stock, s_tune_save, s_tune_load, s_tune_asb, s_tune_restart;
 static menufield_s s_tune_name;
-static char s_tune_ab_text[64], s_tune_status[96];
+static char s_tune_ab_text[64], s_tune_status[96], s_tune_hdr_note[64];
 static float s_tune_pres_open;
 static int s_tune_rows;
 
@@ -853,6 +960,13 @@ TuneMenu_Rules(void)
 		const int on = e ? VidRules_RTEffective(c->effect, s_built_renderer, available, pres,
 				Cvar_VariableValue(e->cvar)) : 1;
 
+		if (VidRules_HdrItem(c->cvar) >= 0)
+		{
+			/* TASK196 (HD5): the HDR rows by the display's reading */
+			RTSetRule(s_tune_items[i], HdrRule(VidRules_HdrItem(c->cvar), s_built_renderer,
+					s_tune_hdr_note, sizeof(s_tune_hdr_note)));
+			continue;
+		}
 		RTSetRule(s_tune_items[i], VidRules_TuneItem(i, s_built_renderer, available, on));
 	}
 
@@ -1932,6 +2046,7 @@ VID_MenuInit(void)
 		static const char *cs_names[] = { "untagged", "sRGB", NULL };
 		static const char *cs_na_names[] = { "n/a", NULL };
 
+		s_colorspace_pending = -1;
 		s_colorspace_list.generic.type = MTYPE_SPINCONTROL;
 		s_colorspace_list.generic.name = "colour space";
 		s_colorspace_list.generic.x = 0;
@@ -1946,6 +2061,31 @@ VID_MenuInit(void)
 			s_colorspace_list.itemnames = cs_na_names;
 			s_colorspace_list.curvalue = 0;
 		}
+	}
+
+	/* HDR (TASK196, HD5): after the colour space, live, greyed with its reason (HdrMenu_Rules) */
+	{
+		static const char *hdr_names[] = { "off", "on", NULL };
+
+		s_hdr_list.generic.type = MTYPE_SPINCONTROL;
+		s_hdr_list.generic.name = "HDR";
+		s_hdr_list.generic.x = 0;
+		s_hdr_list.generic.y = (sy += 10);
+		s_hdr_list.generic.callback = HdrChanged;
+		s_hdr_list.itemnames = hdr_names;
+
+		s_hdr_peak_slider.generic.type = MTYPE_SLIDER;
+		s_hdr_peak_slider.generic.name = "HDR peak";
+		s_hdr_peak_slider.generic.x = 0;
+		s_hdr_peak_slider.generic.y = (sy += 10);
+		s_hdr_peak_slider.generic.callback = HdrPeakChanged;
+		s_hdr_peak_slider.cvar = "r_hdr_peak";
+		s_hdr_peak_slider.minvalue = VIDHDR_PEAK_MIN;
+		s_hdr_peak_slider.maxvalue = VIDHDR_PEAK_MAX;
+		s_hdr_peak_slider.slidestep = VIDHDR_PEAK_STEP;
+		s_hdr_peak_slider.printformat = "%.1f";
+
+		HdrMenu_Rules();
 	}
 
 	/* The renderer's own settings are a page of their own, with
@@ -1977,7 +2117,8 @@ VID_MenuInit(void)
 	s_ropts_apply_action.generic.type = MTYPE_ACTION;
 	s_ropts_apply_action.generic.name = "apply";
 	s_ropts_apply_action.generic.x = 0;
-	s_ropts_apply_action.generic.y = (sy += 20);
+	/* one line, not two, above apply: with the HDR items (HD5) the page fits below the banner at 240 lines */
+	s_ropts_apply_action.generic.y = (sy += 10);
 	s_ropts_apply_action.generic.callback = ApplyChanges;
 
 	s_apply_action.generic.type = MTYPE_ACTION;
@@ -2031,6 +2172,8 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ao_scale_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ao_rays_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_colorspace_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_hdr_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_hdr_peak_slider);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ropts_apply_action);
 
 	Menu_SetStatusBar(&s_ropts_menu, "Esc: back to the video menu");

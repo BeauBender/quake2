@@ -700,3 +700,92 @@ no mutant skipped on this GPU).
   and it uses the same note when refused.
 - The MetalFX fallback of plan 2.6 (the tone map before the scaler): decided by HD6 with the
   display on and a peak above 1, on game frames, from the stability figures above.
+
+## HD5: the HDR items in the menu (screen locked)
+
+### What it is
+
+- "HDR" (`r_hdr`, off and on) and "HDR peak" (`r_hdr_peak`, a slider from 1.0 to 16.0 in steps
+  of 0.5) on the video menu's "renderer options..." page, after the colour space, and the same
+  two rows on the tuning screen (`rt_tune` in `src/client/menu/vidrules.c`), so a preset
+  (`rt_preset save|load`) and the A/B toggle (`rt_ab`) hold them with the other tuning settings
+  (19 now; `scripts/rt/preset-to-table.sh` counts them). Both write their cvar at once: no apply,
+  no restart. ref_metal reads them through the B side (`RM_Effect`), which is empty outside an A/B.
+- The greying is `VidRules_Hdr`, a pure function with a host test, in the plan's order: another
+  renderer ("HDR is a Metal renderer feature"), Apple TV ("not built for Apple TV yet"), visionOS
+  ("no headroom reading on visionOS"), Retro ("Retro is a 16-bit SDR look"), no headroom reading
+  ("the display's headroom is unavailable"), a potential headroom of 1.0 or less ("this display
+  reports no extended range"), and for the peak, `r_hdr` not 1 ("HDR is off"). With headroom, the
+  peak's status bar shows it ("headroom 3.2; peak held to it", at most 40 characters at headroom 16.0). Under `r_hdr 1`
+  (not Retro) the colour space is greyed with "set by HDR" (plan 2.7).
+- The menu learns the headroom from `r_hdr_headroom`, a new cvar ref_metal sets to the display's
+  potential headroom when its reading changes, `-1` with no reading. HD1 has not landed, so
+  `rmb_hdr_headroom` reads `-1` on every display and the items are greyed "the display's headroom
+  is unavailable" everywhere for now; at `r_hdr 0` the cvar is never written, so no frame changes.
+- The colour space choice not yet applied is kept while the page is re-opened and while HDR greys
+  the item; it is re-read from `metal_colorspace` only when the item goes from greyed to enabled
+  with no choice held (`test_colorspace_choice_is_pending`).
+- `scripts/rt/preset-to-table.sh --as <presentation>` leaves `r_hdr` and `r_hdr_peak` out of an
+  overlay (they would force HDR for every user of the mode); the defaults output lists them.
+- The walk (`menu_probe walk`) now checks every greyed spin control and slider, not only actions:
+  it prints each with its reason, fails one with none, and fails one whose value (the list's
+  choice, the slider's cvar), screen, cursor, status bar or queued commands change on select,
+  left or right. The renderer page's apply moved up one line so the page clears the banner at 240
+  lines with two more items.
+
+### Tests and mutants
+
+- `tests/unit/test_vidrules.c`: `vidrules_hdr_greying_and_reasons`, `vidrules_hdr_items_in_tuning_and_presets`,
+  and the colour space's "set by HDR". `tests/menu/videomenu_test.c`: `test_hdr_items` (place,
+  every reason, a greyed item written by nothing, live writes, the colour space) and
+  `test_hdr_tuning_rows`. Red first on stubs: `FAIL: no ray tracing item named "HDR"` and the
+  tuning screen's item count (15).
+- Mutants against `tests/check-video-menu.sh`, each failing it:
+  - a greyed HDR item that acts (its `QMF_GRAYED` cleared, the reason kept): `soft: the greyed HDR wrote a cvar`;
+  - a missing reason (Retro's text `NULL`): `Retro: HDR greyed 1, says (no reason)`;
+  - the item hidden (its `Menu_AddItem` removed): `FAIL: no menu item named "HDR"`;
+  - the tuning row hidden: `the tuning screen has 16 items`, `FAIL: no ray tracing item named "HDR"`.
+- The walk's own mutants, in a scratch copy, one probe build (the HDR reason `NULL`, and
+  `Menu_SlideItem`'s greyed guard removed): `FAIL: greyed item 14 'HDR' of 'm_banner_video' has no
+  reason` (and the peak, and both tuning rows), `FAIL: greyed setting 5 'sun floor' of
+  'm_banner_video' changed on select, left or right` (and seven more), `walk FAIL: 25 screens,
+  1136 key presses, 13 failures`.
+
+### The walk, this Mac, screen locked
+
+Probe build (`make DEBUG=1` with `-DYQ2_INPUT_PROBE`) of `9d4b255a`, `-datadir` the licensed data,
+`-portable`. The display has no headroom reading while locked (and none until HD1):
+
+- `vid_renderer metal`, `r_hdr 0`: `item 14 'HDR' ... is greyed: the display's headroom is
+  unavailable`, the same for `item 15 'HDR peak'` and for the tuning screen's `item 8 'HDR'` and
+  `item 9 'HDR peak'`; `28 greyed settings changed nothing on select, left and right`; `walk ok:
+  25 screens, 1136 key presses, 0 failures`.
+- `r_hdr 1`: also `item 13 'colour space' ... is greyed: set by HDR`; `29 greyed settings`;
+  `walk ok: 25 screens, 1139 key presses, 0 failures`.
+- `r_presentation 2`: the four HDR items `greyed: Retro is a 16-bit SDR look`; `walk ok: 25
+  screens, 1136 key presses, 0 failures`.
+- `vid_renderer soft`: `item 14 'HDR' ... is greyed: HDR is a Metal renderer feature` and the peak;
+  `20 greyed settings`; `walk ok: 23 screens, 1022 key presses, 0 failures`.
+
+### Pins at `r_hdr 0`
+
+`26b0ce11` (the engine source of the menu items and `r_hdr_headroom`), Metal, screen locked,
+`PINS_SEED=1` with the trace, 640 x 480, the game module built, into a scratch store, hashed as in
+HD3's table: `world` 23 frames `b15b40cf1604`, `models` 23 `552ee3cb16b8`, `hdr` 23
+`11b7dcc7968c`, each identical to HD4's table.
+
+### Checks
+
+Under the lock: `make test`: `yq2test: 444 tests, 0 failed` (`26b0ce11`); `tests/check-ref-metal.sh`
+(`9d4b255a`): `check-ref-metal: ok (13159 checks, 0 failed; ...)`; `tests/check-ios.sh`: `check-ios:
+ok (54 mutants refused; ...)`; `tests/check-tvos.sh`: `check-tvos: ok (180 objects for the tvOS
+simulator, platform 8, the iOS simulator's list)`; `tests/check-visionos.sh`: `check-visionos: ok
+(180 objects for the visionOS simulator, platform 12, the iOS simulator's list)`;
+`tests/check-video-menu.sh`: `check-video-menu: ok`. `scripts/test.sh` was not run here.
+
+### Left
+
+- A real EDR display ungreys the items: needs HD1's readings and the display on and unlocked, on
+  the M6 (the host test covers the ungreyed path with a headroom of 3.2 and 4).
+- Apple TV and visionOS stay greyed with their reasons until a device slice (H7); iPhone and iPad
+  on devices are HD7.
