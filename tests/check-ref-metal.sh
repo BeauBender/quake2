@@ -950,6 +950,14 @@ else
 		fx_why16=
 		fx_caps=$(sed -n 's/^rmb_cs_probe: scalers: //p' "${tmp:?}/probe.out" | head -n 1)
 		[ -n "$fx_caps" ] || bad "tests/metal/rmb_cs_probe.m printed no 'scalers:' capability line"
+		# the line is read as two flags, each exactly 0 or 1, with nothing around them: anything else
+		# (spatial=yes, a trailing space or junk, 'none') is a probe that cannot be trusted
+		fx_sp=
+		fx_tp=
+		case "$fx_caps" in
+			"spatial="[01]" temporal="[01]) fx_sp=${fx_caps#spatial=}; fx_sp=${fx_sp%% *}; fx_tp=${fx_caps##*temporal=} ;;
+			*) [ -z "$fx_caps" ] || bad "tests/metal/rmb_cs_probe.m printed a 'scalers:' line that is not 'spatial=0|1 temporal=0|1': '$fx_caps'" ;;
+		esac
 		if grep -q 'the MetalFX spatial half under r_hdr 0 and 1, .*: run$' "${tmp:?}/probe.out"; then
 			fx_spatial_ran=1
 		else
@@ -971,9 +979,12 @@ else
 				fxtemporal8) [ "$fx_temporal16" = 1 ] || why=${fx_why16:-unexplained} ;;
 			esac
 			if [ -n "$why" ]; then
-				# a probe that says both scalers are there may not skip an fx mutant for a missing one
-				case "$fx_caps" in
-					"spatial=1 temporal=1") case $why in "no spatial scaler"*|"no temporal scaler"*) bad "mutant $m skipped ($why) but the probe says both scalers are present" ;; esac ;;
+				# a skip for a missing scaler is refused when the probe's own capability line says that
+				# scaler is there, one half at a time
+				case $why in
+					"no spatial scaler"*) [ "$fx_sp" != 1 ] || bad "mutant $m skipped ($why) but the probe says spatial=1" ;;
+					"no temporal scaler"*) [ "$fx_tp" != 1 ] || bad "mutant $m skipped ($why) but the probe says temporal=1" ;;
+					"refused in float16"*) [ "${CHECK_REF_METAL_DEVICE_REQUIRE:-0}" != 1 ] || bad "CHECK_REF_METAL_DEVICE_REQUIRE=1 and mutant $m skipped ($why)" ;;
 				esac
 				probe_skipped=$((probe_skipped + 1))
 				case ", $probe_skip_why, " in *", $why, "*) ;; *) probe_skip_why=${probe_skip_why:+$probe_skip_why, }$why ;; esac
