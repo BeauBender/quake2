@@ -22,7 +22,10 @@
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
-#     (rm_rtsun.c and common/mtl_rtsun_math.h, RT4, TASK56), and
+#     (rm_rtsun.c and common/mtl_rtsun_math.h, RT4, TASK56),
+#     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
+#     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
+#     generated lumps, TASK187), and
 #     tests/metal/rm_fx_test.c, the pure part of the MetalFX scalers
 #     (rm_metalfx.c, TASK111), and tests/metal/rm_rtgate_test.c, the
 #     hardware gate of ray tracing (rm_rtgate.c, RT8, TASK60). The gate's
@@ -265,6 +268,22 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtsun_test" > "${tmp:?}/out
 else
 	rtsun=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtsun_test: //')
 	case $rtsun in *", 0 failed") ;; *) bad "tests/metal/rm_rtsun_test.c printed no result line"; rtsun="";; esac
+fi
+
+# the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
+# (an asset loader: every malformed case runs under the sanitizers when the compiler has them)
+rtl=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags -o "${tmp:?}/rm_rtlights_test" tests/metal/rm_rtlights_test.c "$rm_dir/rm_rtlights.c" -lm \
+	> "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtlights_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtlights_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtlights_test.c failed"
+else
+	rtl=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtlights_test: //')
+	case $rtl in *", 0 failed") ;; *) bad "tests/metal/rm_rtlights_test.c printed no result line"; rtl="";; esac
 fi
 
 # the pure part of the MetalFX scalers (TASK111): rm_metalfx.c alone
@@ -1392,6 +1411,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused, $proto_ok shapes passed; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; RT data ${rtl:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused, $proto_ok shapes passed; $build)"
 fi
 exit $fail

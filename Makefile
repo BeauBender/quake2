@@ -1464,8 +1464,10 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_model.o \
 	src/client/refresh/metal/rm_pure.o \
 	src/client/refresh/metal/rm_rt.o \
+	src/client/refresh/metal/rm_rtdata.o \
 	src/client/refresh/metal/rm_rtgate.o \
 	src/client/refresh/metal/rm_rtfx.o \
+	src/client/refresh/metal/rm_rtlights.o \
 	src/client/refresh/metal/rm_rtscene.o \
 	src/client/refresh/metal/rm_rtshadow.o \
 	src/client/refresh/metal/rm_rtshadowscene.o \
