@@ -1839,8 +1839,11 @@ int rm_hdr_format(int active);
  */
 int rm_hdr_slot_keep(int fmt, int w, int h, int want_fmt, int want_w, int want_h);
 
-/* the MetalFX mode the view runs: off (RM_FX_OFF) on the float16 path until HD4, the asked one otherwise */
-int rm_hdr_fx_mode(int active, int mode);
+/*
+ * the note of a MetalFX scaler the GPU will not make in colour format fmt (HD4):
+ * RM_FX_NOTE_HDR for RM_FMT_RGBA16F (MetalFX is off under r_hdr 1), RM_FX_NOTE_UNMADE otherwise
+ */
+int rm_hdr_fx_note(int fmt);
 
 /*
  * metal_hdr_info's line (without a newline): the layer's pixel format

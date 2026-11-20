@@ -688,10 +688,10 @@ test_format(void)
 	CHECK(rm_fx_note_format(RM_FX_NOTE_NONE, 1, &s, buf, sizeof(buf)) == 0 && buf[0] == '\0');
 	buf[0] = 'x';
 	CHECK(rm_fx_note_format(9, 1, &s, buf, sizeof(buf)) == 0 && buf[0] == '\0');
-	/* TASK196: the scaler off on r_hdr's float16 path */
+	/* TASK196 HD4: a scaler the GPU will not make in r_hdr's float16 colour */
 	CHECK(rm_fx_note_format(RM_FX_NOTE_HDR, 2, &s, buf, sizeof(buf)));
-	CHECK(strcmp(buf, "ref_metal: the MetalFX temporal scaler is off under r_hdr 1 (it takes 8-bit colour); "
-			"the view is stretched") == 0);
+	CHECK(strcmp(buf, "ref_metal: the MetalFX temporal scaler from 320x240 to 640x480 cannot be made in float16 "
+			"colour; it is off under r_hdr 1 and the view is stretched") == 0);
 	CHECK(rm_fx_note_format(RM_FX_NOTE_UNMADE, 1, &s, buf, 20) == 0 && buf[0] == '\0');
 	CHECK(rm_fx_note_format(RM_FX_NOTE_UNMADE, 1, &s, buf, 0) == 0);
 	CHECK(rm_fx_support_format(0, buf, 0) == 0);

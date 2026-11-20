@@ -508,3 +508,195 @@ table (`shasum` of the frames, then of the list of hashes):
 | `world` | 23 | `b15b40cf1604` | identical |
 | `models` | 23 | `552ee3cb16b8` | identical |
 | `hdr` | 23 | `11b7dcc7968c` | identical |
+
+## HD4: MetalFX and the denoiser under `r_hdr 1`
+
+Plan sections 2.6 and 2.7, slice HD4. HD2 turned MetalFX off under `r_hdr 1` (`RM_FX_NOTE_HDR`);
+the scalers now run on the float16 path.
+
+### What it is
+
+- `rmb_metalfx.m`: the scaler's colour format is the path's, `rmb_fx_color()` (that is,
+  `rm_hdr_format(rmb_hdr_on())`, the format of `t_rcolor` and of the frame). Under `r_hdr 1` the
+  spatial scaler takes `RGBA16Float` in and out with `MTLFXSpatialScalerColorProcessingModeHDR`;
+  under `r_hdr 0` it is `BGRA8Unorm` and perceptual, as before. The temporal scaler's colour and
+  output formats follow the path too. Auto exposure stays off, and `preExposure` is set to 1.0 (its
+  default) at each encode. The output target `fx_out` takes the same format.
+- The live switch: `rmb_fx_prepare` remakes the scaler when the format differs from the one it was
+  made in (`fx_fmt`), as it does on a change of mode or size, so a toggle drops the history. A change
+  of format also forgets the refusal memo, so a scaler refused in one format is tried again in the
+  other. `rmb_fx_upscale` runs nothing unless the scaler's format is the path's, the frame's and
+  the view's: a scaler made before a toggle runs on neither the old targets nor the new ones.
+- The fallback: a scaler the GPU will not make in float16 leaves MetalFX off and tells
+  `RM_FX_NOTE_HDR` once for that mode, size and format, and the view is stretched. The note now
+  reads `the MetalFX <mode> scaler from WxH to WxH cannot be made in float16 colour; it is off under
+  r_hdr 1 and the view is stretched`. In 8 bits a refusal is still `RM_FX_NOTE_UNMADE`.
+  `rm_hdr_fx_note` (rm_pure.c) picks the note by format. It replaces HD2's `rm_hdr_fx_mode`, which
+  turned every mode off.
+- The denoiser: the tree has no `MTLFXTemporalDenoisedScaler` of its own yet (TASK59). Until a
+  ray-traced effect exists, `r_metalfx 3` runs as the temporal scaler (`rm_fx_run`), so it follows
+  the rule above. When TASK59 builds it, its output takes `rmb_fx_color()` and the same
+  verify-or-fallback rule; the GPU's acceptance is recorded below.
+- The tone map stays after MetalFX (plan 2.6); the fallback of moving it before was not applied
+  (see *Stability*).
+
+### Tests and mutants
+
+`tests/metal/rmb_cs_probe.m` now includes `rmb_metalfx.m` as well and links `rm_metalfx.c` (and
+MetalFX, weakly). Its `rmb_frame_compute` stub hands out one real command buffer, which the probe
+commits, and counts its calls. The new case, `fx_case`, runs for each of the three layers under
+`metal_colorspace` 0 and 1:
+
+- Under `r_hdr 0`: the spatial and the temporal scaler and `fx_out` are `BGRA8Unorm`, the spatial
+  one perceptual, and the spatial one runs on the GPU.
+- Under `r_hdr 1`, with the 8-bit scaler of `r_hdr 0` still prepared: a float16 view and frame are
+  not run (no `rmb_frame_compute`).
+- Under `r_hdr 1`: the spatial scaler is `RGBA16Float` in and out, its mode
+  `MTLFXSpatialScalerColorProcessingModeHDR`, and `fx_out` is `RGBA16Float`. An 8-bit frame or an
+  8-bit view is not run. Both scalers run on the GPU in float16, and the command buffer completes.
+- A refusal, forced through the file's test seam `fx_refuse` (static, set only by a file that
+  includes `rmb_metalfx.m`; no cvar or environment variable reaches it), for the spatial and the
+  temporal mode under `r_hdr 1`: nothing is kept, `rmb_fx_ready()` is 0, the note is
+  `RM_FX_NOTE_HDR` for that mode, and nothing is encoded. Asked again: no second note, and still
+  refused after the seam is cleared. A toggle to `r_hdr 0` tries again, and a refusal there gives
+  `RM_FX_NOTE_UNMADE`.
+- The toggle back to `r_hdr 0`: the float16 scaler is not run on any targets, the next prepare
+  remakes it in `BGRA8Unorm` and perceptual, and it runs. A scaler made in 8 bits is not run after a
+  toggle to `r_hdr 1`.
+
+Result: `rmb_cs_probe: 736 checks, 0 failed` (346 before HD4), with `the temporal scaler in RGBA16Float colour and output: made` printed on each of the six runs.
+
+`check-ref-metal.sh` (f) adds three mutants of `rmb_metalfx.m`, and the probe must fail each one:
+
+- `fxlinear`: the spatial scaler's mode under `r_hdr 1` is linear.
+- `fxtemporal8`: the temporal output stays `BGRA8Unorm` under `r_hdr 1`.
+- `fxnonote`: a scaler refused in float16 tells no note.
+
+`check-ref-metal: ... colour space 736 checks, 0 failed; 12 colour-space mutants refused` (nine before HD4).
+
+Review round 1: `fx_case` has two halves, each printing a line when it runs or is skipped. The
+spatial half (the spatial scaler under `r_hdr 0` and 1, and its refusal case) runs on any GPU with
+the spatial scaler; the temporal half (the temporal scaler in both formats, its refusal case) only
+when the GPU has the temporal one too. The build VM's paravirtual GPU has the spatial scaler alone
+(TASK111), and before the split the case skipped there as a whole, so the three mutants passed the
+probe and the check failed a correct tree. The check now runs `fxlinear` and `fxnonote` only when
+the spatial half ran (the spatial refusal case catches `fxnonote`), and `fxtemporal8` only when the
+probe printed `the temporal scaler in RGBA16Float colour and output: made`, and counts the skipped
+ones in its line. Proved on this Mac with a scratch copy of the probe whose temporal-support test
+was forced to 0 (a `sed`, not committed), and a copy of the check pointed at it: the probe gave
+`640 checks, 0 failed` with `the MetalFX temporal half skipped: no temporal scaler on this GPU` on
+each run, and the check `colour space 640 checks, 0 failed; 11 colour-space mutants refused, 1
+skipped (no temporal scaler)`, so `fxlinear` and `fxnonote` were still refused. The normal run is
+in the checks below.
+
+`rm_fx_test.c` pins the note's new line; `rm_host_test.c` pins `rm_hdr_fx_note`.
+
+### On this GPU (apple9, this Mac, screen locked)
+
+`rmb_cs_probe --measure`, by hand: it builds the probe as `check-ref-metal.sh` does and runs only
+the measurements.
+
+- **Acceptance.** `MTLFXTemporalScalerDescriptor` with `RGBA16Float` colour and output: `made`
+  (`newTemporalScalerWithDevice:` returns a scaler, its `colorTextureFormat` and
+  `outputTextureFormat` read back `RGBA16Float`, and it encodes and completes). The spatial scaler in
+  `RGBA16Float` with the hdr mode: made, runs. `MTLFXTemporalDenoisedScalerDescriptor` (960x540 to
+  1920x1080, depth `Depth32Float`, motion `RG16Float`, albedos `RGBA8Unorm`, normal `RGBA16Float`,
+  roughness `R16Float`): `made` with `BGRA8Unorm` colour and output and `made` with `RGBA16Float`,
+  with no exception. The denoiser was made only; it was not encoded.
+- **Memory**, 960x540 to 1920x1080 (`r_metalfx_scale 0.5`), as the device's
+  `currentAllocatedSize` before and after the scaler and `fx_out` are made:
+
+  | scaler | `BGRA8Unorm` | `RGBA16Float` | extra | of which `fx_out` |
+  | --- | --- | --- | --- | --- |
+  | spatial | 17.0 MB | 33.7 MB | 16.7 MB | 8.3 MB |
+  | temporal | 98.8 MB | 107.2 MB | 8.4 MB | 8.3 MB |
+
+  The spatial scaler's own allocation doubles with the format (8.7 to 17.1 MB). The temporal
+  scaler's history stays the same, about 90.5 MB in both formats, so its extra memory is the output
+  target alone. The denoiser's figure is not reliable: the first one made added 12.8 MB, and the
+  second 0.0 MB (its allocation is deferred or reused), so no denoiser memory figure is given.
+- **Stability** (plan 2.6). This is a still view drawn by the probe, not a game frame, so no image
+  is viewed. The view is a smooth gradient, a checker of hard edges, and a grid of 576 small cores
+  at 7 to 8 times white, each about 3 output pixels across, which stand in for additive cores. It is
+  sampled at each frame's jitter (`rm_fx_jitter`) at 960x540, with depth 0.5 and no motion, then
+  upscaled to 1920x1080 by the renderer's own `rmb_fx_prepare` and `rmb_fx_upscale`, for 60 frames.
+  The view is clamped at white and quantized to 8 bits under `r_hdr 0`, and kept in float16 under
+  `r_hdr 1`. The metric is the change of each output channel from one frame to the next, read in
+  display units (clamped to [0, 1], as `r_hdr_peak 1` shows them), over frames 10 to 59 (50 frame
+  pairs, 103,680,000 pixel samples):
+
+  | run | mean | max | samples changing by more than 0.1 |
+  | --- | --- | --- | --- |
+  | `r_hdr 0`, jitter as sampled (+1) | 0.000556 | 0.3961 | 15,154 |
+  | `r_hdr 0`, jitter negated (-1) | 0.000254 | 0.0863 | 0 |
+  | `r_hdr 1`, jitter negated (-1) | 0.000441 | 0.5930 | 35,154 (0.034 %) |
+
+  The negated jitter is the scaler's convention here: it is the steadier one at `r_hdr 0`, and
+  `r_hdr 1` was run with it. Under `r_hdr 1` the mean change is 1.7 times that of `r_hdr 0`, and
+  about 700 samples a frame change by more than 0.1. That is about 1.2 for each core a frame, so
+  the change is inferred to sit on the cores' rims, which the scaler's history blends against values
+  far above white. Not measured: where in the frame those samples are.
+
+  Reading: deferred. In this synthetic still view the temporal scaler is unstable at the cores'
+  rims under `r_hdr 1`: a max change of 0.593 against 0.0863, and about 700 samples a frame above
+  0.1 against none at `r_hdr 0` with the same jitter. The flat and edged parts are as steady as in
+  8 bits. That is the symptom plan 2.6 names. How large the flicker is on a display with a peak
+  above 1 is unknown, since the clamp at white hides part of the change. So the plan's fallback
+  (the tone map before the scaler) is neither applied nor ruled out here: the decision moves to
+  HD6, with the display on, on game frames, starting from these figures (plan 2.6 and the HD6 row
+  of its slice table).
+
+### Pins
+
+Branch `1a918da2`, Metal, screen locked, `PINS_SEED=1` with the trace, 640 x 480, with the game module
+built, MetalFX at its default (off) in the `r_hdr 0` scenarios, and hashed as in HD3's table
+(`shasum` of the frames, then of the list of hashes):
+
+| scenario | frames | branch | against FIX133's table |
+| --- | --- | --- | --- |
+| `world` | 23 | `b15b40cf1604` | identical |
+| `models` | 23 | `552ee3cb16b8` | identical |
+| `hdr` | 23 | `11b7dcc7968c` | identical |
+| `hdr-metalfx2` (new) | 23 | `966095662f89` | its own reference |
+
+Review round 1, head `022c1d74` (the same `src/` as `1a918da2`; the round changed the probe, the
+check and the docs), the same settings: the `r_hdr 0` scenarios that run the changed scaler code
+with MetalFX on, against HD3's table, and `hdr-metalfx2` again, into a fresh scratch store:
+
+| scenario | frames | branch | against HD3's table |
+| --- | --- | --- | --- |
+| `world-metalfx1` | 23 | `8bb165628bea` | identical |
+| `world-metalfx2` | 23 | `15df2f0d4ca4` | identical |
+| `world-metalfx3` | 23 | `15df2f0d4ca4` | identical |
+| `world-metalfx-interp` | 23 | `b15b40cf1604` | identical |
+| `hdr-metalfx2` (second run) | 23 | `966095662f89` | identical to the first run |
+
+`hdr-metalfx2` is `hdr` with `r_metalfx 2` at `r_metalfx_scale 0.5`: the temporal scaler on the
+float16 view, before the tone map. Its engine log has no MetalFX note, and its teardown counts
+`metalfx 2/2` (the scaler and `fx_out`), so the scaler ran under `r_hdr 1` for the whole demo.
+
+### Checks
+
+Run on `1a918da2` under the lock:
+
+- `make test`: `yq2test: 435 tests, 0 failed`
+- `tests/check-ref-metal.sh`: `check-ref-metal: ok (13194 checks, 0 failed; ...; MetalFX 335 checks, 0 failed; ...; colour space 736 checks, 0 failed; 12 colour-space mutants refused; ...; ref_metal built)`
+- `tests/check-ios.sh`: `check-ios: ok (54 mutants refused; ...)`
+- `tests/check-tvos.sh`: `check-tvos: ok (180 objects for the tvOS simulator, platform 8, the iOS simulator's list)`
+- `tests/check-visionos.sh`: `check-visionos: ok (180 objects for the visionOS simulator, platform 12, the iOS simulator's list)`
+- `tests/check-cvar-docs.sh`: `check-cvar-docs: ok`
+- `tests/check-doc-links.sh`: `check-doc-links: ok`
+- `tests/check-metalfx-report.sh`: `check-metalfx-report: ok (118 mutants killed)`
+
+Review round 1, on `22f155d6` under the lock: each of these checks gave the same last line as
+above (`check-ref-metal` with `colour space 736 checks, 0 failed; 12 colour-space mutants refused`,
+no mutant skipped on this GPU).
+
+`scripts/test.sh` was not run here; the orchestrator runs the gate.
+
+### Left
+
+- The denoiser's own float16 path is built with it, in TASK59: its output takes `rmb_fx_color()`,
+  and it uses the same note when refused.
+- The MetalFX fallback of plan 2.6 (the tone map before the scaler): decided by HD6 with the
+  display on and a peak above 1, on game frames, from the stability figures above.
