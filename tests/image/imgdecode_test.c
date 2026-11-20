@@ -714,8 +714,23 @@ test_encode_png(void)
 				{
 					/* the first pixel that differs, to tell an encode from a decode change */
 					size_t d = 0;
+					int invisible = 1;
 
-					while (d < n && back[d] == rgba[d])
+					for (k = 3; k < n; k += 4)
+					{
+						if (rgba[k])
+						{
+							invisible = 0;
+						}
+					}
+
+					/* An image whose every pixel has alpha 0 is compared by alpha only:
+					   macOS 26's ImageIO does not keep the colour of a fully transparent
+					   image (it does when any pixel is visible, see the 2x1 control below),
+					   and nothing draws such an image: no renderer reads the colour of a
+					   texture with no visible texel. Every other image compares every byte. */
+					while (d < n && (invisible ? (d % 4 != 3 || back[d] == rgba[d])
+						: back[d] == rgba[d]))
 					{
 						d++;
 					}
@@ -740,6 +755,35 @@ test_encode_png(void)
 			free(rgba);
 		}
 	}
+
+#ifdef __APPLE__
+	/* control for the exemption above: one pixel is visible, so every byte must
+	   come back, the colour under alpha 0 included */
+	{
+		static const unsigned char two[8] = { 19, 37, 34, 0, 200, 100, 50, 255 };
+		unsigned char *png = NULL, *back = NULL;
+		size_t pnglen = 0;
+		int bw = -1, bh = -1;
+
+		if (IMGDEC_EncodePNG(two, 2, 1, &png, &pnglen) == IMGDEC_OK && png)
+		{
+			imgdec_result_t r = IMGDEC_Decode(png, pnglen, "png", &back, &bw, &bh);
+
+			CHECK(r == IMGDEC_OK && bw == 2 && bh == 1, "encode 2x1 mixed: decodes as %s %dx%d",
+				IMGDEC_ResultString(r), bw, bh);
+			CHECK(back && !memcmp(back, two, 8), "encode 2x1 mixed: not the same bytes back: "
+				"pixel 0 is %u %u %u %u", back ? back[0] : 0, back ? back[1] : 0,
+				back ? back[2] : 0, back ? back[3] : 0);
+		}
+		else
+		{
+			CHECK(0, "encode 2x1 mixed: no PNG");
+		}
+
+		free(back);
+		free(png);
+	}
+#endif
 
 	/* the decoder's bounds, before anything is made */
 	{
