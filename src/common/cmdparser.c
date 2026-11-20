@@ -167,7 +167,7 @@ Cbuf_StripServer(byte *buf, byte *src, int len)
  * line that drops stays the server's for the rest of its run, so what
  * it does after the drop is still refused where a server's use is
  * (FIX153). The source is the player's again at the next line, which
- * Cbuf_Execute tags itself, or where a Com_Error longjmp lands
+ * Cbuf_Execute tags itself, or when the line ends in Com_Error
  * (Cbuf_ResetSource).
  */
 void
@@ -184,9 +184,11 @@ Cbuf_DropServerText(void)
 }
 
 /*
- * Called where a Com_Error longjmp lands (Qcommon_Frame's abortframe):
- * a line the error left never returned to Cbuf_Execute to restore the
- * source, and the next frame's lines would inherit it.
+ * Called by Com_Error before its teardown and its longjmp: the error
+ * ends the line that raised it, which never returns to Cbuf_Execute to
+ * restore the source. Without it the teardown's text (the configs
+ * CL_Disconnect execs) and the next frame's lines would be the
+ * server's.
  */
 void
 Cbuf_ResetSource(void)

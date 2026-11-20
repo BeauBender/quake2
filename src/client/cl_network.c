@@ -153,8 +153,9 @@ CL_Drop(void)
 
 	if (cls.state == ca_disconnected)
 	{
-		/* a server line that dropped never returned to Cbuf_Execute
-		   to restore the source; CL_Disconnect is not reached (FIX113) */
+		/* drop the server's queued text; the command source is reset
+		   in Com_Error, before its teardown (Cbuf_ResetSource), not
+		   here; CL_Disconnect is not reached (FIX113) */
 		Cbuf_DropServerText();
 		return;
 	}

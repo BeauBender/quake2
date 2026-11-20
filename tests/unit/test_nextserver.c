@@ -389,3 +389,64 @@ TEST(cbuf_server_line_stays_server_after_drop)
 	Cbuf_Execute();
 	T_EQ_INT(drop_seen, 0);
 }
+
+/*
+ * An error ends the server line, so what the error's teardown queues is
+ * the player's (FIX153 round 3). In the client, Com_Error's CL_Drop runs
+ * CL_Disconnect, whose `game` revert (Cvar_Set("game", userGivenGame))
+ * queues the player's configs; a stock `precache` line takes this route
+ * when the map differs from the server's. The suite builds Com_Error
+ * DEDICATED_ONLY, so its teardown is SV_Shutdown alone: here the game
+ * module's Shutdown, which SV_Shutdown calls, queues the text instead.
+ */
+static int teardown_seen;
+static int teardown_runs;
+
+static void
+T_NsErr_f(void)
+{
+	Com_Error(ERR_DROP, "t_ns_err");
+}
+
+static void
+T_NsTeardown_f(void)
+{
+	teardown_seen = Cbuf_ExecutingServerText();
+	teardown_runs++;
+}
+
+static void
+T_NsShutdown(void)
+{
+	Cbuf_AddText("t_ns_teardown\n");
+}
+
+static void
+error_teardown_child(void *arg)
+{
+	ns_setup();
+	stub_client_connect();
+	ge->Shutdown = T_NsShutdown;
+	Cmd_AddCommand("t_ns_err", T_NsErr_f);
+	Cmd_AddCommand("t_ns_teardown", T_NsTeardown_f);
+	teardown_seen = -1;
+	teardown_runs = 0;
+
+	Cbuf_AddServerText("t_ns_err\n");
+	T_EXPECT_DROP(Cbuf_Execute());
+	T_EQ_INT(Com_ServerState(), ss_dead);  /* SV_Shutdown ran */
+
+	/* as Com_Error runs it in the client, then the next frame */
+	CL_Drop();
+	T_EQ_INT(stub_client_connected(), 0);
+	Cbuf_Execute();
+
+	T_EQ_INT(teardown_runs, 1);   /* the drop kept it: not the server's */
+	T_EQ_INT(teardown_seen, 0);   /* and it ran as the player's */
+	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+}
+
+TEST(cbuf_error_drop_teardown_text_is_player)
+{
+	ns_run(error_teardown_child, NULL);
+}
