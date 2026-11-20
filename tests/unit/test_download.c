@@ -569,6 +569,54 @@ TEST(download_filename_too_long)
 	T_CHECK(strstr(dest, "/maps/ok.bsp") != NULL);
 }
 
+/* FIX161 r3: a temp name that does not fit leaves CL_DownloadFileName with an
+   empty buffer; CL_ParseDownload must refuse without handing it to
+   FS_CreatePath (an ASAN run reports the read past the terminator). */
+TEST(download_parse_name_too_long)
+{
+	static char longname[MAX_OSPATH + 64];
+	char cwd[MAX_OSPATH];
+	char tmp[MAX_OSPATH];
+	FILE *fp;
+
+	T_REQUIRE(cwd_enter(cwd, sizeof(cwd)));
+
+	/* the temp name is too long */
+	reset_client();
+	memset(longname, 'A', sizeof(longname) - 1);
+	longname[sizeof(longname) - 1] = '\0';
+	memcpy(longname, "maps/", 5);
+	Q_strlcpy(cls.downloadname, "maps/f161l.bsp", sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, longname, sizeof(cls.downloadtempname));
+	server_sends(3, 100, "abc", 3);
+	t_console_reset();
+	CL_ParseDownload();
+	T_CHECK(cls.download == NULL);
+	T_CONSOLE_HAS("Failed to open");
+
+	/* the temp name fits, the final name does not: no temp file is left */
+	reset_client();
+	Q_strlcpy(cls.downloadname, longname, sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, "maps/f161m.tmp", sizeof(cls.downloadtempname));
+	CL_DownloadFileName(tmp, sizeof(tmp), cls.downloadtempname);
+	server_sends(3, 100, "abc", 3);
+	t_console_reset();
+	CL_ParseDownload();
+	T_CHECK(cls.download == NULL);
+	T_CONSOLE_HAS("name too long");
+
+	fp = Q_fopen(tmp, "rb");
+	T_CHECK(fp == NULL);
+
+	if (fp)
+	{
+		fclose(fp);
+		Sys_Remove(tmp);
+	}
+
+	cwd_leave(cwd);
+}
+
 TEST(loadgame_savedir)
 {
 	/* TASK1: the check used to print and fall through. */

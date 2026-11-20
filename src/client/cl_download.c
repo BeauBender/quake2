@@ -654,6 +654,7 @@ void
 CL_Download_f(void)
 {
 	char filename[MAX_OSPATH];
+	char name[MAX_OSPATH];
 
 	if (Cmd_Argc() != 2)
 	{
@@ -668,14 +669,22 @@ CL_Download_f(void)
 		return;
 	}
 
-	strcpy(cls.downloadname, filename);
+	Q_strlcpy(cls.downloadname, filename, sizeof(cls.downloadname));
 	Com_Printf("Downloading %s\n", cls.downloadname);
 
 	/* download to a temp name, and only rename
 	   to the real name when done, so if interrupted
 	   a runt file wont be left */
 	COM_StripExtension(cls.downloadname, cls.downloadtempname);
-	strcat(cls.downloadtempname, ".tmp");
+	Q_strlcat(cls.downloadtempname, ".tmp", sizeof(cls.downloadtempname));
+
+	CL_DownloadFileName(name, sizeof(name), cls.downloadtempname);
+
+	if (!name[0])
+	{
+		Com_Printf("Refusing to download a name that is too long: %s\n", filename);
+		return;
+	}
 
 	MSG_WriteByte(&cls.netchan.message, clc_stringcmd);
 	MSG_WriteString(&cls.netchan.message, va("download %s", cls.downloadname));
@@ -740,7 +749,10 @@ CL_ParseDownload(void)
 	{
 		CL_DownloadFileName(name, sizeof(name), cls.downloadtempname);
 
-		FS_CreatePath(name);
+		if (name[0])
+		{
+			FS_CreatePath(name);
+		}
 
 		cls.download = name[0] ? Q_fopen(name, "wb") : NULL;
 
@@ -780,6 +792,13 @@ CL_ParseDownload(void)
 		if (!oldn[0] || !newn[0])
 		{
 			Com_Printf("failed to rename: name too long.\n");
+
+			/* the temp name may have fitted when the final one did not */
+			if (oldn[0])
+			{
+				Sys_Remove(oldn);
+			}
+
 			fp = NULL;
 			r = 1;
 		}
