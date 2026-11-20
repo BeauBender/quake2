@@ -4,7 +4,7 @@ Card: TASK185 (#532). Plan: `docs/plans/presentation-modes.md`, sections 5.2 and
 PM1 (TASK183, the `r_presentation` overlay) and PM2 (TASK184, the Retro post-process).
 
 Under the effective mode `RM_PRES_RETRO` (`r_presentation 2`), `ref_metal` now also uploads and samples
-textures as a 16-bit board did and draws the 3D view at 480 lines. Stock (`r_presentation 0`) takes none
+textures as a 16-bit board did and draws the frame's 3D layer as if the window were 480 lines tall. Stock (`r_presentation 0`) takes none
 of these paths. No cvar is written; no cvar is new; the renderer API, the protocol, savegames and the game
 module are unchanged and no asset is added.
 
@@ -25,7 +25,11 @@ module are unchanged and no asset is added.
 - **The 480-line view**: under Retro `RM_GB_Choose` always gives the MOTION path or better, so the world
   view has the render-size target, and `RM_GB_Begin` sizes it with `mtl_retro_view_scale`: 480 lines over
   the target's height, the width by the same fraction (the window's aspect); a target of 480 lines or fewer
-  is not scaled. `RM_FX_Begin` returns 0 under Retro, so no MetalFX scaler runs, and the existing blit at
+  is not scaled. The scale is the target's, not the view's: the frame's 3D layer is drawn as if the window
+  were 480 lines tall, and the view's rectangle maps into it in proportion, so at `viewsize 60` in a
+  1080-line window the view (about 648 lines) is drawn at about 288. The menu's player model
+  (`RDF_NOWORLDMODEL`) takes the FORWARD path, so it is not drawn smaller; `R_RetroFinish` quantizes it at
+  the window's size. `RM_FX_Begin` returns 0 under Retro, so no MetalFX scaler runs, and the existing blit at
   the view's end (`rm_fragment_blit`, bilinear) enlarges the view to its rectangle. The 2D layer is drawn on
   the window-size frame after it, as before.
 - **Mode change**: the mode is read in `RI_Init`, so it applies at `vid_restart`, which reloads the
@@ -48,14 +52,17 @@ arguments for this; the tone map's and the frame's pass pass the frame's. The se
 
 ## Tests and mutants
 
-`tests/metal/rm_retro_tex_test.c` (167 checks, run by `tests/check-ref-metal.sh`, line `Retro textures 167
+`tests/metal/rm_retro_tex_test.c` (197 checks, run by `tests/check-ref-metal.sh`, line `Retro textures 197
 checks, 0 failed`): every byte at every rank for 4, 5 and 6 bits against a floating-point reference; black
 and white kept; 128 giving 123 or 132 in 5 bits and 125 or 130 in 6; every channel of a 565 image one of
 32 or 64 levels and its alpha untouched; every channel of a 4444 image a multiple of 17 with alpha 0 and
 255 kept, a middle alpha going to its two neighbouring levels; a flat image becoming the Bayer pattern with
 period 4, each texel its own rank's value, the 16 averaging to the byte; the cap's dimensions (512 to 256,
 256 kept, 1024 x 256 to 256 x 64, 2048 to 256, 300 x 200 to 150 x 100, 257 x 1 to 129 x 1); the in-place
-box average of a checker (100) and of a gradient against the four sources; the filter name; the view's scale
+box average of a checker (100) and of a gradient against the four sources; the cap in place at odd and
+non-square sizes (1 x 1000, 1000 x 1, 257 x 3, 3 x 257, 301 x 299, 1025 x 513, 2049 x 1, 512 x 64,
+257 x 257, 4096 x 4096), each in a buffer of exactly w x h x 4 bytes so a read past it is a sanitizer error,
+against a reference halving into a second buffer and against `mtl_retro_cap_dims`'s size; the filter name; the view's scale
 (1 at 480 lines and below, 480 over the height above, 480 lines after rounding at 481, 1080 and 2880).
 
 Each mutant was applied to a scratch copy of the header and the test built against it; each is red:
@@ -71,6 +78,15 @@ Each mutant was applied to a scratch copy of the header and the test built again
 | the cap takes one texel, not the average | 2 of 167 failed |
 | 540 lines | 6 of 167 failed |
 | the filter is `GL_LINEAR_MIPMAP_LINEAR` | 1 of 167 failed |
+
+Review round 1 found two mutants of `mtl_retro_cap_apply` that the 512 x 512 cases let through. With the
+odd-size cases (197 checks) both are red, under ASan and UBSan:
+
+| mutant | result |
+| --- | --- |
+| the last row's source not clamped (`y1 = 2 * y + 1`) | AddressSanitizer: heap-buffer-overflow (exit 134) |
+| the last row of an odd height dropped (`nh = *h / 2 + (*h == 1)`) | 10 of 197 failed |
+| none (the header as committed) | 197 checks, 0 failed |
 
 The shader's use of the pass and the wiring in `rm_main.c`, `rm_gbufscene.c` and `rmb_gbuf.m` are not read
 back by a host test; they are shown by the run below and by the frames.
