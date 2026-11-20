@@ -148,43 +148,50 @@ TEST(download_filter_extension_table)
 		{"pak5.pak", true},
 		{"dir/X.PAK", true},
 		{"x.pak.1", true},
+		/* a name at the top of a game directory, refused: the filesystem
+		   mounts containers only from there, and a case-folding volume
+		   spells ".pak" in more ways than a byte comparison sees */
+		{"x.bsp", true},
+		{"foo.wav", true},
+		{"pak9.pa\xe2\x84\xaa", true},
+		{"x", true},
 		/* ordinary assets and cfg text elsewhere, accepted */
 		{"maps/x.bsp", false},
 		{"sound/x.wav", false},
 		{"players/x/y.pcx", false},
-		{"x.cfgs", false},
-		{"x.paks", false},
+		{"maps/x.cfgs", false},
+		{"maps/x.paks", false},
 		{"cfg/x.wav", false},
-		{"x.cfg.pcx", false},
+		{"maps/x.cfg.pcx", false},
 		/* the extension text inside a component, accepted */
 		{"maps/a.area.bsp", false},
-		{"x.solid.pcx", false},
+		{"maps/x.solid.pcx", false},
 		{"textures/e1u1/a.lib_wall.wal", false},
 		{"sound/.au/x.wav", false},
 		{"models/items/a.ase", false},
 		{"a.dll_x/y.wav", false},
 		{"x.dylibs/y.wav", false},
 		{"x.so_called/y.wav", false},
-		{"x.dll.pcx", false},
-		{"x.so.bsp", false},
+		{"maps/x.dll.pcx", false},
+		{"maps/x.so.bsp", false},
 		/* no extension text at all */
 		{"maps/q2dm1.bsp", false},
 		{"players/male/grunt.pcx", false},
 		/* a version group that is not numeric does not count */
-		{"libx.so.x", false},
-		{"libx.so.", false},
-		{"libx.so.1a", false},
-		{"x.dll1", false},
-		{"libx.so2", false},
-		{"x.a7", false},
-		{"x.dll_1", false},
+		{"maps/libx.so.x", false},
+		{"maps/libx.so.", false},
+		{"maps/libx.so.1a", false},
+		{"maps/x.dll1", false},
+		{"maps/libx.so2", false},
+		{"maps/x.a7", false},
+		{"maps/x.dll_1", false},
 		/* names shorter than the extension */
-		{"x", false},
-		{"so", false},
-		{"dll", false},
+		{"maps/x", false},
+		{"maps/so", false},
+		{"maps/dll", false},
 		/* only digit groups: the version scan stops at the start */
-		{"123", false},
-		{"1.2", false},
+		{"maps/123", false},
+		{"maps/1.2", false},
 		/* the other rules, byte for byte as before */
 		{".x.wav", true},
 		{"/x.wav", true},
@@ -197,7 +204,7 @@ TEST(download_filter_extension_table)
 	for (i = 0; i < sizeof(table) / sizeof(table[0]); i++)
 	{
 		reset_client();
-		Cmd_TokenizeString(va("download %s", table[i].name), false);
+		Cmd_TokenizeString(va("download \"%s\"", table[i].name), false);
 		CL_Download_f();
 
 		if ((cls.netchan.message.cursize == 0) != table[i].refused)
@@ -211,9 +218,12 @@ TEST(download_filter_extension_table)
 
 static byte f159buf[512];
 
-/* A hostile server offers a pak holding autoexec.cfg: it must not be
-   downloaded, so the config is not run when the search path is rebuilt. */
-TEST(download_pak_cfg_never_runs)
+/* A hostile server offers a pak holding autoexec.cfg under the given name
+   (a spelling of "pakN.pak" the volume may resolve to a real one): it must
+   not be downloaded, so the config is not run when the search path is
+   rebuilt. */
+static void
+pak_cfg_never_runs(const char *name)
 {
 	static byte pak[12 + 18 + 64];
 
@@ -228,13 +238,13 @@ TEST(download_pak_cfg_never_runs)
 
 	/* a pak left by an earlier run would be mounted below */
 	FS_BuildGameSpecificSearchPath("t_f159");
-	Sys_Remove(va("%s/evil.pak", FS_Gamedir()));
+	Sys_Remove(va("%s/%s", FS_Gamedir(), name));
 	FS_BuildGameSpecificSearchPath("t_f159");
 	Cbuf_Execute();
 	T_EQ_STR(Cvar_VariableString("f159probe"), "");
 
 	reset_client();
-	Cmd_TokenizeString("download evil.pak", false);
+	Cmd_TokenizeString(va("download \"%s\"", name), false);
 	CL_Download_f();
 	T_EQ_INT(cls.netchan.message.cursize, 0);
 
@@ -253,6 +263,18 @@ TEST(download_pak_cfg_never_runs)
 	FS_BuildGameSpecificSearchPath("t_f159");
 	Cbuf_Execute();
 	T_EQ_STR(Cvar_VariableString("f159probe"), "");
+}
+
+TEST(download_pak_cfg_never_runs)
+{
+	pak_cfg_never_runs("evil.pak");
+}
+
+/* KELVIN SIGN (U+212A) folds to "k" on a case-folding volume, so this name
+   opens pak9.pak at the next start; it is refused as a top-level name. */
+TEST(download_pak_cfg_never_runs_kelvin)
+{
+	pak_cfg_never_runs("pak9.pa\xe2\x84\xaa");
 }
 
 TEST(download_filter_nodownload_list_and_existing)
