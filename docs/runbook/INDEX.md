@@ -111,3 +111,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX156](../runbook/FIX156.md): an alias or bind a server line wrote runs as the server's text whoever runs it, until the player defines it again: the owner flag, why a key press is not the player's choice of the body, why a server's binding is left out of `config.cfg`, and every route
 - [FIX163](../runbook/FIX163.md): the Keys menu's unbind of a server-owned key gives the key back to the player's saved binding instead of erasing it
 - [FIX166](../runbook/FIX166.md): a bind line in `config.cfg` cannot split into a second command: the writer skips a body with a quote or a line break and says so, and why the key names cannot hold a splitting character
+- [FIX167](../runbook/FIX167.md): the console's `unbind` of a server-owned key gives the key back to the player's saved binding instead of erasing it; `unbindall` still clears everything, and why

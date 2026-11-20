@@ -962,7 +962,7 @@ Key_Unbind_f(void)
 		return;
 	}
 
-	Key_SetBinding(b, "");
+	Key_ClearForPlayer(b);
 }
 
 static void
