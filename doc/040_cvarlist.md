@@ -56,10 +56,13 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   load. Latched, and advertised in the server info.
 
 * **crosshair**: The crosshair shape drawn at the center of the screen.
-  `0` (the default) draws none. Archived.
+  `0` (the default) draws none, `1` to `3` pick `ch1` to `ch3`, and a
+  higher value is clamped to `3`. Archived.
 
 * **dedicated**: Set to `1` by the dedicated server (`q2ded`), which has
-  no client. Cannot be changed at runtime.
+  no client, and by the client binary started with `+set dedicated 1`,
+  which then returns early from its client initialisation. Cannot be
+  changed at runtime.
 
 * **deathmatch**: Set to `1` to start a deathmatch game on the next map
   load. Latched, and advertised in the server info.
@@ -72,7 +75,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   default of the engine) is a single-player game. Latched, and advertised
   in the server info.
 
-* **name**: The player name, sent to servers. Archived.
+* **name**: The player name, sent to servers. Default `unnamed`. Archived.
 
 * **paused**: Set to `1` to pause the game in a single-player game,
   `0` to resume.

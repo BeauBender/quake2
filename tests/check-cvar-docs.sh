@@ -684,7 +684,7 @@ EOF
 		printf 'const char *zz_fn(int i)\n{\n\tif (i) return "zz_f2";\n\treturn "zz_f1";\n}\n' > src/common/t.c
 		printf 'src/common/v.c|Cvar_Get|name|src/common/t.c:zz_fn|a function\n' >> tests/baselines/nonliteral-calls.txt
 	}
-	s_fn_table_first() { s_fn_table; printf '* **zz_f1**: x.\n' >> doc/040_cvarlist.md; }
+	s_fn_table_first() { s_fn_table; printf '* **zz_f2**: x.\n' >> doc/040_cvarlist.md; }
 	s_literal_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **zz_doc**: documented.\n' >> doc/040_cvarlist.md; }
 	s_cmt_block() { printf '/* Cvar_Get("zz_c", "0", 0); */\n' > src/common/c.c; }
 	s_cmt_line() { printf '// Cvar_Get("zz_c", "0", 0);\n' > src/common/c.c; }
@@ -819,7 +819,7 @@ EOF
 	case_run bullet-with-no-colon-is-not-documentation refused zz_a s_nocolon_next
 	case_run header-that-gives-up-then-bold-prose refused zz_b s_giveup_prose
 	case_run lone-struct-counts-only-its-first-literal accepted "$OK" s_lone_struct_doc
-	case_run function-table-counts-every-literal refused zz_f2 s_fn_table_first
+	case_run function-table-counts-every-literal refused zz_f1 s_fn_table_first
 	case_run literal-documented-one-line accepted "$OK" s_literal_doc
 	case_run commented-out-block-counts refused zz_c s_cmt_block
 	case_run commented-out-line-counts refused zz_c s_cmt_line
