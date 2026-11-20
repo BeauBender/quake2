@@ -352,9 +352,40 @@ Cvar_Get(const char *var_name, const char *var_value, int flags)
 	return Cvar_AddToList(var_name, var_value, flags);
 }
 
+/*
+ * nextserver and nextdemo hold console text: SV_Map copies nextdemo
+ * into nextserver, and SV_Nextserver queues nextserver from SV_Frame,
+ * so it runs as the player's when a demo or cinematic ends. A line the
+ * server sent may not set either (FIX153), or its text would come back
+ * as the player's and pass the commands that refuse a server's use.
+ * Every write of a value goes through Cvar_SetVar, Cvar_Set2 or
+ * Cvar_FullSet, which ask this first.
+ */
+static qboolean
+Cvar_RefusedFromServer(const char *var_name)
+{
+	if (!Cbuf_ExecutingServerText())
+	{
+		return false;
+	}
+
+	if (strcmp(var_name, "nextserver") && strcmp(var_name, "nextdemo"))
+	{
+		return false;
+	}
+
+	Com_Printf("%s may not be set by the server.\n", var_name);
+	return true;
+}
+
 static cvar_t *
 Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 {
+	if (Cvar_RefusedFromServer(var->name))
+	{
+		return var;
+	}
+
 	if (var->flags & (CVAR_USERINFO | CVAR_SERVERINFO))
 	{
 		if (!Cvar_InfoValidate(value))
@@ -453,9 +484,14 @@ Cvar_Set2(const char *var_name, const char *value, qboolean force)
 	var_name = Cvar_CheckReplacement(var_name, true);
 	var = Cvar_FindVar(var_name);
 
-	return (!var) ?
-		Cvar_GetNew(var_name, value, 0) :
-		Cvar_SetVar(var, value, force);
+	if (var)
+	{
+		return Cvar_SetVar(var, value, force);
+	}
+
+	/* a refused write still returns a cvar, created empty */
+	return Cvar_GetNew(var_name,
+			Cvar_RefusedFromServer(var_name) ? "" : value, 0);
 }
 
 cvar_t *
@@ -477,6 +513,12 @@ Cvar_FullSet(const char *var_name, const char *value, int flags)
 
 	var_name = Cvar_CheckReplacement(var_name, true);
 	var = Cvar_FindVar(var_name);
+
+	/* neither the value nor the flags, so not the archive flag */
+	if (Cvar_RefusedFromServer(var_name))
+	{
+		return var ? var : Cvar_GetNew(var_name, "", 0);
+	}
 
 	if (!var)
 	{
