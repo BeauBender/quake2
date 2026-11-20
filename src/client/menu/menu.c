@@ -874,7 +874,7 @@ M_UnbindCommand(char *command, int scope)
 
 		if (!strcmp(b, command))
 		{
-			Key_SetBinding(j, "");
+			Key_ClearForPlayer(j);
 		}
 	}
 }
