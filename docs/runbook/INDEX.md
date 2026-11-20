@@ -92,6 +92,7 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK184](../runbook/TASK184.md): the Retro post-process (RGB565 with the 4 x 4 dither, the box filter, the gamma curve): the tests and mutants, the retro records and the GPU time at 1080p and 5K (WIP: the pin comparison and the gate are left)
 - [TASK185](../runbook/TASK185.md): Retro upload and sampling (RGB565 and ARGB4444 texels with the dither, the 256 cap, linear-mip-nearest, the 480-line 3D view and its blit): the order of the post-process and the blit, the tests and mutants, the M6 log line, the stock pin comparison
 - [TASK196](../runbook/TASK196.md): HDR output in ref_metal: HD2, r_hdr's float16 path, the r_hdr 0 pin comparison, the hdr record, the live switch and the mutants
+- [TASK197](../runbook/TASK197.md): Retro forces ray tracing and MetalFX off (slice 1; plan call P8): the overlay and the menu
 - [FIX124](../runbook/FIX124.md): the identity check refuses an index blob it cannot read, and scans binary blobs as bytes (FIX125 too)
 - [FIX115](../runbook/FIX115.md): the gate's invariants in CI (`invariants_macos`), the required status checks of `main-protect`, and a `_REQUIRE` variable for every skip
 - [FIX118](../runbook/FIX118.md): the shared BSP checks of all four renderers: the round-2 red and green runs, the mutants, and every stock map passing
