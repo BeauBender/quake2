@@ -100,6 +100,8 @@ unsigned long rmb_frame_serial = 1;
 id<MTLTexture> rmb_present_take(int w, int h);
 id<MTLRenderPipelineState> rmb_present_pipe(void);
 id<CAMetalDrawable> rmb_next_drawable(void);
+int rmb_present_region(int region, int same_format, int hdr, int have_pso);
+int rmb_present_written(id<MTLCommandBuffer> cmd, id<CAMetalDrawable> drawable, int region);
 id<MTLCommandBuffer> rmb_present_begin(id<MTLCommandBuffer> frame);
 void rmb_present_commit(void);
 
@@ -516,7 +518,12 @@ rmb_post_pass(id<MTLRenderPipelineState> (*pipe)(void), int x, int y, int w, int
 			return 0;
 		}
 
-		[enc setRenderPipelineState:rmb_fmt_pipe(pso)];
+		if (!rmb_fmt_bind(enc, pso))
+		{
+			[enc endEncoding];
+			return 0;
+		}
+
 		[enc setViewport:vp];
 		[enc setScissorRect:sc];
 		[enc setFragmentTexture:retro_src atIndex:0];
@@ -863,8 +870,12 @@ rmb_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 	rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
 	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
 	enc = [cmd renderCommandEncoderWithDescriptor:rp];
-	[enc setRenderPipelineState:rmb_fmt_pipe(pso)];
-	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+
+	if (rmb_fmt_bind(enc, pso))
+	{
+		[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+	}
+
 	[enc endEncoding];
 }
 
@@ -891,8 +902,10 @@ rmb_present_inset_set(const rm_inset_t *in)
  * FIX51: the frame onto the drawable of a layer that is not opaque, in one
  * pass: the frame's rows of r with alpha 1 (rm_fragment_present), the rest
  * of the drawable black, as the copy and FIX53's alpha pass leave it.
+ * Returns 0 when pso could not be bound (rmb_fmt_bind): nothing was drawn,
+ * and the drawable is not presented (FIX133).
  */
-static void
+static int
 rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MTLTexture> dst, const rm_present_t *r)
 {
 	MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -906,7 +919,13 @@ rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MT
 	rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
 	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
 	enc = [cmd renderCommandEncoderWithDescriptor:rp];
-	[enc setRenderPipelineState:rmb_fmt_pipe(pso)];
+
+	if (!rmb_fmt_bind(enc, pso))
+	{
+		[enc endEncoding];
+		return 0;
+	}
+
 	[enc setViewport:vp];
 	[enc setFragmentTexture:color atIndex:0];
 	[enc setFragmentBytes:ofs length:sizeof(ofs) atIndex:0];
@@ -919,6 +938,7 @@ rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MT
 
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	[enc endEncoding];
+	return 1;
 }
 
 void
@@ -981,16 +1001,19 @@ rmb_frame_end(void)
 			/* at gl1's place: the frame's bottom-left corner on the drawable's (FIX45) */
 			int region = rm_present_region_in((int)color.width, (int)color.height, (int)dst.width, (int)dst.height, &rmb_inset, &r);
 
-			/* a drawable or a frame of the other format (r_hdr switched while it was held) is not presented */
-			if ((dst.pixelFormat != color.pixelFormat) || (hdr && !pso))
-			{
-				region = 0;
-			}
+			/*
+			 * a drawable or a frame of the other format (r_hdr switched while it was held) is not presented,
+			 * nor a float16 frame without its present pipeline or with a draw skipped (rmb_fmt_bind, FIX133)
+			 */
+			region = rmb_present_region(region, dst.pixelFormat == color.pixelFormat, hdr, pso != nil);
 
 			if (region && pso)
 			{
 				/* a layer that is not opaque: the copy and the alpha 1 of FIX53 in one pass (FIX51) */
-				rmb_present_pass(pcmd, pso, dst, &r);
+				if (!rmb_present_pass(pcmd, pso, dst, &r))
+				{
+					region = 0;   /* nothing written: not presented */
+				}
 			}
 			else if (region)
 			{
@@ -1023,16 +1046,14 @@ rmb_frame_end(void)
 				}
 			}
 
-			if (dst.pixelFormat == color.pixelFormat)
+			/* metal_hdr_probe (TASK196): the pixel as presented, after the present wrote it */
+			if (region)
 			{
-				/* metal_hdr_probe (TASK196): the pixel as presented, after the present wrote it */
-				if (region)
-				{
-					rmb_hdr_probe_copy(pcmd, dst);
-				}
-
-				[pcmd presentDrawable:drawable];
+				rmb_hdr_probe_copy(pcmd, dst);
 			}
+
+			/* a drawable nothing wrote is not presented (FIX133) */
+			rmb_present_written(pcmd, drawable, region);
 		}
 		else
 		{
@@ -1236,7 +1257,12 @@ rmb_draw_2d_idx(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, in
 		memcpy((unsigned char *)frame_ring.contents + vat, v, vbytes);
 		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
 
-		[frame_enc setRenderPipelineState:rmb_fmt_pipe(ps)];
+		if (!rmb_fmt_bind(frame_enc, ps))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
 		[frame_enc setViewport:(MTLViewport){ 0, 0, (double)color.width, (double)color.height, 0, 1 }];
 		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)vat atIndex:0];
 		[frame_enc setVertexBytes:mvp length:16 * sizeof(float) atIndex:1];
@@ -1316,7 +1342,11 @@ rmb_draw_3d_state(int pipe, int ds, const float *mvp, const float *rgba, const r
 	memcpy(u.mvp, mvp, sizeof(u.mvp));
 	memcpy(u.color, rgba, sizeof(u.color));
 
-	[frame_enc setRenderPipelineState:rmb_fmt_pipe(ps)];
+	if (!rmb_fmt_bind(frame_enc, ps))
+	{
+		return 0;
+	}
+
 	[frame_enc setDepthStencilState:dss];
 	[frame_enc setFrontFacingWinding:MTLWindingCounterClockwise];
 	[frame_enc setCullMode:(cull == RMB_CULL_BACK) ? MTLCullModeBack : (cull ? MTLCullModeFront : MTLCullModeNone)];

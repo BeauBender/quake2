@@ -1565,7 +1565,8 @@ void rmb_hdr_set(int active);
 
 /*
  * A pipeline of the float16 path could not be built (rmb_fmt_pipe, the
- * present's): r_hdr is off for the session, said once on stderr by the
+ * present's): r_hdr is off until the next renderer start (vid_restart),
+ * which tries it again (FIX133), said once on stderr by the
  * caller. It takes effect through the next rmb_hdr_set, between frames,
  * the way a live r_hdr 0 does; the frame that failed is not presented.
  */
@@ -1573,6 +1574,13 @@ void rmb_hdr_fail(void);
 
 /* rmb_hdr_fail was called: rmb_hdr_set(1) then leaves the path off */
 int rmb_hdr_failed(void);
+
+/*
+ * Clears rmb_hdr_fail's flag. Only rmb_resources_close calls it, after it
+ * has emptied the caches that remember the failure, so the flag and the
+ * caches reset together (FIX133); a detach and an attach keep both.
+ */
+void rmb_hdr_retry(void);
 
 /* the float16 path is in force on the layer (the colour targets are RM_FMT_RGBA16F) */
 int rmb_hdr_on(void);
@@ -1617,12 +1625,21 @@ int rmb_hdr_probe_take(int *fmt, int *x, int *y, unsigned char px[8]);
  * ps itself on the stock path; on the float16 path its variant with every
  * BGRA8Unorm colour attachment made RGBA16Float, built at its first use
  * from the descriptor rmb_new_render_pipe kept (rmb_resource.m). When the
- * variant cannot be built it says so once, turns the float16 path off for
- * the session (rmb_hdr_fail) and returns ps, never nil: that frame's draw
- * is not presented (the frame and the drawable differ in format), and the
- * next frame is stock.
+ * variant cannot be built it says so once, turns the float16 path off
+ * (rmb_hdr_fail) and returns nil, never ps (a BGRA8Unorm pipeline is never
+ * bound to an RGBA16Float target, FIX133), for every later ask of that
+ * frame too: the draw is skipped, that frame is not presented, and the
+ * next frame is stock. nil for a nil ps.
  */
 id<MTLRenderPipelineState> rmb_fmt_pipe(id<MTLRenderPipelineState> ps);
+
+/*
+ * rmb_fmt_pipe(ps) bound to enc: 1, or 0 with nothing bound (no enc, no
+ * ps, or its float16 variant was not built), when the caller skips the
+ * draw. Every draw of a rmb_new_render_pipe pipeline binds it through here
+ * (tests/check-ref-metal.sh).
+ */
+int rmb_fmt_bind(id<MTLRenderCommandEncoder> enc, id<MTLRenderPipelineState> ps);
 
 /* newRenderPipelineStateWithDescriptor:error:, keeping a copy of d for rmb_fmt_pipe when it draws into BGRA8Unorm */
 id<MTLRenderPipelineState> rmb_new_render_pipe(MTLRenderPipelineDescriptor *d, NSError **e);
