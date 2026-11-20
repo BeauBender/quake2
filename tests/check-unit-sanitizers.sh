@@ -38,7 +38,12 @@
 #   runtime in this build, and the last log_path set (UBSan's) wins for
 #   every report, so an ASan report can land in a ubsan.<pid> file. A
 #   forked test child that dies by a signal fails its test; its report is
-#   in the log file, not in the test output.
+#   in the log file, not in the test output. On a log file failure the
+#   check also prints the last 40 lines of the make log, which hold the
+#   failing test's "FAIL <test>" line (FIX143). The runtime splits its
+#   options on space, ',' and ':', so the path is written in single
+#   quotes, which it accepts; a scratch path holding a single quote is
+#   refused with a message.
 # - A run that exits 0 but whose output still holds a sanitizer report
 #   ("runtime error:", "ERROR: AddressSanitizer",
 #   "SUMMARY: UndefinedBehaviorSanitizer") fails too.
@@ -73,8 +78,20 @@ cp -R tests/pins/unit "${tree:?}/tests/pins/"
 jobs=$(sysctl -n hw.ncpu 2> /dev/null || nproc 2> /dev/null || echo 4)
 case $jobs in '' | *[!0-9]*) jobs=4 ;; esac
 
-ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=0:log_path="${tmp:?}/run/asan"
-UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1:log_path="${tmp:?}/run/ubsan"
+# The runtime splits its options on space, ',' and ':', but accepts a value in
+# single quotes (tested with a small -fsanitize=address program, FIX143), so
+# log_path is quoted; a path holding a single quote cannot be quoted and is
+# refused.
+case $tmp in
+*"'"*)
+	echo "check-unit-sanitizers: the scratch path holds a single quote, which the sanitizer options cannot carry: $tmp"
+	echo "check-unit-sanitizers: set TMPDIR to a path without one"
+	exit 1
+	;;
+esac
+
+ASAN_OPTIONS="halt_on_error=1:abort_on_error=1:detect_leaks=0:log_path='${tmp:?}/run/asan'"
+UBSAN_OPTIONS="halt_on_error=1:abort_on_error=1:print_stacktrace=1:log_path='${tmp:?}/run/ubsan'"
 TMPDIR="${tmp:?}/run"
 export ASAN_OPTIONS UBSAN_OPTIONS TMPDIR
 
@@ -106,6 +123,8 @@ logf=$(ls "${tmp:?}"/run/asan.* "${tmp:?}"/run/ubsan.* 2> /dev/null | head -n 1 
 if [ -n "$logf" ]; then
 	echo "check-unit-sanitizers: a sanitizer log file was written: $(basename "$logf")"
 	head -n 60 "$logf"
+	echo "check-unit-sanitizers: the end of the make log (the failing test's name is in it):"
+	tail -n 40 "${tmp:?}/out"
 	echo "check-unit-sanitizers: FAILED: make ASAN=1 UBSAN=1 test, status $rc, in $((t1 - t0)) s"
 	exit 1
 fi
