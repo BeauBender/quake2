@@ -354,6 +354,32 @@ FS_PackQuickSearch(const fsPack_t *pak, const char *name)
 }
 
 /*
+ * Returns true if a track name from the server (CS_CDTRACK) is a bare
+ * file name that may be joined onto "<path>/music/". Anything with a
+ * path separator, and "." and "..", is refused.
+ */
+qboolean
+FS_TrackNameValid(const char *track)
+{
+	if (track == NULL || track[0] == '\0')
+	{
+		return false;
+	}
+
+	if (strchr(track, '/') != NULL || strchr(track, '\\') != NULL)
+	{
+		return false;
+	}
+
+	if (strcmp(track, ".") == 0 || strcmp(track, "..") == 0)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+/*
  * Returns true if a name has a ".." component, separated by '/' or '\\'.
  * Such a name would leave the search paths when joined onto one. "a..b"
  * and "..foo" are ordinary names, not escapes.
@@ -457,6 +483,15 @@ FS_FOpenFile(const char *rawname, fileHandle_t *f, qboolean gamedir_only)
 	{
 		Com_DPrintf("%s: refusing name with '..' component: %.64s\n",
 				__func__, name);
+		return -1;
+	}
+
+	// handle->name holds MAX_QPATH bytes and is what gets joined onto the
+	// search paths. A longer name is truncated there, after the check
+	// above, and could never match a pak entry or a real asset anyway.
+	if (strlen(name) >= MAX_QPATH)
+	{
+		Com_DPrintf("%s: refusing overlong name: %.64s\n", __func__, name);
 		return -1;
 	}
 

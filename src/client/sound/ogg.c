@@ -395,6 +395,16 @@ OGG_PlayTrack(const char *track, qboolean cdtrack, qboolean immediate)
 		return;
 	}
 
+	/* A track is a bare file name under music/. The name can come from
+	   the server (CS_CDTRACK), so it must not leave that directory. */
+	if (!FS_TrackNameValid(track))
+	{
+		Com_DPrintf("%s: refusing track name: %.64s\n", __func__,
+				track ? track : "");
+
+		return;
+	}
+
 	while (1)
 	{
 		int res = 0;
