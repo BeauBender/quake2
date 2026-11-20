@@ -194,11 +194,12 @@ static const char player_binds[] =
 
 /*
  * A server line runs the player's own config.cfg, as `exec config.cfg`
- * does, or `game <dir>` on a remote client does inside that line
- * (FS_BuildGameSpecificSearchPath runs default.cfg, then config.cfg).
- * unbindall first, with cfg_unbindall 1 (the default) or none with 0;
- * then every bind line. Every key stays the player's and what config.cfg
- * saves is what it saved before.
+ * does, alone or after default.cfg (the order Qcommon_ExecConfigs
+ * uses; a server line's `game <dir>` runs them as the player's text
+ * since round 3, keybind_server_game_dir_keeps_dir_config). unbindall
+ * first, with cfg_unbindall 1 (the default) or none with 0; then every
+ * bind line. Every key stays the player's and what config.cfg saves is
+ * what it saved before.
  */
 static void
 kb_server_runs_config(qboolean unbindall, qboolean defaults_first)
@@ -265,7 +266,7 @@ TEST(keybind_server_exec_config_keeps_player_keys)
 	kb_server_runs_config(false, false);
 }
 
-TEST(keybind_server_game_dir_configs_keep_player_keys)
+TEST(keybind_server_exec_default_then_config_keeps_player_keys)
 {
 	kb_server_runs_config(true, true);
 	kb_server_runs_config(false, true);
