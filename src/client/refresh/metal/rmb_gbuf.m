@@ -40,7 +40,8 @@
 #include "header/rmb.h"
 #include "header/rm_gbuf.h"
 #include "header/rm_rtfx.h"
-#include "common/mtl_rts_math.h"
+#include "common/mtl_shader_math.h"
+#include "common/mtl_rts_math.h"   /* mtl_rts_gb_tag: the surface attachment's names (TASK131) */
 #include "header/rm_metalfx.h"
 #include "header/rmb_internal.h"
 
