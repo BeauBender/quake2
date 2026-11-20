@@ -589,6 +589,13 @@ each run, and the check `colour space 640 checks, 0 failed; 11 colour-space muta
 skipped (no temporal scaler)`, so `fxlinear` and `fxnonote` were still refused. The normal run is
 in the checks below.
 
+FIX145: the skip is no longer inferred from a missing line. The probe prints `scalers: spatial=N
+temporal=N` and a skipped line for each half it does not run (`the MetalFX spatial half skipped: ...`,
+`the MetalFX temporal half skipped: ...`, `the temporal scaler in RGBA16Float skipped: ...` when the GPU
+has the scaler but refuses float16). The check skips an fx mutant only on that line, and its reason is
+the line's own text. It calls `bad` when a half printed neither a run nor a skipped line, and when the
+capability line says both scalers are present but a mutant was skipped for a missing scaler.
+
 `rm_fx_test.c` pins the note's new line; `rm_host_test.c` pins `rm_hdr_fx_note`.
 
 ### On this GPU (apple9, this Mac, screen locked)
