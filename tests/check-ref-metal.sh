@@ -104,6 +104,13 @@
 #     moved below another statement; &caps for &rtcaps; RM_RTG_Init deleted,
 #     moved after ri.Vid_MenuInit; another *_Init(&caps); either function
 #     renamed) must fail it, each naming the rule it breaks.
+# (i) Always: the effect table (TASK179). tests/metal/rm_rtfx_test.c over
+#     rm_rtfx.c (RM_RTFX_HOST: every entry point a recording stub of
+#     tests/metal/rm_rtfx_host.h) and rm_rtgate.c: the order, the switches
+#     against the gate, the pipeline rule, what each walk calls; ten scratch
+#     mutants of the two files must fail it. Then, comments and literals
+#     stripped, rm_main.c and rmb_gbuf.m name no effect's symbol (a prefix
+#     taken from the table's FX(...) rows); four mutants check the lint.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -272,10 +279,15 @@ else
 	case $fx in *", 0 failed") ;; *) bad "tests/metal/rm_fx_test.c printed no result line"; fx="";; esac
 fi
 
-# the hardware gate of ray tracing (RT8, TASK60): rm_rtgate.c alone
+# the effect table (TASK179): rm_rtfx.c is built for the host with its entry points the recording stubs
+# of tests/metal/rm_rtfx_host.h (RM_RTFX_HOST), so the gate, which takes its effect switches from it, and
+# the table's test link no backend
+fxhost="-DYQ2OSTYPE=\"host\" -DYQ2ARCH=\"host\" -DRM_RTFX_HOST -Itests/metal"
+
+# the hardware gate of ray tracing (RT8, TASK60): rm_rtgate.c, with the effect table for its switches
 rtg=""
 # shellcheck disable=SC2086 # flags is a word list
-if ! $cc $flags -o "${tmp:?}/rm_rtgate_test" tests/metal/rm_rtgate_test.c "$rm_dir/rm_rtgate.c" -lm \
+if ! $cc $flags $fxhost -o "${tmp:?}/rm_rtgate_test" tests/metal/rm_rtgate_test.c "$rm_dir/rm_rtgate.c" "$rm_dir/rm_rtfx.c" -lm \
 	> "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
 	bad "tests/metal/rm_rtgate_test.c does not compile"
@@ -285,6 +297,67 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtgate_test" > "${tmp:?}/ou
 else
 	rtg=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtgate_test: //')
 	case $rtg in *", 0 failed") ;; *) bad "tests/metal/rm_rtgate_test.c printed no result line"; rtg="";; esac
+fi
+
+# the effect table (TASK179): tests/metal/rm_rtfx_test.c over rm_rtfx.c and rm_rtgate.c, the order every walk
+# takes, each row's switch against the gate's table, and the pipeline rule of rmb_gbuf_pipe3d. fxbuild <dir>
+# <out>: the test built over rm_rtfx.c and rm_rtgate.c of <dir> (a scratch copy finds the headers by -I)
+fxbuild() {
+	# shellcheck disable=SC2086 # flags and fxhost are word lists
+	$cc $flags $fxhost -I"$rm_dir" -o "$2" tests/metal/rm_rtfx_test.c "$1/rm_rtfx.c" "$1/rm_rtgate.c" -lm
+}
+rtfx=""
+if ! fxbuild "$rm_dir" "${tmp:?}/rm_rtfx_test" > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtfx_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtfx_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtfx_test.c failed"
+else
+	rtfx=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtfx_test: //')
+	case $rtfx in *", 0 failed") ;; *) bad "tests/metal/rm_rtfx_test.c printed no result line"; rtfx="";; esac
+fi
+# Scratch mutants the test must fail: two effects swapped in the order; the AO's switch changed in the
+# table but not in the gate, then in the gate but not in the table; the raster's surface choice inverted;
+# the forward pipeline asked for every pipe but the blended world face's; the AO row's show and post
+# entries swapped; the water's frame entry NULL; the post walk emptied; the resolve walk going on past
+# the first yes (with one resolve row: losing it); the wanted walk going on past the first yes
+fxh_mutants=0
+if [ -n "$rtfx" ]; then
+	mkdir "${tmp:?}/fxm"
+	for fxm in order tablesw gatesw surf forward aoswap wframe postempty resolvego wantedgo; do
+		cp "$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtgate.c" "${tmp:?}/fxm/"
+		case $fxm in
+			order) sed 's/{ RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER }/{ RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER }/' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			tablesw) sed 's/"ao", "r_rt_ao"/"ao", "r_rt_ambient"/' "$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			gatesw) sed 's/^	"r_rt_ao",$/	"r_rt_ambient",/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/fxm/rm_rtgate.c" ;;
+			surf) sed 's/surf ? RM_RTFX_PIPE_RASTER_SURF : RM_RTFX_PIPE_RASTER;/surf ? RM_RTFX_PIPE_RASTER : RM_RTFX_PIPE_RASTER_SURF;/' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			forward) sed 's/if ((pipe == RM_PIPE_WORLD_TEXC_BLEND) \&\& forward/if ((pipe != RM_PIPE_WORLD_TEXC_BLEND) \&\& forward/' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			aoswap) sed 's/FX(rmb_rtao_fx_trace), NULL, FX(rmb_rtao_fx_show), NULL,/FX(rmb_rtao_fx_trace), NULL, NULL, FX(rmb_rtao_fx_show),/' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			wframe) sed 's/FX(RM_RTW_Frame)/NULL/' "$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			postempty) awk '/^rm_rtfx_post\(/ { f = 1 } { print } f && /^\tint k;$/ { print "\n\treturn;"; f = 0 }' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			resolvego) awk '/^rm_rtfx_resolve\(/ { f = 1 } f && /return 1;/ { sub(/return 1;/, "continue;"); f = 0 } { print }' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			wantedgo) awk '/^rm_rtfx_wanted\(/ { f = 1 } f && /^\tint k;$/ { $0 = "\tint k, r = 0;" }
+				f && /return 1;/ { sub(/return 1;/, "r = 1;") } f && /return 0;/ { sub(/return 0;/, "return r;") }
+				/^}/ { f = 0 } { print }' "$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+		esac
+		if cmp -s "$rm_dir/rm_rtfx.c" "${tmp:?}/fxm/rm_rtfx.c" && cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/fxm/rm_rtgate.c"; then
+			bad "the effect-table mutant ($fxm) changed nothing"
+		elif ! fxbuild "${tmp:?}/fxm" "${tmp:?}/fxm/t" > "${tmp:?}/fxm.out" 2>&1; then
+			cat "${tmp:?}/fxm.out"
+			bad "the effect-table mutant ($fxm) does not compile"
+		elif "${tmp:?}/fxm/t" > "${tmp:?}/fxm.out" 2>&1; then
+			bad "tests/metal/rm_rtfx_test.c passes the effect-table mutant ($fxm)"
+		else
+			fxh_mutants=$((fxh_mutants + 1))
+		fi
+	done
 fi
 
 # the preset to table script (TASK195, slice 2): the rows it prints for a fixture preset, compiled
@@ -300,8 +373,8 @@ elif ! "$pt" "$ptfix/good.cfg" > "${tmp:?}/pt.def" 2>&1 || ! grep -q '^r_rt_ao_r
 else
 	ptvals=$(sed -n 's/^set \([A-Za-z0-9_]*\) "\([0-9.]*\)"$/\1=\2/p' "$ptfix/good.cfg")
 	# shellcheck disable=SC2086 # flags is a word list; ptvals is name=value pairs without blanks
-	if ! $cc $flags -include "${tmp:?}/pt.h" -o "${tmp:?}/rm_pres_table_test" tests/metal/rm_pres_table_test.c \
-		"$rm_dir/rm_rtgate.c" -lm > "${tmp:?}/cc.out" 2>&1; then
+	if ! $cc $flags $fxhost -include "${tmp:?}/pt.h" -o "${tmp:?}/rm_pres_table_test" tests/metal/rm_pres_table_test.c \
+		"$rm_dir/rm_rtgate.c" "$rm_dir/rm_rtfx.c" -lm > "${tmp:?}/cc.out" 2>&1; then
 		cat "${tmp:?}/cc.out"
 		bad "tests/metal/rm_pres_table_test.c does not compile with the rows of $pt"
 	elif ! "${tmp:?}/rm_pres_table_test" $ptvals > "${tmp:?}/out" 2>&1; then
@@ -1161,7 +1234,74 @@ for pf in "$rm_dir"/*.m; do
 	fi
 done
 
+# (i) TASK179: rm_main.c and rmb_gbuf.m reach the ray-traced effects only through the effect table's walks
+# (rm_rtfx.c). fx_vocab <table>: the effects' prefixes, from the identifiers the table's rows name in FX(...),
+# each cut after its second underscore (RM_RTS_Init: RM_RTS_, rmb_rtw_fx_mark: rmb_rtw_), with the pure
+# part's rm_ form of each (RM_RTSun_: rm_rtsun_): a row added for a new effect adds its prefixes. fx_named
+# <file> <vocabulary>: "file:line: name" for each identifier of the file's code (comments and literals
+# stripped) that starts with one of them.
+fx_vocab() {
+	strip "$1" | grep -oE 'FX\([A-Za-z_][A-Za-z0-9_]*\)' | sed -E 's/^FX\(//; s/\)$//' |
+		sed -nE 's/^([A-Za-z]+_[A-Za-z]+_).*/\1/p' |
+		awk '{ print; p = $0; sub(/^[A-Za-z]+_/, "", p); print "rm_" tolower(p) }' | sort -u
+}
+fx_named() {
+	strip "$1" | awk -v f="$1" '
+		NR == FNR { pre[++n] = $0; next }
+		{
+			line = $0
+			while (match(line, /[A-Za-z_][A-Za-z0-9_]*/)) {
+				id = substr(line, RSTART, RLENGTH); line = substr(line, RSTART + RLENGTH)
+				for (i = 1; i <= n; i++) if (index(id, pre[i]) == 1) { print f ":" FNR ": " id; break }
+			}
+		}' "$2" -
+}
+fx_mutants=0
+fx_vocab "$rm_dir/rm_rtfx.c" > "${tmp:?}/fx.vocab"
+if ! grep -qx 'RM_RTS_' "${tmp:?}/fx.vocab" || ! grep -qx 'rmb_rtw_' "${tmp:?}/fx.vocab"; then
+	cat "${tmp:?}/fx.vocab"
+	bad "the effect vocabulary of $rm_dir/rm_rtfx.c lacks RM_RTS_ or rmb_rtw_: its rows are not FX(...) entries"
+else
+	for fxf in rm_main.c rmb_gbuf.m; do
+		fout=$(fx_named "$rm_dir/$fxf" "${tmp:?}/fx.vocab")
+		if [ -n "$fout" ]; then
+			printf '%s\n' "$fout"
+			bad "$rm_dir/$fxf names a ray-traced effect outside the effect table: walk it with rm_rtfx_* (rm_rtfx.c)"
+		fi
+	done
+	# Mutants: an effect called directly from rm_main.c, and from rmb_gbuf.m, must be named; one named in a
+	# comment only must not; a new row's effect (RM_RTGI_) called from rm_main.c must be named through the
+	# vocabulary of the table that has the row
+	mkdir "${tmp:?}/fxc"
+	for fxm in main gbuf comment newrow; do
+		cp "$rm_dir/rm_main.c" "$rm_dir/rmb_gbuf.m" "$rm_dir/rm_rtfx.c" "${tmp:?}/fxc/"
+		want=""
+		case $fxm in
+			main) awk '{ print } /^[ \t]*rm_rtfx_frame\(fd, RM_RT_SceneReady\(\)\);/ { print "\tRM_RTW_Frame(fd, RM_RT_SceneReady());" }' \
+				"$rm_dir/rm_main.c" > "${tmp:?}/fxc/rm_main.c"; want=RM_RTW_Frame ;;
+			gbuf) awk '{ print } /^[ \t]*rm_rtfx_post\(&io\);/ { print "\t\trmb_rtw_blend(io.enc, t_material);" }' \
+				"$rm_dir/rmb_gbuf.m" > "${tmp:?}/fxc/rmb_gbuf.m"; want=rmb_rtw_blend ;;
+			comment) awk '{ print } /^[ \t]*rm_rtfx_frame\(fd, RM_RT_SceneReady\(\)\);/ { print "\t/* RM_RTW_Frame(fd, 0); */" }' \
+				"$rm_dir/rm_main.c" > "${tmp:?}/fxc/rm_main.c" ;;
+			newrow) awk '{ print } /^static const rm_rtfx_t rm_rtfx\[/ { print "\t[RM_RTFX_COUNT - 1] = { \"gi\", \"r_rt_gi\", FX(RM_RTGI_Init) }," }' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxc/rm_rtfx.c"
+				awk '{ print } /^[ \t]*rm_rtfx_frame\(fd, RM_RT_SceneReady\(\)\);/ { print "\tRM_RTGI_Frame(fd, RM_RT_SceneReady());" }' \
+				"$rm_dir/rm_main.c" > "${tmp:?}/fxc/rm_main.c"; want=RM_RTGI_Frame ;;
+		esac
+		fx_vocab "${tmp:?}/fxc/rm_rtfx.c" > "${tmp:?}/fxc.vocab"
+		got=$( { fx_named "${tmp:?}/fxc/rm_main.c" "${tmp:?}/fxc.vocab"; fx_named "${tmp:?}/fxc/rmb_gbuf.m" "${tmp:?}/fxc.vocab"; } |
+			sed 's/.*: //' | tr '\n' ' ' | sed 's/ $//')
+		if cmp -s "$rm_dir/rm_main.c" "${tmp:?}/fxc/rm_main.c" && cmp -s "$rm_dir/rmb_gbuf.m" "${tmp:?}/fxc/rmb_gbuf.m"; then
+			bad "the effect-call mutant ($fxm) changed nothing"
+		elif [ "$got" != "$want" ]; then
+			bad "the effect-call check names \"$got\", not \"$want\", for a mutant ($fxm)"
+		else
+			fx_mutants=$((fx_mutants + 1))
+		fi
+	done
+fi
+
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused; $build)"
 fi
 exit $fail
