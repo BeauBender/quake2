@@ -52,6 +52,36 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   slightly inaccurate, bullets and the like have a little drift. When
   set to `1` they hit exactly were the crosshair is.
   
+* **coop**: Set to `1` to start a cooperative game on the next map
+  load. Latched, and advertised in the server info.
+
+* **crosshair**: The crosshair shape drawn at the center of the screen.
+  `0` (the default) draws none. Archived.
+
+* **dedicated**: Set to `1` by the dedicated server (`q2ded`), which has
+  no client. Cannot be changed at runtime.
+
+* **deathmatch**: Set to `1` to start a deathmatch game on the next map
+  load. Latched, and advertised in the server info.
+
+* **game**: The game (mod) directory to load, for example `rogue`. The
+  empty string (the default) is `baseq2`. Latched, and advertised in the
+  server info.
+
+* **maxclients**: The number of player slots of the server. `1` (the
+  default of the engine) is a single-player game. Latched, and advertised
+  in the server info.
+
+* **name**: The player name, sent to servers. Archived.
+
+* **paused**: Set to `1` to pause the game in a single-player game,
+  `0` to resume.
+
+* **rate**: The network bandwidth in bytes per second that the client
+  asks the server to use. Default `8000`. Archived and sent to servers.
+
+* **sensitivity**: The mouse sensitivity. Default `3`. Archived.
+
 * **busywait**: By default this is set to `1`, causing Quake II to spin
   in a very tight loop until it's time to process the next frame. This
   is a very accurate way to determine the internal timing, but comes with

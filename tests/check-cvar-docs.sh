@@ -35,7 +35,8 @@
 # table's string literals as cvar names, so a walk cannot add an
 # undocumented name: path:Symbol is an array (the first literal of each
 # {row} is a name; every literal of a flat array of strings is) or a function
-# (every literal in its body is) defined at column 0 of path;
+# (every literal in its body is; a lone struct initialiser gives its first
+# literal) defined at column 0 of path;
 # fmt:pattern:low:high is pattern with %d from low to high, a bound being an
 # integer or MACRO or MACRO-n, the macro one plain-integer #define under src
 # (else the check fails). An entry whose call is not in src fails (a stale entry would
@@ -225,7 +226,7 @@ function bound(b, where,   m, off, cmd, line, v, nd) {
 	return v - off
 }
 # the names of the table sym defined at column 0 of path, into out
-function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit, flat) {
+function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit, flat, single) {
 	on = 0; isarr = 0; body = ""; n = 0
 	while ((r = getline line < path) > 0) {
 		if (!on) {
@@ -256,10 +257,14 @@ function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit, flat) {
 			out[++n] = lit
 		}
 	} else {
+		# a lone struct initialiser (sym = { "name", "label", ... }): the
+		# first literal is the name, the others are its label and default
+		single = (body ~ ("(^|[ *])" sym " *= *\\{"))
 		while (match(body, /"[^"]*"/)) {
 			lit = substr(body, RSTART + 1, RLENGTH - 2)
 			body = substr(body, RSTART + RLENGTH)
 			out[++n] = lit
+			if (single) break
 		}
 	}
 	return n

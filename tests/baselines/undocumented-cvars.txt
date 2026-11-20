@@ -66,11 +66,13 @@ gl1_palettedtexture
 gl1_picmip
 gl1_round_down
 gl1_saturatelighting
+gl1_stereo
 gl1_stereo_anaglyph_colors
 gl1_stereo_convergence
 gl1_stereo_separation
 gl1_texturealphamode
 gl1_texturesolidmode
+gl1_ztrick
 gl3_libgl
 gl3_show_draw_stats
 gl4_colorlight
@@ -80,6 +82,7 @@ gl_finish
 gl_modulate
 gl_nobind
 gl_overbrightbits
+gl_showbbox
 gl_showtris
 graphheight
 graphscale
@@ -87,10 +90,6 @@ graphshift
 gun_x
 gun_y
 gun_z
-gyro_calibration_a
-gyro_calibration_x
-gyro_calibration_y
-gyro_calibration_z
 host_speeds
 hostname
 hostport
@@ -99,6 +98,11 @@ ip_clientport
 ip_hostport
 ipx_clientport
 ipx_hostport
+joy_extra_pitchspeed
+joy_extra_yawspeed
+joy_pitchspeed
+joy_ramp_time
+joy_yawspeed
 log_stats
 logfile
 lookstrafe
@@ -130,9 +134,11 @@ r_clear
 r_cull
 r_drawworld
 r_dspeeds
+r_fullbright
 r_lightlevel
 r_lightmap
 r_lockpvs
+r_mode
 r_modulate
 r_norefresh
 r_novis
@@ -174,6 +180,7 @@ sv_downloadserver
 sv_enforcetime
 sv_entfile
 sv_gravity
+sv_maplist
 sv_maxvelocity
 sv_noreload
 sv_rollangle
@@ -196,6 +203,8 @@ timegraph
 timelimit
 timeout
 timescale
+version
+vid_displayindex
 vid_rate
 viewsize
 vk_dynamic
