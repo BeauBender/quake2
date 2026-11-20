@@ -32,6 +32,13 @@
 #   is what that runtime does anyway, written out so a platform that has
 #   LSan runs the same check. Whether the suite is leak-free there is not
 #   known and is not what this check is for. Nothing else is relaxed.
+# - log_path: both runtimes write their reports to files in the check's
+#   scratch tree (asan.<pid>, ubsan.<pid>), and after the run the check
+#   fails if any exists and prints the first one. ASan and UBSan share one
+#   runtime in this build, and the last log_path set (UBSan's) wins for
+#   every report, so an ASan report can land in a ubsan.<pid> file. A
+#   forked test child that dies by a signal fails its test; its report is
+#   in the log file, not in the test output.
 # - A run that exits 0 but whose output still holds a sanitizer report
 #   ("runtime error:", "ERROR: AddressSanitizer",
 #   "SUMMARY: UndefinedBehaviorSanitizer") fails too.

@@ -73,6 +73,18 @@ t_register(t_case_t *tc)
 	t_ncases++;
 }
 
+int
+t_failures(void)
+{
+	return t_current_failures;
+}
+
+void
+t_set_failures(int n)
+{
+	t_current_failures = n;
+}
+
 void
 t_fail(const char *file, int line, const char *fmt, ...)
 {
@@ -405,8 +417,10 @@ t_expect_exit(void (*fn)(void *), void *arg, char *out, size_t outlen)
 	if (WIFSIGNALED(status))
 	{
 		/* A child killed by a signal (SIGABRT from a sanitizer report, a
-		   crash) fails the test and its output, which holds the report,
-		   reaches the log. The return value stays -1. */
+		   crash) fails the test and its output is printed. A bare
+		   ASAN=1 UBSAN=1 run has the sanitizer report in that output;
+		   under tests/check-unit-sanitizers.sh log_path sends it to a
+		   log file, which the check prints. The return value stays -1. */
 		t_fail(__FILE__, __LINE__, "forked child killed by signal %d; its output:\n%s",
 			WTERMSIG(status), out);
 		return -1;
