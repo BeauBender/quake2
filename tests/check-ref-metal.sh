@@ -1168,11 +1168,19 @@ done
 # defines it includes that header; a hand-written prototype in a .m file (copies drift: the
 # five rmb_watch ones, and a rmb_frame_ring_take that lost its __strong) is refused. protos
 # <file>: prints "file:line: text" for each non-static file-scope function prototype in the
-# file's code (comments and literals stripped, preprocessor lines and Objective-C @ lines
-# skipped): a statement ending in ";" at brace depth 0 that has the shape name(...), no "="
-# before its first "(", and does not start with static, typedef or _Static_assert. It sees a
-# prototype over several lines, one with extern, and one with an attribute; a function
-# definition ends in a brace, not in ";", and a static prototype is skipped by its keyword.
+# file's code (comments and literals stripped): a statement ending in ";" at brace depth 0
+# whose text, after dropping __attribute__((...)) and any trailing identifier words after the
+# last ")" (NS_RETURNS_RETAINED, __dead2, several in a row, a blank or a line break before the
+# ";"), has the shape name(...) with no "=" before its first "(". It catches a prototype over
+# several lines, one with extern, one with an attribute or a trailing macro, one whose parameter
+# list holds an #if 0 (the statement goes on across it), one returning a pointer to a function,
+# (*name(args))(args), also with qualifiers before the name ((* _Nullable name(...)),
+# (*const name(...))), and a parenthesised name, (name)(...). It skips preprocessor lines,
+# Objective-C @ lines and + / - method lines, anything between #if 0 and its #else, #elif or
+# #endif (nested #if counted), a statement starting with static, typedef, _Static_assert or
+# static_assert, a function pointer or block variable ((*fp)(int), (^blk)(int),
+# (* _Nonnull fpvar)(int), (* const fp2)(int)), and a definition (it ends in a brace, not in
+# ";"). An #if 0 that never closes is reported as "unterminated #if 0", so the check fails closed.
 protos() {
 	strip "$1" | awk -v f="$1" '
 	function flush(   s, p, q) {
@@ -1181,13 +1189,14 @@ protos() {
 		while (match(s, /__attribute__[ \t]*\(\(([^()]|\([^()]*\))*\)\)/)) s = substr(s, 1, RSTART - 1) " " substr(s, RSTART + RLENGTH)
 		sub(/^[ \t]+/, "", s); gsub(/[ \t]+/, " ", s)
 		if (s ~ /^(static|typedef|_Static_assert|static_assert)[ (]/ || s ~ /^[-+@]/) return
-		while (s ~ /\) [A-Z_][A-Z0-9_]*$/) sub(/ [A-Z_][A-Z0-9_]*$/, "", s)
+		sub(/ +$/, "", s)
+		sub(/\) *[A-Za-z_][A-Za-z0-9_]*( +[A-Za-z_][A-Za-z0-9_]*)*$/, ")", s)
 		p = index(s, "(")
 		if (p == 0) return
 		q = substr(s, 1, p - 1)
 		if (q ~ /=/) return
 		r = substr(s, p)
-		fpr = (r ~ /^\( ?[*^] ?[A-Za-z_0-9]* ?\(/)
+		fpr = (r ~ /^\( ?[*^][ *^A-Za-z_0-9]*[A-Za-z_0-9] ?\(/)
 		if (!fpr && r ~ /^\( ?[*^]/) return
 		par = (r ~ /^\( ?[A-Za-z_][A-Za-z0-9_]* ?\) ?\(/ && q ~ /[A-Za-z_0-9>*] ?$/)
 		if (fpr && q ~ /^ *$/) return
@@ -1200,7 +1209,7 @@ protos() {
 		if (cont) { cont = (line ~ /\\[ \t\r]*$/); next }
 		if (line ~ /^[ \t]*#/) {
 			cont = (line ~ /\\[ \t\r]*$/)
-			if (skip == 0 && line ~ /^[ \t]*#[ \t]*if[ \t]+0[ \t]*$/) { skip = 1; nest = 1; stmt = "" }
+			if (skip == 0 && line ~ /^[ \t]*#[ \t]*if[ \t]+0[ \t]*$/) { skip = 1; nest = 1; skipline = NR }
 			else if (skip) {
 				if (line ~ /^[ \t]*#[ \t]*if/) nest++
 				else if (line ~ /^[ \t]*#[ \t]*endif/) { if (--nest == 0) skip = 0 }
@@ -1222,7 +1231,8 @@ protos() {
 			stmt = stmt c
 		}
 		if (stmt != "") stmt = stmt " "
-	}'
+	}
+	END { if (skip) print f ":" skipline ": unterminated #if 0 (the rest of the file is not checked)" }'
 }
 proto_mutants=0
 mkdir -p "${tmp:?}/pm"
@@ -1231,7 +1241,7 @@ if [ -n "$(protos "${tmp:?}/pm/ok.m")" ]; then
 	protos "${tmp:?}/pm/ok.m"
 	bad "the prototype check flags a static prototype, a definition, a typedef, a macro or a comment"
 fi
-for proto_mut in 'void f(void);' 'extern void f(void);' 'id<MTLDevice> f(int a,' '__attribute__((unused)) void f(void);' 'void *f(size_t n, __strong id<MTLBuffer> *buf);' 'void f(void) NS_RETURNS_RETAINED;' 'void *(*getf(void))(int);' 'id<MTLBuffer> (f)(void);'; do
+for proto_mut in 'void f(void);' 'extern void f(void);' 'id<MTLDevice> f(int a,' '__attribute__((unused)) void f(void);' 'void *f(size_t n, __strong id<MTLBuffer> *buf);' 'void f(void) NS_RETURNS_RETAINED;' 'void *(*getf(void))(int);' 'id<MTLBuffer> (f)(void);' 'void (* _Nullable getf(void))(int);' 'void (^ _Nonnull getb(void))(int);' 'int (*const getf(void))(int);' 'void f(void) __dead2;' 'void f(void) NS_A NS_b;' 'void f(void) NS_A ;'; do
 	case $proto_mut in *,) printf '%s\n' "$proto_mut" '	int b);' > "${tmp:?}/pm/mut.m";; *) printf '%s\n' "$proto_mut" > "${tmp:?}/pm/mut.m";; esac
 	if [ -z "$(protos "${tmp:?}/pm/mut.m")" ]; then
 		bad "the prototype check passes a mutant ($proto_mut)"
@@ -1239,8 +1249,21 @@ for proto_mut in 'void f(void);' 'extern void f(void);' 'id<MTLDevice> f(int a,'
 		proto_mutants=$((proto_mutants + 1))
 	fi
 done
+proto_multi() { # <name> <line>...: a mutant over several lines, which the check must refuse
+	proto_name=$1; shift
+	printf '%s\n' "$@" > "${tmp:?}/pm/mut.m"
+	if [ -z "$(protos "${tmp:?}/pm/mut.m")" ]; then
+		bad "the prototype check passes a mutant ($proto_name)"
+	else
+		proto_mutants=$((proto_mutants + 1))
+	fi
+}
+proto_multi 'an #if 0 inside a parameter list' 'void f(int a,' '#if 0' 'int b,' '#endif' 'int c);'
+proto_multi 'an #if 0 / #else inside a parameter list' 'void f(int a,' '#if 0' 'int b,' '#else' 'int d,' '#endif' 'int c);'
+proto_multi 'a macro with the ; on the next line' 'void f(void) NS_x' ';'
+proto_multi 'an #if 0 never closed' 'void ok(void) {}' '#if 0' 'void dead(void);'
 proto_ok=0
-for proto_fix in 'void (*fp)(int);' 'void (^blk)(int);' 'static_assert(sizeof(int) == 4, "x");'; do
+for proto_fix in 'void (*fp)(int);' 'void (^blk)(int);' '(* _Nonnull fpvar)(int);' 'void (* const fp2)(int);' 'static_assert(sizeof(int) == 4, "x");'; do
 	printf '%s\n' "$proto_fix" > "${tmp:?}/pm/fix.m"
 	if [ -n "$(protos "${tmp:?}/pm/fix.m")" ]; then
 		bad "the prototype check flags a function pointer, a block variable or a static_assert ($proto_fix)"
@@ -1336,6 +1359,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused, $proto_ok shapes passed; $build)"
 fi
 exit $fail
