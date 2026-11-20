@@ -429,11 +429,15 @@ Cvar_FreeServerMarks(void)
 
 /*
  * Records who wrote a cvar's value. Every write that was not refused
- * calls it, changed or not:
- * - the player's line makes the value the player's;
- * - a server line makes it the server's if it changed the value, and
- *   leaves the owner as it was if not, so a server that runs the
- *   player's config.cfg again does not take over the player's values;
+ * calls it, changed or not. A write that leaves the value as it is
+ * never changes the owner, whichever source wrote it:
+ * - the player's line makes the value the player's if it changed it,
+ *   so the player takes a value back by writing another one, and the
+ *   server's own config.cfg round trip (a game directory change writes
+ *   config.cfg and runs it as the player's text) cannot clear a mark;
+ * - a server line makes it the server's if it changed the value, so a
+ *   server that runs the player's config.cfg again does not take over
+ *   the player's values;
  * - the engine's own write, outside any line, leaves the owner as it
  *   was: no text chose the value, so nothing makes it the player's.
  */
@@ -451,7 +455,9 @@ Cvar_NoteWriter(const cvar_t *var, qboolean changed)
 
 	if (!Cbuf_ExecutingServerText())
 	{
-		if (found)
+		/* a write that leaves the value as it is changes no owner,
+		   whoever wrote it */
+		if (found && changed)
 		{
 			m = *found;
 			*found = m->next;
