@@ -914,9 +914,9 @@ marked `(n/a)` and skipped.
 * **r_hdr_headroom**: The display's potential headroom as the Metal
   renderer reads it, a multiple of SDR white, for the video menu's HDR
   items; `-1` while the renderer has no reading. Set by the renderer
-  when the reading changes (the window may move to another display); a
-  value set here is overwritten at the next change and changes no
-  picture, only which items the menu greys. Not saved.
+  each frame its reading differs (the window may move to another
+  display), so a value set here lasts until the next frame; it changes
+  no picture, only which items the menu greys. Not saved.
 
 * **r_hdr_peak**: The peak brightness of `r_hdr 1`, as a multiple of SDR
   white: `4` (the default) to show highlights up to four times as bright
