@@ -593,8 +593,15 @@ FIX145: the skip is no longer inferred from a missing line. The probe prints `sc
 temporal=N` and a skipped line for each half it does not run (`the MetalFX spatial half skipped: ...`,
 `the MetalFX temporal half skipped: ...`, `the temporal scaler in RGBA16Float skipped: ...` when the GPU
 has the scaler but refuses float16). The check skips an fx mutant only on that line, and its reason is
-the line's own text. It calls `bad` when a half printed neither a run nor a skipped line, and when the
-capability line says both scalers are present but a mutant was skipped for a missing scaler.
+the line's own text. It calls `bad` when a half printed neither a run nor a skipped line, and when there
+is no `scalers:` line at all.
+
+FIX147: the capability line is read as two flags, `spatial=` and `temporal=`, each exactly 0 or 1 with
+nothing before, between or after (a trailing space or junk is not tolerated), and the check calls `bad`
+when the line does not parse that way. It also calls `bad` for a "no spatial scaler" skip when
+`spatial=1`, for a "no temporal scaler" skip when `temporal=1`, and, under
+`CHECK_REF_METAL_DEVICE_REQUIRE=1`, for a "refused in float16" skip (the M6 makes the float16 temporal
+scaler).
 
 `rm_fx_test.c` pins the note's new line; `rm_host_test.c` pins `rm_hdr_fx_note`.
 
