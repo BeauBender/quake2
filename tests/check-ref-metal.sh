@@ -89,7 +89,9 @@
 #     it had at attach, and the ledger holds no state object. With no device
 #     the probe prints one skip line and passes. Scratch mutants of
 #     rmb_device.m (1 -> 0 sets NULL; 1 -> 0 leaves ours; detach leaves ours)
-#     must fail it.
+#     must fail it. It includes rmb_metalfx.m too (TASK196 HD4): the
+#     MetalFX scalers' formats and modes under r_hdr 0 and 1, the refusal
+#     in float16, the toggle; scratch mutants of it must fail it as well.
 # (g) Always: the call seats of the ray-tracing gate (TASK60), by source
 #     inspection, as for the flush points. In rm_main.c, comments and string
 #     literals stripped: RI_BeginFrame's first statement after its
