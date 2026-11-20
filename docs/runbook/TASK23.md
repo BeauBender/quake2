@@ -352,3 +352,107 @@ binding item everywhere, and rebinding from the menus was gone on macOS too.
   shows, bind mode on every binding item and back leaving it. `doc/050_commands.md` says what the walk checks on a
   binding item. The lines above that called the binding items greyed on the iPhone-family targets, or dated that
   from TASK150, are corrected.
+
+## TASK182: the trigger, which gamepad the engine opens, bind mode with the remote
+
+### The trigger: the probe was wrong, not the binding
+
+The press reaches `+attack`. The path, traced in the source: SDL's virtual gamepad maps its trigger axis from the
+joystick's full range (-32768 to 32767, at rest at -32768, `SDL_virtualjoystick.c`) to the gamepad's 0 to 32767
+(`SDL_gamepad.c`); `IN_Update` (`src/client/input/sdl3.c`) turns `SDL_GAMEPAD_AXIS_RIGHT_TRIGGER` above
+`trig_thresh` (`joy_trigger` 0.2, 6553) into a `K_TRIG_RIGHT` press with `IN_VirtualKeyEvent`, a key like any
+other; `Key_DefaultPadBinds` binds `TRIG_RIGHT` to `+attack` on a fresh start; and `Key_Event` queues the bound
+command with `Cbuf_AddText`, at the end of the command buffer.
+
+That last step is what the TASK23 probe missed. Its script was an exec'd file, whose `wait` stops
+`Cbuf_Execute` and leaves the rest of the file in the buffer: the `+attack` the press queued sat behind the
+script's own remaining lines and ran only after the whole file, after every `in_probe state` that looked for it.
+The sticks and start were shown working because they act at once (the stick axes are read in `IN_Move`, and
+start is `K_ESCAPE`, which `Key_Event` hands to the menu directly); every bound button had the same blind spot,
+which is why the other default bindings were shown only by their table. A second error: its release, `in_probe
+axis righttrigger 0`, is not a release, since 0 on the joystick is 16383 on the gamepad, above the threshold; the
+rest position is -32768.
+
+The probe now has `in_probe script <file>` (test builds only): it feeds a file one line a frame and only when the
+command buffer is empty, so a press's command runs in the frame after it, as when a person presses it, and
+`wait <n>` counts n input updates while the command buffer is empty, not frames. `in_probe state` also prints the gun, the crouch flag, the layouts, the ammo, the
+right trigger as the engine reads it, `K_TRIG_RIGHT`'s key state and the bytes left in the command buffer;
+`in_probe mark` and `in_probe expect <field>` print `ok` or `FAIL` for a value that changed or did not;
+`in_probe bound <key>` prints a binding; `in_probe pads` prints each joystick's vendor, product, version, GUID,
+types, path and counts.
+
+### The runs
+
+Each run is `IOS_SIM_SDK=appletvsimulator scripts/ios-sim.sh run` of a test build (`-DYQ2_INPUT_PROBE`) on a
+fresh Apple TV 4K (4th generation) device, tvOS 27.2, with `+set vid_renderer metal +in_probe script
+probe.txt` and a pak holding the script and the old probe as `old.cfg`. The script waits 60 frames, lists the
+pads, loads `base1`, attaches the probe's pad, lists the pads again with `in_probe state`, runs `give all`, then
+presses each default binding with a `mark` before and an `expect` after, runs `old.cfg` (TASK23's probe: the
+trigger inside an exec'd file, released at 0) as the trigger's red line, and ends with bind mode on the
+controller buttons screen (`menu_buttons`: select, the d-pad's left, select, Escape) and on the keys screen
+(`menu_keys`: select, Escape), with `menu_probe state` and `in_probe bound` after each step. Each run ended
+through `quit`, and each printed `launcher: no crash`, so PineBoard did not crash.
+
+- **Red**, at `124bc5be`, before the gamepad preference: every `expect` on the probe's pad fails,
+  `in_probe: expect gun weapnext: FAIL, unchanged at 36` and the same for attack, weapprev, jump, crouch,
+  inven and toggleconsole, because the engine opened the simulator's own pad (`Trying joystick 1,
+  'Gamepad'`, then `joystick 1, id 3, 'Gamepad', gamepad 1, virtual 0, the engine's gamepad`). In bind mode
+  the d-pad's left never reached the menu (`DP_LEFT bound to ""`, still in bind mode).
+- **Green**, at `76405549`: `Skipping joystick 1, the tvOS simulator's own gamepad: another gamepad is
+  connected.`, `Trying joystick 2, 'in_probe pad'`, and the pad list marks `joystick 2, id 4, 'in_probe pad',
+  gamepad 1, virtual 1, the engine's gamepad, the probe's pad`. Every binding fires:
+  `expect gun weapnext: ok, 36 -> 64` (Y), `expect ammo attack: ok, 99 -> 98` (the right trigger, with
+  `trigger axis 32767, TRIG_RIGHT down` while it is held), `expect gun weapprev: ok, 64 -> 36` (the left
+  shoulder), `expect gun weapnext: ok, 36 -> 64` (the right shoulder), `expect z jump: ok, 24 -> 33` (A),
+  `expect duck crouch: ok, 0 -> 1` (B), `expect layouts inven: ok, 0 -> 2` (the view button) and `expect
+  dest toggleconsole: ok, 0 -> 1` (BTN_MISC1). The old probe still fails in the same run, `expect ammo
+  old-probe-attack: FAIL, unchanged at 100`, and its release at 0 shows `trigger axis 16383, TRIG_RIGHT
+  down`: the trigger held, not released. X (invuse) has no field to expect; the game answers in the console.
+- **Bind mode**, green: on the controller buttons screen select gives `..., cursor 0 'attack' (greyed), bind
+  mode`, the d-pad's left leaves it with `DP_LEFT bound to "+attack"`, select enters it again, and Escape
+  leaves it on the same screen (`depth 1`, no `bind mode`) with `ESCAPE bound to ""`; on the keys screen the
+  same, `depth 2 ... bind mode`, then `depth 2` with `ESCAPE bound to ""`. `(greyed)` is upstream's dark label
+  (TASK23 round 2), not a disabled item; bind mode is entered on it all the same.
+
+### Which gamepad the engine opens
+
+About a second after the start the tvOS simulator adds a joystick of its own. `in_probe pads` gives its
+facts at the engine's side: `'Gamepad', gamepad 1, virtual 0`, `vendor 0x05ac, product 0x0004, version
+0x25fa, guid 0500a5d0ac05000004000000fa256d04, type 1, gamepad type 'standard', path '', buttons 15, axes 19,
+hats 0`. The GUID's bus is 0x0005 (Bluetooth) and its driver byte is `m`: SDL's MFi driver
+(`SDL_mfijoystick.m`), which names a GCController after its `vendorName` and gives vendor 0x05ac, product 4
+and subtype 4 to a controller it reads through the generic `physicalInputProfile`, one that is not an Xbox,
+PlayStation, Switch or Backbone pad. It is not a Siri Remote (SDL's remote is matched by its product
+category, and the remote's buttons reach the engine as keys). So it is a GCController that the simulator
+provides. Whether a real Apple TV has one is not shown: the evidence is the simulator alone, and no real
+Apple TV was run.
+
+`IN_Controller_Init` opened it first, before any controller that was really there. `IN_IsTVSimulatorPad`
+(`src/client/input/sdl3.c`, tvOS only) matches that device: the name `Gamepad`, not virtual, vendor 0x05ac,
+product 4. `IN_Controller_Init` passes over it while another gamepad is present, as the touch controls are
+passed over on iOS, and `SDL_EVENT_JOYSTICK_ADDED` looks again when a gamepad is added while it is the one in
+use. Alone it is still opened. There is no setting. On tvOS 14 and later SDL gives every unidentified MFi controller
+vendor 0x05ac and product 4 (`SDL_mfijoystick.m`), so only the name `Gamepad` singles out the simulator's pad: a
+real third-party pad that reports the name `Gamepad` would also be passed over while another gamepad is connected.
+A real Apple TV is not verified.
+
+### Mutants
+
+- The trigger's fix (the probe's script mode) reverted, that is, the old exec'd probe: `expect ammo
+  old-probe-attack: FAIL, unchanged at 100`, in the green run itself.
+- The gamepad preference reverted (`sdl3.c` as at `4060894a`), in one run with Escape bound by bind mode
+  (`(key != K_ESCAPE)` dropped from `Keys_MenuKey`, `|| key == K_ESCAPE` added to
+  `ControllerButtons_MenuKey`): `Trying joystick 1, 'Gamepad'` and the nine `FAIL` lines of the red run. That
+  run's Escape mutant was masked on the controller screen (the d-pad never reached it, so bind mode was left
+  by select and Escape closed the menu), and on the keys screen `bind` itself refused it: `You can't bind the
+  special key "ESCAPE"!`, with `ESCAPE bound to ""`.
+- So bind mode's Escape was mutated again alone, binding it past `bind` with `Key_SetBinding` on both
+  screens, the gamepad preference kept: `ESCAPE bound to "+attack"` on the controller buttons screen and
+  again on the keys screen, where the green run has `ESCAPE bound to ""`.
+
+### No macOS or iOS change
+
+The default objects (no `YQ2_INPUT_PROBE`) of the two touched C files, built at the same path from
+`origin/main`'s text (`6c150812`) and from `76405549`, are byte-identical: macOS `sdl3.o` 56872 bytes and
+`menu.o` 164656 bytes, iOS simulator `sdl3.o` 58824 bytes and `menu.o` 164640 bytes. The gamepad preference
+is inside `TARGET_OS_TV`, and the probe's changes are inside `YQ2_INPUT_PROBE`.
