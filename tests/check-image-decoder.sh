@@ -121,7 +121,10 @@ reap()
 # A TERM or INT to this check (the gate stopping it) ends the run in
 # progress and its watchdog as the bound would, so a target leaks(1)
 # holds stopped is not left behind. (A signal ignored when the check
-# starts, as the merge gate ignores INT, stays ignored.)
+# starts, as the merge gate ignores INT, stays ignored.) The trap runs
+# inside the redirections of the bounded call it interrupts, so what reap
+# says goes to the check's own stderr, kept as descriptor 3.
+exec 3>&2
 run=
 dog=
 name=-
@@ -132,7 +135,7 @@ stopped()
 		kill "$dog" 2>/dev/null || :
 	fi
 	if [ -n "$run" ]; then
-		reap "$run" "$name"
+		reap "$run" "$name" 2>&3
 	fi
 	exit "$1"
 }
@@ -150,7 +153,7 @@ bounded()
 	limit=$1
 	name=$2
 	shift 2
-	"$@" &
+	"$@" 3>&- &
 	run=$!
 	(
 		n=0
@@ -162,7 +165,7 @@ bounded()
 			echo "$limit" > "${tmp:?}/expired"
 			reap "$run" "$name" 2> "${tmp:?}/reap.err"
 		fi
-	) < /dev/null > /dev/null 2>&1 &
+	) < /dev/null > /dev/null 2>&1 3>&- &
 	dog=$!
 	rc=0
 	wait "$run" || rc=$?
