@@ -100,10 +100,45 @@ ref_metal: presentation: retro (r_presentation 2): the 3D view in RGB565 with th
 ref_metal: retro: 3D view 853x480 of a 1920x1080 target, enlarged by a bilinear blit, no MetalFX; textures 163 RGB565 and 33 ARGB4444, 20 capped to 256x256, largest side 256, filter GL_LINEAR_MIPMAP_NEAREST, no anisotropy
 ```
 
+Since review round 1 the line names what the code sizes, the whole target's render size, not the view's
+(at 640 x 480, from round 2's run): `ref_metal: retro: 3D layer drawn at 640x480, the 640x480 target as if
+480 lines tall, enlarged by a bilinear blit, no MetalFX; textures 163 RGB565 and 33 ARGB4444, 20 capped to
+256x256, largest side 256, filter GL_LINEAR_MIPMAP_NEAREST, no anisotropy`. The counts are of the class
+each image was quantized in, chosen by the source's alpha: an ARGB4444 image whose alpha all rounds to 15
+is still counted ARGB4444, though the opaque flag of its upload, taken from the quantized texels, is set.
+
 The second line is new, printed once for each target and render size at the first Retro 3D view (so after
 the map's textures are loaded). It shows the 480-line target (853 x 480 from 1920 x 1080), the cap (20
 textures reduced, the largest side kept 256), the two texel classes and the filter. The same run at
 `r_presentation 0` prints no `retro:` line.
+
+## Leaving Retro (review round 1, B1)
+
+`retro_on` in `rmb_gbuf.m` was set only under Retro and never cleared, and `RM_KeepMapped` keeps the
+renderer's statics across `vid_restart`. So after Retro then stock, a scaled G-buffer view was still
+quantized at its end. `RI_RenderFrame` now calls `rmb_gbuf_set_retro` on every frame with
+`rm_presentation == RM_PRES_RETRO`, and `RI_Init` clears it once the mode is read. The other new statics:
+`retro_done` is cleared by every `rmb_gbuf_set_retro` and by its one reader; `retro_counts` is cleared by
+`R_InitImages`; `retro_view_src` is released with the other targets in `rmb_encode_release` and made only
+under Retro; the report line's sizes are file statics cleared in `RM_GB_Init`, so the line is printed again
+after a restart. None is written at stock.
+
+The proof is a real-data run (M6, in a `heavy.sh` hold) at 640 x 480 with world.cfg's settings,
+`r_rt_gbuffer 1` and `r_rt_gbuffer_scale 0.5`, each frame taken as the pin harness takes it
+(`pins_dir`, `pins_capture 30`, `demomap demo1.dm2`). A sequence is an exec'd console script:
+`r_presentation 2` (or 0), `vid_restart`, `map base1` with 400 frames of play, `r_presentation 0`,
+`vid_restart`, then the demo. The 23 frames' hashes, hashed:
+
+| run | build | frames |
+| --- | --- | --- |
+| fresh process, stock | branch | `61369ba81eeb` |
+| sequence, stock then stock | branch | `61369ba81eeb` |
+| sequence, Retro then stock | branch | `61369ba81eeb` (green) |
+| fresh process, stock | `950344ce`'s ref_metal | `61369ba81eeb` |
+| sequence, Retro then stock | `950344ce`'s ref_metal | `a782f23c24fe` (red) |
+
+Both Retro sequences printed the Retro report line, so Retro views were drawn before the restart. The frames
+are in the artifacts folder and were not viewed.
 
 ## Pins
 
@@ -118,7 +153,14 @@ textures reduced, the largest side kept 256), the two texel classes and the filt
   `rt-shadows-entities`, `rt-sun`, `hdr`, `hdr-metalfx2` and `cinematic` (12 frames, `idlog.cin`,
   `PINS_EVERY=7`). The hashes of the 22 scenarios PM2 also compared match PM2's table (`world`
   `b15b40cf1`, `models` `552ee3cb1`, `rt-sun` `374691775`, and the rest).
-- **Not compared: the water scenarios** (`skywater`, `rt-water`, `rt-water-entities`). The water demo is
+- **Round 2, after the B1 fix**: the same 24 recorded again by a build of `bebb1f12` (client, game and
+  `ref_metal`) and by the branch, the same way: all 24 byte-identical, and the hashes equal round 1's.
+- **Still not compared in round 2: the water scenarios.** The base was a `git archive` of `bebb1f12`, and
+  `pins.sh make-demo` refuses a write directory inside a tree that git does not ignore, so no water demo was
+  made and the three scenarios again recorded 0 frames on both builds. The next try makes the demo in the
+  branch's worktree (its `release/` is git-ignored; make-demo plays a local game with the soft renderer, and
+  the branch changes only `ref_metal`) and copies it beside the base's binary. Round 1's account:
+- **Not compared in round 1: the water scenarios** (`skywater`, `rt-water`, `rt-water-entities`). The water demo is
   made by `pins.sh make-demo water`, which failed because the base worktree had no `game.dylib` when it
   ran. The first hold was wasted for the same reason (the game module was missing from both builds, so
   every record failed); the second began with the module built, but its `make-demo` step ran in the same
@@ -141,6 +183,9 @@ textures reduced, the largest side kept 256), the two texel classes and the filt
 | `make ref_metal` | `release/ref_metal.dylib' is up to date.` (built before the hold; the hold's `make` found nothing to do) |
 | `tests/check-ref-metal.sh` | `check-ref-metal: ok (13159 checks, 0 failed; ...; Retro textures 167 checks, 0 failed, ...; ref_metal built)` |
 | `make test` | `yq2test: 444 tests, 0 failed` |
+| round 2: `make ref_metal game client` | `===> LD release/quake2` (exit 0) |
+| round 2: `tests/check-ref-metal.sh` | `check-ref-metal: ok (13159 checks, 0 failed; ...; Retro textures 197 checks, 0 failed, ...; ref_metal built)` |
+| round 2: `make test` | `yq2test: 444 tests, 0 failed` |
 | `check-branch.sh refs/remotes/origin/main HEAD` | run after the last commit; see the card's report |
 
 ## Left for PM4 or a follow-up
