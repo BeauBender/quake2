@@ -120,7 +120,8 @@ original clients (Vanilla Quake II) commands are still in place.
 * **rt_preset save|load|ab <name>, rt_preset list**: The ray-tracing
   tuning presets, `<writedir>/presets/rt-<name>.cfg`: plain `set` lines
   for every tuning setting (the ray-tracing screen's and the tuning
-  screen's, without the debug views and the presentation) under a
+  screen's, without the debug views and the presentation, with `r_hdr`
+  and `r_hdr_peak`) under a
   comment with the engine version and the date; a setting the renderer
   has not registered, or whose value holds a quote or one of `;`, `|`
   and `=`, gets no line. Its first word: save writes the

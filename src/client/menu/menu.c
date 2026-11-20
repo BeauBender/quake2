@@ -6742,6 +6742,13 @@ Walk_Screen(int depth)
 			   select does nothing on it (Menu_SelectItem) */
 			Com_Printf("menu_probe: item %d '%s' of '%s' is greyed: %s\n", i, it->name ? it->name : "",
 					Walk_Name(m), it->statusbar ? it->statusbar : "(no reason)");
+			/* TASK196 (HD5): a greyed item says why */
+			if (!it->statusbar || !it->statusbar[0])
+			{
+				Com_Printf("menu_probe: FAIL: greyed item %d '%s' of '%s' has no reason\n", i,
+						it->name ? it->name : "", Walk_Name(m));
+				walk_fail++;
+			}
 			grayed = true;
 			cursor = m->cursor;
 			statusbar = m->statusbar;
