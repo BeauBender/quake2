@@ -100,3 +100,50 @@ was added), last line. `tests/check-doc-links.sh` (`check-doc-links: ok`) ran af
 - `tests/check-tvos.sh`: `check-tvos: ok (181 objects for the tvOS simulator, platform 8, the iOS simulator's list)`
 - `tests/check-visionos.sh`: `check-visionos: ok (181 objects for the visionOS simulator, platform 12, the iOS simulator's list)`
 
+## Review round 1
+
+Two Importants from the panel, both fixed; nothing a real build compiles changed but comments.
+
+- **The host test could not fail on the walks.** Under `RM_RTFX_HOST`, `FX(f)` was `NULL`, so every walk
+  body was skipped. Now `FX(f)` names `rm_rtfx_host_f`, a recording stub of `tests/metal/rm_rtfx_host.h`
+  (included by `rm_rtfx.c` under `RM_RTFX_HOST` only, found by `-Itests/metal`). Each stub appends
+  `<effect>:<entry>` to a log and returns 1 when the test lists that token. `test_walks` asserts each
+  walk's exact log: the rows in the order shadows, AO, sun, water, and no entry the table leaves `NULL`.
+  resolve and forward return 0 when none draws, which is when the caller takes the stock resolve or the
+  motion pipeline, and 1 when one does. wanted, active and show_only stop at the first row that says yes,
+  for each row in turn. The real build's `FX(f)` is still `f`. A real build given `-DRM_RTFX_HOST` stops
+  at the missing `rm_rtfx_host.h`, and `header/rm_rtfx.h` makes it an `#error` in any Objective-C file.
+- **The header claimed more than held.** `header/rm_rtfx.h` named `rm_rtscene.c` and `rm_gbufscene.c`
+  among the files that reach the effects only through the walks. They keep direct calls to the shadows
+  (`RM_RTS_MapBuilt`, `RM_RTS_Wanted` and `rm_rts_carried` in `rm_rtscene.c`, `RM_RTS_Active` in
+  `rm_gbufscene.c`). The header and the design's "Adding an effect" now say so, and that the lint covers
+  only `rm_main.c` and `rmb_gbuf.m`.
+
+Green: `rm_rtfx_test: 444 checks, 0 failed`.
+
+New table mutants. Each fails the host test, and `tests/check-ref-metal.sh` builds each on every run:
+
+| Mutant | Refused by | First line |
+|---|---|---|
+| the AO row's `show` and `post` entries swapped | `rm_rtfx_test` (2 failed) | `FAIL tests/metal/rm_rtfx_test.c:270: called "sun:show", not "ao:show sun:show"` |
+| `FX(RM_RTW_Frame)` replaced with `NULL` | `rm_rtfx_test` (1 failed) | `FAIL tests/metal/rm_rtfx_test.c:303: called "shadows:frame ao:frame sun:frame", not "shadows:frame ao:frame sun:frame water:frame"` |
+| `rm_rtfx_post` returning at once | `rm_rtfx_test` (1 failed) | `FAIL tests/metal/rm_rtfx_test.c:274: called "", not "water:post"` |
+| the resolve walk going on past the first 1 (`continue` for `return 1`) | `rm_rtfx_test` (1 failed) | `FAIL tests/metal/rm_rtfx_test.c:265: rm_rtfx_resolve(NULL) == 1` |
+| the wanted walk going on past the first 1, still returning 1 | `rm_rtfx_test` (4 failed) | `FAIL tests/metal/rm_rtfx_test.c:230: called "shadows:wanted ao:wanted sun:wanted water:wanted", not "shadows:wanted"` |
+
+The table has one resolve row and one forward row. So a resolve walk that goes on past the first 1 and
+still returns 1 calls the same entries and draws the same frame: it is an equivalent mutant, and no test
+can refuse it. The mutant that is refused drops the yes. The wanted walk has four rows, so the faithful
+"goes on, still says yes" form is refused there by its log.
+
+No change in what is drawn: `ref_metal.dylib` built from `git archive` extractions of 13698dea and of this
+round's code head (9ae105a0), at one path, is byte-identical
+(`2a11d9898b0f8f7693570dba5d3e48312a99d880080e6863c13055bb7b6e63c7` both), and so are all 42 of
+ref_metal's objects. No pin was re-run.
+
+Checks through the host lock, at 9ae105a0, last line:
+
+- `make test`: `yq2test: 435 tests, 0 failed`
+- `tests/check-ref-metal.sh`: `check-ref-metal: ok (... ray-tracing gate 833 checks, 0 failed, effect table 444 checks, 0 failed, 10 table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, 4 call mutants refused, 31 r_rt_* cvars classified, 4 table mutants refused; ... ref_metal built)`
+- `tests/check-ios.sh`: `check-ios: ok (54 mutants refused; 188 smoke selftest cases; 65 device selftest cases; 181 objects for the simulator; 181 for a device; ios_objects)`
+
