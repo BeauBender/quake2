@@ -74,7 +74,17 @@ gate_child(void *arg)
 	/* SV_Map broadcasts "changing" before SV_SpawnServer sets this up. */
 	SZ_Init(&sv.multicast, sv.multicast_buf, sizeof(sv.multicast_buf));
 
-	SV_Map(c->attractloop, (char *)c->level, false, false);
+	if (c->level)
+	{
+		SV_Map(c->attractloop, (char *)c->level, false, false);
+	}
+	else
+	{
+		/* A game level needs a BSP; this is the state SV_SpawnServer
+		   leaves a running game in. */
+		Com_SetServerState(ss_game);
+	}
+
 
 	T_EQ_INT(Com_ServerState(), c->want_state);
 	T_EQ_INT(CL_UpscaleAllowed(1, 1, c->demo_byte), c->want_allowed);
@@ -117,4 +127,11 @@ TEST(demo_gate_stock_demo_refused)
 TEST(demo_gate_pic_level_allowed)
 {
 	gate((t_gate_t){ false, "t_gate.pcx", 0, ss_pic, 1 });
+}
+
+/* A running local game is not a demo: allowed, as before. The gate
+   compares with ss_demo alone, not with a wider set of states. */
+TEST(demo_gate_local_game_allowed)
+{
+	gate((t_gate_t){ false, NULL, 0, ss_game, 1 });
 }
