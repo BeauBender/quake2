@@ -741,6 +741,7 @@ strlist_t FS_ListFiles2(const char *findname,
 
 void FS_InitFilesystem(void);
 void FS_ShutdownFilesystem(void);
+qboolean FS_GameDirValid(const char *name);
 void FS_BuildGameSpecificSearchPath(const char *dir);
 const char *FS_Gamedir(void);
 const char *FS_NextPath(const char *prevpath);

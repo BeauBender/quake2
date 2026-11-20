@@ -1751,6 +1751,32 @@ extern qboolean menu_startdemoloop;
 void CL_WriteConfiguration(void);
 #endif
 
+/*
+ * Returns true if name can be a game directory: a single file
+ * name, without path separators, ':', '..' or control bytes. The
+ * empty string is valid and means baseq2.
+ */
+qboolean
+FS_GameDirValid(const char *name)
+{
+	const unsigned char *c;
+
+	if (!strcmp(name, ".") || strstr(name, ".."))
+	{
+		return false;
+	}
+
+	for (c = (const unsigned char *)name; *c; c++)
+	{
+		if (*c < ' ' || *c == 0x7f || *c == '/' || *c == '\\' || *c == ':')
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
 void
 FS_BuildGameSpecificSearchPath(const char *dir)
 {
@@ -1775,7 +1801,7 @@ FS_BuildGameSpecificSearchPath(const char *dir)
 
 	// This is against PEBCAK. The user may give us paths like
 	// xatrix/ or even /home/stupid/quake2/xatrix.
-	if (!strcmp(dir, ".") || strstr(dir, "..") || strstr(dir, "/") || strstr(dir, "\\"))
+	if (!FS_GameDirValid(dir))
 	{
 		Com_Printf("Gamedir should be a single filename, not a path.\n");
 		return;
