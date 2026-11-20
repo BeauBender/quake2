@@ -848,20 +848,33 @@ else
 	else
 		probe=$(tail -n 1 "${tmp:?}/probe.out" | sed 's/^rmb_cs_probe: //')
 		case $probe in *", 0 failed") ;; *) bad "tests/metal/rmb_cs_probe.m printed no result line"; probe="probe skipped";; esac
-		# the mutants of rmb_device.m, each of which must fail the probe: 1 -> 0 sets NULL, 1 -> 0
-		# leaves the colour space on the layer, detach leaves it too
+		# the mutants of rmb_device.m and rmb_resource.m, each of which must fail the probe: 1 -> 0
+		# sets NULL, 1 -> 0 leaves the colour space on the layer, detach leaves it too; FIX133: a
+		# float16 variant that was not built hands back the stock pipeline (fmtstock), a drawable
+		# nothing wrote is presented (unwritten), the frame of a failed variant is presented
+		# (failframe), rmb_attach clears the failure while its caches stay (hdrattach), the close
+		# empties the caches and keeps the failure (hdrkept)
 		probe_mutants=0
-		for m in nulled kept detached unretained; do
+		for m in nulled kept detached unretained fmtstock unwritten failframe hdrattach hdrkept; do
 			rm -rf "${tmp:?}/csmut"
 			mkdir "${tmp:?}/csmut"
 			case $m in
-				nulled) sed 's|rmb_layer.colorspace = rmb_cs_own;|rmb_layer.colorspace = NULL;|' "$rm_dir/rmb_device.m" ;;
-				kept) sed 's|rmb_layer.colorspace = rmb_cs_own;|(void)0;|' "$rm_dir/rmb_device.m" ;;
-				unretained) sed 's|CGColorSpaceRetain(rmb_cs_own);|(void)0;|' "$rm_dir/rmb_device.m" ;;
-				detached) sed 's|rmb_cs_release();   /\* the view|(void)0;   /* the view|' "$rm_dir/rmb_device.m" ;;
-			esac > "${tmp:?}/csmut/rmb_device.m"
-			if cmp -s "$rm_dir/rmb_device.m" "${tmp:?}/csmut/rmb_device.m"; then
-				bad "the colour-space mutant ($m) of rmb_device.m changed nothing"
+				fmtstock|hdrkept) mf=rmb_resource.m ;;
+				*) mf=rmb_device.m ;;
+			esac
+			case $m in
+				nulled) sed 's|rmb_layer.colorspace = rmb_cs_own;|rmb_layer.colorspace = NULL;|' "$rm_dir/$mf" ;;
+				kept) sed 's|rmb_layer.colorspace = rmb_cs_own;|(void)0;|' "$rm_dir/$mf" ;;
+				unretained) sed 's|CGColorSpaceRetain(rmb_cs_own);|(void)0;|' "$rm_dir/$mf" ;;
+				detached) sed 's|rmb_cs_release();   /\* the view|(void)0;   /* the view|' "$rm_dir/$mf" ;;
+				fmtstock) sed 's|return (v == \[NSNull null\]) ? nil : v;|return (v == [NSNull null]) ? ps : v;|' "$rm_dir/$mf" ;;
+				unwritten) sed 's|if (!cmd \|\| !drawable \|\| !region)|if (!cmd \|\| !drawable \|\| (region < 0))|' "$rm_dir/$mf" ;;
+				failframe) sed 's|(hdr \&\& (!have_pso \|\| rmb_hdr_dead))|(hdr \&\& !have_pso)|' "$rm_dir/$mf" ;;
+				hdrattach) sed 's|rmb_detach();   /\* a failed float16 path stays off|rmb_detach(); rmb_hdr_dead = 0;   /* a failed float16 path stays off|' "$rm_dir/$mf" ;;
+				hdrkept) sed 's|rmb_hdr_retry();   /\* with the caches|(void)0;   /* with the caches|' "$rm_dir/$mf" ;;
+			esac > "${tmp:?}/csmut/$mf"
+			if cmp -s "$rm_dir/$mf" "${tmp:?}/csmut/$mf"; then
+				bad "the colour-space mutant ($m) of $mf changed nothing"
 				continue
 			fi
 			rc=0
@@ -870,13 +883,29 @@ else
 				cat "${tmp:?}/probe.out"
 				bad "the colour-space mutant ($m) does not compile"
 			elif [ "$rc" = 0 ]; then
-				bad "the colour-space probe passes a mutant of rmb_device.m ($m)"
+				bad "the colour-space probe passes a mutant of $mf ($m)"
 			else
 				probe_mutants=$((probe_mutants + 1))
 			fi
 		done
 		probe="$probe; $probe_mutants colour-space mutants refused"
 	fi
+fi
+
+# (f2) FIX133: the probe's cases hold for every draw and present only when each bind of a
+# frame pipeline goes through rmb_fmt_bind and its result is tested (a draw is skipped when it
+# binds nothing), and the frame's present goes through rmb_present_written
+for f in "$rm_dir"/rmb_*.m; do
+	if strip "$f" | grep -n 'setRenderPipelineState:rmb_fmt_pipe(' > "${tmp:?}/fmtbind.out"; then
+		bad "$f binds rmb_fmt_pipe's pipeline itself, not through rmb_fmt_bind: $(head -n 1 "${tmp:?}/fmtbind.out")"
+	fi
+	[ "$f" = "$rm_dir/rmb_resource.m" ] && continue
+	if strip "$f" | grep 'rmb_fmt_bind(' | grep -vE 'if \(!?rmb_fmt_bind\(' > "${tmp:?}/fmtbind.out"; then
+		bad "$f calls rmb_fmt_bind without testing its result: $(head -n 1 "${tmp:?}/fmtbind.out")"
+	fi
+done
+if strip "$rm_dir/rmb_encode.m" | grep -n 'presentDrawable' > "${tmp:?}/fmtbind.out"; then
+	bad "rmb_encode.m presents a drawable itself, not through rmb_present_written: $(head -n 1 "${tmp:?}/fmtbind.out")"
 fi
 
 # (a2) FIX98: the water mark's blend factors are defined once (common/mtl_rtw_math.h:

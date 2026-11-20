@@ -414,6 +414,41 @@ rmb_present_take(int w, int h)
  * drawable is then left for the next frame). With display sync off the
  * next one is then acquired ahead.
  */
+/*
+ * FIX133: the region the present writes (rm_present_region_in's), or 0
+ * when it writes nothing: a drawable and a frame of different formats
+ * (same_format 0: r_hdr switched while it was held), or on the float16 path
+ * (hdr) without its present pipeline (have_pso 0) or after a pipeline of
+ * it was not built (rmb_hdr_fail: a draw of the frame was skipped).
+ */
+int
+rmb_present_region(int region, int same_format, int hdr, int have_pso)
+{
+	if (!same_format || (hdr && (!have_pso || rmb_hdr_dead)))
+	{
+		return 0;
+	}
+
+	return region;
+}
+
+/*
+ * FIX133: drawable presented through cmd when the present wrote it
+ * (rmb_present_region nonzero), 1; 0 with it dropped unpresented (it goes
+ * back to the layer), as a frame of the other format always was.
+ */
+int
+rmb_present_written(id<MTLCommandBuffer> cmd, id<CAMetalDrawable> drawable, int region)
+{
+	if (!cmd || !drawable || !region)
+	{
+		return 0;
+	}
+
+	[cmd presentDrawable:drawable];
+	return 1;
+}
+
 id<CAMetalDrawable>
 rmb_next_drawable(void)
 {
@@ -907,12 +942,26 @@ rmb_hdr_set(int active)
 	rmb_hdr_apply();
 }
 
-/* a pipeline of the float16 path could not be built: off for the session, applied by the next rmb_hdr_set (between frames) */
+/* a pipeline of the float16 path could not be built: off until the next renderer start (vid_restart, FIX133), applied by the next rmb_hdr_set (between frames) */
 void
 rmb_hdr_fail(void)
 {
 	rmb_hdr_dead = 1;
 	rmb_hdr_want = 0;
+}
+
+/*
+ * The float16 path may be tried again (FIX133). Called only by
+ * rmb_resources_close, once it has emptied the caches that remember the
+ * failure (fmt_variants' NSNull entries, the *_tried flags of the present,
+ * readback and tone-map pipelines): the dead flag and those caches always
+ * reset together. An rmb_attach without a close keeps both, so a cached
+ * failure never meets a path that is on again.
+ */
+void
+rmb_hdr_retry(void)
+{
+	rmb_hdr_dead = 0;
 }
 
 int
@@ -991,7 +1040,7 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 		return 0;
 	}
 
-	rmb_detach();
+	rmb_detach();   /* a failed float16 path stays off: rmb_hdr_retry, at rmb_resources_close, clears it (FIX133) */
 	rmb_frames_reset(&rmb_frames);   /* frames begin on the new layer: a drain waits for every slot again (FIX84) */
 #if TARGET_OS_OSX
 	rmb_sync = vsync ? 1 : 0;

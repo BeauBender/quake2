@@ -541,7 +541,11 @@ rmb_rts_resolve(id<MTLRenderCommandEncoder> enc, const void *resolve, size_t res
 		return 0;
 	}
 
-	[enc setRenderPipelineState:rmb_fmt_pipe(resolve_pipe)];
+	if (!rmb_fmt_bind(enc, resolve_pipe))
+	{
+		return 1;   /* its float16 variant was not built: no resolve, the frame is not presented */
+	}
+
 	[enc setFragmentBytes:resolve length:resolve_len atIndex:0];
 	[enc setFragmentTexture:albedo atIndex:0];
 	[enc setFragmentTexture:light atIndex:1];
