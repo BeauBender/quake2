@@ -212,7 +212,12 @@ TEST(vidrules_colorspace_is_metal_only)
 				T_CHECK(VidRules_Cvar(VIDITEM_COLORSPACE, refs[r]) == NULL);
 			}
 
-			T_EQ_INT(on(VIDITEM_COLORSPACE, "metal", masks[m], s), 1);
+			/* TASK196 (HD5): the argument is whether r_hdr 1 is in force, which sets the colour space */
+			T_EQ_INT(on(VIDITEM_COLORSPACE, "metal", masks[m], s), s == 0);
+			if (s)
+			{
+				T_EQ_STR(why(VIDITEM_COLORSPACE, "metal", masks[m], s), "set by HDR");
+			}
 		}
 	}
 
@@ -894,4 +899,112 @@ TEST(vidrules_presentation_persists)
 
 	free_cvars(cvar_vars);
 	cvar_vars = saved;
+}
+
+/* TASK196 (HD5): the HDR items, each reason in the plan's order (docs/plans/hdr-output.md, sections 3 and 4) */
+static vidrule_t
+hdr(int item, const char *ref, vidhdrplat_t plat, float headroom, float pres, float on)
+{
+	return VidRules_Hdr(item, ref, plat, headroom, pres, on);
+}
+
+TEST(vidrules_hdr_greying_and_reasons)
+{
+	const float nan_ = strtof("nan", NULL);
+
+	for (int item = VIDHDR_ITEM_ON; item <= VIDHDR_ITEM_PEAK; item++)
+	{
+		/* every other renderer, whatever the display */
+		for (int r = 1; r < NREFS; r++)
+		{
+			T_EQ_INT(hdr(item, refs[r], VIDHDR_MAC, 16.0f, 0, 1).enabled, 0);
+			T_EQ_STR(hdr(item, refs[r], VIDHDR_MAC, 16.0f, 0, 1).text, "HDR is a Metal renderer feature");
+		}
+		T_EQ_STR(hdr(item, NULL, VIDHDR_MAC, 16.0f, 0, 1).text, "HDR is a Metal renderer feature");
+
+		/* Apple TV and visionOS: greyed whatever they read (call H7) */
+		T_EQ_INT(hdr(item, "metal", VIDHDR_TVOS, 16.0f, 0, 1).enabled, 0);
+		T_EQ_STR(hdr(item, "metal", VIDHDR_TVOS, 16.0f, 0, 1).text, "not built for Apple TV yet");
+		T_EQ_INT(hdr(item, "metal", VIDHDR_VISIONOS, 16.0f, 0, 1).enabled, 0);
+		T_EQ_STR(hdr(item, "metal", VIDHDR_VISIONOS, 16.0f, 0, 1).text, "no headroom reading on visionOS");
+		T_EQ_INT(hdr(item, "metal", (vidhdrplat_t)99, 16.0f, 0, 1).enabled, 0);
+
+		/* Retro overrides HDR on a display with headroom (call H5) */
+		T_EQ_INT(hdr(item, "metal", VIDHDR_MAC, 16.0f, VIDPRES_RETRO, 1).enabled, 0);
+		T_EQ_STR(hdr(item, "metal", VIDHDR_MAC, 16.0f, VIDPRES_RETRO, 1).text, "Retro is a 16-bit SDR look");
+		T_EQ_STR(hdr(item, "metal", VIDHDR_IOS, 0.0f, 2.5f, 1).text, "Retro is a 16-bit SDR look");
+
+		/* no reading, and a display with no extended range */
+		for (int p = VIDHDR_MAC; p <= VIDHDR_IOS; p++)
+		{
+			T_EQ_INT(hdr(item, "metal", p, -1.0f, 0, 1).enabled, 0);
+			T_EQ_STR(hdr(item, "metal", p, -1.0f, 0, 1).text, "the display's headroom is unavailable");
+			T_EQ_STR(hdr(item, "metal", p, nan_, 0, 1).text, "the display's headroom is unavailable");
+			T_EQ_STR(hdr(item, "metal", p, INFINITY, 0, 1).text, "the display's headroom is unavailable");
+			T_EQ_INT(hdr(item, "metal", p, 1.0f, 0, 1).enabled, 0);
+			T_EQ_STR(hdr(item, "metal", p, 1.0f, 0, 1).text, "this display reports no extended range");
+			T_EQ_STR(hdr(item, "metal", p, 0.0f, 0, 1).text, "this display reports no extended range");
+			T_EQ_STR(hdr(item, "metal", p, 1.0f, VIDPRES_ENHANCED, 0).text, "this display reports no extended range");
+			/* live with headroom, under every presentation but Retro */
+			T_EQ_INT(hdr(item, "metal", p, 1.5f, 0, 1).enabled, 1);
+			T_EQ_INT(hdr(item, "metal", p, 16.0f, VIDPRES_ENHANCED, 1).enabled, 1);
+			T_EQ_INT(hdr(item, "metal", p, 16.0f, VIDPRES_RTPRIMARY, 1).enabled, 1);
+			T_CHECK(hdr(item, "metal", p, 16.0f, 0, 1).text != NULL);
+		}
+	}
+
+	/* the switch is live with headroom whatever r_hdr is; the peak only while r_hdr is 1 */
+	T_EQ_INT(hdr(VIDHDR_ITEM_ON, "metal", VIDHDR_MAC, 4.0f, 0, 0).enabled, 1);
+	T_EQ_INT(hdr(VIDHDR_ITEM_PEAK, "metal", VIDHDR_MAC, 4.0f, 0, 0).enabled, 0);
+	T_EQ_STR(hdr(VIDHDR_ITEM_PEAK, "metal", VIDHDR_MAC, 4.0f, 0, 0).text, "HDR is off");
+	T_EQ_STR(hdr(VIDHDR_ITEM_PEAK, "metal", VIDHDR_MAC, 4.0f, 0, 2).text, "HDR is off");
+	T_EQ_STR(hdr(VIDHDR_ITEM_PEAK, "metal", VIDHDR_MAC, 4.0f, 0, nan_).text, "HDR is off");
+	/* with r_hdr 0 on a display with no range, the display's reason, not "HDR is off" */
+	T_EQ_STR(hdr(VIDHDR_ITEM_PEAK, "metal", VIDHDR_MAC, 1.0f, 0, 0).text, "this display reports no extended range");
+
+	T_EQ_INT(hdr(2, "metal", VIDHDR_MAC, 16.0f, 0, 1).enabled, 0);
+	T_EQ_INT(hdr(-1, "metal", VIDHDR_MAC, 16.0f, 0, 1).enabled, 0);
+}
+
+TEST(vidrules_hdr_items_in_tuning_and_presets)
+{
+	int found = 0;
+
+	T_EQ_INT(VidRules_HdrItem("r_hdr"), VIDHDR_ITEM_ON);
+	T_EQ_INT(VidRules_HdrItem("r_hdr_peak"), VIDHDR_ITEM_PEAK);
+	T_EQ_INT(VidRules_HdrItem("r_hdr_headroom"), -1);
+	T_EQ_INT(VidRules_HdrItem(NULL), -1);
+
+	/* both rows on the tuning screen, live (no restart), with the renderer's defaults */
+	for (int i = 0; i < VidRules_TuneNum(); i++)
+	{
+		const vidrt_control_t *c = VidRules_TuneControl(i);
+
+		if (VidRules_HdrItem(c->cvar) < 0)
+		{
+			continue;
+		}
+		found++;
+		T_EQ_INT(c->restart, 0);
+		T_EQ_INT(c->flags, CVAR_ARCHIVE);
+		T_EQ_STR(c->def, (VidRules_HdrItem(c->cvar) == VIDHDR_ITEM_ON) ? "0" : "4");
+		/* the tuning rules alone have no headroom reading: greyed with the reason, off Metal the HDR one */
+		T_EQ_INT(VidRules_TuneItem(i, "metal", 1, 1).enabled, 0);
+		T_EQ_STR(VidRules_TuneItem(i, "metal", 1, 1).text, "the display's headroom is unavailable");
+		T_EQ_STR(VidRules_TuneItem(i, "soft", 1, 1).text, "HDR is a Metal renderer feature");
+	}
+	T_EQ_INT(found, 2);
+
+	/* in the presets and the A/B */
+	T_CHECK(VidRules_IsPresetCvar("r_hdr"));
+	T_CHECK(VidRules_IsPresetCvar("r_hdr_peak"));
+	T_CHECK(!VidRules_IsPresetCvar("r_hdr_headroom"));
+
+	/* in force as the renderer runs it */
+	T_EQ_INT(VidRules_HdrInForce(1, 0), 1);
+	T_EQ_INT(VidRules_HdrInForce(1, VIDPRES_ENHANCED), 1);
+	T_EQ_INT(VidRules_HdrInForce(1, VIDPRES_RETRO), 0);
+	T_EQ_INT(VidRules_HdrInForce(0, 0), 0);
+	T_EQ_INT(VidRules_HdrInForce(2, 0), 0);
+	T_EQ_INT(VidRules_HdrInForce(0.5f, 0), 0);
 }

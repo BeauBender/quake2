@@ -103,7 +103,8 @@ vidref_t VidRules_Renderer(const char *name);
    scaler is the MetalFX scaler's index for the MetalFX items, and for the
    items that need a ray-traced effect on, whether it is: VIDITEM_RTW_HITS
    whether r_rt_water is on (VidRules_WaterOn), the ray-traced AO's items
-   (VIDITEM_AO_*) whether r_rt_ao is on. */
+   (VIDITEM_AO_*) whether r_rt_ao is on, VIDITEM_COLORSPACE whether r_hdr 1
+   is in force (VidRules_HdrInForce). */
 vidrule_t VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler);
 
 /* the cvar an item sets under this renderer, NULL when it sets none */
@@ -285,6 +286,44 @@ const char *VidRules_PresetNameError(const char *name);
  * of them, only r_rt_ab, the B side the renderer overlays. RTPreset_Side
  * is the side showing: "A: your settings", "B: stock" or "B: preset <name>".
  */
+/*
+ * The HDR items (TASK196, HD5; docs/plans/hdr-output.md, sections 3 and
+ * 4): "HDR" (r_hdr) and "HDR peak" (r_hdr_peak), on the renderer's page
+ * of the video menu after the colour space, and on the tuning screen,
+ * whose presets and A/B hold them. Always shown; VidRules_Hdr greys an
+ * item with its reason, in this order: another renderer ("HDR is a Metal
+ * renderer feature"), Apple TV ("not built for Apple TV yet"), visionOS
+ * ("no headroom reading on visionOS"), Retro ("Retro is a 16-bit SDR
+ * look"), no headroom reading ("the display's headroom is unavailable"),
+ * a potential headroom of 1.0 or less ("this display reports no extended
+ * range"), and for the peak, r_hdr not 1 ("HDR is off"). headroom is
+ * r_hdr_headroom, the display's potential headroom as ref_metal reads it,
+ * below 0 or not finite for no reading; hdr is r_hdr, presentation
+ * r_presentation. The console still takes either cvar where the item is
+ * greyed (plan section 3).
+ */
+typedef enum
+{
+	VIDHDR_MAC,
+	VIDHDR_IOS,       /* iPhone and iPad */
+	VIDHDR_TVOS,
+	VIDHDR_VISIONOS
+} vidhdrplat_t;
+
+#define VIDHDR_ITEM_ON 0
+#define VIDHDR_ITEM_PEAK 1
+#define VIDHDR_PEAK_MIN 1.0f
+#define VIDHDR_PEAK_MAX 16.0f
+#define VIDHDR_PEAK_STEP 0.5f
+
+vidrule_t VidRules_Hdr(int item, const char *renderer, vidhdrplat_t plat, float headroom,
+	float presentation, float hdr);
+/* VIDHDR_ITEM_ON for "r_hdr", VIDHDR_ITEM_PEAK for "r_hdr_peak", -1 for any other name */
+int VidRules_HdrItem(const char *cvar);
+/* whether r_hdr 1 is in force as the renderer runs it: hdr exactly 1 and the presentation not Retro;
+   VIDITEM_COLORSPACE takes it as its scaler argument and is greyed "set by HDR" when it is */
+int VidRules_HdrInForce(float hdr, float presentation);
+
 void RTPreset_Init(void);
 int RTPreset_Save(const char *name);
 int RTPreset_Load(const char *name);

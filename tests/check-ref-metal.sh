@@ -382,6 +382,13 @@ else
 		bad "rm_pres_value does not return the preset's values under the rows of $pt"
 	fi
 fi
+# a preset with r_hdr and r_hdr_peak: the overlay must not carry them, the defaults output must
+if ! "$pt" "$ptfix/hdr.cfg" --as enhanced > "${tmp:?}/pt.hdr" 2> /dev/null || grep -q 'r_hdr' "${tmp:?}/pt.hdr" ||
+	! grep -q 'r_rt_ao_range' "${tmp:?}/pt.hdr"; then
+	bad "$pt --as enhanced put r_hdr or r_hdr_peak into the overlay of $ptfix/hdr.cfg"
+elif ! "$pt" "$ptfix/hdr.cfg" 2>&1 | grep -q '^r_hdr: 0 -> 1$'; then
+	bad "$pt --as defaults did not list r_hdr: 0 -> 1 for $ptfix/hdr.cfg"
+fi
 for ptbad in badline badname; do
 	if "$pt" "$ptfix/$ptbad.cfg" > "${tmp:?}/pt.out" 2>&1; then
 		bad "$pt accepted $ptfix/$ptbad.cfg"
