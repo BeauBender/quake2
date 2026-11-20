@@ -389,6 +389,11 @@ void Cbuf_DropServerText(void);
 /* line queues while it runs. Cbuf_DropServerText discards all of it, */
 /* and keeps the player's, when the connection it came from ends. */
 
+void Cbuf_AddPlayerText(const char *text);
+
+/* Cbuf_AddText, but marked as the player's even inside a server line: */
+/* the player's own config files the engine execs (Qcommon_ExecConfigs). */
+
 qboolean Cbuf_ExecutingServerText(void);
 
 /* true while Cbuf_Execute runs a line that holds any of the server's */

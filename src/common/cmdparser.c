@@ -136,6 +136,26 @@ Cbuf_AddServerText(const char *text)
 	cbuf_source = saved;
 }
 
+/*
+ * Adds the player's own text at the end of the buffer, marked as the
+ * player's even while a server line runs: the engine's exec of the
+ * player's config files when the game directory changes
+ * (Qcommon_ExecConfigs), whichever line changed it (FIX156). The files
+ * are the player's, not the server's bytes, and run as the player's
+ * text, so the binds in them stay the player's and config.cfg saves
+ * them back unchanged.
+ */
+void
+Cbuf_AddPlayerText(const char *text)
+{
+	byte saved;
+
+	saved = cbuf_source;
+	cbuf_source = CBUF_PLAYER;
+	Cbuf_AddText(text);
+	cbuf_source = saved;
+}
+
 /* Removes the server's bytes from buf, keeping the order of the rest.
    Returns the new length. */
 static int

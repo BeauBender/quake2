@@ -271,6 +271,35 @@ TEST(keybind_server_game_dir_configs_keep_player_keys)
 	kb_server_runs_config(false, true);
 }
 
+/*
+ * A server line `game <dir>` on a remote client, where <dir> has a
+ * config.cfg of its own that the player saved there earlier
+ * (correctness round 2, B1). The directory change runs that file as the
+ * player's text (Qcommon_ExecConfigs), so its binds are the player's and
+ * the next write leaves it as it was: not the old directory's binds.
+ */
+TEST(keybind_server_game_dir_keeps_dir_config)
+{
+	static const char modcfg[] = "unbindall\nbind w \"+forward\"\n";
+	char before[4096], after[4096];
+
+	kb_setup();
+	player_line(player_binds);
+	kb_written(before, sizeof(before));
+	T_CHECK(strstr(before, "bind w \"t_kb_probe\"\n") != NULL);
+
+	t_write_file("data/t_kbmod/config.cfg", modcfg, strlen(modcfg));
+	server_line("game t_kbmod\n");
+
+	T_EQ_INT(kb_server_keys(), 0);
+	T_EQ_STR(keybindings['w'], "+forward");
+	kb_written(after, sizeof(after));
+	T_EQ_STR(after, "bind w \"+forward\"\n");
+
+	player_line("game \"\"\n");
+	kb_teardown();
+}
+
 /* A server binds over a player's key: the press runs as the server's
    text, and config.cfg still saves the player's binding. */
 TEST(keybind_server_bind_over_player_key)
