@@ -51,8 +51,6 @@ extern id<MTLDevice> rmb_device;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
-/* rmb_encode.m */
-
 #define RMB_RTAO_GROUP 8        /* the kernel's threadgroup side */
 #define RMB_RTAO_COUNTS 7       /* traced, occluded, at the floor, up, up and occluded, rays, hits (rm_rtao.metal) */
 

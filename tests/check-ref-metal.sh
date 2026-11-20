@@ -104,6 +104,9 @@
 #     moved below another statement; &caps for &rtcaps; RM_RTG_Init deleted,
 #     moved after ri.Vid_MenuInit; another *_Init(&caps); either function
 #     renamed) must fail it, each naming the rule it breaks.
+# (h) Darwin and elsewhere: FIX119, one internal header for the backend files; a
+#     hand-written prototype in an rmb_*.m file is refused, with scratch mutants and
+#     false-positive fixtures for the check.
 # (i) Always: the effect table (TASK179). tests/metal/rm_rtfx_test.c over
 #     rm_rtfx.c (RM_RTFX_HOST: every entry point a recording stub of
 #     tests/metal/rm_rtfx_host.h) and rm_rtgate.c: the order, the switches
@@ -1177,18 +1180,35 @@ protos() {
 		if (s == "") return
 		while (match(s, /__attribute__[ \t]*\(\(([^()]|\([^()]*\))*\)\)/)) s = substr(s, 1, RSTART - 1) " " substr(s, RSTART + RLENGTH)
 		sub(/^[ \t]+/, "", s); gsub(/[ \t]+/, " ", s)
-		if (s ~ /^(static|typedef|_Static_assert)[ (]/ || s ~ /^[-+@]/) return
+		if (s ~ /^(static|typedef|_Static_assert|static_assert)[ (]/ || s ~ /^[-+@]/) return
+		while (s ~ /\) [A-Z_][A-Z0-9_]*$/) sub(/ [A-Z_][A-Z0-9_]*$/, "", s)
 		p = index(s, "(")
 		if (p == 0) return
 		q = substr(s, 1, p - 1)
-		if (q ~ /=/ || q !~ /[A-Za-z_0-9] ?$/) return
+		if (q ~ /=/) return
+		r = substr(s, p)
+		fpr = (r ~ /^\( ?[*^] ?[A-Za-z_0-9]* ?\(/)
+		if (!fpr && r ~ /^\( ?[*^]/) return
+		par = (r ~ /^\( ?[A-Za-z_][A-Za-z0-9_]* ?\) ?\(/ && q ~ /[A-Za-z_0-9>*] ?$/)
+		if (fpr && q ~ /^ *$/) return
+		if (!fpr && !par && q !~ /[A-Za-z_0-9] ?$/) return
 		if (s !~ /\) ?$/) return
 		print f ":" first ": " s
 	}
 	{
 		line = $0
 		if (cont) { cont = (line ~ /\\[ \t\r]*$/); next }
-		if (line ~ /^[ \t]*#/) { cont = (line ~ /\\[ \t\r]*$/); next }
+		if (line ~ /^[ \t]*#/) {
+			cont = (line ~ /\\[ \t\r]*$/)
+			if (skip == 0 && line ~ /^[ \t]*#[ \t]*if[ \t]+0[ \t]*$/) { skip = 1; nest = 1; stmt = "" }
+			else if (skip) {
+				if (line ~ /^[ \t]*#[ \t]*if/) nest++
+				else if (line ~ /^[ \t]*#[ \t]*endif/) { if (--nest == 0) skip = 0 }
+				else if (nest == 1 && line ~ /^[ \t]*#[ \t]*(else|elif)/) skip = 0
+			}
+			next
+		}
+		if (skip) next
 		if (depth == 0 && line ~ /^[ \t]*@[A-Za-z]/) { stmt = ""; next }
 		n = length(line)
 		for (i = 1; i <= n; i++) {
@@ -1211,7 +1231,7 @@ if [ -n "$(protos "${tmp:?}/pm/ok.m")" ]; then
 	protos "${tmp:?}/pm/ok.m"
 	bad "the prototype check flags a static prototype, a definition, a typedef, a macro or a comment"
 fi
-for proto_mut in 'void f(void);' 'extern void f(void);' 'id<MTLDevice> f(int a,' '__attribute__((unused)) void f(void);' 'void *f(size_t n, __strong id<MTLBuffer> *buf);'; do
+for proto_mut in 'void f(void);' 'extern void f(void);' 'id<MTLDevice> f(int a,' '__attribute__((unused)) void f(void);' 'void *f(size_t n, __strong id<MTLBuffer> *buf);' 'void f(void) NS_RETURNS_RETAINED;' 'void *(*getf(void))(int);' 'id<MTLBuffer> (f)(void);'; do
 	case $proto_mut in *,) printf '%s\n' "$proto_mut" '	int b);' > "${tmp:?}/pm/mut.m";; *) printf '%s\n' "$proto_mut" > "${tmp:?}/pm/mut.m";; esac
 	if [ -z "$(protos "${tmp:?}/pm/mut.m")" ]; then
 		bad "the prototype check passes a mutant ($proto_mut)"
@@ -1219,6 +1239,27 @@ for proto_mut in 'void f(void);' 'extern void f(void);' 'id<MTLDevice> f(int a,'
 		proto_mutants=$((proto_mutants + 1))
 	fi
 done
+proto_ok=0
+for proto_fix in 'void (*fp)(int);' 'void (^blk)(int);' 'static_assert(sizeof(int) == 4, "x");'; do
+	printf '%s\n' "$proto_fix" > "${tmp:?}/pm/fix.m"
+	if [ -n "$(protos "${tmp:?}/pm/fix.m")" ]; then
+		bad "the prototype check flags a function pointer, a block variable or a static_assert ($proto_fix)"
+	else
+		proto_ok=$((proto_ok + 1))
+	fi
+done
+printf '%s\n' '#if 0' 'void dead(void);' '#if defined(X)' 'void nested(void);' '#endif' 'void dead2(void);' '#endif' > "${tmp:?}/pm/fix.m"
+if [ -n "$(protos "${tmp:?}/pm/fix.m")" ]; then
+	bad "the prototype check flags a prototype inside #if 0 (a nested #if included)"
+else
+	proto_ok=$((proto_ok + 1))
+fi
+printf '%s\n' '#if 0' 'void dead(void);' '#else' 'void live(void);' '#endif' > "${tmp:?}/pm/fix.m"
+if [ -z "$(protos "${tmp:?}/pm/fix.m")" ]; then
+	bad "the prototype check skips a prototype in the #else of an #if 0"
+else
+	proto_ok=$((proto_ok + 1))
+fi
 for pf in "$rm_dir"/*.m; do
 	pout=$(protos "$pf")
 	if [ -n "$pout" ]; then
