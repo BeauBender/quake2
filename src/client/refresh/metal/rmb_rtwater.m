@@ -63,10 +63,6 @@ extern id<MTLDevice> rmb_device;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
-/* rmb_encode.m */
-
-/* rmb_gbuf.m (TASK162): the G-buffer raster's attachment formats, with the surface attachment or not */
-
 #define RMB_RTW_GROUP 8         /* the compaction's threadgroup side */
 #define RMB_RTW_SLOT 16         /* uint32s a frame slot of the counts buffer (rm_rtwater.metal's RM_RTW_C_*) */
 #define RMB_RTW_C_LISTED 9

@@ -50,8 +50,6 @@ extern id<MTLDevice> rmb_device;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
-/* rmb_encode.m */
-
 #define RMB_RTSUN_GROUP 8       /* the kernel's threadgroup side */
 #define RMB_RTSUN_COUNTS 5      /* world, bright, facing away, rays, lit (rm_rtsun.metal) */
 
