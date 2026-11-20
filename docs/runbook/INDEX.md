@@ -90,6 +90,7 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX102](../runbook/FIX102.md): a pin record's capture stall stays out of the timedemo clock, so 5K records with a temporal scaler repeat byte for byte
 - [TASK195](../runbook/TASK195.md): the ray-tracing tuning screen, the A/B toggle (`rt_ab`, an overlay that writes no setting) and presets (`rt_preset`), with the engine runs, the mutants and the base-against-branch pin comparison
 - [TASK184](../runbook/TASK184.md): the Retro post-process (RGB565 with the 4 x 4 dither, the box filter, the gamma curve): the tests and mutants, the retro records and the GPU time at 1080p and 5K (WIP: the pin comparison and the gate are left)
+- [TASK185](../runbook/TASK185.md): Retro upload and sampling (RGB565 and ARGB4444 texels with the dither, the 256 cap, linear-mip-nearest, the 480-line 3D view and its blit): the order of the post-process and the blit, the tests and mutants, the M6 log line, the stock pin comparison
 - [TASK196](../runbook/TASK196.md): HDR output in ref_metal: HD2, r_hdr's float16 path, the r_hdr 0 pin comparison, the hdr record, the live switch and the mutants
 - [FIX124](../runbook/FIX124.md): the identity check refuses an index blob it cannot read, and scans binary blobs as bytes (FIX125 too)
 - [FIX115](../runbook/FIX115.md): the gate's invariants in CI (`invariants_macos`), the required status checks of `main-protect`, and a `_REQUIRE` variable for every skip
