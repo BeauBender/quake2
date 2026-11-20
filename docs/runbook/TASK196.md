@@ -448,3 +448,63 @@ ref_metal: hdr: off
 `check-ref-metal: ok (13197 checks, 0 failed; ...)`, `check-tvos: ok`, `check-ios: ok`,
 `check-cvar-docs: ok`, `make test`: 406 tests, 0 failed; the doc checks on the tree with this
 section are in the lane's report. The gate (`scripts/test.sh`) is the parent's.
+
+## FIX133: a pipeline failure on the float16 path
+
+HD2's switch-off waits for the frame boundary; on the frame that failed three gaps lasted one frame
+each. Fixed:
+
+- A variant that is not built is never bound. `rmb_fmt_pipe` returns nil, not the stock `BGRA8Unorm`
+  pipeline, on the failing ask and every later one, and every draw binds through `rmb_fmt_bind`, which
+  returns 0 with nothing bound. Its caller then skips the draw. No pipeline is made at failure time.
+- A drawable nothing wrote is not presented. `rmb_present_region` returns 0 in three cases: the
+  formats differ, the float16 path has no present pipeline, or a variant of the frame was not built.
+  `rmb_present_written` presents only a nonzero region. Otherwise the drawable is dropped, as a frame of
+  the other format always was.
+- The lifetime: a failure keeps `r_hdr 1` drawing as `0` until the next renderer start (`vid_restart`),
+  which tries the float16 path again (doc/040, `r_hdr`). `rmb_hdr_dead` is cleared by `rmb_hdr_retry`,
+  which only `rmb_resources_close` calls, right after it empties the caches that remember the failure:
+  the `NSNull` entries of `fmt_variants` and the `*_tried` flags of the present, readback and tone-map
+  pipelines. The flag and the caches therefore always reset together. `rmb_attach` no longer clears
+  the flag, so an attach without a close cannot turn the path on against a cached failure. Two paths
+  are closed this way. A cached `NSNull` would make `rmb_fmt_pipe` return nil without `rmb_hdr_fail`,
+  so every draw would be skipped. A tried, nil present pipeline would give region 0 on every frame, so
+  nothing would be presented.
+- `rmb_present_pass` returns 0 when its pipeline is not bound, and the frame end then zeroes the
+  region: that drawable is not presented.
+
+### Tests and mutants
+
+`tests/metal/rmb_cs_probe.m` now includes `rmb_resource.m` as well. Its new failure case runs under
+`metal_colorspace` 0 and 1, for each of the probe's three layers. It refuses variant builds through the
+file's test seam `fmt_refuse`, which only an including file can set, and uses mock objects that count
+binds and presents. The case asserts that the failing ask and the next one bind nothing, that the frame
+and a float16 frame without its present pipeline present nothing. A detach and an attach without
+`rmb_resources_close` must keep the path off: `rmb_hdr_failed()` is still 1 after `rmb_hdr_set(1)`, and
+`rmb_fmt_pipe(ps) != nil || !rmb_hdr_on()`. After the close, the flag is clear and `ps`'s cache entry is
+gone. The next attach turns the path on, and the variant is built again: a refused build fails anew,
+not from the cache. The older `r_hdr` loop runs its failure sub-case under both modes now, and it no
+longer clears `rmb_hdr_dead` by hand. Result:
+`rmb_cs_probe: 346 checks, 0 failed` (round 2; 292 in round 1), and nine colour-space mutants refused.
+
+`check-ref-metal.sh` (f) adds five mutants, each reverting one fix, and the probe must fail each:
+
+- `fmtstock`: `rmb_fmt_pipe` hands back the stock pipeline.
+- `unwritten`: `rmb_present_written` presents a zero region.
+- `failframe`: `rmb_present_region` presents the failing frame.
+- `hdrattach`: `rmb_attach` clears `rmb_hdr_dead` again, while the caches stay.
+- `hdrkept`: `rmb_resources_close` empties the caches and keeps `rmb_hdr_dead`.
+
+Its new (f2) is a source guard: no `setRenderPipelineState:rmb_fmt_pipe(` in `rmb_*.m`, every
+`rmb_fmt_bind(` call tested in an `if`, and no `presentDrawable` in `rmb_encode.m`.
+
+### Pins at `r_hdr 0`
+
+Branch `de91e822`, Metal, screen locked, `PINS_SEED=1` with the trace, 640 x 480, hashed as in HD3's
+table (`shasum` of the frames, then of the list of hashes):
+
+| scenario | frames | branch | against HD3's table |
+| --- | --- | --- | --- |
+| `world` | 23 | `b15b40cf1604` | identical |
+| `models` | 23 | `552ee3cb16b8` | identical |
+| `hdr` | 23 | `11b7dcc7968c` | identical |

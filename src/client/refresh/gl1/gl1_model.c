@@ -195,6 +195,10 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 
 	strcpy(mod->name, name);
 
+	/* no file yet: a refusal before the load is read (a missing file with
+	 * crash set) is reclaimed too, and leaves no named empty slot (FIX140) */
+	Mod_LoadBegin(mod, NULL);
+
 	/* load the file */
 	modfilelen = ri.FS_LoadFile(mod->name, (void **)&buf);
 
@@ -206,6 +210,7 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 					__func__, mod->name);
 		}
 
+		Mod_LoadEnd();
 		memset(mod->name, 0, sizeof(mod->name));
 		return NULL;
 	}

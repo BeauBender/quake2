@@ -267,7 +267,7 @@ R_HdrProbeFrame(void)
 static void
 R_HdrFrame(void)
 {
-	/* Retro holds r_hdr 1 off; a failed float16 pipeline (rmb_hdr_fail) holds it off for the session */
+	/* Retro holds r_hdr 1 off; a failed float16 pipeline (rmb_hdr_fail) holds it off until the next renderer start (vid_restart) */
 	const int asked = rm_hdr_mode(r_hdr->value);
 	const int retro = asked && (rm_presentation == RM_PRES_RETRO);
 	const int active = rm_hdr_active(asked, rm_presentation == RM_PRES_RETRO) && !rmb_hdr_failed();
