@@ -144,6 +144,12 @@ static cvar_t *r_retro_gamma;
 /* TASK195: the tuning harness's B side, "" for A (the client's rt_ab writes it) */
 static cvar_t *r_rt_ab;
 
+int
+RM_PresentationMode(void)
+{
+	return rm_presentation;
+}
+
 const char *
 RM_EffectString(const cvar_t *cv)
 {
@@ -1292,6 +1298,12 @@ R_RetroFinish(const refdef_t *fd)
 	rm_viewport_t vp;
 	int tw = 0, th = 0;
 
+	/* TASK185: a view drawn at 480 lines ran the pass at its own size, before its blit; the frame's copy would quantize it twice */
+	if (rmb_gbuf_retro_done())
+	{
+		return;
+	}
+
 	rmb_target_size(&tw, &th);
 	rm_view_rect(fd->x, fd->y, fd->width, fd->height, vid.width, vid.height, th, &vp);
 	rmb_retro_pass((int)vp.x, (int)vp.y, (int)vp.w, (int)vp.h, r_retro_filter->value != 0,
@@ -1352,6 +1364,14 @@ RI_RenderFrame(refdef_t *fd)
 	 * bits), and no 2D draw writes depth or stencil before the view, so a
 	 * clear here gives the same.
 	 */
+	/* Retro's pass is made at the view's own lines when it has them (TASK185), with this frame's settings */
+	if (rm_presentation == RM_PRES_RETRO)
+	{
+		const float rc = r_retro_gamma->value;
+
+		rmb_gbuf_set_retro(1, r_retro_filter->value != 0, ((rc >= 0.0f) && (rc < (float)MTL_RETRO_CURVES)) ? (int)rc : 0);
+	}
+
 	if (RM_GB_Choose(fd) != RM_GB_PATH_FORWARD)
 	{
 		R_RenderViewGB(fd, (gl_shadows->value && gl1_stencilshadow->value) ? 1 : 0);

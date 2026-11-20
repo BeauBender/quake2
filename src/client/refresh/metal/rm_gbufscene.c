@@ -46,7 +46,9 @@
 #include "header/rm_rtwaterscene.h"
 #include "header/rm_fxscene.h"
 #include "header/rm_rtfx.h"
+#include "header/rm_rtgate.h"
 #include "common/mtl_matrix.h"
+#include "common/mtl_retro_tex.h"
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
 #include "common/mtl_rts_math.h"
@@ -102,7 +104,9 @@ RM_GB_Choose(const refdef_t *fd)
 	/* a ray-traced effect on (RT3's shadows, RM_RTS_Frame; RT5's AO, RM_RTAO_Frame; RT6's water reflections,
 	   RM_RTW_Frame; RT4's sun, RM_RTSun_Frame, never on a map under 2 % sky) takes the G-buffer;
 	   a MetalFX scaler asks for the motion path (TASK111) */
-	return rm_gb_path(rm_rtfx_active(), r_rt_gbuffer->value, RM_FX_WantsMotion() ? 1.0f : r_rt_motion->value,
+	/* Retro (TASK185): the world view is drawn at 480 lines, so it has a render-size target, which the MOTION path gives */
+	return rm_gb_path(rm_rtfx_active(), r_rt_gbuffer->value,
+			(RM_FX_WantsMotion() || (RM_PresentationMode() == RM_PRES_RETRO)) ? 1.0f : r_rt_motion->value,
 			(fd->rdflags & RDF_NOWORLDMODEL) != 0);
 }
 
@@ -132,10 +136,32 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 
 	rmb_target_size(&fw, &fh);
 
-	if (!rm_gb_render_size(fw, fh, r_rt_gbuffer_scale->value, &rw, &rh))
+	/* Retro (TASK185): 480 lines at the target's aspect, in place of r_rt_gbuffer_scale; the blit of the view's end enlarges it */
+	if (!rm_gb_render_size(fw, fh, (RM_PresentationMode() == RM_PRES_RETRO) ? mtl_retro_view_scale(fh) :
+			r_rt_gbuffer_scale->value, &rw, &rh))
 	{
 		path = RM_GB_PATH_FORWARD;
 		return 0;
+	}
+
+	/* the report line of Retro's upload and view (TASK185), once for each target size and render size */
+	if (RM_PresentationMode() == RM_PRES_RETRO)
+	{
+		static int said_fw, said_fh, said_rw, said_rh;
+
+		if ((fw != said_fw) || (fh != said_fh) || (rw != said_rw) || (rh != said_rh))
+		{
+			int n565, n4444, ncap, maxside;
+
+			RM_RetroImageCounts(&n565, &n4444, &ncap, &maxside);
+			R_Printf(PRINT_ALL, "ref_metal: retro: 3D view %dx%d of a %dx%d target, enlarged by a bilinear blit, no MetalFX; "
+					"textures %d RGB565 and %d ARGB4444, %d capped to %dx%d, largest side %d, filter %s, no anisotropy\n",
+					rw, rh, fw, fh, n565, n4444, ncap, MTL_RETRO_TEX_CAP, MTL_RETRO_TEX_CAP, maxside, MTL_RETRO_TEXMODE);
+			said_fw = fw;
+			said_fh = fh;
+			said_rw = rw;
+			said_rh = rh;
+		}
 	}
 
 	memcpy(keep_proj, view->proj, sizeof(keep_proj));
