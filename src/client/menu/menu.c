@@ -6528,7 +6528,7 @@ M_Menu_Quit_f(void)
 extern sizebuf_t cmd_text; /* src/common/cmdparser.c: what select queued */
 
 static menuframework_s *walk_seen[128];
-static int walk_nseen, walk_fail, walk_presses, walk_bound;
+static int walk_nseen, walk_fail, walk_presses, walk_bound, walk_greyset;
 static int walk_path[MAX_MENU_DEPTH];
 
 static void
@@ -6705,6 +6705,78 @@ Walk_Screen(int depth)
 		}
 	}
 
+	/*
+	 * TASK196 (HD5): every greyed setting (a spin control or a slider; the
+	 * binding screens' dark labels are not greyed settings) is shown with
+	 * its reason, and select, left and right change nothing: not its value
+	 * (the slider's cvar, the list's choice), the screen, the cursor, the
+	 * status bar or the commands queued.
+	 */
+	for (i = 0; i < m->nitems && !Walk_BindingScreen(m); i++)
+	{
+		menucommon_s *it = (menucommon_s *)m->items[i];
+		const char *statusbar;
+		char value[64];
+		int cursor, queued, k;
+
+		if (!Walk_Selectable(m, i) || !(it->flags & QMF_GRAYED) ||
+			(it->type != MTYPE_SPINCONTROL && it->type != MTYPE_SLIDER))
+		{
+			continue;
+		}
+		if (!Walk_GoTo(m, depth, i))
+		{
+			Com_Printf("menu_probe: FAIL: item %d of '%s' is not reached\n", i, Walk_Name(m));
+			walk_fail++;
+			continue;
+		}
+
+		Com_Printf("menu_probe: item %d '%s' of '%s' is greyed: %s\n", i, it->name ? it->name : "",
+				Walk_Name(m), it->statusbar ? it->statusbar : "(no reason)");
+		if (!it->statusbar || !it->statusbar[0])
+		{
+			Com_Printf("menu_probe: FAIL: greyed item %d '%s' of '%s' has no reason\n", i,
+					it->name ? it->name : "", Walk_Name(m));
+			walk_fail++;
+		}
+
+		if (it->type == MTYPE_SLIDER)
+		{
+			Q_strlcpy(value, ((menuslider_s *)it)->cvar ? Cvar_VariableString(((menuslider_s *)it)->cvar) : "",
+					sizeof(value));
+		}
+		else
+		{
+			Com_sprintf(value, sizeof(value), "%d", ((menulist_s *)it)->curvalue);
+		}
+		cursor = m->cursor;
+		statusbar = m->statusbar;
+		queued = cmd_text.cursize;
+
+		for (k = 0; k < 3 && Walk_On(m, depth); k++)
+		{
+			Walk_Key((k == 0) ? K_ENTER : ((k == 1) ? K_LEFTARROW : K_RIGHTARROW));
+		}
+
+		if (!Walk_On(m, depth) || m->cursor != cursor || m->statusbar != statusbar || cmd_text.cursize != queued ||
+			strcmp(value, (it->type == MTYPE_SLIDER) ? (((menuslider_s *)it)->cvar ?
+				Cvar_VariableString(((menuslider_s *)it)->cvar) : "") :
+				va("%d", ((menulist_s *)it)->curvalue)))
+		{
+			Com_Printf("menu_probe: FAIL: greyed setting %d '%s' of '%s' changed on select, left or right\n", i,
+					it->name ? it->name : "", Walk_Name(m));
+			walk_fail++;
+			cmd_text.cursize = queued;
+
+			if (!Walk_On(m, depth) && !Walk_Reopen(depth))
+			{
+				return;
+			}
+			continue;
+		}
+		walk_greyset++;
+	}
+
 	/* select on every action item; a screen it opens is walked, then left with back */
 	for (i = 0; i < m->nitems; i++)
 	{
@@ -6871,7 +6943,7 @@ M_Probe_f(void)
 		return;
 	}
 
-	walk_nseen = walk_fail = walk_presses = walk_bound = 0;
+	walk_nseen = walk_fail = walk_presses = walk_bound = walk_greyset = 0;
 	Com_Printf("menu_probe: walk at cls.realtime %d\n", cls.realtime);
 	M_ForceMenuOff();
 	M_Menu_Main_f();
@@ -6889,6 +6961,7 @@ M_Probe_f(void)
 	}
 
 	Com_Printf("menu_probe: %d binding items entered bind mode on select and left it with back\n", walk_bound);
+	Com_Printf("menu_probe: %d greyed settings changed nothing on select, left and right\n", walk_greyset);
 	Com_Printf("menu_probe: walk %s: %d screens, %d key presses, %d failures\n",
 			walk_fail ? "FAIL" : "ok", walk_nseen, walk_presses, walk_fail);
 
