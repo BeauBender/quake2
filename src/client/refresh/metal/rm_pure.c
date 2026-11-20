@@ -686,9 +686,9 @@ rm_hdr_slot_keep(int fmt, int w, int h, int want_fmt, int want_w, int want_h)
 }
 
 int
-rm_hdr_fx_mode(int active, int mode)
+rm_hdr_fx_note(int fmt)
 {
-	return active ? 0 : mode;   /* RM_FX_OFF */
+	return (fmt == RM_FMT_RGBA16F) ? 3 : 1;   /* RM_FX_NOTE_HDR, RM_FX_NOTE_UNMADE */
 }
 
 static const char *
@@ -1305,72 +1305,6 @@ rm_range_ok(long first, long count, long total)
 }
 
 int
-rm_lump_ok(long fileofs, long filelen, long len)
-{
-	/* the loaders read int and float fields of the records in place: aligned to 4 */
-	return ((fileofs & 3) == 0) && rm_range_ok(fileofs, filelen, len);
-}
-
-int
-rm_face_edges_ok(long firstedge, long numedges, long numsurfedges)
-{
-	return (numedges >= 3) && rm_range_ok(firstedge, numedges, numsurfedges);
-}
-
-int
-rm_surfedge_ok(long e, long numedges)
-{
-	return (e < numedges) && (e > -numedges);
-}
-
-/* Mod_LoadTexinfo's next: a positive nexttexinfo names a texinfo, anything else ends the chain (-1) */
-static long
-rm_texinfo_next(const int *next, long i)
-{
-	return next[i] > 0 ? next[i] : -1;
-}
-
-int
-rm_texinfo_chains_ok(const int *next, long count)
-{
-	long i, step, steps;
-
-	if (count < 0)
-	{
-		return 0;
-	}
-
-	for (i = 0; i < count; i++)
-	{
-		if (next[i] >= count)
-		{
-			return 0;
-		}
-	}
-
-	/* Mod_LoadTexinfo's count loop: from each texinfo until the chain ends or comes back */
-	for (i = 0; i < count; i++)
-	{
-		for (step = rm_texinfo_next(next, i), steps = 0; (step != -1) && (step != i);
-			step = rm_texinfo_next(next, step))
-		{
-			if (++steps > count)
-			{
-				return 0;
-			}
-		}
-	}
-
-	return 1;
-}
-
-int
-rm_vis_header_ok(long numclusters, long len)
-{
-	return (len >= 4) && (numclusters >= 0) && (numclusters <= RM_MAX_MAP_LEAFS) && (numclusters <= (len - 4) / 8);
-}
-
-int
 rm_leaf_ok(long cluster, long area, long numclusters, int has_vis)
 {
 	if ((area < 0) || (area >= RM_MAX_MAP_AREAS))
@@ -1385,73 +1319,6 @@ int
 rm_leaf_contents_ok(long contents)
 {
 	return contents != -1;   /* CONTENTS_NODE */
-}
-
-int
-rm_world_head_ok(long numnodes, long nummodels, long headnode)
-{
-	return (numnodes >= 1) && (nummodels >= 1) && (headnode >= 0) && (headnode < numnodes);
-}
-
-int
-rm_node_tree_ok(const int *children, long numnodes, long numleafs, unsigned char *seen)
-{
-	long i;
-
-	if ((numnodes < 1) || (numleafs < 0))
-	{
-		return 0;
-	}
-
-	memset(seen, 0, (size_t)numnodes);
-
-	for (i = 0; i < 2 * numnodes; i++)
-	{
-		long c = children[i];
-
-		if (c < 0)
-		{
-			/* a leaf, -1 - c; a leaf may have more than one parent (the last one is kept) */
-			if (-1 - c >= numleafs)
-			{
-				return 0;
-			}
-
-			continue;
-		}
-
-		/* node 0 is the root; any other node has one parent at most */
-		if ((c == 0) || (c >= numnodes) || seen[c])
-		{
-			return 0;
-		}
-
-		seen[c] = 1;
-	}
-
-	return 1;
-}
-
-int
-rm_mark_once(unsigned char *owner, long total, long first, long count)
-{
-	long i;
-
-	if (!rm_range_ok(first, count, total))
-	{
-		return 0;
-	}
-
-	for (i = first; i < first + count; i++)
-	{
-		if (owner[i])
-		{
-			return 0;
-		}
-	}
-
-	memset(owner + first, 1, (size_t)count);
-	return 1;
 }
 
 rm_slot_t

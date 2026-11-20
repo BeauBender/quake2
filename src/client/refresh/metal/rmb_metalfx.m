@@ -26,7 +26,12 @@
  * at the input size into the render-size colour target, and in place of
  * the bilinear stretch into the frame. Its output goes to a target of
  * the world view's rectangle, copied into the frame at that rectangle.
- * Nothing here is made while every mode is off.
+ * Nothing here is made while every mode is off. On r_hdr's float16 path
+ * (TASK196, HD4) the colour in, the output and its target are
+ * RGBA16Float, as the view and the frame are, and the spatial scaler
+ * takes its hdr mode; a scaler the GPU will not make in that format
+ * leaves MetalFX off with a note (RM_FX_NOTE_HDR), and a toggle of
+ * r_hdr remakes the scaler in the new format.
  *
  * =======================================================================
  */
@@ -46,6 +51,7 @@
 
 #include "header/rmb.h"
 #include "header/rm_metalfx.h"
+#include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_metalfx.m is written for ARC: compile it with -fobjc-arc"
@@ -56,11 +62,7 @@
 extern id<MTLDevice> rmb_device;
 extern id<MTLCommandQueue> rmb_queue;
 
-id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
-int rmb_frame_cut(void);
-void rmb_watch(id<MTLCommandBuffer> cmd);
-
-/* the formats of the G-buffer contract: the render-size colour target, the frame, the depth and motion */
+/* the formats of the G-buffer contract: the render-size colour target and the frame (stock), the depth and motion */
 #define RMB_FX_COLOR MTLPixelFormatBGRA8Unorm
 #define RMB_FX_DEPTH MTLPixelFormatDepth32Float
 #define RMB_FX_MOTION MTLPixelFormatRG16Float
@@ -69,6 +71,8 @@ static id<MTLFXSpatialScaler> fx_spatial;
 static id<MTLFXTemporalScaler> fx_temporal;
 static id<MTLTexture> fx_out;       /* the output, the world view's rectangle */
 static int fx_mode;                 /* the mode of the scaler made, 0 for none */
+static MTLPixelFormat fx_fmt;       /* its colour and output format, the view's and the frame's (rmb_fx_color) */
+static MTLPixelFormat fx_asked_fmt; /* the format of the last rmb_fx_prepare: a change forgets the refusals */
 static rm_fx_size_t fx_size;
 static int fx_ready;                /* prepared for the view being drawn */
 static rm_fx_refusal_t fx_refusal;  /* the last scaler that could not be made */
@@ -79,6 +83,15 @@ static float fx_jx, fx_jy;
 static int fx_reset;
 static int fx_timing;
 static _Atomic double fx_ms = -1.0;
+/* a test seam (TASK196 HD4): tests/metal/rmb_cs_probe.m, which includes this file, sets it to refuse every scaler */
+static int fx_refuse;
+
+/* the colour format of the 3D view's target and of the frame: RGBA16Float on r_hdr's float16 path */
+static MTLPixelFormat
+rmb_fx_color(void)
+{
+	return (MTLPixelFormat)rm_hdr_format(rmb_hdr_on());
+}
 
 unsigned
 rmb_fx_support(void)
@@ -199,6 +212,7 @@ rmb_fx_free(void)
 	}
 
 	fx_mode = 0;
+	fx_fmt = MTLPixelFormatInvalid;
 	fx_ready = 0;
 	memset(&fx_size, 0, sizeof(fx_size));
 }
@@ -211,9 +225,9 @@ rmb_fx_release(void)
 	fx_note = RM_FX_NOTE_NONE;
 }
 
-/* the scaler of mode at s and its output target; 0, with nothing kept, when one cannot be made */
+/* the scaler of mode at s with colour format f, and its output target; 0, with nothing kept, when one cannot be made */
 static int
-rmb_fx_make(int mode, const rm_fx_size_t *s)
+rmb_fx_make(int mode, const rm_fx_size_t *s, MTLPixelFormat f)
 {
 	MTLTextureUsage out_usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
 
@@ -223,14 +237,16 @@ rmb_fx_make(int mode, const rm_fx_size_t *s)
 		{
 			MTLFXSpatialScalerDescriptor *d = [MTLFXSpatialScalerDescriptor new];
 
-			d.colorTextureFormat = RMB_FX_COLOR;
-			d.outputTextureFormat = RMB_FX_COLOR;
+			d.colorTextureFormat = f;
+			d.outputTextureFormat = f;
 			d.inputWidth = (NSUInteger)s->iw;
 			d.inputHeight = (NSUInteger)s->ih;
 			d.outputWidth = (NSUInteger)s->ow;
 			d.outputHeight = (NSUInteger)s->oh;
-			d.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
-			fx_spatial = [d newSpatialScalerWithDevice:rmb_device];
+			/* the stock 8-bit colour is display-referred; float16's is linear and goes above white (plan 2.7) */
+			d.colorProcessingMode = (f == RMB_FX_COLOR) ? MTLFXSpatialScalerColorProcessingModePerceptual :
+				MTLFXSpatialScalerColorProcessingModeHDR;
+			fx_spatial = fx_refuse ? nil : [d newSpatialScalerWithDevice:rmb_device];
 
 			if (fx_spatial)
 			{
@@ -245,16 +261,17 @@ rmb_fx_make(int mode, const rm_fx_size_t *s)
 		{
 			MTLFXTemporalScalerDescriptor *d = [MTLFXTemporalScalerDescriptor new];
 
-			d.colorTextureFormat = RMB_FX_COLOR;
+			d.colorTextureFormat = f;
 			d.depthTextureFormat = RMB_FX_DEPTH;
 			d.motionTextureFormat = RMB_FX_MOTION;
-			d.outputTextureFormat = RMB_FX_COLOR;
+			d.outputTextureFormat = f;   /* the temporal output follows the frame */
 			d.inputWidth = (NSUInteger)s->iw;
 			d.inputHeight = (NSUInteger)s->ih;
 			d.outputWidth = (NSUInteger)s->ow;
 			d.outputHeight = (NSUInteger)s->oh;
-			d.autoExposureEnabled = NO;   /* the stock display-referred colour: fixed exposure (design section 2) */
-			fx_temporal = [d newTemporalScalerWithDevice:rmb_device];
+			/* fixed exposure (design section 2), under r_hdr 1 too: the view is not exposure-scaled (plan 2.7) */
+			d.autoExposureEnabled = NO;
+			fx_temporal = fx_refuse ? nil : [d newTemporalScalerWithDevice:rmb_device];
 
 			if (fx_temporal)
 			{
@@ -270,7 +287,7 @@ rmb_fx_make(int mode, const rm_fx_size_t *s)
 	}
 
 	{
-		MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:RMB_FX_COLOR
+		MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:f
 				width:(NSUInteger)s->ow height:(NSUInteger)s->oh mipmapped:NO];
 
 		t.storageMode = MTLStorageModePrivate;
@@ -286,6 +303,7 @@ rmb_fx_make(int mode, const rm_fx_size_t *s)
 
 	rmb_ledger_note(RM_OBJ_FX, 1);
 	fx_mode = mode;
+	fx_fmt = f;
 	fx_size = *s;
 	return 1;
 }
@@ -293,28 +311,16 @@ rmb_fx_make(int mode, const rm_fx_size_t *s)
 int
 rmb_fx_prepare(int mode, const rm_fx_size_t *s, float jx, float jy, int reset)
 {
-	static int hdr_told;
+	const MTLPixelFormat f = rmb_fx_color();
 
 	fx_ready = 0;
 
-	/* r_hdr's float16 path (TASK196): the scalers take BGRA8Unorm, so none runs until HD4; told once */
-	if (rm_hdr_fx_mode(rmb_hdr_on(), mode) != mode)
+	/* r_hdr toggled (TASK196 HD4): a scaler refused in the other format is tried again in this one */
+	if (f != fx_asked_fmt)
 	{
-		if (fx_mode)
-		{
-			rmb_fx_free();
-		}
-
-		if (!hdr_told)
-		{
-			hdr_told = 1;
-			rmb_fx_tell(RM_FX_NOTE_HDR, mode, s);
-		}
-
-		return 0;
+		fx_asked_fmt = f;
+		rm_fx_refusal_clear(&fx_refusal);
 	}
-
-	hdr_told = 0;
 
 	if ((mode != RM_FX_SPATIAL) && (mode != RM_FX_TEMPORAL))
 	{
@@ -328,7 +334,8 @@ rmb_fx_prepare(int mode, const rm_fx_size_t *s, float jx, float jy, int reset)
 		return 0;
 	}
 
-	if ((mode != fx_mode) || !rm_fx_same_size(s, &fx_size))
+	/* a scaler of the other format is never kept: its output is not the frame's format (r_hdr toggled) */
+	if ((mode != fx_mode) || !rm_fx_same_size(s, &fx_size) || (f != fx_fmt))
 	{
 		/* a scaler refused before in this mode and at these sizes is not tried again */
 		const int was_refused = rm_fx_refused(&fx_refusal, mode, s);
@@ -342,11 +349,11 @@ rmb_fx_prepare(int mode, const rm_fx_size_t *s, float jx, float jy, int reset)
 
 		@autoreleasepool
 		{
-			if (!rmb_fx_make(mode, s))
+			if (!rmb_fx_make(mode, s, f))
 			{
-				/* told once for each mode and size; the view is stretched as without a scaler */
+				/* told once for each mode, size and format; the view is stretched as without a scaler */
 				rm_fx_refuse(&fx_refusal, mode, s);
-				rmb_fx_tell(RM_FX_NOTE_UNMADE, mode, s);
+				rmb_fx_tell(rm_hdr_fx_note((int)f), mode, s);
 				return 0;
 			}
 		}
@@ -409,7 +416,8 @@ rmb_fx_upscale(id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion
 
 	fx_ready = 0;
 
-	if (!frame || (frame.pixelFormat != RMB_FX_COLOR) || ((NSUInteger)(s->ox + s->ow) > frame.width) ||
+	/* the scaler's format is the path's, the frame's and the view's, or nothing is bound (a toggle of r_hdr between) */
+	if (!frame || (fx_fmt != rmb_fx_color()) || (frame.pixelFormat != fx_fmt) || ((NSUInteger)(s->ox + s->ow) > frame.width) ||
 		((NSUInteger)(s->oy + s->oh) > frame.height))
 	{
 		return 0;
@@ -419,11 +427,11 @@ rmb_fx_upscale(id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion
 	{
 		if (fx_spatial)
 		{
-			ok = rmb_fx_fits(color, fx_spatial.colorTextureUsage, RMB_FX_COLOR, s->iw, s->ih);
+			ok = rmb_fx_fits(color, fx_spatial.colorTextureUsage, fx_fmt, s->iw, s->ih);
 		}
 		else if (fx_temporal)
 		{
-			ok = rmb_fx_fits(color, fx_temporal.colorTextureUsage, RMB_FX_COLOR, s->iw, s->ih) &&
+			ok = rmb_fx_fits(color, fx_temporal.colorTextureUsage, fx_fmt, s->iw, s->ih) &&
 				rmb_fx_fits(depth, fx_temporal.depthTextureUsage, RMB_FX_DEPTH, s->iw, s->ih) &&
 				rmb_fx_fits(motion, fx_temporal.motionTextureUsage, RMB_FX_MOTION, s->iw, s->ih);
 		}
@@ -479,6 +487,7 @@ rmb_fx_upscale(id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion
 			fx_temporal.motionVectorScaleX = 1.0f;
 			fx_temporal.motionVectorScaleY = 1.0f;
 			fx_temporal.depthReversed = NO;
+			fx_temporal.preExposure = 1.0f;   /* the view is not exposure-scaled, under r_hdr 1 too */
 			fx_temporal.reset = fx_reset ? YES : NO;
 			[fx_temporal encodeToCommandBuffer:cmd];
 		}

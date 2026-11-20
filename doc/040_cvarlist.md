@@ -878,8 +878,10 @@ marked `(n/a)` and skipped.
   end of the 3D view, before the HUD and the console, which stay at SDR
   white; the hue of a bright pixel is kept. On a display without
   extended range, or while the renderer has no headroom reading, the
-  peak is `1.0` and the frame is shown clamped at SDR white. This
-  version turns the MetalFX scalers off with one line. A live change
+  peak is `1.0` and the frame is shown clamped at SDR white. The
+  MetalFX scalers (`r_metalfx`) run on the 16-bit colour as well, before
+  the tone map; a scaler the GPU will not make in 16-bit colour is off
+  with one line, and the view is stretched as without one. A live change
   prints one line: `off`; or, with a headroom above SDR white, `on` with
   the peak in force, `r_hdr_peak` and the display's headroom; or, without
   one, `on, shown at SDR` with the reason (no headroom reading, or no
@@ -926,6 +928,10 @@ marked `(n/a)` and skipped.
   limit of a smooth particle point (256 pixels) is in the smaller view's
   pixels, so a particle above 256 pixels of the window is drawn smaller
   than without a scaler; this needs `gl1_particle_max_size` above 256.
+  Under `r_hdr 1` the scaler takes and gives 16-bit floating-point
+  colour (the spatial scaler in its HDR mode), and a change of `r_hdr`
+  makes it anew in the new format, without its history; a GPU that will
+  not make it in that format leaves the scaler off with one line.
   Other renderers do not have it. Saved with the configuration; applies
   from the next frame.
 

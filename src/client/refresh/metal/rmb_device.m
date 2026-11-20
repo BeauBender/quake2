@@ -49,6 +49,7 @@
 
 #include "header/rmb.h"
 #include "header/rmb_drain.h"
+#include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_device.m is written for ARC: compile it with -fobjc-arc"
@@ -77,10 +78,6 @@ static CGColorSpaceRef rmb_cs_own;   /* the layer's own colour space, kept while
  */
 static int rmb_hdr_want, rmb_hdr_layer, rmb_hdr_dead;
 static CGColorSpaceRef rmb_hdr_cs;
-
-/* rmb_encode.m */
-void rmb_encode_abandon(void);
-void rmb_encode_release(void);
 
 static atomic_ulong rmb_failed;
 static int rmb_sync = 1;
@@ -164,7 +161,6 @@ static id<MTLTexture> rmb_present_target[RMB_PRESENTS];      /* the target the s
 static int rmb_present_slot = -1;              /* the slot the open frame holds, or -1 */
 static id<MTLCommandBuffer> rmb_present_cmd;   /* the present of the frame that ends, committed after it */
 
-void rmb_watch(id<MTLCommandBuffer> cmd);
 static void rmb_watch_until(id<MTLCommandBuffer> cmd, dispatch_group_t done);
 
 /* With display sync off the frames are presented apart (with the present queue and its order queue made). */

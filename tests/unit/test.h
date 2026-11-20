@@ -135,6 +135,11 @@ void t_rearm_abortframe(void);
 extern unsigned t_child_timeout;
 int t_expect_exit(void (*fn)(void *), void *arg, char *out, size_t outlen);
 
+/* The current test's failure count, and a way to put it back: the runner
+   self-test provokes a failure on purpose and must not keep it. */
+int t_failures(void);
+void t_set_failures(int n);
+
 /*
  * Pins. t_pin(name, text) compares text with the body of
  * tests/pins/unit/<name>.pin (everything after the provenance header) and

@@ -234,10 +234,14 @@ SDR.
 
 The tone map runs after MetalFX, not before, so the scaler sees the
 untouched view and its history is not built on a curve that moves with the
-headroom. If HD4 finds the temporal scaler unstable on the unbounded input
-(fireflies from additive cores), the tone map moves before it and the
-spatial scaler's mode becomes `hdr`; that is the fallback, decided by
-HD4's frames.
+headroom. If the temporal scaler is unstable on the unbounded input
+(fireflies from additive cores), the tone map moves before it, and the
+scalers get tone-mapped colour (the spatial scaler keeps the `hdr` mode it
+already has under `r_hdr 1`, section 2.7); that is the fallback. HD4
+measured a synthetic still view: the change sits on the cores' rims, and
+its size on a display with a peak above 1 is unknown (runbook TASK196,
+HD4). So the fallback is decided by HD6's display-on frames, starting from
+HD4's figures.
 
 ### 2.7 Interactions
 
@@ -395,8 +399,11 @@ before MetalFX, it runs at the internal size and costs less. For scale, the M1's
 memory bandwidth is 68 GB/s (Apple's published figure), so float16 at 5K
 and 60 Hz is about half of an M1's bandwidth by this count: the 5K HDR case
 on an M1 is likely bandwidth-bound and is measured, not assumed, by HD3.
-The MetalFX history textures double with the format too (HD4 counts them
-with the ledger, `rmb_ledger_note`).
+HD4 counted the MetalFX memory with the ledger (`rmb_ledger_note`): the
+spatial scaler's own allocation doubles with the format (8.7 to 17.1 MB),
+but the temporal scaler's history did not grow with it, about 90 MB in
+both formats, so its extra memory under `r_hdr 1` is the output target
+alone.
 
 ## 7. The order of work, as proposed slices
 
@@ -411,7 +418,7 @@ section 7: VM, M6, device. Sizes: S under about 300 changed lines, M about
 | HD3 | The tone map (shared header, host test) at the Retro seat, `r_hdr_peak` clamped to the headroom, the report line, `metal_hdr_probe`, the `hdr` scenario; the first owner frames; the 5K cost measured | HD2, TASK184 | VM (test, pins), M6 with the display on (probe, frames, timing) | M |
 | HD4 | MetalFX and the denoiser under `r_hdr 1`: float16 formats, the spatial `hdr` mode, the temporal scaler's acceptance of `RGBA16Float` recorded, the fallback note if refused | HD3 | M6 | S |
 | HD5 | The menu: Video options items, the Tuning screen items and A/B, preset keys, every greying reason, Retro's override; the menu walk | HD3, TASK195 | VM (walk) and M6 with the display on (a real EDR display ungreys) | M |
-| HD6 | The RT terms in float16 under `r_hdr 1` (`t_light`; `t_rcolor` became float16 in HD2), so the sun and RT-primary go above white; owner frames | HD4, TASK59 | M6 with the display on | M |
+| HD6 | The RT terms in float16 under `r_hdr 1` (`t_light`; `t_rcolor` became float16 in HD2), so the sun and RT-primary go above white; owner frames; the MetalFX fallback of section 2.6, decided on its display-on frames from HD4's figures | HD4, TASK59 | M6 with the display on | M |
 | HD7 | iPhone and iPad: the readings and the greying on devices, one XDR and one LCD | HD5 | device | S |
 
 Apple TV and visionOS stay greyed by HD5; a slice for each waits for the

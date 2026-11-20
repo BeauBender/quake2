@@ -47,6 +47,7 @@
 #include <string.h>
 
 #include "header/rm_rt.h"
+#include "header/rmb_internal.h"
 #include "common/mtl_shader_math.h"
 #include "common/mtl_rts_math.h"
 #include "common/mtl_rtao_math.h"
@@ -62,17 +63,8 @@ extern id<MTLDevice> rmb_device;
 extern id<MTLCommandQueue> rmb_queue;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
-void rmb_watch(id<MTLCommandBuffer> cmd);
-int rmb_commit_wait(id<MTLCommandBuffer> cmd);
-
-/* rmb_resource.m */
-void rmb_upload_flush(void);
-id<MTLBuffer> rmb_static_buffer(int bid);
-id<MTLLibrary> rmb_library(void);
 
 /* rmb_encode.m */
-id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
-void *rmb_frame_ring_take(size_t n, __strong id<MTLBuffer> *buf, size_t *ofs);
 
 #define RMB_RT_MAX_MAP (1 + 1024)      /* the world and MAX_MAP_MODELS inline models */
 #define RMB_RT_MAX_MODELS 512          /* MAX_MOD_KNOWN */

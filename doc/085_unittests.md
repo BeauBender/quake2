@@ -92,7 +92,10 @@ bad data, and `t_console()` returns what the engine printed.
 ends in a fatal error; it returns the child's exit status, and a child
 that runs longer than `t_child_timeout` seconds (10) is killed and
 reported as `T_EXIT_TIMEOUT`, so a hang cannot stall the gate. A check
-that fails inside the child fails the test. `t_pin(name, text)` compares against a pin.
+that fails inside the child fails the test, and so does a child killed
+by a signal (its output is printed; a sanitizer report is in it on a bare
+`make ASAN=1 UBSAN=1 test`, and in a log file under
+`tests/check-unit-sanitizers.sh`, which prints it). `t_pin(name, text)` compares against a pin.
 A new `test_*.c` file is picked up by the Makefile automatically.
 `tests/unit/test_ipfilter.c` includes the game module's `src/game/g_svcmds.c` whole, with a fake `gi` and `filterban`, to test the IP filter.
 
@@ -119,7 +122,9 @@ UBSAN=1 test` after a change to this code: the bounds tests rely on the
 sanitizers to report an out-of-bounds access. The test objects are built
 with `-fno-sanitize-recover=undefined` in that build, so a report of
 undefined behaviour ends the run with a failure; the shipped binaries
-keep the default and only print it.
+keep the default and only print it. The gate and CI run that build on
+every run, in a scratch copy of the tree, through
+`tests/check-unit-sanitizers.sh`.
 
 ## Coverage
 
