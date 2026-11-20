@@ -38,14 +38,23 @@ static int gated_runs;
 static int player_runs;
 
 /* Stands in for a command that refuses while connected, as
-   upscale_textures does: it counts only runs while disconnected. */
+   upscale_textures does: it counts the runs the real gate lets through,
+   every state below ca_connected (CL_UpscaleAllowed is called with
+   cls.state >= ca_connected). */
 static void
 T_Gated_f(void)
 {
-	if (cls.state == ca_disconnected)
+	if (cls.state < ca_connected)
 	{
 		gated_runs++;
 	}
+}
+
+/* A server line that drops the connection. */
+static void
+T_Err_f(void)
+{
+	Com_Error(ERR_DROP, "t_err");
 }
 
 static void
@@ -92,6 +101,11 @@ setup(void)
 	if (!Cmd_Exists("t_player"))
 	{
 		Cmd_AddCommand("t_player", T_Player_f);
+	}
+
+	if (!Cmd_Exists("t_err"))
+	{
+		Cmd_AddCommand("t_err", T_Err_f);
 	}
 }
 
@@ -184,4 +198,52 @@ TEST(cl_server_alias_text_dropped)
 	drop_frame_then_next();
 	T_EQ_INT(gated_runs, 0);
 	T_EQ_INT(cmd_text.cursize, 0);
+}
+
+/* svc_reconnect ends the connection without CL_Disconnect. Server text
+   queued before it in the same message does not run in the same frame's
+   Cbuf_Execute, where the state is below ca_connected. */
+TEST(cl_stufftext_before_reconnect_dropped)
+{
+	setup();
+	cls.state = ca_active;
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_stufftext);
+	MSG_WriteString(&net_message, "t_gated\n");
+	MSG_WriteByte(&net_message, svc_reconnect);
+	MSG_BeginReading(&net_message);
+	CL_ParseServerMessage();
+	T_EQ_INT(cls.state, ca_connecting);
+	Cbuf_Execute();
+	T_EQ_INT(gated_runs, 0);
+	T_EQ_INT(cmd_text.cursize, 0);
+}
+
+/* After a server line drops the connection, the buffer's source is the
+   player again: player text queued after the drop is the player's and
+   survives a later CL_Disconnect. */
+TEST(cl_drop_resets_source_to_player)
+{
+	setup();
+	stufftext("t_err\n");
+	drop_frame_then_next();
+	Cbuf_AddText("t_player\n");
+	CL_Disconnect();
+	Cbuf_Execute();
+	T_EQ_INT(player_runs, 1);
+}
+
+/* The same when the client was already disconnected, where CL_Drop
+   returns before it reaches CL_Disconnect. */
+TEST(cl_drop_while_disconnected_resets_source_to_player)
+{
+	setup();
+	cls.state = ca_disconnected;
+	Cbuf_AddServerText("t_err\n");
+	T_EXPECT_DROP(Cbuf_Execute());
+	CL_Drop();
+	Cbuf_AddText("t_player\n");
+	CL_Disconnect();
+	Cbuf_Execute();
+	T_EQ_INT(player_runs, 1);
 }
