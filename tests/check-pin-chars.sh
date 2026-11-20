@@ -9,7 +9,7 @@
 #     characters, the size of FIX155's Retro report line) and passes on the
 #     same text in a demo frame no pin captures, and on a trace with none;
 #   - (a demo with no table in scripts/pins/text/ declares no text, here synth.dm2;)
-#   - it refuses a file that is not a trace.
+#   - it refuses a file that is not a trace, and half of a real one, with its own message, for a demo with a table and for demos without one.
 # Needs a C compiler; needs no engine and no game data.
 set -eu
 cd "$(dirname "$0")/.."
@@ -44,9 +44,19 @@ else
 fi
 /bin/bash scripts/pins.sh check-text "$tmp/quiet-frame.q2r" synth.dm2 > "$tmp/out" 2>&1 || { cat "$tmp/out"; bad "text in a demo frame that no pin captures was refused"; }
 /bin/bash scripts/pins.sh check-text "$tmp/none.q2r" synth.dm2 > "$tmp/out" 2>&1 || { cat "$tmp/out"; bad "a trace with no text was refused"; }
-if /bin/bash scripts/pins.sh check-text "$tmp/junk.q2r" > "$tmp/out" 2>&1; then
-	bad "a file that is not a trace was accepted"
-fi
+# a trace the scanner cannot read is refused with its own message, for a demo
+# with a table (demo1) and for demos without one (synth, water): half of a
+# real trace is an unfinished one
+head -c "$(( $(wc -c < "$tmp/stray.q2r") / 2 ))" "$tmp/stray.q2r" > "$tmp/half.q2r"
+for t in junk half; do
+	for d in synth.dm2 water.dm2 demo1.dm2; do
+		if /bin/bash scripts/pins.sh check-text "$tmp/$t.q2r" "$d" > "$tmp/out" 2>&1; then
+			bad "$t.q2r was accepted with $d"
+		elif ! grep -q 'charscan could not read the trace' "$tmp/out"; then
+			cat "$tmp/out"; bad "$t.q2r with $d was refused, but not for being unreadable"
+		fi
+	done
+done
 
 # the declared tables hold only "pin <number> <number>" lines and comments
 for f in scripts/pins/text/*.txt; do

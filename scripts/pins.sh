@@ -359,25 +359,38 @@ need_tools() {
 # the external tools record and replay call (make and cc are optional: a
 # missing make skips the staleness check, compare alone builds framediff)
 pins_tools="awk basename cat cksum date dirname find git grep head ls mkdir rm sleep tr wc"
-difftool() {
-    if [ -n "${PINS_DIFF:-}" ]; then echo "$PINS_DIFF"; return; fi
-    local bin="$(store)/bin/framediff"
-    if [ ! -x "$bin" ] || [ "$root/scripts/pins/framediff.c" -nt "$bin" ]; then
-        mkdir -p "$(dirname "$bin")"; cc -O2 -o "$bin" "$root/scripts/pins/framediff.c" -lm || die "cannot build framediff"
+# build_tool <name> <what> <source>...: prints the path of <name> in the store's
+# bin/, built with cc when missing or older than any source (the first is the
+# program). It builds to a temporary name and moves it into place, so a
+# concurrent first build never runs a half-written binary. Dies if cc fails.
+build_tool() {
+    local name=$1 what=$2 bin tmp s stale=0; shift 2
+    bin="$(store)/bin/$name"
+    [ -x "$bin" ] || stale=1
+    for s in "$@"; do if [ "$s" -nt "$bin" ]; then stale=1; fi; done
+    if [ "$stale" = 1 ]; then
+        mkdir -p "$(dirname "$bin")"
+        tmp="$bin.$$.tmp"
+        if [ "$name" = charscan ]; then
+            cc -std=gnu99 -O1 -DYQ2OSTYPE='"pins"' -DYQ2ARCH='"pins"' -o "$tmp" "$1" "$root/src/client/vid/refrecord.c" -lm ||
+                { rm -f "$tmp"; die "cannot build $what"; }
+        else
+            cc -O2 -o "$tmp" "$1" -lm || { rm -f "$tmp"; die "cannot build $what"; }
+        fi
+        mv -f "$tmp" "$bin"
     fi
     echo "$bin"
+}
+difftool() {
+    if [ -n "${PINS_DIFF:-}" ]; then echo "$PINS_DIFF"; return; fi
+    build_tool framediff framediff "$root/scripts/pins/framediff.c"
 }
 
 # textscan: the path of the trace's character-draw counter (FIX157),
 # tests/refrecord/charscan.c built against the real src/client/vid/refrecord.c
 textscan() {
-    local bin; bin="$(store)/bin/charscan"
-    if [ ! -x "$bin" ] || [ "$root/tests/refrecord/charscan.c" -nt "$bin" ] || [ "$root/src/client/vid/refrecord.c" -nt "$bin" ]; then
-        mkdir -p "$(dirname "$bin")"
-        cc -std=gnu99 -O1 -DYQ2OSTYPE='"pins"' -DYQ2ARCH='"pins"' -o "$bin" "$root/tests/refrecord/charscan.c" \
-            "$root/src/client/vid/refrecord.c" -lm || die "cannot build charscan"
-    fi
-    echo "$bin"
+    build_tool charscan "the scanner (charscan)" "$root/tests/refrecord/charscan.c" \
+        "$root/src/client/vid/refrecord.c" "$root/src/client/vid/header/refrecord.h"
 }
 
 # check_trace_text <trace> <demo> <every>: a demo frame that the run captured
@@ -387,15 +400,16 @@ textscan() {
 # whose appearance can depend on the wall clock (console notify lines, FIX155),
 # so the pin would flip from run to run. Prints the difference and returns 1.
 check_trace_text() {
-    local trace=$1 demo=$2 every=$3 decl got want bin
+    local trace=$1 demo=$2 every=$3 decl got want bin scan
     decl="$root/scripts/pins/text/$demo-every$every.txt"
-    bin=$(textscan)
-    got=$("$bin" "$trace" | grep '^pin ' || true)
+    bin=$(textscan) || { echo "pins: $trace: could not build the scanner" >&2; return 1; }
+    scan=$("$bin" "$trace") || { echo "pins: $trace: charscan could not read the trace (bad header, unfinished or damaged), so no text check was made" >&2; return 1; }
+    got=$(printf '%s\n' "$scan" | grep '^pin ' || true)
     want=""
     if [ -f "$decl" ]; then want=$(grep '^pin ' "$decl" || true); fi
     if [ "$got" != "$want" ]; then
         echo "pins: $trace: a captured demo frame draws characters the scenario does not declare (found on the left, declared in $demo-every$every.txt on the right; \"pin <capture> <characters>\"):" >&2
-        diff <(printf '%s\n' "$got") <(printf '%s\n' "$want") >&2 || true
+        diff <(if [ -n "$got" ]; then printf '%s\n' "$got"; fi) <(if [ -n "$want" ]; then printf '%s\n' "$want"; fi) >&2 || true
         return 1
     fi
 }
@@ -563,6 +577,7 @@ check_seed() {
 
 cmd_record() {
     need_tools record $pins_tools
+    if [ "${PINS_TRACE:-1}" != 0 ]; then need_tools record cc diff; fi
     local renderer=$1 scenario=$2 run=1 replace=0; shift 2
     local bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
     check_name renderer "$renderer"; check_name scenario "$scenario"

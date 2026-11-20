@@ -242,7 +242,10 @@ demo plays (FIX157; a line printed to the console is drawn for
 `con_notifytime` seconds of wall time, so a pin's frames would depend on
 the clock). The setting is not archived and a pin run writes no
 `config.cfg`, so it never reaches a player's configuration. After each
-record, the trace is read (`tests/refrecord/charscan.c`): a frame the run
+record that writes a trace (not `PINS_TRACE=0`, which has no trace to read, so
+no text check), the trace is read to its end (`tests/refrecord/charscan.c`);
+a trace that cannot be read, or a scanner that cannot be built, makes the
+record incomplete, never a pass. A frame the run
 captured that holds a character draw must be listed in
 `scripts/pins/text/<demo>-every<PINS_EVERY>.txt`, as `pin <capture
 number> <characters>`, the text the demo itself draws; no such file
