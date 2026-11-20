@@ -21,13 +21,15 @@
  * docs/plans/metal-raytracing-design.md, "Adding an effect"). Each row of
  * rm_rtfx.c names one effect, its switch (the cvar the hardware gate,
  * rm_rtgate.c, forces to 0 without ray tracing: the gate takes it from
- * here) and its entry points, NULL where the effect has none. rm_main.c,
- * rm_rtscene.c, rm_gbufscene.c and rmb_gbuf.m reach the effects only
- * through the walks below, in the order of rm_rtfx_order; the pipeline a
- * 3D draw takes (rm_rtfx_pipe) is decided here too.
- * tests/metal/rm_rtfx_test.c holds the order, the switches and the rule,
- * and tests/check-ref-metal.sh refuses an effect named in rm_main.c or
- * rmb_gbuf.m outside the table.
+ * here) and its entry points, NULL where the effect has none. rm_main.c
+ * and rmb_gbuf.m reach the effects only through the walks below, in the
+ * order of rm_rtfx_order; the pipeline a 3D draw takes (rm_rtfx_pipe) is
+ * decided here too. The scene files call the walks as well, but keep
+ * direct calls to the shadows (RT3): RM_RTS_MapBuilt, RM_RTS_Wanted and
+ * rm_rts_carried in rm_rtscene.c, RM_RTS_Active in rm_gbufscene.c.
+ * tests/metal/rm_rtfx_test.c holds the order, the switches, the rule and
+ * what each walk calls, and tests/check-ref-metal.sh refuses an effect
+ * named in rm_main.c or rmb_gbuf.m outside the table.
  *
  * Pure C: the backend's state of one resolve (rmb_rtfx_io_t) is opaque
  * here and defined in rmb_internal.h, under __OBJC__.
@@ -37,6 +39,11 @@
 
 #ifndef RM_RTFX_H
 #define RM_RTFX_H
+
+/* RM_RTFX_HOST belongs to the host test only: in a backend build it would turn every effect off */
+#if defined(RM_RTFX_HOST) && defined(__OBJC__)
+#error "RM_RTFX_HOST is for tests/metal/rm_rtfx_test.c only, not for a build of ref_metal"
+#endif
 
 /* the effects, in the table's rows (rm_rtfx.c); RM_RTFX_COUNT rows */
 enum

@@ -1376,7 +1376,11 @@ the order, the switches against the gate and that rule, and
 from the table's rows) named in `rm_main.c` or `rmb_gbuf.m`. Adding an
 effect is: its id in `header/rm_rtfx.h`, its row and its place in the
 order, its switch in the gate's sorted table, its files, and the Makefile
-lines for them.
+lines for them. An effect that needs a hook the walks do not have also
+touches the scene files, as the shadows do: `RM_RTS_MapBuilt`,
+`RM_RTS_Wanted` and `rm_rts_carried` are called from `rm_rtscene.c` and
+`RM_RTS_Active` from `rm_gbufscene.c`, directly; the lint covers only
+`rm_main.c` and `rmb_gbuf.m`.
 
 ## 5. Verification with the pin harness
 
