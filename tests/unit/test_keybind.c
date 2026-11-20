@@ -402,6 +402,49 @@ TEST(keybind_player_unbind_clears_saved)
 	kb_teardown();
 }
 
+/*
+ * Every line the bind writer emits, run back through Cbuf_Execute,
+ * runs exactly one bind with the same key and body (FIX166). A body
+ * with a quote or a line break would end its own quoted string and
+ * run the rest as a second command at the next start: the writer
+ * skips it and says so.
+ */
+TEST(keybind_written_lines_round_trip)
+{
+	char out[4096];
+
+	kb_setup();
+
+	Key_SetBinding('h', "a\"b;t_kb_probe\"c");
+	Key_SetBinding('n', "x\nt_kb_probe");
+	Key_SetBinding('r', "x\rt_kb_probe");
+	Key_SetBinding('f', "+forward");
+	Key_SetBinding('s', "say a;b");
+	Key_SetBinding('p', "t_kb_probe");
+
+	t_console_reset();
+	kb_written(out, sizeof(out));
+
+	Key_FreeBindings();
+	probe_runs = 0;
+	player_line(out);
+
+	/* only the plain probe bind exists; pressing it is the one run */
+	T_EQ_INT(probe_runs, 0);
+	T_EQ_STR(keybindings['f'], "+forward");
+	T_EQ_STR(keybindings['s'], "say a;b");
+	T_EQ_STR(keybindings['p'], "t_kb_probe");
+	T_CHECK(keybindings['h'] == NULL || !keybindings['h'][0]);
+	T_CHECK(keybindings['n'] == NULL || !keybindings['n'][0]);
+	T_CHECK(keybindings['r'] == NULL || !keybindings['r'][0]);
+
+	T_CONSOLE_HAS("Not saving bind for h: its body holds a quote or a line break.");
+	T_CONSOLE_HAS("Not saving bind for n: its body holds a quote or a line break.");
+	T_CONSOLE_HAS("Not saving bind for r: its body holds a quote or a line break.");
+
+	kb_teardown();
+}
+
 /* Key numbers outside keybindings[], from a server's or the player's
    line: refused, nothing allocated, nothing queued. In a child, since
    the unchecked index wrote outside the arrays. */
