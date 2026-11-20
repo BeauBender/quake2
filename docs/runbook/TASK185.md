@@ -155,7 +155,17 @@ are in the artifacts folder and were not viewed.
   `b15b40cf1`, `models` `552ee3cb1`, `rt-sun` `374691775`, and the rest).
 - **Round 2, after the B1 fix**: the same 24 recorded again by a build of `bebb1f12` (client, game and
   `ref_metal`) and by the branch, the same way: all 24 byte-identical, and the hashes equal round 1's.
-- **Still not compared in round 2: the water scenarios.** The base was a `git archive` of `bebb1f12`, and
+- **Round 3: the water scenarios, now compared.** The round-2 base had no water demo, because `pins.sh
+  make-demo` refuses a write directory in a `git archive`. Round 3 made the demo in the branch's worktree
+  (git ignores its `release/`; make-demo plays a local game with the soft renderer) and copied the one file
+  beside the base's binary, so both builds replayed the same demo. All three are byte-identical at the stock
+  setting, 4 frames each, the base (`bebb1f12`) against this branch:
+  - `skywater`: identical, 4 frames, hash `bd6e66d3c43a`.
+  - `rt-water`: identical, 4 frames, hash `60b1e91c2456`.
+  - `rt-water-entities`: identical, 4 frames, hash `60b1e91c2456` (the same hash as `rt-water`; both
+    scenarios recorded 4 frames on each build and the frame sets match between the builds).
+  With these, all 27 stock pin scenarios are byte-identical between the base and the branch.
+- Why they were not compared earlier. Round 2: the base was a `git archive` of `bebb1f12`, and
   `pins.sh make-demo` refuses a write directory inside a tree that git does not ignore, so no water demo was
   made and the three scenarios again recorded 0 frames on both builds. The next try makes the demo in the
   branch's worktree (its `release/` is git-ignored; make-demo plays a local game with the soft renderer, and
