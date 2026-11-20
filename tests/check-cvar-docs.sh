@@ -153,25 +153,39 @@ function slurp(path,   old, x, r) {
 	if (r < 0) die("cannot read " path)
 	return x
 }
-function words(D, W,   t, n, A, i) {
-	t = D
-	gsub(/[^A-Za-z0-9_]+/, " ", t)
-	n = split(t, A, " ")
-	for (i = 1; i <= n; i++) W[A[i]] = 1
-}
-# grep -wF: the name with no word character before or after it
-function documented(name, D, W,   p, off, b, a, L) {
-	if (name ~ /^[A-Za-z0-9_]+$/) return (name in W)
-	L = length(name)
-	off = 1
-	while ((p = index(substr(D, off), name)) > 0) {
-		p += off - 1
-		b = (p == 1) ? "\n" : substr(D, p - 1, 1)
-		a = substr(D, p + L, 1)
-		if (b !~ /[A-Za-z0-9_]/ && a !~ /[A-Za-z0-9_]/) return 1
-		off = p + 1
+# The names a doc opens an entry with: a line that starts "* **", up to the
+# first "**:" (the header may wrap onto indented lines), and in the header
+# the first word of every **bold** group. "* **a** / **b**: text" and
+# "* **a**, **b**:" give a and b; a name in prose, in a code span or after
+# the colon gives nothing. A name ending in _(x/y) stands for each choice.
+function entries(D, E,   n, L, i, h, on, k, g, A, m, j, base, C)
+{
+	n = split(D, L, "\n")
+	on = 0; h = ""
+	for (i = 1; i <= n; i++) {
+		if (!on && L[i] !~ /^\* \*\*/) continue
+		if (!on) { on = 1; h = ""; k = 0 }
+		h = h " " L[i]
+		k++
+		if ((j = index(h, "**:")) > 0) { h = substr(h, 1, j + 1); on = 0 }
+		else if (k >= 4) { on = 0 }
+		else continue
+		while (match(h, /\*\*[^*]+\*\*/)) {
+			g = substr(h, RSTART + 2, RLENGTH - 4)
+			h = substr(h, RSTART + RLENGTH)
+			sub(/^ +/, "", g)
+			split(g, A, " ")
+			if (match(A[1], /_\([A-Za-z0-9\/]+\)$/)) {
+				base = substr(A[1], 1, RSTART)
+				m = split(substr(A[1], RSTART + 2, RLENGTH - 3), C, "/")
+				for (j = 1; j <= m; j++) E[base C[j]] = 1
+			} else E[A[1]] = 1
+		}
 	}
-	return 0
+}
+function documented(name, D, W)
+{
+	return (name in W)
 }
 function section(hdr, A,   k, n) {
 	n = 0
@@ -255,7 +269,7 @@ BEGIN {
 	pat_cvar = "^[A-Za-z0-9_]+$"
 	pat_cmd = "^[A-Za-z0-9_+-]+$"
 	d40 = slurp(f_d40); d50 = slurp(f_d50)
-	words(d40, W40); words(d50, W50)
+	entries(d40, W40); entries(d50, W50)
 
 	# the upstream names
 	nup = 0; upid = ""
@@ -643,7 +657,7 @@ EOF
 	s_prose_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf 'The zz_doc cvar is mentioned in prose.\n' >> doc/040_cvarlist.md; }
 	s_span_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **other**: see `zz_doc` and **zz_doc** here.\n\nSet `zz_doc` to 1.\n' >> doc/040_cvarlist.md; }
 	s_prose_cmd() { printf 'void f(void) { Cmd_AddCommand("zz_cmd", f); }\n' > src/common/d.c; printf 'Use zz_cmd to do it.\n' >> doc/050_commands.md; }
-	s_wrap_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **other**, **x**,\n  **zz_doc** <val>: wrapped.\n' >> doc/040_cvarlist.md; }
+	s_wrap_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **other**, **x**,\n  **zz_doc <val>**: wrapped.\n' >> doc/040_cvarlist.md; }
 	s_literal_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **zz_doc**: documented.\n' >> doc/040_cvarlist.md; }
 	s_cmt_block() { printf '/* Cvar_Get("zz_c", "0", 0); */\n' > src/common/c.c; }
 	s_cmt_line() { printf '// Cvar_Get("zz_c", "0", 0);\n' > src/common/c.c; }
