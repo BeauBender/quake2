@@ -50,7 +50,7 @@ T_DtPlayer_f(void)
 
 /* A game module that spawns nothing: SV_SpawnServer calls these. */
 static void
-fake_spawn(char *mapname, char *entities, char *spawnpoint)
+fake_spawn(const char *mapname, char *entities, const char *spawnpoint)
 {
 }
 
