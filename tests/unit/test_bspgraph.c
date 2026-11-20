@@ -73,7 +73,7 @@ typedef struct
 	const byte *vistail;	/* the last bytes of the visibility lump */
 	int nvistail;
 	/* the face lumps (FIX118), written when nfaces is set */
-	dface_t faces[2];
+	dface_t faces[3];
 	int nfaces;
 	int surfedges[8];
 	int nsurfedges;
@@ -1161,6 +1161,234 @@ TEST(bspcheck_leaf_cluster_bounds_pass)
 	g.nvis = 0;
 	g.leafs[3].cluster = 7;
 	T_EQ_INT(c_check(g_build()), 5);
+}
+
+/*
+ * The cases ref_metal's host test held for its own copies of these checks
+ * (TASK198: rm_lump_ok, rm_face_edges_ok, rm_surfedge_ok, rm_vis_header_ok,
+ * rm_world_head_ok, rm_node_tree_ok, rm_mark_once), now run against the
+ * shared Mod_Check* the renderers call.
+ */
+static void
+c_header_lump(int lump, int fileofs, int filelen)
+{
+	dheader_t *h = (dheader_t *)gbuf;
+
+	h->lumps[lump].fileofs = fileofs;
+	h->lumps[lump].filelen = filelen;
+}
+
+TEST(bspcheck_lump_ranges)
+{
+	int len;
+
+	/* a negative offset or length, and offset plus length overflowing */
+	c_default();
+	len = g_build();
+	c_header_lump(LUMP_LEAFS, -4, 4);
+	C_REFUSED(len, 0, "lump 8 (");
+	c_header_lump(LUMP_LEAFS, 4, -4);
+	C_REFUSED(len, 0, "lump 8 (");
+	c_header_lump(LUMP_LEAFS, 0x7fffffff, 0x7fffffff);
+	C_REFUSED(len, 0, "lump 8 (");
+
+	/* a lump ending exactly at the file's end passes, one byte more does not */
+	c_default();
+	len = g_build();
+	c_header_lump(LUMP_ENTITIES, len - 4, 4);
+	T_EQ_INT(c_check(len), 5);
+	c_header_lump(LUMP_ENTITIES, len - 4, 5);
+	C_REFUSED(len, 0, "lump 0 (");
+
+	/* a misaligned offset is refused even for an empty lump, or for 1 byte at 3 */
+	c_default();
+	len = g_build();
+	c_header_lump(LUMP_ENTITIES, 162, 0);
+	C_REFUSED(len, 0, "lump 0 (");
+	c_header_lump(LUMP_ENTITIES, 3, 1);
+	C_REFUSED(len, 0, "lump 0 (");
+}
+
+TEST(bspcheck_face_edge_ranges)
+{
+	c_default();
+	T_EQ_INT(c_check(g_build()), 5);	/* 3 edges from 0 of 3 surfedges */
+
+	c_default();
+	g.faces[0].firstedge = -1;
+	C_REFUSED(g_build(), 3, "face 0 has 3 edges from -1");
+
+	c_default();
+	g.faces[0].numedges = -3;
+	C_REFUSED(g_build(), 3, "face 0 has -3 edges from 0");
+
+	c_default();
+	g.faces[0].firstedge = 0x7fffffff;
+	C_REFUSED(g_build(), 3, "face 0 has 3 edges from 2147483647");
+
+	/* a surfedge names edges -(n-1) to n-1: n, -n and the most negative int are refused */
+	c_default();
+	g.surfedges[2] = 3;
+	T_EQ_INT(c_check(g_build()), 5);
+	g.surfedges[2] = -3;
+	T_EQ_INT(c_check(g_build()), 5);
+	g.surfedges[2] = 4;
+	C_REFUSED(g_build(), 3, "face 0 names edge 4, the map has 4");
+	g.surfedges[2] = -4;
+	C_REFUSED(g_build(), 3, "face 0 names edge -4, the map has 4");
+	g.surfedges[2] = -2147483647 - 1;
+	C_REFUSED(g_build(), 3, "names edge -2147483648");
+}
+
+TEST(bspcheck_vis_header_bounds)
+{
+	dheader_t *h;
+	int len;
+
+	/* 2 clusters need 4 + 16 = 20 bytes: 20 passes (offsets inside it), 19 does not */
+	c_default();
+	g.vis[1] = g.vis[2] = g.vis[3] = g.vis[4] = 0;
+	len = g_build();
+	h = (dheader_t *)gbuf;
+	h->lumps[LUMP_VISIBILITY].filelen = 20;
+	T_EQ_INT(c_check(len), 5);
+	h->lumps[LUMP_VISIBILITY].filelen = 19;
+	C_REFUSED(len, 1, "visibility of 2 clusters in 19 bytes");
+
+	/* under 4 bytes there is no count at all */
+	h->lumps[LUMP_VISIBILITY].filelen = 3;
+	C_REFUSED(len, 1, "3 bytes of visibility");
+
+	/* a negative count, and one whose offsets could not fit */
+	c_default();
+	g.vis[0] = -1;
+	C_REFUSED(g_build(), 1, "visibility of -1 clusters");
+	c_default();
+	g.vis[0] = 0x7fffffff / 4;
+	C_REFUSED(g_build(), 1, "clusters in 24 bytes");
+}
+
+TEST(bspcheck_world_head)
+{
+	c_default();
+	g.nnodes = 0;
+	C_REFUSED(g_build(), 2, "0 nodes and 2 models");
+
+	c_default();
+	g.nmodels = 0;
+	C_REFUSED(g_build(), 2, "model 0 at node -1");
+
+	c_default();
+	g.models[0].headnode = -1;
+	C_REFUSED(g_build(), 2, "model 0 at node -1");
+
+	/* the last node is a head */
+	c_default();
+	g.models[0].headnode = 2;
+	T_EQ_INT(c_check(g_build()), 5);
+}
+
+TEST(bspcheck_node_tree)
+{
+	/* node 2 is a child of node 0 and of node 1 */
+	c_default();
+	g_node(0, 0, 1, 2);
+	g_node(1, 1, 2, LEAF(1));
+	C_REFUSED(g_build(), 2, "node 1 names node 2");
+
+	/* node 1 is both children of node 0 */
+	c_default();
+	g_node(0, 0, 1, 1);
+	C_REFUSED(g_build(), 2, "node 0 names node 1");
+
+	/* 0 -> 1 -> 0 */
+	c_default();
+	g_node(1, 1, 0, LEAF(2));
+	C_REFUSED(g_build(), 2, "node 1 names node 0");
+
+	/* 0 -> 1 -> 2 -> 1, and 1 -> 1 */
+	c_default();
+	g_node(0, 0, 1, 2);
+	g_node(1, 1, 2, LEAF(1));
+	g_node(2, 1, 1, LEAF(2));
+	C_REFUSED(g_build(), 2, "not a tree from node 0");
+	c_default();
+	g_node(1, 1, 1, LEAF(2));
+	C_REFUSED(g_build(), 2, "node 1 names node 1");
+
+	/* the last slot of the last node names the root, or node 1 again */
+	c_default();
+	g.nodes[2].children[1] = 0;
+	C_REFUSED(g_build(), 2, "node 2 names node 0");
+	c_default();
+	g.nodes[2].children[1] = 1;
+	C_REFUSED(g_build(), 2, "node 2 names node 1");
+
+	/* a leaf past the leafs, and the most negative child */
+	c_default();
+	g.nodes[2].children[0] = LEAF(6);
+	C_REFUSED(g_build(), 2, "node 2 names leaf 6");
+	c_default();
+	g.nodes[2].children[0] = -2147483647 - 1;
+	C_REFUSED(g_build(), 2, "names leaf 2147483647");
+
+	/* a leaf may have two parents */
+	c_default();
+	g.nodes[2].children[0] = LEAF(2);
+	T_EQ_INT(c_check(g_build()), 5);
+
+	/* the scratch is cleared on each call: a refused map does not poison the next */
+	c_default();
+	g_node(0, 0, 1, 1);
+	T_EQ_INT(c_check(g_build()), 2);
+	c_default();
+	T_EQ_INT(c_check(g_build()), 5);
+	T_EQ_INT(c_check(g_build()), 5);
+}
+
+TEST(bspcheck_node_faces_once)
+{
+	/* two faces, each in one node */
+	c_default();
+	g.nfaces = 2;
+	g.faces[1].firstedge = 0;
+	g.faces[1].numedges = 3;
+	g.nodes[1].firstface = 1;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 2;	/* an empty range at the end */
+	T_EQ_INT(c_check(g_build()), 5);
+
+	/* node 1 claims both: face 0 is node 0's */
+	g.nodes[1].firstface = 0;
+	g.nodes[1].numfaces = 2;
+	C_REFUSED(g_build(), 2, "node 1 has surfaces 0 to 2 of 2");
+
+	/* the first face of node 2's one-face range is taken already */
+	g.nodes[1].firstface = 1;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 1;
+	g.nodes[2].numfaces = 1;
+	C_REFUSED(g_build(), 2, "node 2 has surfaces 1 to 2 of 2");
+
+	/* only the LAST face of node 2's two-face range is taken already */
+	g.nfaces = 3;
+	g.faces[2] = g.faces[1];
+	g.nodes[1].firstface = 2;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 1;
+	g.nodes[2].numfaces = 2;
+	C_REFUSED(g_build(), 2, "node 2 has surfaces 1 to 3 of 3");
+
+	g.nfaces = 2;
+	g.nodes[1].firstface = 1;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 1;
+	g.nodes[2].numfaces = 1;
+
+	/* a range that starts inside and ends past the lump */
+	g.nodes[1].numfaces = 0;
+	g.nodes[2].numfaces = 2;
+	C_REFUSED(g_build(), 2, "node 2 has surfaces 1 to 3 of 2");
 }
 
 /*

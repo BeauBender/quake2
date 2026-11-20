@@ -569,40 +569,12 @@ long rm_world_fan(unsigned long base, long n, unsigned *idx, unsigned long cap);
 int rm_range_ok(long first, long count, long total);
 
 /*
- * A lump of the BSP file: fileofs and filelen not negative, fileofs a
- * multiple of 4 (the loaders read the records' int and float fields in
- * place), the lump inside the file's len bytes.
- */
-int rm_lump_ok(long fileofs, long filelen, long len);
-
-/* A face's edges: at least 3, inside the surfedge lump. */
-int rm_face_edges_ok(long firstedge, long numedges, long numsurfedges);
-
-/* A surfedge names edge |e| of numedges: 1 when -numedges < e < numedges. */
-int rm_surfedge_ok(long e, long numedges);
-
-/*
- * The raw texinfo lump before files/models.c reads it (Mod_LoadTexinfo
- * follows nexttexinfo unchecked and counts each chain until it ends or
- * returns to its start): next[i] for each of count texinfos, already
- * swapped. 1 when every next is 0 or below (the end) or names a texinfo,
- * and the chain from every texinfo ends or returns to it within count
- * steps; 0 otherwise (the map is refused).
- */
-int rm_texinfo_chains_ok(const int *next, long count);
-
-/*
- * The header of a visibility lump of len bytes that says it holds
- * numclusters clusters: 0 to RM_MAX_MAP_LEAFS, and its 4 + 8 * numclusters
- * bytes of offsets inside the lump (files/models.c swaps them in place
- * unchecked).
- */
-int rm_vis_header_ok(long numclusters, long len);
-
-/*
  * A leaf's cluster and area: the cluster -1 or below numclusters when the
  * map has visibility (R_MarkLeaves indexes the PVS row by it), the area
- * inside the client's areabits (R_AreaVisible).
+ * inside the client's areabits (R_AreaVisible). The cluster half is a second
+ * line of defence behind Mod_CheckLeafs, which runs first in rm_model.c;
+ * without vis it accepts what Mod_CheckLeafs already refused, so the area
+ * bound is the only part unique to this check.
  */
 int rm_leaf_ok(long cluster, long area, long numclusters, int has_vis);
 
@@ -612,36 +584,6 @@ int rm_leaf_ok(long cluster, long area, long numclusters, int has_vis);
  * the leaf's marksurface fields as children.
  */
 int rm_leaf_contents_ok(long contents);
-
-/*
- * The world's head before files/models.c reads the nodes: at least one
- * node (Mod_LoadNodes sets the parents from node 0, and the draw starts
- * there) and a model 0 whose head node is one of them. A world without
- * nodes would leave its node array empty and aliased by the next hunk
- * allocation.
- */
-int rm_world_head_ok(long numnodes, long nummodels, long headnode);
-
-/*
- * The raw node lump before files/models.c links it: children holds the two
- * children of each of numnodes nodes, already swapped (a node index, or
- * -1 - leaf for a leaf); seen has numnodes bytes of scratch. 1 when node 0
- * is no node's child, every other node is a child at most once (of one
- * node, in one of its two slots), every node child is below numnodes and
- * every leaf child below numleafs; 0 otherwise. The nodes reachable from
- * node 0 are then a tree: Mod_SetParent, Mod_NumberLeafs and the draw
- * visit each node once, and a node's surfaces enter a texture chain once.
- */
-int rm_node_tree_ok(const int *children, long numnodes, long numleafs, unsigned char *seen);
-
-/*
- * Marks [first, first + count) of owner[total] as taken (a node's
- * surfaces): 0, and nothing marked, when the range leaves the table or a
- * surface is taken already. gl1 links a surface into its texture chain
- * once per node that holds it, so a surface in two nodes would make the
- * chain a loop.
- */
-int rm_mark_once(unsigned char *owner, long total, long first, long count);
 
 /*
  * What a model slot holds, from its name, its loaded flag and whether it
