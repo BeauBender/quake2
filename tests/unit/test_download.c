@@ -23,6 +23,8 @@
  * =======================================================================
  */
 
+#include <unistd.h>
+
 #include "test.h"
 #include "../../src/client/header/client.h"
 
@@ -374,6 +376,29 @@ TEST(download_chunk_size)
 	T_EQ_INT(FS_LoadFile("maps/chunk.tmp", NULL), -1);
 }
 
+/* FIX161: the players tests run with the working directory set to the
+   suite's scratch directory, so a regression that writes relative to it
+   cannot leave a file in the source tree. */
+static int
+cwd_enter(char *old, size_t len)
+{
+	if (!getcwd(old, len))
+	{
+		return 0;
+	}
+
+	return chdir(t_tmpdir()) == 0;
+}
+
+static void
+cwd_leave(const char *old)
+{
+	if (chdir(old) != 0)
+	{
+		T_CHECK(!"restore the working directory");
+	}
+}
+
 /* FIX161: a players/ download is written under the write directory, where
    the filesystem finds it, not relative to the working directory. */
 TEST(download_players_lands_in_gamedir)
@@ -381,7 +406,9 @@ TEST(download_players_lands_in_gamedir)
 	void *buf;
 	int len;
 	char path[MAX_OSPATH];
+	char cwd[MAX_OSPATH];
 
+	T_CHECK(cwd_enter(cwd, sizeof(cwd)));
 	reset_client();
 	Q_strlcpy(cls.downloadname, "players/f161m/skin.pcx", sizeof(cls.downloadname));
 	Q_strlcpy(cls.downloadtempname, "players/f161m/skin.tmp", sizeof(cls.downloadtempname));
@@ -414,6 +441,7 @@ TEST(download_players_lands_in_gamedir)
 	}
 
 	Sys_Remove(path);
+	cwd_leave(cwd);
 }
 
 /* FIX161: the final rename never replaces an existing file. */
@@ -422,8 +450,10 @@ TEST(download_players_existing_target_kept)
 	char path[MAX_OSPATH];
 	char tmp[MAX_OSPATH];
 	char got[8] = { 0 };
+	char cwd[MAX_OSPATH];
 	FILE *fp;
 
+	T_CHECK(cwd_enter(cwd, sizeof(cwd)));
 	reset_client();
 	Q_strlcpy(cls.downloadname, "players/f161k/skin.pcx", sizeof(cls.downloadname));
 	Q_strlcpy(cls.downloadtempname, "players/f161k/skin.tmp", sizeof(cls.downloadtempname));
@@ -435,6 +465,7 @@ TEST(download_players_existing_target_kept)
 
 	if (!fp)
 	{
+		cwd_leave(cwd);
 		return;
 	}
 
@@ -466,6 +497,7 @@ TEST(download_players_existing_target_kept)
 	}
 
 	Sys_Remove(path);
+	cwd_leave(cwd);
 }
 
 TEST(loadgame_savedir)
