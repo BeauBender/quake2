@@ -835,6 +835,7 @@ Cvar_WriteVariables(const char *path)
 	{
 		if (var->flags & CVAR_ARCHIVE)
 		{
+			if (Cvar_ServerWrote(var->name)) continue;
 			fprintf(f, "set %s \"%s\"\n", var->name, var->string);
 		}
 	}
