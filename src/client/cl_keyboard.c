@@ -836,7 +836,9 @@ Key_StringToKeynum(char *str)
 
 	if (!str[1])
 	{
-		return str[0];
+		/* 1 to 255, all below K_LAST: a byte 0x80 or above is not a
+		   negative index where char is signed (arm64) */
+		return (unsigned char)str[0];
 	}
 
 	for (kn = keynames; kn->name; kn++)
@@ -954,7 +956,7 @@ Key_Unbind_f(void)
 
 	b = Key_StringToKeynum(Cmd_Argv(1));
 
-	if (b == -1)
+	if ((b < 0) || (b >= K_LAST))
 	{
 		Com_Printf("\"%s\" isn't a valid key\n", Cmd_Argv(1));
 		return;
@@ -989,7 +991,7 @@ Key_Bind_f(void)
 
 	b = Key_StringToKeynum(Cmd_Argv(1));
 
-	if (b == -1)
+	if ((b < 0) || (b >= K_LAST))
 	{
 		Com_Printf("\"%s\" isn't a valid key\n", Cmd_Argv(1));
 		return;
@@ -1342,6 +1344,12 @@ Key_Event(int key, qboolean down, qboolean special)
 	char *kb;
 	cvar_t *fullscreen;
 	unsigned int time = Sys_Milliseconds();
+
+	/* every table below is indexed by key */
+	if ((key < 0) || (key >= K_LAST))
+	{
+		return;
+	}
 
 	// evil hack for the joystick key altselector, which turns K_BTN_x into K_BTN_x_ALT
 	if(joy_altselector_pressed && key >= K_JOY_FIRST_BTN && key < K_JOY_FIRST_BTN_ALT)

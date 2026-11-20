@@ -13,74 +13,102 @@
  * the keyboard code so that the unit tests link it: it needs no SDL, no
  * menu and no key name table but Key_KeynumToString.
  *
+ * A binding a server line writes is the server's, as an alias is
+ * (Cmd_Alias_f): pressing the key picks when it runs, the server picked
+ * what, so Key_Event queues it as server text and a command that
+ * refuses a server's use refuses it.
+ *
+ * What config.cfg saves is only ever what the player's own text wrote:
+ * each key keeps the player's last binding apart (keybindplayer[]),
+ * which only the player's text writes, and Key_WriteBindingLines writes
+ * that. A server write never removes or replaces it. A server line
+ * that writes the player's own binding gives the key back to the
+ * player, so a server line that runs the player's config.cfg, its
+ * leading unbindall included (`exec config.cfg`, or `game <dir>` on a
+ * remote client, which runs default.cfg and config.cfg inside that
+ * line), leaves every key the player's and config.cfg as it was.
+ *
  * =======================================================================
  */
 
 #include "header/client.h"
 
 char *keybindings[K_LAST];
-/* if true, a server line wrote keybindings[] for this key (FIX156): a
-   press queues it as server text and config.cfg leaves it out */
+/* the player's own last binding of each key: what config.cfg saves */
+static char *keybindplayer[K_LAST];
+/* if true, a server line wrote keybindings[] for this key: a press
+   queues it as server text */
 static qboolean keybindserver[K_LAST];
 
-/*
- * A binding a server line writes is the server's (FIX156), as an alias
- * is (Cmd_Alias_f): pressing the key picks when it runs, the server
- * picked what, so Key_Event queues it as server text and a command that
- * refuses a server's use refuses it. Key_WriteBindings leaves it out of
- * config.cfg, which the next start runs as the player's text. The
- * player's text binding the key again makes it the player's; a server
- * line that writes the binding the key already has leaves its owner as
- * it was, so a server that runs the player's own configuration again
- * does not take over the player's keys.
- */
+/* Replaces *slot by a copy of binding (which may be *slot itself). */
+static void
+Key_SetBody(char **slot, const char *binding)
+{
+	size_t l = strlen(binding);
+	char *new = Z_Malloc(l + 1);
+
+	memcpy(new, binding, l + 1);
+
+	if (*slot)
+	{
+		Z_Free(*slot);
+	}
+
+	*slot = new;
+}
+
 void
 Key_SetBinding(int keynum, char *binding)
 {
-	char *new;
-	int l;
 	qboolean server;
 
-	if (keynum == -1)
+	/* a key number outside the tables, for example a server's
+	   `bind "<0x80>" x` where char is signed, binds nothing */
+	if ((keynum < 0) || (keynum >= K_LAST) || !binding)
 	{
 		return;
 	}
 
 	server = Cbuf_ExecutingServerText();
 
-	/* free old bindings */
-	if (keybindings[keynum])
+	if (!server)
 	{
-		if (server && !strcmp(keybindings[keynum], binding))
-		{
-			server = keybindserver[keynum];
-		}
-
-		Z_Free(keybindings[keynum]);
-		keybindings[keynum] = NULL;
+		Key_SetBody(&keybindplayer[keynum], binding);
+	}
+	else if (!strcmp(binding, keybindplayer[keynum] ? keybindplayer[keynum] : ""))
+	{
+		/* the player's own binding: the key is the player's again */
+		server = false;
 	}
 
-	/* allocate memory for new binding */
-	l = strlen(binding);
-	new = Z_Malloc(l + 1);
-	strcpy(new, binding);
-	new[l] = 0;
-	keybindings[keynum] = new;
+	Key_SetBody(&keybindings[keynum], binding);
 	keybindserver[keynum] = server;
 }
 
-/* True if a press of keynum queues its binding as the server's text. */
+/* True if a press of keynum queues its binding as the server's text;
+   a key outside the tables is never the player's. */
 qboolean
 Key_BindingIsServer(int keynum)
 {
+	if ((keynum < 0) || (keynum >= K_LAST))
+	{
+		return true;
+	}
+
 	return keybindserver[keynum];
 }
 
-/* Queues text from key's binding, as the server's if a server wrote it */
+/* Queues text from key's binding, as the server's if a server wrote it;
+   a key outside the tables has no binding and queues nothing. */
 void
 Key_AddBindingText(int key, const char *text)
 {
-	if (Key_BindingIsServer(key))
+	if ((key < 0) || (key >= K_LAST))
+	{
+		return;
+	}
+
+	if (keybindserver[key])
 	{
 		Cbuf_AddServerText(text);
 	}
@@ -90,7 +118,9 @@ Key_AddBindingText(int key, const char *text)
 	}
 }
 
-/* unbindall: every bound key gets the empty binding. */
+/* unbindall: every bound key gets the empty binding; from the player's
+   text that clears what config.cfg saves too, from a server's it does
+   not. */
 void
 Key_UnbindAll(void)
 {
@@ -105,7 +135,8 @@ Key_UnbindAll(void)
 	}
 }
 
-/* The "bind key value" lines of config.cfg. */
+/* The "bind key value" lines of config.cfg: the player's own bindings,
+   never a server's, which the next start would run as the player's. */
 void
 Key_WriteBindingLines(FILE *f)
 {
@@ -113,16 +144,15 @@ Key_WriteBindingLines(FILE *f)
 
 	for (i = 0; i < K_LAST; i++)
 	{
-		/* a server's binding would come back as the player's text */
-		if (keybindings[i] && keybindings[i][0] && !keybindserver[i])
+		if (keybindplayer[i] && keybindplayer[i][0])
 		{
 			fprintf(f, "bind %s \"%s\"\n",
-					Key_KeynumToString(i), keybindings[i]);
+					Key_KeynumToString(i), keybindplayer[i]);
 		}
 	}
 }
 
-/* Frees every binding, at shutdown. */
+/* Frees every binding, the player's saved ones too, at shutdown. */
 void
 Key_FreeBindings(void)
 {
@@ -135,5 +165,13 @@ Key_FreeBindings(void)
 			Z_Free(keybindings[i]);
 			keybindings[i] = NULL;
 		}
+
+		if (keybindplayer[i])
+		{
+			Z_Free(keybindplayer[i]);
+			keybindplayer[i] = NULL;
+		}
+
+		keybindserver[i] = false;
 	}
 }
