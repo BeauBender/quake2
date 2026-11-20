@@ -154,22 +154,27 @@ function slurp(path,   old, x, r) {
 	if (r < 0) die("cannot read " path)
 	return x
 }
-# The names a doc opens an entry with: a line that starts "* **", up to the
+# The names a doc opens an entry with: a line that starts "* **" (in doc/040
+# also an indented "  - **" or "  * **" one, nested under another), up to the
 # first "**:" (the header may wrap onto indented lines), and in the header
 # the first word of every **bold** group. "* **a** / **b**: text" and
 # "* **a**, **b**:" give a and b; a name in prose, in a code span or after
 # the colon gives nothing. A name ending in _(x/y) stands for each choice.
-function entries(D, E,   n, L, i, h, on, k, g, A, m, j, base, C)
+function entries(D, E, nested,   n, L, i, h, on, k, g, A, m, j, base, C, st)
 {
 	n = split(D, L, "\n")
 	on = 0; h = ""
 	for (i = 1; i <= n; i++) {
-		if (!on && L[i] !~ /^\* \*\*/) continue
+		st = (L[i] ~ /^\* \*\*/) || (nested && L[i] ~ /^  [-*] \*\*/)
+		# a header with no "**:" ends where the next entry or a blank line
+		# starts; what it held is prose and counts for nothing
+		if (on && (st || L[i] == "")) on = 0
+		if (!on && !st) continue
 		if (!on) { on = 1; h = ""; k = 0 }
 		h = h " " L[i]
 		k++
 		if ((j = index(h, "**:")) > 0) { h = substr(h, 1, j + 1); on = 0 }
-		else if (k >= 4) { on = 0 }
+		else if (k >= 4) { on = 0; continue }
 		else continue
 		while (match(h, /\*\*[^*]+\*\*/)) {
 			g = substr(h, RSTART + 2, RLENGTH - 4)
@@ -274,7 +279,7 @@ BEGIN {
 	pat_cvar = "^[A-Za-z0-9_]+$"
 	pat_cmd = "^[A-Za-z0-9_+-]+$"
 	d40 = slurp(f_d40); d50 = slurp(f_d50)
-	entries(d40, W40); entries(d50, W50)
+	entries(d40, W40, 1); entries(d50, W50, 0)
 
 	# the upstream names
 	nup = 0; upid = ""
@@ -663,6 +668,23 @@ EOF
 	s_span_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **other**: see `zz_doc` and **zz_doc** here.\n\nSet `zz_doc` to 1.\n' >> doc/040_cvarlist.md; }
 	s_prose_cmd() { printf 'void f(void) { Cmd_AddCommand("zz_cmd", f); }\n' > src/common/d.c; printf 'Use zz_cmd to do it.\n' >> doc/050_commands.md; }
 	s_wrap_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **other**, **x**,\n  **zz_doc <val>**: wrapped.\n' >> doc/040_cvarlist.md; }
+	s_nested_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **zz_parent**: x.\n  - **zz_doc**: nested.\n' >> doc/040_cvarlist.md; }
+	s_nested_star_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **zz_parent**: x.\n  * **zz_doc**: nested.\n' >> doc/040_cvarlist.md; }
+	s_nested_cmd() { printf 'void f(void) { Cmd_AddCommand("zz_cmd", f); }\n' > src/common/d.c; printf '* **ogg**: x.\n  - **zz_cmd**: a subcommand.\n' >> doc/050_commands.md; }
+	s_nocolon_next() { printf 'void f(void) { Cvar_Get("zz_a", "0", 0); }\n' > src/common/d.c; printf '* **zz_a** is said here\n* **other**: y.\n' >> doc/040_cvarlist.md; }
+	s_giveup_prose() { printf 'void f(void) { Cvar_Get("zz_b", "0", 0); }\n' > src/common/d.c; printf '* **other** one\n  two\n  three\n  and **zz_b** more\n\n' >> doc/040_cvarlist.md; }
+	s_lone_struct() {
+		printf 'void f(void) { x = Cvar_Get(name, "0", 0); }\n' > src/common/v.c
+		printf 'static zzinfo_t zz_one = { "zz_one", "zz label", "zz def" };\n' > src/common/t.c
+		printf 'src/common/v.c|Cvar_Get|name|src/common/t.c:zz_one|one struct\n' >> tests/baselines/nonliteral-calls.txt
+	}
+	s_lone_struct_doc() { s_lone_struct; printf '* **zz_one**: x.\n' >> doc/040_cvarlist.md; }
+	s_fn_table() {
+		printf 'void f(void) { x = Cvar_Get(name, "0", 0); }\n' > src/common/v.c
+		printf 'const char *zz_fn(int i)\n{\n\tif (i) return "zz_f2";\n\treturn "zz_f1";\n}\n' > src/common/t.c
+		printf 'src/common/v.c|Cvar_Get|name|src/common/t.c:zz_fn|a function\n' >> tests/baselines/nonliteral-calls.txt
+	}
+	s_fn_table_first() { s_fn_table; printf '* **zz_f1**: x.\n' >> doc/040_cvarlist.md; }
 	s_literal_doc() { printf 'void f(void) { Cvar_Get("zz_doc", "0", 0); }\n' > src/common/d.c; printf '* **zz_doc**: documented.\n' >> doc/040_cvarlist.md; }
 	s_cmt_block() { printf '/* Cvar_Get("zz_c", "0", 0); */\n' > src/common/c.c; }
 	s_cmt_line() { printf '// Cvar_Get("zz_c", "0", 0);\n' > src/common/c.c; }
@@ -791,6 +813,13 @@ EOF
 	case_run prose-mention-of-a-command-is-not-documentation refused zz_cmd s_prose_cmd
 	case_run code-span-in-prose-is-not-documentation refused zz_doc s_span_doc
 	case_run wrapped-entry-header-is-documentation accepted "$OK" s_wrap_doc
+	case_run nested-entry-is-documentation accepted "$OK" s_nested_doc
+	case_run nested-star-entry-is-documentation accepted "$OK" s_nested_star_doc
+	case_run nested-item-in-the-commands-doc-is-not-a-command refused zz_cmd s_nested_cmd
+	case_run bullet-with-no-colon-is-not-documentation refused zz_a s_nocolon_next
+	case_run header-that-gives-up-then-bold-prose refused zz_b s_giveup_prose
+	case_run lone-struct-counts-only-its-first-literal accepted "$OK" s_lone_struct_doc
+	case_run function-table-counts-every-literal refused zz_f2 s_fn_table_first
 	case_run literal-documented-one-line accepted "$OK" s_literal_doc
 	case_run commented-out-block-counts refused zz_c s_cmt_block
 	case_run commented-out-line-counts refused zz_c s_cmt_line

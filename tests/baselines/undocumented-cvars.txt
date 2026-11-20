@@ -98,11 +98,6 @@ ip_clientport
 ip_hostport
 ipx_clientport
 ipx_hostport
-joy_extra_pitchspeed
-joy_extra_yawspeed
-joy_pitchspeed
-joy_ramp_time
-joy_yawspeed
 log_stats
 logfile
 lookstrafe
