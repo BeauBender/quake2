@@ -103,8 +103,9 @@
 #     moved after ri.Vid_MenuInit; another *_Init(&caps); either function
 #     renamed) must fail it, each naming the rule it breaks.
 # (i) Always: the effect table (TASK179). tests/metal/rm_rtfx_test.c over
-#     rm_rtfx.c (RM_RTFX_HOST: every entry point NULL) and rm_rtgate.c: the
-#     order, the switches against the gate, the pipeline rule; five scratch
+#     rm_rtfx.c (RM_RTFX_HOST: every entry point a recording stub of
+#     tests/metal/rm_rtfx_host.h) and rm_rtgate.c: the order, the switches
+#     against the gate, the pipeline rule, what each walk calls; ten scratch
 #     mutants of the two files must fail it. Then, comments and literals
 #     stripped, rm_main.c and rmb_gbuf.m name no effect's symbol (a prefix
 #     taken from the table's FX(...) rows); four mutants check the lint.
@@ -276,8 +277,9 @@ else
 	case $fx in *", 0 failed") ;; *) bad "tests/metal/rm_fx_test.c printed no result line"; fx="";; esac
 fi
 
-# the effect table (TASK179): rm_rtfx.c is built for the host with its entry points NULL (RM_RTFX_HOST),
-# so the gate, which takes its effect switches from it, and the table's test link no backend
+# the effect table (TASK179): rm_rtfx.c is built for the host with its entry points the recording stubs
+# of tests/metal/rm_rtfx_host.h (RM_RTFX_HOST), so the gate, which takes its effect switches from it, and
+# the table's test link no backend
 fxhost="-DYQ2OSTYPE=\"host\" -DYQ2ARCH=\"host\" -DRM_RTFX_HOST -Itests/metal"
 
 # the hardware gate of ray tracing (RT8, TASK60): rm_rtgate.c, with the effect table for its switches
@@ -315,11 +317,13 @@ else
 fi
 # Scratch mutants the test must fail: two effects swapped in the order; the AO's switch changed in the
 # table but not in the gate, then in the gate but not in the table; the raster's surface choice inverted;
-# the forward pipeline asked for every pipe but the blended world face's
+# the forward pipeline asked for every pipe but the blended world face's; the AO row's show and post
+# entries swapped; the water's frame entry NULL; the post walk emptied; the resolve walk going on past
+# the first yes (with one resolve row: losing it); the wanted walk going on past the first yes
 fxh_mutants=0
 if [ -n "$rtfx" ]; then
 	mkdir "${tmp:?}/fxm"
-	for fxm in order tablesw gatesw surf forward; do
+	for fxm in order tablesw gatesw surf forward aoswap wframe postempty resolvego wantedgo; do
 		cp "$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtgate.c" "${tmp:?}/fxm/"
 		case $fxm in
 			order) sed 's/{ RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER }/{ RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER }/' \
@@ -330,6 +334,16 @@ if [ -n "$rtfx" ]; then
 				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 			forward) sed 's/if ((pipe == RM_PIPE_WORLD_TEXC_BLEND) \&\& forward/if ((pipe != RM_PIPE_WORLD_TEXC_BLEND) \&\& forward/' \
 				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			aoswap) sed 's/FX(rmb_rtao_fx_trace), NULL, FX(rmb_rtao_fx_show), NULL,/FX(rmb_rtao_fx_trace), NULL, NULL, FX(rmb_rtao_fx_show),/' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			wframe) sed 's/FX(RM_RTW_Frame)/NULL/' "$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			postempty) awk '/^rm_rtfx_post\(/ { f = 1 } { print } f && /^\tint k;$/ { print "\n\treturn;"; f = 0 }' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			resolvego) awk '/^rm_rtfx_resolve\(/ { f = 1 } f && /return 1;/ { sub(/return 1;/, "continue;"); f = 0 } { print }' \
+				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
+			wantedgo) awk '/^rm_rtfx_wanted\(/ { f = 1 } f && /^\tint k;$/ { $0 = "\tint k, r = 0;" }
+				f && /return 1;/ { sub(/return 1;/, "r = 1;") } f && /return 0;/ { sub(/return 0;/, "return r;") }
+				/^}/ { f = 0 } { print }' "$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 		esac
 		if cmp -s "$rm_dir/rm_rtfx.c" "${tmp:?}/fxm/rm_rtfx.c" && cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/fxm/rm_rtgate.c"; then
 			bad "the effect-table mutant ($fxm) changed nothing"
