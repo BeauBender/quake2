@@ -34,7 +34,7 @@ mutant fieldsw: R_HdrToneMap builds its rectangle from "x y width width", not "x
 mutant fieldss: R_SetupGL builds its rectangle from "x x width height", not "x y width height", of one refdef
 mutant tmfull: R_HdrToneMap's tone-map pass is not over the (int)vp.x, vp.y, vp.w, vp.h of its rm_view_rect
 mutant thtw: R_HdrToneMap's rm_view_rect arguments ("x,y,width,height,vid.width,vid.height,tw") differ from R_SetupGL's ("x,y,width,height,vid.width,vid.height,th")
-mutant retclear: R_ClearNoWorld returns anywhere but in its RDF_NOWORLDMODEL guard, so it can skip its draw
+mutant retclear: R_ClearNoWorld returns anywhere but in its RDF_NOWORLDMODEL guard, so its draw may not run
 mutant guardinv: R_ClearNoWorld does not begin with the !(r_newrefdef.rdflags & RDF_NOWORLDMODEL) guard that returns
 mutant nocancel: RI_ShutdownContext does not call RM_HdrProbeCancel(); before rmb_detach();
 mutant nobody: RM_HdrProbeCancel does not call rm_hdr_probe_cancel(&rm_hdr_probe_wait)

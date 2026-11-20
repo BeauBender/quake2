@@ -1426,7 +1426,7 @@ hdr_order() { # <rm_main.c> <rm_sdl.c>
 	printf '%s\n' "$cnw" | grep -qF 'if(!(r_newrefdef.rdflags&RDF_NOWORLDMODEL)){return;}' ||
 		echo "R_ClearNoWorld does not begin with the !(r_newrefdef.rdflags & RDF_NOWORLDMODEL) guard that returns"
 	[ "$(printf '%s\n' "$cnw" | grep -o 'return' | wc -l | tr -d ' ')" = 1 ] ||
-		echo "R_ClearNoWorld returns anywhere but in its RDF_NOWORLDMODEL guard, so it can skip its draw"
+		echo "R_ClearNoWorld returns anywhere but in its RDF_NOWORLDMODEL guard, so its draw may not run"
 	for hf in R_SetupGL R_HdrToneMap; do
 		got=$(hdr_fields "$1" "$hf")
 		[ "$got" = "x y width height" ] || echo "$hf builds its rectangle from \"$got\", not \"x y width height\", of one refdef"
