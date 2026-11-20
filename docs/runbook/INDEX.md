@@ -101,3 +101,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX138](../runbook/FIX138.md): the image decoder's type restriction on an SDK before 27.0: the type check tested and pinned on both kinds of SDK, and why check-image-decoder stays local-only
 - [FIX135](../runbook/FIX135.md): a refused model load leaves no named empty slot: the deferred-cleanup design, and `Hunk_Begin` recording its reservation so an unfinished hunk frees
 - [FIX116](../runbook/FIX116.md): the unit suite under ASan and UBSan in the gate and CI (`tests/check-unit-sanitizers.sh`): the options, the time and the PCX mutant
+- [FIX141](../runbook/FIX141.md): a fully transparent image compares alpha only in the decoder round trip, because macOS 26's ImageIO drops its colour; a mixed control keeps colour under alpha 0 pinned, and check-image-decoder returns to CI

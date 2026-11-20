@@ -40,6 +40,9 @@
 
 #include "test.h"
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include "../../src/client/refresh/files/models.c"
 
 /* Each renderer supplies this; the node loader never calls it. */
@@ -70,7 +73,7 @@ typedef struct
 	const byte *vistail;	/* the last bytes of the visibility lump */
 	int nvistail;
 	/* the face lumps (FIX118), written when nfaces is set */
-	dface_t faces[2];
+	dface_t faces[3];
 	int nfaces;
 	int surfedges[8];
 	int nsurfedges;
@@ -1161,6 +1164,234 @@ TEST(bspcheck_leaf_cluster_bounds_pass)
 }
 
 /*
+ * The cases ref_metal's host test held for its own copies of these checks
+ * (TASK198: rm_lump_ok, rm_face_edges_ok, rm_surfedge_ok, rm_vis_header_ok,
+ * rm_world_head_ok, rm_node_tree_ok, rm_mark_once), now run against the
+ * shared Mod_Check* the renderers call.
+ */
+static void
+c_header_lump(int lump, int fileofs, int filelen)
+{
+	dheader_t *h = (dheader_t *)gbuf;
+
+	h->lumps[lump].fileofs = fileofs;
+	h->lumps[lump].filelen = filelen;
+}
+
+TEST(bspcheck_lump_ranges)
+{
+	int len;
+
+	/* a negative offset or length, and offset plus length overflowing */
+	c_default();
+	len = g_build();
+	c_header_lump(LUMP_LEAFS, -4, 4);
+	C_REFUSED(len, 0, "lump 8 (");
+	c_header_lump(LUMP_LEAFS, 4, -4);
+	C_REFUSED(len, 0, "lump 8 (");
+	c_header_lump(LUMP_LEAFS, 0x7fffffff, 0x7fffffff);
+	C_REFUSED(len, 0, "lump 8 (");
+
+	/* a lump ending exactly at the file's end passes, one byte more does not */
+	c_default();
+	len = g_build();
+	c_header_lump(LUMP_ENTITIES, len - 4, 4);
+	T_EQ_INT(c_check(len), 5);
+	c_header_lump(LUMP_ENTITIES, len - 4, 5);
+	C_REFUSED(len, 0, "lump 0 (");
+
+	/* a misaligned offset is refused even for an empty lump, or for 1 byte at 3 */
+	c_default();
+	len = g_build();
+	c_header_lump(LUMP_ENTITIES, 162, 0);
+	C_REFUSED(len, 0, "lump 0 (");
+	c_header_lump(LUMP_ENTITIES, 3, 1);
+	C_REFUSED(len, 0, "lump 0 (");
+}
+
+TEST(bspcheck_face_edge_ranges)
+{
+	c_default();
+	T_EQ_INT(c_check(g_build()), 5);	/* 3 edges from 0 of 3 surfedges */
+
+	c_default();
+	g.faces[0].firstedge = -1;
+	C_REFUSED(g_build(), 3, "face 0 has 3 edges from -1");
+
+	c_default();
+	g.faces[0].numedges = -3;
+	C_REFUSED(g_build(), 3, "face 0 has -3 edges from 0");
+
+	c_default();
+	g.faces[0].firstedge = 0x7fffffff;
+	C_REFUSED(g_build(), 3, "face 0 has 3 edges from 2147483647");
+
+	/* a surfedge names edges -(n-1) to n-1: n, -n and the most negative int are refused */
+	c_default();
+	g.surfedges[2] = 3;
+	T_EQ_INT(c_check(g_build()), 5);
+	g.surfedges[2] = -3;
+	T_EQ_INT(c_check(g_build()), 5);
+	g.surfedges[2] = 4;
+	C_REFUSED(g_build(), 3, "face 0 names edge 4, the map has 4");
+	g.surfedges[2] = -4;
+	C_REFUSED(g_build(), 3, "face 0 names edge -4, the map has 4");
+	g.surfedges[2] = -2147483647 - 1;
+	C_REFUSED(g_build(), 3, "names edge -2147483648");
+}
+
+TEST(bspcheck_vis_header_bounds)
+{
+	dheader_t *h;
+	int len;
+
+	/* 2 clusters need 4 + 16 = 20 bytes: 20 passes (offsets inside it), 19 does not */
+	c_default();
+	g.vis[1] = g.vis[2] = g.vis[3] = g.vis[4] = 0;
+	len = g_build();
+	h = (dheader_t *)gbuf;
+	h->lumps[LUMP_VISIBILITY].filelen = 20;
+	T_EQ_INT(c_check(len), 5);
+	h->lumps[LUMP_VISIBILITY].filelen = 19;
+	C_REFUSED(len, 1, "visibility of 2 clusters in 19 bytes");
+
+	/* under 4 bytes there is no count at all */
+	h->lumps[LUMP_VISIBILITY].filelen = 3;
+	C_REFUSED(len, 1, "3 bytes of visibility");
+
+	/* a negative count, and one whose offsets could not fit */
+	c_default();
+	g.vis[0] = -1;
+	C_REFUSED(g_build(), 1, "visibility of -1 clusters");
+	c_default();
+	g.vis[0] = 0x7fffffff / 4;
+	C_REFUSED(g_build(), 1, "clusters in 24 bytes");
+}
+
+TEST(bspcheck_world_head)
+{
+	c_default();
+	g.nnodes = 0;
+	C_REFUSED(g_build(), 2, "0 nodes and 2 models");
+
+	c_default();
+	g.nmodels = 0;
+	C_REFUSED(g_build(), 2, "model 0 at node -1");
+
+	c_default();
+	g.models[0].headnode = -1;
+	C_REFUSED(g_build(), 2, "model 0 at node -1");
+
+	/* the last node is a head */
+	c_default();
+	g.models[0].headnode = 2;
+	T_EQ_INT(c_check(g_build()), 5);
+}
+
+TEST(bspcheck_node_tree)
+{
+	/* node 2 is a child of node 0 and of node 1 */
+	c_default();
+	g_node(0, 0, 1, 2);
+	g_node(1, 1, 2, LEAF(1));
+	C_REFUSED(g_build(), 2, "node 1 names node 2");
+
+	/* node 1 is both children of node 0 */
+	c_default();
+	g_node(0, 0, 1, 1);
+	C_REFUSED(g_build(), 2, "node 0 names node 1");
+
+	/* 0 -> 1 -> 0 */
+	c_default();
+	g_node(1, 1, 0, LEAF(2));
+	C_REFUSED(g_build(), 2, "node 1 names node 0");
+
+	/* 0 -> 1 -> 2 -> 1, and 1 -> 1 */
+	c_default();
+	g_node(0, 0, 1, 2);
+	g_node(1, 1, 2, LEAF(1));
+	g_node(2, 1, 1, LEAF(2));
+	C_REFUSED(g_build(), 2, "not a tree from node 0");
+	c_default();
+	g_node(1, 1, 1, LEAF(2));
+	C_REFUSED(g_build(), 2, "node 1 names node 1");
+
+	/* the last slot of the last node names the root, or node 1 again */
+	c_default();
+	g.nodes[2].children[1] = 0;
+	C_REFUSED(g_build(), 2, "node 2 names node 0");
+	c_default();
+	g.nodes[2].children[1] = 1;
+	C_REFUSED(g_build(), 2, "node 2 names node 1");
+
+	/* a leaf past the leafs, and the most negative child */
+	c_default();
+	g.nodes[2].children[0] = LEAF(6);
+	C_REFUSED(g_build(), 2, "node 2 names leaf 6");
+	c_default();
+	g.nodes[2].children[0] = -2147483647 - 1;
+	C_REFUSED(g_build(), 2, "names leaf 2147483647");
+
+	/* a leaf may have two parents */
+	c_default();
+	g.nodes[2].children[0] = LEAF(2);
+	T_EQ_INT(c_check(g_build()), 5);
+
+	/* the scratch is cleared on each call: a refused map does not poison the next */
+	c_default();
+	g_node(0, 0, 1, 1);
+	T_EQ_INT(c_check(g_build()), 2);
+	c_default();
+	T_EQ_INT(c_check(g_build()), 5);
+	T_EQ_INT(c_check(g_build()), 5);
+}
+
+TEST(bspcheck_node_faces_once)
+{
+	/* two faces, each in one node */
+	c_default();
+	g.nfaces = 2;
+	g.faces[1].firstedge = 0;
+	g.faces[1].numedges = 3;
+	g.nodes[1].firstface = 1;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 2;	/* an empty range at the end */
+	T_EQ_INT(c_check(g_build()), 5);
+
+	/* node 1 claims both: face 0 is node 0's */
+	g.nodes[1].firstface = 0;
+	g.nodes[1].numfaces = 2;
+	C_REFUSED(g_build(), 2, "node 1 has surfaces 0 to 2 of 2");
+
+	/* the first face of node 2's one-face range is taken already */
+	g.nodes[1].firstface = 1;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 1;
+	g.nodes[2].numfaces = 1;
+	C_REFUSED(g_build(), 2, "node 2 has surfaces 1 to 2 of 2");
+
+	/* only the LAST face of node 2's two-face range is taken already */
+	g.nfaces = 3;
+	g.faces[2] = g.faces[1];
+	g.nodes[1].firstface = 2;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 1;
+	g.nodes[2].numfaces = 2;
+	C_REFUSED(g_build(), 2, "node 2 has surfaces 1 to 3 of 3");
+
+	g.nfaces = 2;
+	g.nodes[1].firstface = 1;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 1;
+	g.nodes[2].numfaces = 1;
+
+	/* a range that starts inside and ends past the lump */
+	g.nodes[1].numfaces = 0;
+	g.nodes[2].numfaces = 2;
+	C_REFUSED(g_build(), 2, "node 2 has surfaces 1 to 3 of 2");
+}
+
+/*
  * A refused map leaves no named slot behind (FIX135). Mod_ForName names the
  * slot and loads the file; the refusal is a Com_Error, which longjmps, so
  * nothing after it runs. The loader records the load in progress
@@ -1305,6 +1536,159 @@ TEST(slot_reclaim_frees_unfinished_hunk)
 {
 	char out[1024];
 	int status = t_expect_exit(slot_reclaim_child, NULL, out, sizeof(out));
+
+	T_EQ_INT(status, 0);
+	T_CHECK(strstr(out, "munmap failed") == NULL);
+	T_CHECK(strstr(out, "yq2test-child: reclaimed") != NULL);
+}
+
+/*
+ * A refusal before the file is read (FIX140): Mod_ForName names the slot,
+ * records the load with no buffer (Mod_LoadBegin(slot, NULL)), and the file
+ * is missing with crash set, so Com_Error fires. The reclaim clears the
+ * slot and frees no file.
+ */
+static void
+missing_file_child(void *arg)
+{
+	t_slot_t slot;
+
+	(void)arg;
+	memset(&slot, 0, sizeof(slot));
+	t_files_freed = 0;
+
+	strcpy(slot.name, "models/missing.md2");
+	Mod_LoadBegin(&slot, NULL);
+	T_EXPECT_DROP(Com_Error(ERR_DROP, "%s not found", slot.name));
+	T_CHECK(slot.name[0] != '\0');
+
+	Mod_ReclaimUnfinished(t_slot_free, t_file_free);
+	T_CHECK(slot.name[0] == '\0');
+	T_EQ_INT(t_files_freed, 0);
+	printf("yq2test-child: reclaimed\n");
+}
+
+TEST(slot_reclaim_missing_file_clears_name)
+{
+	char out[1024];
+	int status = t_expect_exit(missing_file_child, NULL, out, sizeof(out));
+
+	T_EQ_INT(status, 0);
+	T_CHECK(strstr(out, "yq2test-child: reclaimed") != NULL);
+}
+
+/*
+ * A skin refusal in the alias loader (FIX140): find_image raises
+ * Com_Error between Hunk_Begin and the return, so the hunk is in
+ * Mod_LoadMD2's local only. The reclaim frees it through Mod_LoadHunk, with
+ * the real hunk.o. mprotect on the hunk's mapping tells whether it is still
+ * mapped.
+ */
+static void *t_skin_hunk;
+
+static struct image_s *
+t_find_image_refuses(const char *name, imagetype_t type)
+{
+	(void)type;
+	t_skin_hunk = mod_loadhunk;
+	Com_Error(ERR_DROP, "R_LoadPic: %s: too many textures", name);
+	return NULL;
+}
+
+/* an image that is found: the load finishes */
+static char t_image_bytes[8];
+
+static struct image_s *
+t_find_image_ok(const char *name, imagetype_t type)
+{
+	(void)name;
+	(void)type;
+	t_skin_hunk = mod_loadhunk;
+	return (struct image_s *)t_image_bytes;
+}
+
+static int
+t_mapped(void *hunk)
+{
+	void *base = (byte *)hunk - sizeof(size_t);
+
+	/* ENOMEM when the page is unmapped; the same protection changes nothing */
+	return mprotect(base, (size_t)getpagesize(), PROT_READ | PROT_WRITE) == 0;
+}
+
+static void
+alias_skin_refusal_child(void *arg)
+{
+	enum { OFS_SKIN = sizeof(dmdl_t), OFS_ST = OFS_SKIN + MAX_SKINNAME,
+		OFS_TRIS = OFS_ST + sizeof(dstvert_t),
+		OFS_FRAMES = OFS_TRIS + sizeof(dtriangle_t),
+		FRAMESIZE = sizeof(daliasframe_t),
+		OFS_GL = OFS_FRAMES + FRAMESIZE, SIZE = OFS_GL + 8 };
+	t_slot_t slot;
+	dmdl_t *h;
+	byte *file = calloc(1, SIZE);
+	vec3_t mins, maxs;
+	struct image_s *skins[MAX_MD2SKINS];
+	modtype_t type;
+	int pass;
+
+	(void)arg;
+	memset(&slot, 0, sizeof(slot));
+	t_files_freed = 0;
+
+	h = (dmdl_t *)file;
+	h->ident = IDALIASHEADER;
+	h->version = ALIAS_VERSION;
+	h->framesize = FRAMESIZE;
+	h->num_skins = 1;
+	h->num_xyz = 1;
+	h->num_st = 1;
+	h->num_tris = 1;
+	h->num_glcmds = 2;
+	h->num_frames = 1;
+	h->ofs_skins = OFS_SKIN;
+	h->ofs_st = OFS_ST;
+	h->ofs_tris = OFS_TRIS;
+	h->ofs_frames = OFS_FRAMES;
+	h->ofs_glcmds = OFS_GL;
+	h->ofs_end = SIZE;
+	strcpy((char *)file + OFS_SKIN, "models/x/skin.pcx");
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		strcpy(slot.name, "models/refused.md2");
+		Mod_LoadBegin(&slot, malloc(16));
+		t_skin_hunk = NULL;
+
+		T_EXPECT_DROP(slot.extradata = Mod_LoadMD2(slot.name, file, SIZE,
+			mins, maxs, skins, t_find_image_refuses, &type));
+		T_CHECK(slot.extradata == NULL);
+		T_CHECK(t_skin_hunk != NULL);
+		T_CHECK(t_mapped(t_skin_hunk));
+
+		Mod_ReclaimUnfinished(t_slot_free, t_file_free);
+		T_CHECK(slot.name[0] == '\0');
+		T_CHECK(!t_mapped(t_skin_hunk));
+		T_EQ_INT(t_files_freed, pass + 1);
+	}
+
+	/* a load that succeeds records the hunk for the skin lookup, and clears
+	 * the record on return: nothing is left for a later reclaim to free */
+	t_skin_hunk = NULL;
+	slot.extradata = Mod_LoadMD2("models/ok.md2", file, SIZE, mins, maxs,
+		skins, t_find_image_ok, &type);
+	T_CHECK(slot.extradata != NULL);
+	T_CHECK(t_skin_hunk != NULL);
+	T_CHECK(skins[0] == (struct image_s *)t_image_bytes);
+	T_CHECK(mod_loadhunk == NULL);
+	free(file);
+	printf("yq2test-child: reclaimed\n");
+}
+
+TEST(slot_reclaim_frees_alias_hunk_on_skin_refusal)
+{
+	char out[1024];
+	int status = t_expect_exit(alias_skin_refusal_child, NULL, out, sizeof(out));
 
 	T_EQ_INT(status, 0);
 	T_CHECK(strstr(out, "munmap failed") == NULL);
