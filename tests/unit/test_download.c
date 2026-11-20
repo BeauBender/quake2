@@ -94,7 +94,9 @@ TEST(download_filter)
 		   extension, does not end the name. */
 		"models/items/a.ase",
 		"sound/.au/x.wav",
-		/* Backslashes are not special to the filter. */
+		/* A backslash is not a separator to the filter (the caller of the
+		   download path turns them into slashes first), so this has no
+		   "/" and is refused as a top-level name. */
 		"maps\\sub\\x.bsp",
 	};
 	t_text_t pin = {0};
