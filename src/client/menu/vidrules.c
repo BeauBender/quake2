@@ -968,7 +968,7 @@ VidRules_Hdr(int item, const char *renderer, vidhdrplat_t plat, float headroom, 
 		{
 			return (vidrule_t){ 0, "HDR is off" };
 		}
-		return (vidrule_t){ 1, "held to the display's headroom; next frame" };
+		return (vidrule_t){ 1, "held to the display's headroom" };
 	}
 	return (vidrule_t){ 1, "the display's extended range; next frame" };
 }

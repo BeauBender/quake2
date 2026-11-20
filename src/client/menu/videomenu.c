@@ -75,6 +75,7 @@ static menulist_s s_mfx_scale_list;
 static menulist_s s_mfx_interp_list;
 static menulist_s s_denoiser_list;
 static menulist_s s_colorspace_list;   /* TASK121: metal_colorspace */
+static int s_colorspace_pending = -1;  /* the choice held while HDR greys the item; -1 none */
 static menulist_s s_hdr_list;          /* TASK196 (HD5): r_hdr, live */
 static menuslider_s s_hdr_peak_slider; /* TASK196 (HD5): r_hdr_peak, live */
 static menulist_s s_rtw_hits_list;   /* TASK158: r_rt_water_hits */
@@ -706,17 +707,30 @@ HdrMenu_Rules(void)
 			s_hdr_peak_note, sizeof(s_hdr_peak_note)));
 	s_hdr_list.curvalue = (Cvar_VariableValue("r_hdr") == 1.0f);
 
+	const int was_grayed = (s_colorspace_list.generic.flags & QMF_GRAYED) != 0;
+
 	SetRule(&s_colorspace_list.generic, VIDITEM_COLORSPACE,
 		metal && VidRules_HdrInForce(Cvar_VariableValue("r_hdr"), Cvar_VariableValue("r_presentation")));
 	if (s_colorspace_list.generic.flags & QMF_GRAYED)
 	{
+		/* keep a pending choice while the item shows n/a */
+		if (!was_grayed)
+		{
+			s_colorspace_pending = s_colorspace_list.curvalue;
+		}
 		s_colorspace_list.itemnames = cs_na_names;
 		s_colorspace_list.curvalue = 0;
 	}
 	else
 	{
 		s_colorspace_list.itemnames = cs_names;
-		s_colorspace_list.curvalue = (Cvar_VariableValue("metal_colorspace") == 1.0f);
+		if (was_grayed)
+		{
+			/* back from greyed: the choice held while it was, else the cvar */
+			s_colorspace_list.curvalue = (s_colorspace_pending >= 0) ? s_colorspace_pending :
+				(Cvar_VariableValue("metal_colorspace") == 1.0f);
+			s_colorspace_pending = -1;
+		}
 	}
 }
 
@@ -820,7 +834,7 @@ HdrRule(int item, const char *renderer, char *note, size_t len)
 
 	if (rule.enabled && item == VIDHDR_ITEM_PEAK)
 	{
-		snprintf(note, len, "display headroom %.1f; held to it; next frame", HdrHeadroom());
+		snprintf(note, len, "headroom %.1f; peak held to it", HdrHeadroom());
 		return (vidrule_t){ 1, note };
 	}
 	return rule;
@@ -2032,6 +2046,7 @@ VID_MenuInit(void)
 		static const char *cs_names[] = { "untagged", "sRGB", NULL };
 		static const char *cs_na_names[] = { "n/a", NULL };
 
+		s_colorspace_pending = -1;
 		s_colorspace_list.generic.type = MTYPE_SPINCONTROL;
 		s_colorspace_list.generic.name = "colour space";
 		s_colorspace_list.generic.x = 0;

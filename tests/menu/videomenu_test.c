@@ -1418,6 +1418,12 @@ test_hdr_items(void)
 		Item("HDR peak")->statusbar);
 	CHECK(Greyed("colour space") && !strcmp(Item("colour space")->statusbar, "set by HDR"),
 		"colour space with HDR on: greyed %d, %s", Greyed("colour space"), Item("colour space")->statusbar);
+	CheckStatus("HDR peak at 3.2", Item("HDR peak")->statusbar);
+	HdrOpen("metal", "16", "1", "0");
+	CHECK(!Greyed("HDR peak"), "HDR peak greyed at headroom 16");
+	CheckStatus("HDR peak at 16", Item("HDR peak")->statusbar);
+	HdrOpen("metal", "3.2", "0", "0");
+	Slide("HDR", 1);
 	Slide("HDR peak", 1);
 	CHECK(Cvar_VariableValue("r_hdr_peak") == 4.5f, "r_hdr_peak %s after Right", Str("r_hdr_peak"));
 	Apply();
@@ -1434,6 +1440,33 @@ test_hdr_items(void)
 	SetCv("r_hdr", "0");
 	SetCv("r_hdr_headroom", "-1");
 	SetCv("r_presentation", "0");
+}
+
+/* TASK196 (HD5): a colour space choice not yet applied survives re-opening the page and an HDR toggle */
+static void
+test_colorspace_choice_is_pending(void)
+{
+	HdrOpen("metal", "3.2", "0", "0");
+	CHECK(Slide("colour space", 1) && !strcmp(Shown("colour space"), "sRGB"), "Right");
+
+	/* close and re-open the renderer options page */
+	menu = main_menu;
+	Cursor("renderer options...");
+	Menu_SelectItem(menu);
+	menu = sub_menu;
+	CHECK(!strcmp(Shown("colour space"), "sRGB"), "re-opened page lost the choice: %s", Shown("colour space"));
+
+	/* HDR on greys it, HDR off enables it again: the choice is back */
+	Slide("HDR", 1);
+	CHECK(Greyed("colour space"), "colour space not greyed with HDR on");
+	Slide("HDR", -1);
+	CHECK(!Greyed("colour space") && !strcmp(Shown("colour space"), "sRGB"),
+		"HDR toggle lost the choice: %s", Shown("colour space"));
+	Apply();
+	CHECK(!strcmp(Str("metal_colorspace"), "1"), "apply wrote metal_colorspace %s", Str("metal_colorspace"));
+
+	SetCv("metal_colorspace", "0");
+	SetCv("r_hdr", "0");
 }
 
 /* TASK196 (HD5): the tuning screen's HDR rows, greyed with the display's reason, live with headroom */
@@ -1468,6 +1501,12 @@ test_hdr_tuning_rows(void)
 	Menu_SlideItem(tm, 1);
 	CHECK(!strcmp(Str("r_hdr"), "1"), "tuning HDR wrote r_hdr %s", Str("r_hdr"));
 	CHECK(!RTGreyed("HDR peak"), "tuning HDR peak greyed with HDR on: %s", RTItem("HDR peak")->statusbar);
+	CheckStatus("tuning HDR peak at 4", RTItem("HDR peak")->statusbar);
+	SetCv("r_hdr_headroom", "16");
+	tm->draw(tm);
+	CheckStatus("tuning HDR peak at 16", RTItem("HDR peak")->statusbar);
+	SetCv("r_hdr_headroom", "4");
+	tm->draw(tm);
 	RTItem("HDR peak");
 	Menu_SlideItem(tm, -1);
 	CHECK(Cvar_VariableValue("r_hdr_peak") == 3.5f, "tuning HDR peak wrote %s", Str("r_hdr_peak"));
@@ -1509,6 +1548,7 @@ main(void)
 	test_rt_screen_under_presentation();
 	test_tuning_screen();
 	test_hdr_items();
+	test_colorspace_choice_is_pending();
 	test_hdr_tuning_rows();
 
 	printf("videomenu_test: %d checks, %d failed\n", checks, failed);
