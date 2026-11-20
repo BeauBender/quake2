@@ -530,7 +530,9 @@ TEST(sv_connect_ip_refusal_reply)
 /*
  * The game module's AddCommandString: a level name from map data must
  * only name a level. ExitLevel builds "gamemap \"<changemap>\"\n"; a
- * newline inside the name would otherwise start a second command.
+ * newline, or a ';' outside quotes, inside the name would otherwise
+ * start a second command. SV_GameAddCommandString refuses such text
+ * whole, using Cbuf_Execute's own split rule.
  */
 static void
 fix160_probe(void)
@@ -591,6 +593,21 @@ TEST(sv_game_command_text_never_adds_a_command)
 	fix160_run("t_gamemap \"base2\"\r\n");
 	T_CONSOLE_HAS("mapname base2");
 	T_CHECK(strstr(t_console(), "refused") == NULL);
+
+	/* addon batch text, refused since FIX160: more than one command. */
+	fix160_run("t_gamemap a;t_gamemap b\n");
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	/* addon batch text, refused since FIX160: a newline before the end. */
+	fix160_run("t_gamemap a\nt_gamemap b\n");
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	/* addon batch text, refused since FIX160: a trailing ';'. */
+	fix160_run("t_gamemap a;\n");
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
 
 	Cmd_RemoveCommand("t_probe");
 	Cmd_RemoveCommand("t_gamemap");
