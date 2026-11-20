@@ -70,6 +70,8 @@ static float proj_u[16];
 static float jitter[2];
 static rm_viewport_t vp_frame, vp_render;
 static int render_w, render_h;
+/* TASK185: the target and render size Retro's report line last named, cleared at each renderer start (RM_GB_Init) */
+static int said_fw, said_fh, said_rw, said_rh;
 
 void
 RM_GB_Init(void)
@@ -82,6 +84,7 @@ RM_GB_Init(void)
 	r_rt_gbuffer_show = ri.Cvar_Get("r_rt_gbuffer_show", "0", 0);
 	r_rt_motion_test = ri.Cvar_Get("r_rt_motion_test", "0", 0);
 	r_rt_flatlight = ri.Cvar_Get("r_rt_flatlight", "0", 0);
+	said_fw = said_fh = said_rw = said_rh = 0;
 	RM_GB_Reset();
 }
 
@@ -147,16 +150,16 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 	/* the report line of Retro's upload and view (TASK185), once for each target size and render size */
 	if (RM_PresentationMode() == RM_PRES_RETRO)
 	{
-		static int said_fw, said_fh, said_rw, said_rh;
-
 		if ((fw != said_fw) || (fh != said_fh) || (rw != said_rw) || (rh != said_rh))
 		{
 			int n565, n4444, ncap, maxside;
 
 			RM_RetroImageCounts(&n565, &n4444, &ncap, &maxside);
-			R_Printf(PRINT_ALL, "ref_metal: retro: 3D view %dx%d of a %dx%d target, enlarged by a bilinear blit, no MetalFX; "
-					"textures %d RGB565 and %d ARGB4444, %d capped to %dx%d, largest side %d, filter %s, no anisotropy\n",
-					rw, rh, fw, fh, n565, n4444, ncap, MTL_RETRO_TEX_CAP, MTL_RETRO_TEX_CAP, maxside, MTL_RETRO_TEXMODE);
+			/* rw x rh is the whole target's render size (the view's rectangle maps into it in proportion), not the view's */
+			R_Printf(PRINT_ALL, "ref_metal: retro: 3D layer drawn at %dx%d, the %dx%d target as if %d lines tall, enlarged by a "
+					"bilinear blit, no MetalFX; textures %d RGB565 and %d ARGB4444, %d capped to %dx%d, largest side %d, "
+					"filter %s, no anisotropy\n",
+					rw, rh, fw, fh, rh, n565, n4444, ncap, MTL_RETRO_TEX_CAP, MTL_RETRO_TEX_CAP, maxside, MTL_RETRO_TEXMODE);
 			said_fw = fw;
 			said_fh = fh;
 			said_rw = rw;

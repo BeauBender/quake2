@@ -658,6 +658,9 @@ RI_Init(void)
 		rm_presentation = rm_pres_decide(r_presentation->value, rm_rtg.path, &why);
 		rm_pres_format(r_presentation->value, rm_presentation, why, line, sizeof(line));
 		R_Printf(PRINT_ALL, "%s\n", line);
+
+		/* TASK185: no Retro view pass left from before a vid_restart (the image stays mapped); RI_RenderFrame sets it per frame */
+		rmb_gbuf_set_retro(0, 0, 0);
 	}
 
 	if (!rm_caps_floor_ok(caps.families))
@@ -1357,6 +1360,19 @@ RI_RenderFrame(refdef_t *fd)
 	rm_rtfx_frame(fd, RM_RT_SceneReady());
 
 	/*
+	 * Retro's pass is made at the view's own lines when it has them
+	 * (TASK185), with this frame's settings. Set on every frame, off in
+	 * every other mode: the renderer stays mapped across vid_restart, so
+	 * a Retro session's setting would otherwise outlive it.
+	 */
+	{
+		const float rc = r_retro_gamma->value;
+
+		rmb_gbuf_set_retro(rm_presentation == RM_PRES_RETRO, r_retro_filter->value != 0,
+				((rc >= 0.0f) && (rc < (float)MTL_RETRO_CURVES)) ? (int)rc : 0);
+	}
+
+	/*
 	 * Colour loaded, so 2D drawn before a view (the player-config menu)
 	 * stays. Depth to 1, and stencil to 1 with stencil shadows, else 0:
 	 * gl1 clears them in R_Clear, at the start of the frame (the stencil
@@ -1364,14 +1380,6 @@ RI_RenderFrame(refdef_t *fd)
 	 * bits), and no 2D draw writes depth or stencil before the view, so a
 	 * clear here gives the same.
 	 */
-	/* Retro's pass is made at the view's own lines when it has them (TASK185), with this frame's settings */
-	if (rm_presentation == RM_PRES_RETRO)
-	{
-		const float rc = r_retro_gamma->value;
-
-		rmb_gbuf_set_retro(1, r_retro_filter->value != 0, ((rc >= 0.0f) && (rc < (float)MTL_RETRO_CURVES)) ? (int)rc : 0);
-	}
-
 	if (RM_GB_Choose(fd) != RM_GB_PATH_FORWARD)
 	{
 		R_RenderViewGB(fd, (gl_shadows->value && gl1_stencilshadow->value) ? 1 : 0);

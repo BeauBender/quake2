@@ -277,6 +277,12 @@ R_Upload32(image_t *image, unsigned *data, int width, int height, qboolean mipma
 
 		mtl_retro_tex_quantize((unsigned char *)data, width, height, alpha);
 
+		/*
+		 * Counted by the class the source's alpha chose and quantized in.
+		 * An ARGB4444 image whose alpha all rounds to 15 (254, say) is
+		 * still counted ARGB4444; only the opaque flag below, taken from
+		 * the quantized texels, calls it opaque.
+		 */
 		if (alpha)
 		{
 			retro_counts.argb4444++;
