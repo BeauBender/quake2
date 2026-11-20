@@ -40,6 +40,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rt.h"
 #include "header/rm_rtao.h"
+#include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_rtao.m is written for ARC: compile it with -fobjc-arc"
@@ -50,11 +51,7 @@ extern id<MTLDevice> rmb_device;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
-/* rmb_resource.m */
-id<MTLLibrary> rmb_library(void);
-
 /* rmb_encode.m */
-id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
 
 #define RMB_RTAO_GROUP 8        /* the kernel's threadgroup side */
 #define RMB_RTAO_COUNTS 7       /* traced, occluded, at the floor, up, up and occluded, rays, hits (rm_rtao.metal) */

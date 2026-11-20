@@ -1092,6 +1092,10 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 # alike; REFMETAL_DEPS includes the .d files.
 REFMETAL_DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
 
+# FIX119: a function ref_metal's Objective-C files define without a prototype in a header they include
+# (header/rmb_internal.h) is an error; the C files and every other target keep their flags.
+REFMETAL_M_WARN = -Wmissing-prototypes -Werror=missing-prototypes
+
 $(BUILDDIR)/ref_metal/%.o: %.c
 	@if [ -z $(QUIET) ]; then\
 		echo "===> CC $<";\
@@ -1104,7 +1108,7 @@ $(BUILDDIR)/ref_metal/%.o: %.m
 		echo "===> CC $<";\
 	fi
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c -fobjc-arc $(CFLAGS) $(REFMETAL_DEPFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+	${Q}$(CC) -c -fobjc-arc $(REFMETAL_M_WARN) $(CFLAGS) $(REFMETAL_DEPFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
 
 else
 
