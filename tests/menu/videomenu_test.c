@@ -1083,6 +1083,58 @@ test_ray_tracing_screen(void)
 /* TASK183: the ray-tracing screen under a presentation: Enhanced runs the
    effects, so their switches are greyed "set by the presentation" showing on
    and their tuning rows stay live; r_rt_ao is never written. Mode 0 is as before. */
+/* TASK197 (P8): under Retro the Ray tracing and Tuning screens grey every row the mode reads as off,
+   "set by the presentation", and write no cvar; stock and Enhanced leave the scaler's row live */
+static void
+test_screens_under_retro(void)
+{
+	static const char *const sw[] = { "shadows", "sun", "ambient occlusion", "water reflections", "gun shadow" };
+	static const char *const sl[] = { "sun floor", "sun scale", "AO range", "AO minimum", "AO scale",
+		"water reflect", "water ripple" };
+	static const char *const tu[] = { "scaler", "sun elevation", "sun azimuth", "AO rays", "water hits" };
+
+	SetCv("r_presentation", "2");
+	SetCv("r_metalfx", "2");
+	OpenRT("1");
+	SetCv("r_rt_ao", "1");
+	for (size_t i = 0; i < sizeof(sw) / sizeof(sw[0]); i++)
+	{
+		const menucommon_s *c = RTItem(sw[i]);
+
+		CHECK(RTGreyed(sw[i]) && c->statusbar && !strcmp(c->statusbar, "set by the presentation") &&
+			((menulist_s *)c)->curvalue == 0, "%s under Retro: greyed %d, %s", sw[i], RTGreyed(sw[i]),
+			c->statusbar ? c->statusbar : "(none)");
+	}
+	for (size_t i = 0; i < sizeof(sl) / sizeof(sl[0]); i++)
+	{
+		CHECK(RTGreyed(sl[i]) && !strcmp(RTItem(sl[i])->statusbar, "set by the presentation"),
+			"%s under Retro says %s", sl[i], RTItem(sl[i])->statusbar);
+	}
+	CHECK(!strcmp(Str("r_rt_ao"), "1") && !strcmp(Str("r_metalfx"), "2"), "Retro wrote a cvar: ao %s, fx %s",
+		Str("r_rt_ao"), Str("r_metalfx"));
+
+	/* the tuning screen: the scaler and the effects' rows greyed, the others live */
+	RTItem("tuning...");
+	Menu_SelectItem(rt_menu);
+	rt_menu = menu;
+	for (size_t i = 0; i < sizeof(tu) / sizeof(tu[0]); i++)
+	{
+		CHECK(RTGreyed(tu[i]) && !strcmp(RTItem(tu[i])->statusbar, "set by the presentation"),
+			"%s on the tuning screen under Retro: greyed %d", tu[i], RTGreyed(tu[i]));
+	}
+	CHECK(!RTGreyed("flat light"), "flat light greyed under Retro");
+
+	/* the mode before and after: stock leaves the scaler live */
+	SetCv("r_presentation", "0");
+	OpenRT("1");
+	RTItem("tuning...");
+	Menu_SelectItem(rt_menu);
+	rt_menu = menu;
+	CHECK(!RTGreyed("scaler"), "scaler greyed at mode 0");
+	SetCv("r_metalfx", "0");
+	SetCv("r_rt_ao", "0");
+}
+
 static void
 test_rt_screen_under_presentation(void)
 {
@@ -1546,6 +1598,7 @@ main(void)
 	test_ray_tracing_screen();
 	test_presentation_item();
 	test_rt_screen_under_presentation();
+	test_screens_under_retro();
 	test_tuning_screen();
 	test_hdr_items();
 	test_colorspace_choice_is_pending();
