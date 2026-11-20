@@ -236,6 +236,9 @@ int VidRules_RTOverridden(int i, const char *renderer, int available, float pres
  * scaler and the rows of an effect (under modes 0 and 1: never).
  */
 int VidRules_TuneOverridden(int i, const char *renderer, float presentation);
+
+/* TASK197: whether Retro reads r_metalfx as 0, so the main menu's MetalFX scaler and scale items are greyed "set by the presentation" */
+int VidRules_MetalFXOverridden(const char *renderer, float presentation);
 int VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user);
 vidrule_t VidRules_RTRow(int i, const char *renderer, int available, float presentation, float effect_user);
 

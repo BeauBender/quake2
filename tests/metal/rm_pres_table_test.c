@@ -60,7 +60,7 @@ main(int argc, char **argv)
 		if (rm_pres_value(RM_PRES_STOCK, argv[i], 99.0f) != 99.0f
 			|| rm_pres_value(RM_PRES_RETRO, argv[i], 99.0f) != (retro_off(argv[i]) ? 0.0f : 99.0f))
 		{
-			printf("FAIL: %s is decided outside enhanced\n", argv[i]);
+			printf("FAIL: %s is not the user's under stock, or not Retro's off-or-user value\n", argv[i]);
 			failures++;
 		}
 	}

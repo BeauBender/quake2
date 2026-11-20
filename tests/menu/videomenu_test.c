@@ -1080,9 +1080,6 @@ test_ray_tracing_screen(void)
 	}
 }
 
-/* TASK183: the ray-tracing screen under a presentation: Enhanced runs the
-   effects, so their switches are greyed "set by the presentation" showing on
-   and their tuning rows stay live; r_rt_ao is never written. Mode 0 is as before. */
 /* TASK197 (P8): under Retro the Ray tracing and Tuning screens grey every row the mode reads as off,
    "set by the presentation", and write no cvar; stock and Enhanced leave the scaler's row live */
 static void
@@ -1123,6 +1120,34 @@ test_screens_under_retro(void)
 			"%s on the tuning screen under Retro: greyed %d", tu[i], RTGreyed(tu[i]));
 	}
 	CHECK(!RTGreyed("flat light"), "flat light greyed under Retro");
+	CHECK(((menulist_s *)RTItem("scaler"))->curvalue == 0, "I1: scaler row under Retro shows %d, the renderer reads 0",
+		((menulist_s *)RTItem("scaler"))->curvalue);
+
+	/* N3: reset to defaults under Retro writes no row greyed "set by the presentation" */
+	SetCv("r_presentation", "2");
+	OpenRT("1");
+	SetCv("r_rt_ao_range", "512");
+	SetCv("r_rt_sunfloor", "0.9");
+	RTItem("reset to defaults");
+	Menu_SelectItem(rt_menu);
+	CHECK(!strcmp(Str("r_rt_ao_range"), "512") && !strcmp(Str("r_rt_sunfloor"), "0.9"),
+		"N3: reset under Retro wrote a greyed row: range %s, floor %s", Str("r_rt_ao_range"), Str("r_rt_sunfloor"));
+
+	/* N2: the main menu's MetalFX items are greyed under Retro and Apply writes no r_metalfx */
+	SetCv("r_metalfx", "2");
+	Open("metal", "15");
+	menu = main_menu;
+	CHECK(Greyed("MetalFX scaler") && Item("MetalFX scaler")->statusbar &&
+		!strcmp(Item("MetalFX scaler")->statusbar, "set by the presentation") && Greyed("MetalFX scale"),
+		"N2: the MetalFX items under Retro: scaler greyed %d, scale greyed %d", Greyed("MetalFX scaler"),
+		Greyed("MetalFX scale"));
+	{
+		const int w = Writes("r_metalfx");
+
+		Apply();
+		CHECK(Writes("r_metalfx") == w && !strcmp(Str("r_metalfx"), "2"), "N2: Apply wrote r_metalfx under Retro: %s",
+			Str("r_metalfx"));
+	}
 
 	/* the mode before and after: stock leaves the scaler live */
 	SetCv("r_presentation", "0");
@@ -1135,6 +1160,9 @@ test_screens_under_retro(void)
 	SetCv("r_rt_ao", "0");
 }
 
+/* TASK183: the ray-tracing screen under a presentation: Enhanced runs the
+   effects, so their switches are greyed "set by the presentation" showing on
+   and their tuning rows stay live; r_rt_ao is never written. Mode 0 is as before. */
 static void
 test_rt_screen_under_presentation(void)
 {

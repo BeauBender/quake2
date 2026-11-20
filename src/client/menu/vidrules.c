@@ -639,6 +639,13 @@ VidRules_TuneOverridden(int i, const char *renderer, float presentation)
 		(!strcmp(c->cvar, "r_metalfx") || (c->effect >= 0));
 }
 
+/* TASK197: whether Retro reads r_metalfx as 0, so the MetalFX scaler and scale items are not the user's to set */
+int
+VidRules_MetalFXOverridden(const char *renderer, float presentation)
+{
+	return RTRetroInForce(renderer, presentation);
+}
+
 /* TASK183: the names in the order of r_presentation's values, never renumbered */
 static const char *const pres_names[VIDPRES_COUNT + 1] = { "Stock", "Enhanced", "Retro", "Ray traced", NULL };
 

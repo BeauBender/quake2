@@ -117,3 +117,16 @@ the screen unlocked), and the `retro-filter` frame 12 question above.
 Three runs of the heavy lock were used, one over the two the brief allowed: the second failed at once (the
 build was out of date after a menu change, so `pins.sh record` refused), and the third reran what it was meant to
 do and added the Retro base build. The artifacts are in the TASK197 folder of the artifacts store; no frame was viewed.
+
+## Review round 1 (menu)
+
+- I1: the Tuning screen's scaler row shows `r_metalfx` as the renderer reads it under Retro (0), not the user's
+  value. Red: `videomenu_test.c:1124 ... I1: scaler row under Retro shows 2, the renderer reads 0`; green after
+  `TuneMenu_Values` shows `TuneIndex(c, 0)` for an overridden `r_metalfx` row.
+- N2: the main video menu's "MetalFX scaler" and "MetalFX scale" items are greyed "set by the presentation" under
+  Retro (`SetRule` in `videomenu.c` asks the new `VidRules_MetalFXOverridden`, so `VidRules_Item`'s signature is
+  unchanged) and Apply skips a greyed item. Red: `videomenu_test.c:1143 ... scaler greyed 0, scale greyed 0`.
+- N3: "reset to defaults" under Retro skips every row greyed "set by the presentation", tuning rows included.
+  Red: `videomenu_test.c:1134 ... reset under Retro wrote a greyed row: range 128, floor 0.5`.
+- N4 (not fixed, predates this card): the menu reads `r_presentation` live, while the renderer latches it at
+  `RI_Init` or `vid_restart`, so the Retro greying shows before Apply while the renderer still runs the old mode.
