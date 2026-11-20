@@ -62,6 +62,8 @@ byte cmd_text_buf[32768];
 /* one more than cmd_text_buf for the terminator: Cbuf_InsertText can
    fill cmd_text_buf to the last byte (FIX148) */
 char defer_text_buf[sizeof(cmd_text_buf) + 1];
+YQ2_STATIC_ASSERT(sizeof(defer_text_buf) > sizeof(cmd_text_buf),
+		"Cbuf_CopyToDefer writes a terminator at defer_text_buf[cmd_text.cursize]");
 
 /*
  * Where each byte of cmd_text_buf and defer_text_buf came from (FIX113):
