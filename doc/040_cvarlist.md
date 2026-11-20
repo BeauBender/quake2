@@ -1032,9 +1032,17 @@ marked `(n/a)` and skipped.
   quantized to RGB565 (5, 6 and 5 bits) with a 4 x 4 ordered dither,
   optionally box-filtered (`r_retro_filter`), through one gamma curve
   on top of `vid_gamma` (`r_retro_gamma`); the 2D layer stays stock and
-  no fog is drawn. It needs no ray tracing and runs on every device; its
-  textures and its low-resolution view are later work. `3` (*Ray
-  traced*) is reserved for later work. Retro and Ray traced are greyed in
+  no fog is drawn. The textures are uploaded as such a board stored
+  them: opaque ones in RGB565, ones with alpha in ARGB4444, both
+  dithered, in the usual 8-bit textures, and no texture is larger than
+  256 x 256 (a larger one is halved until it fits). The textures are
+  sampled with bilinear magnification and the nearest mip level, with no
+  anisotropy, in place of `gl_texturemode` and `r_anisotropic`, which keep
+  their values. A 3D view taller than 480 lines is drawn at 480 lines
+  and the window's aspect, quantized there, and enlarged to its
+  rectangle with a bilinear blit; no MetalFX scaler runs. The pictures
+  of the 2D layer are not changed. It needs no ray tracing and runs on
+  every device. `3` (*Ray traced*) is reserved for later work. Retro and Ray traced are greyed in
   the menu "awaiting review" until their look is accepted, and work from
   the console; the values are never renumbered. Read at start-up and at
   `vid_restart`, which say which presentation runs in one line
