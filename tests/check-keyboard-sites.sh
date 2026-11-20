@@ -59,6 +59,9 @@ flat() {
 					i++
 					if (d == q) break
 				}
+			} else if (substr(line, i, 2) == "//") {
+				# a line comment: the rest of the line goes, before any /* in it
+				i = n + 1
 			} else if (substr(line, i, 2) == "/*") {
 				out = out " "; incom = 1; i += 2
 			} else {
@@ -134,8 +137,9 @@ check() { # file: prints a line per broken rule, returns 1 if any
 
 	for fn in Key_Bind_f Key_Unbind_f; do
 		b=$(body "$f" "$fn")
-		if ! printf '%s' "$b" | grep -qE 'if ?\( ?\(? ?b ?< ?0 ?\)? ?\|\| ?\(? ?b ?>= ?K_LAST ?\)? ?\) ?\{[^}]*return ?; ?\}'; then
-			echo "check-keyboard-sites: $fn does not refuse a key number below 0 or at K_LAST and above, and return"
+		# the block is one Com_Printf statement, then an unconditional return;
+		if ! printf '%s' "$b" | grep -qE 'if ?\( ?\(? ?b ?< ?0 ?\)? ?\|\| ?\(? ?b ?>= ?K_LAST ?\)? ?\) ?\{ ?Com_Printf ?\([^;{}]*\) ?; ?return ?; ?\}'; then
+			echo "check-keyboard-sites: $fn does not refuse a key number below 0 or at K_LAST and above with one Com_Printf and an unconditional return"
 			bad=1
 		fi
 	done
@@ -189,6 +193,12 @@ mutant bind-no-low-bound "/^Key_Bind_f/,/^}/s/$bounds/if (b >= K_LAST)/"
 mutant bind-no-high-bound "/^Key_Bind_f/,/^}/s/$bounds/if (b < 0)/"
 mutant unbind-no-low-bound "/^Key_Unbind_f/,/^}/s/$bounds/if (b >= K_LAST)/"
 mutant unbind-no-high-bound "/^Key_Unbind_f/,/^}/s/$bounds/if (b < 0)/"
+mutant bind-dead-return-0 "/^Key_Bind_f/,/^}/{/isn't a valid key/{n;s/return *;/if (0) return;/;};}"
+mutant unbind-dead-return-0 "/^Key_Unbind_f/,/^}/{/isn't a valid key/{n;s/return *;/if (0) return;/;};}"
+mutant bind-dead-return-b "/^Key_Bind_f/,/^}/{/isn't a valid key/{n;s/return *;/if (b == -5) return;/;};}"
+mutant unbind-dead-return-b "/^Key_Unbind_f/,/^}/{/isn't a valid key/{n;s/return *;/if (b == -5) return;/;};}"
+mutant hidden-by-line-comment 's/Key_AddBindingText(key, kb);/Key_AddBindingText(key, kb); \/\/ see \/*\
+\tCbuf_AddText(keybindings[key]);/'
 mutant bind-no-return "/^Key_Bind_f/,/^}/{/isn't a valid key/{n;s/return *;/;/;};}"
 mutant unbind-no-return "/^Key_Unbind_f/,/^}/{/isn't a valid key/{n;s/return *;/;/;};}"
 mutant press-key-zero 's/Key_AddBindingText(key, kb);/Key_AddBindingText(0, kb);/'
@@ -204,4 +214,8 @@ fi
 if [ "$fail" != 0 ]; then
 	exit 1
 fi
-echo "check-keyboard-sites: ok, $m mutants refused"
+if [ -z "${1:-}" ]; then
+	echo "check-keyboard-sites: ok, $m mutants refused"
+else
+	echo "check-keyboard-sites: ok, rules only"
+fi
