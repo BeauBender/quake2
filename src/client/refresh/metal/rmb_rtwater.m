@@ -1064,3 +1064,41 @@ rmb_rtw_view_end(void)
 {
 	traced = forward = shown = marked = 0;
 }
+
+/* ---- TASK179: the effect table's rows (rm_rtfx.c) ---------------------------------- */
+
+void
+rmb_rtw_fx_mark(rmb_rtfx_io_t *io)
+{
+	rmb_rtw_mark(io->raster, io->surf);
+}
+
+/* the reflections, from the resolve's lit result; their blend over the opaque water in a pass of its own */
+void
+rmb_rtw_fx_post(rmb_rtfx_io_t *io)
+{
+	if (rmb_rtw_trace(io->target, io->depth, io->normal, io->material) && io->open && io->open(io))
+	{
+		rmb_rtw_blend(io->enc, io->material);
+	}
+}
+
+int
+rmb_rtw_fx_forward(rmb_rtfx_io_t *io)
+{
+	id<MTLRenderPipelineState> p = rmb_rtw_forward_pipe();
+
+	if (!p)
+	{
+		return 0;
+	}
+
+	io->pipe = p;
+	return 1;
+}
+
+void
+rmb_rtw_fx_bind(rmb_rtfx_io_t *io)
+{
+	rmb_rtw_bind_forward(io->enc);
+}

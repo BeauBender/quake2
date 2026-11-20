@@ -573,3 +573,18 @@ rmb_rts_resolve(id<MTLRenderCommandEncoder> enc, const void *resolve, size_t res
 	rmb_counts.draws++;
 	return 1;
 }
+
+/* ---- TASK179: the effect table's rows (rm_rtfx.c) ---------------------------------- */
+
+void
+rmb_rts_fx_trace(rmb_rtfx_io_t *io)
+{
+	rmb_rts_trace(io->depth, io->normal, io->material, io->surf ? io->surface : nil);
+}
+
+int
+rmb_rts_fx_resolve(rmb_rtfx_io_t *io)
+{
+	return rmb_rts_resolve(io->enc, io->resolve, io->resolve_len, io->albedo, io->light, io->material, io->depth,
+			io->normal);
+}

@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "header/rm_rtgate.h"
+#include "header/rm_rtfx.h"
 
 #define RTG_FAMILY_FIRST 1
 #define RTG_FAMILY_LAST 9   /* rmb_caps_t.families: apple1 to apple9 */
@@ -156,73 +157,69 @@ rm_rtg_reset_format(const char *name, const rm_rtg_t *g, char *buf, size_t len)
 }
 
 /*
- * Every r_rt_* cvar of ref_metal, sorted by name. An effect switch (1)
- * turns on a pass that traces rays, which a device without ray tracing
- * cannot run: it is forced to 0 there, so it reads what the picture shows.
- * A setting (0) is left as it is: it tunes or views an effect and does
+ * Every r_rt_* cvar of ref_metal, sorted by name. An effect switch (the
+ * switch of a row of the effect table, rm_rtfx_is_switch: TASK179 keeps
+ * the one list there) turns on a pass that traces rays, which a device
+ * without ray tracing cannot run: it is forced to 0 there, so it reads
+ * what the picture shows. Every other name is a setting, left as it
+ * is: it tunes or views an effect and does
  * nothing while the effect is off, or it chooses a raster path that every
  * Metal GPU runs. RT11's r_rt_scale, when it lands, is a setting (it reads
  * 1 there, which RT11 does).
  */
-typedef struct
-{
-	const char *name;
-	int effect;
-} rtg_cvar_t;
-
-static const rtg_cvar_t rtg_cvars[] = {
+static const char *const rtg_cvars[] = {
 	/* TASK195's A/B side: an overlay of the tuning settings' values, which turns on no pass itself */
-	{ "r_rt_ab", 0 },
+	"r_rt_ab",
 	/* RT5's ambient occlusion pass (TASK57): its rays are what it draws */
-	{ "r_rt_ao", 1 },
+	"r_rt_ao",
 	/* the AO's floor, ray length, rays, trace size and noise step: read only while r_rt_ao runs */
-	{ "r_rt_ao_min", 0 },
-	{ "r_rt_ao_range", 0 },
-	{ "r_rt_ao_rays", 0 },
-	{ "r_rt_ao_scale", 0 },
-	{ "r_rt_ao_seed", 0 },
+	"r_rt_ao_min",
+	"r_rt_ao_range",
+	"r_rt_ao_rays",
+	"r_rt_ao_scale",
+	"r_rt_ao_seed",
 	/* the AO's development view: drawn only while the AO pass runs (RM_RTAO_Show) */
-	{ "r_rt_ao_show", 0 },
+	"r_rt_ao_show",
 	/* TASK194's read-only report of the gate's path for the menu: the renderer sets it, it traces nothing */
-	{ "r_rt_available", 0 },
+	"r_rt_available",
 	/* TASK173's preview grey: it replaces a lightmap sample on the G-buffer raster path, which every
 	   Metal GPU runs, and traces nothing itself; left alone, it does nothing where the path is off */
-	{ "r_rt_flatlight", 0 },
+	"r_rt_flatlight",
 	/* RT2's G-buffer (TASK54): a raster path every Metal GPU runs, built and pinned on the VM; the
 	   picture the same within one level, and no ray traced */
-	{ "r_rt_gbuffer", 0 },
+	"r_rt_gbuffer",
 	/* the G-buffer's size, its images' view, the view's jitter: the raster path's, no ray traced */
-	{ "r_rt_gbuffer_scale", 0 },
-	{ "r_rt_gbuffer_show", 0 },
+	"r_rt_gbuffer_scale",
+	"r_rt_gbuffer_show",
 	/* whether the view weapon enters the ray-traced scene, which no device without ray tracing builds */
-	{ "r_rt_gunshadow", 0 },
-	{ "r_rt_jitter_x", 0 },
-	{ "r_rt_jitter_y", 0 },
+	"r_rt_gunshadow",
+	"r_rt_jitter_x",
+	"r_rt_jitter_y",
 	/* RT2's depth and motion on the raster path (an upscaler's input), on any Metal GPU */
-	{ "r_rt_motion", 0 },
+	"r_rt_motion",
 	/* a check of the motion images, the raster path's */
-	{ "r_rt_motion_test", 0 },
+	"r_rt_motion_test",
 	/* RT3's dynamic-light shadows (TASK55): a ray each light and pixel */
-	{ "r_rt_shadows", 1 },
+	"r_rt_shadows",
 	/* the shadows' development view: drawn only while the shadow pass runs (RM_RTS_Show) */
-	{ "r_rt_shadows_show", 0 },
+	"r_rt_shadows_show",
 	/* the structures' report: draws nothing, and without ray tracing builds nothing and says so once */
-	{ "r_rt_stats", 0 },
+	"r_rt_stats",
 	/* RT4's sun and sky shadow (TASK56): a ray each pixel toward the sun */
-	{ "r_rt_sun", 1 },
+	"r_rt_sun",
 	/* the sun's direction, development view, floor and strength: read only while r_rt_sun runs
 	   (RM_RTSun_Show needs sun_active) */
-	{ "r_rt_sun_angles", 0 },
-	{ "r_rt_sun_show", 0 },
-	{ "r_rt_sunfloor", 0 },
-	{ "r_rt_sunscale", 0 },
+	"r_rt_sun_angles",
+	"r_rt_sun_show",
+	"r_rt_sunfloor",
+	"r_rt_sunscale",
 	/* RT6's water reflections (TASK58): a ray each water pixel */
-	{ "r_rt_water", 1 },
+	"r_rt_water",
 	/* the reflections' hit shading, tilt, blend and development view: read only while r_rt_water runs */
-	{ "r_rt_water_hits", 0 },
-	{ "r_rt_water_normal", 0 },
-	{ "r_rt_water_reflect", 0 },
-	{ "r_rt_water_show", 0 },
+	"r_rt_water_hits",
+	"r_rt_water_normal",
+	"r_rt_water_reflect",
+	"r_rt_water_show",
 };
 
 #define RTG_NCVARS ((int)(sizeof(rtg_cvars) / sizeof(rtg_cvars[0])))
@@ -243,10 +240,10 @@ rm_rtg_cvar(int i, int *effect)
 
 	if (effect)
 	{
-		*effect = rtg_cvars[i].effect;
+		*effect = rm_rtfx_is_switch(rtg_cvars[i]);
 	}
 
-	return rtg_cvars[i].name;
+	return rtg_cvars[i];
 }
 
 int
@@ -256,7 +253,7 @@ rm_rtg_find(const char *name)
 
 	for (i = 0; name && (i < RTG_NCVARS); i++)
 	{
-		if (!strcmp(rtg_cvars[i].name, name))
+		if (!strcmp(rtg_cvars[i], name))
 		{
 			return i;
 		}
@@ -272,9 +269,9 @@ rm_rtg_effect(int k)
 
 	for (i = 0; (k >= 0) && (i < RTG_NCVARS); i++)
 	{
-		if (rtg_cvars[i].effect && (k-- == 0))
+		if (rm_rtfx_is_switch(rtg_cvars[i]) && (k-- == 0))
 		{
-			return rtg_cvars[i].name;
+			return rtg_cvars[i];
 		}
 	}
 

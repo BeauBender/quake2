@@ -543,3 +543,23 @@ rmb_rtao_show(id<MTLRenderCommandEncoder> enc, id<MTLTexture> material)
 	rmb_counts.draws++;
 	return 1;
 }
+
+/* ---- TASK179: the effect table's rows (rm_rtfx.c) ---------------------------------- */
+
+/* the AO scales the raster's lightmap term: its light, when it traced, is the one the resolve reads */
+void
+rmb_rtao_fx_trace(rmb_rtfx_io_t *io)
+{
+	id<MTLTexture> lt = rmb_rtao_trace(io->depth, io->normal, io->material, io->lightmap);
+
+	if (lt)
+	{
+		io->light = lt;
+	}
+}
+
+void
+rmb_rtao_fx_show(rmb_rtfx_io_t *io)
+{
+	rmb_rtao_show(io->enc, io->material);
+}

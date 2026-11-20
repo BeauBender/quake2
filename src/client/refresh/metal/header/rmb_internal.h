@@ -16,6 +16,7 @@
 #define RMB_INTERNAL_H
 
 #include "rmb.h"
+#include "rm_rtfx.h"
 
 #ifdef __OBJC__
 
@@ -75,6 +76,27 @@ int rmb_gbuf_bind_world(id<MTLRenderCommandEncoder> enc, int dynamic, unsigned n
 int rmb_gbuf_bind_alias(id<MTLRenderCommandEncoder> enc, int pipe, const rm_avert_t *v, unsigned nv);
 void rmb_gbuf_frame_reset(void);
 void rmb_gbuf_release(void);
+
+/*
+ * TASK179: what rmb_gbuf.m hands the ray-traced effects through the
+ * table's walks (header/rm_rtfx.h, which sees only the name). Each field
+ * is set for the walks that read it; the rest are nil or 0.
+ */
+struct rmb_rtfx_io_s
+{
+	id<MTLRenderCommandEncoder> raster;   /* mark: the raster's encoder, before its pass ends */
+	int surf;                             /* mark, trace: the raster has the surface attachment (TASK131) */
+	id<MTLTexture> depth, normal, material, albedo;   /* the G-buffer's attachments */
+	id<MTLTexture> surface;               /* trace: the surface attachment, nil without one */
+	id<MTLTexture> lightmap;              /* the raster's light attachment */
+	id<MTLTexture> light;                 /* the light the resolve reads: lightmap, or a trace's in its place */
+	id<MTLTexture> target;                /* post: the view's colour target, the resolve's lit result in it */
+	id<MTLRenderCommandEncoder> enc;      /* resolve, show: the resolve's pass; bind: the forward pass; post: open's */
+	const void *resolve;                  /* resolve: the stock resolve's uniforms */
+	size_t resolve_len;
+	int (*open)(rmb_rtfx_io_t *io);       /* post: a pass over target into enc; 0 when none opened */
+	id<MTLRenderPipelineState> pipe;      /* forward: the pipeline put there */
+};
 
 /* ---- rmb_rtwater.m (TASK162): the water's marks, the raster's last draw at r_rt_water_hits 1 ---- */
 

@@ -39,10 +39,9 @@
 
 #include "header/rmb.h"
 #include "header/rm_gbuf.h"
-#include "header/rm_rtshadow.h"
-#include "header/rm_rtao.h"
-#include "header/rm_rtsun.h"
-#include "header/rm_rtwater.h"
+#include "header/rm_rtfx.h"
+#include "common/mtl_shader_math.h"
+#include "common/mtl_rts_math.h"   /* mtl_rts_gb_tag: the surface attachment's names (TASK131) */
 #include "header/rm_metalfx.h"
 #include "header/rmb_internal.h"
 
@@ -82,6 +81,9 @@ static const rm_gb_avx_t *alias_x;
 static unsigned alias_nx;
 static const float (*dyn_n)[4];
 static unsigned dyn_nn;
+
+/* the forward pass's query of the effects (rm_rtfx_forward, rm_rtfx_bind): only its pipe and enc are used, each cleared after */
+static rmb_rtfx_io_t fx_fwd;
 
 static void
 rmb_gbuf_tex(__strong id<MTLTexture> *slot, id<MTLTexture> t)
@@ -742,6 +744,17 @@ rmb_gbuf_reopen(void)
 	return ok;
 }
 
+/* the pass an effect's post walk asks for (rm_rtfx_post): over the view's colour target, loaded */
+static int
+rmb_gbuf_fx_open(rmb_rtfx_io_t *io)
+{
+	MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+
+	rmb_gbuf_att_target(rp);
+	io->enc = rmb_frame_open_pass(rp, 0, 0, 0);
+	return io->enc != nil;
+}
+
 int
 rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 {
@@ -754,29 +767,39 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 	{
 		MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
 		id<MTLRenderCommandEncoder> enc;
-		id<MTLTexture> lt, sl;
+		id<MTLTexture> lt;
+		rmb_rtfx_io_t io = { 0 };
+
+		io.raster = raster_enc;
+		io.surf = view_surf;
+		io.depth = t_depth;
+		io.normal = t_normal;
+		io.material = t_material;
+		io.albedo = t_albedo;
+		io.surface = t_surface;
+		io.lightmap = t_light;
+		io.light = t_light;
+		io.resolve = r;
+		io.resolve_len = sizeof(*r);
+		io.open = rmb_gbuf_fx_open;
 
 		/*
-		 * RT6 (TASK162): at r_rt_water_hits 1, the raster's last draw marks
-		 * the pixels with water in front of its depth, in the normal's alpha
-		 * (its "has a normal" kept for every reader below)
+		 * The ray-traced effects in the table's order (rm_rtfx.c, TASK179).
+		 * Their marks first, on the raster's last draw (RT6, TASK162: at
+		 * r_rt_water_hits 1 the pixels with water in front of its depth, in
+		 * the normal's alpha, its "has a normal" kept for every reader below)
 		 */
-		rmb_rtw_mark(raster_enc, view_surf);
-		raster_enc = nil;   /* FIX98: the mark was its only user; nothing may encode on it after the pass ends */
-
-		/* RT3 (TASK55): the shadow rays between the raster and the resolve, when the view asked for them */
-		rmb_rts_trace(t_depth, t_normal, t_material, view_surf ? t_surface : nil);
-
-		/* RT5 (TASK57): the AO rays; the resolve then reads lightmap x AO in place of the light attachment */
-		lt = rmb_rtao_trace(t_depth, t_normal, t_material, t_light);
-		lt = lt ? lt : t_light;
+		rm_rtfx_mark(&io);
+		io.raster = nil;
+		raster_enc = nil;   /* FIX98: the marks were its only users; nothing may encode on it after the pass ends */
 
 		/*
-		 * RT4 (TASK56): the sun's term added to that light, after the AO (which
-		 * scales the lightmap term only); its floor gate reads the raster's lightmap
+		 * Their rays between the raster and the resolve, each that replaces
+		 * the light the resolve reads doing so in io (RT5's lightmap x AO,
+		 * then RT4's sun term added to that)
 		 */
-		sl = rmb_rtsun_trace(t_depth, t_normal, t_material, t_light, lt);
-		lt = sl ? sl : lt;
+		rm_rtfx_trace(&io);
+		lt = io.light;
 		rmb_gbuf_att_target(rp);
 		enc = rmb_frame_open_pass(rp, 0, 0, 0);
 
@@ -788,8 +811,10 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 
 		pass_kind = RMB_GB_PASS_OTHER;
 
-		/* the resolve that adds the shadowed dynamic lights where they were traced, else the stock one */
-		if (!rmb_rts_resolve(enc, r, sizeof(*r), t_albedo, lt, t_material, t_depth, t_normal))
+		/* an effect's resolve (RT3's adds the shadowed dynamic lights where they were traced), else the stock one */
+		io.enc = enc;
+
+		if (!rm_rtfx_resolve(&io))
 		{
 			if (rmb_fmt_bind(enc, resolve_pipe))
 			{
@@ -802,30 +827,17 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 			}
 		}
 
-		/* r_rt_ao_show's view over the resolve, when the frame traced the AO */
-		rmb_rtao_show(enc, t_material);
-
-		/* r_rt_sun_show's view over the resolve, when the frame traced the sun */
-		rmb_rtsun_show(enc);
+		/* the effects' development views over the resolve (r_rt_ao_show, r_rt_sun_show), when the frame traced them */
+		rm_rtfx_show(&io);
 
 		/*
-		 * RT6 (TASK58): the water reflections, last, from the resolve's lit
-		 * result; their blend over the opaque water in a pass of its own (the
-		 * translucent water takes its own in the forward pass's draw)
+		 * The effects that work from the resolve's lit result, last (RT6,
+		 * TASK58: the water reflections, their blend over the opaque water in
+		 * a pass of its own, opened by rmb_gbuf_fx_open; the translucent water
+		 * takes its own in the forward pass's draw)
 		 */
-		if (rmb_rtw_trace(rmb_gbuf_target(), t_depth, t_normal, t_material))
-		{
-			MTLRenderPassDescriptor *wp = [MTLRenderPassDescriptor renderPassDescriptor];
-			id<MTLRenderCommandEncoder> we;
-
-			rmb_gbuf_att_target(wp);
-			we = rmb_frame_open_pass(wp, 0, 0, 0);
-
-			if (we)
-			{
-				rmb_rtw_blend(we, t_material);
-			}
-		}
+		io.target = rmb_gbuf_target();
+		rm_rtfx_post(&io);
 
 		/* the forward pass over the resolved image: its depth and motion kept, the stencil cleared as the stock pass's */
 		return rmb_gbuf_open_motion(0, 0, 1);
@@ -837,8 +849,8 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 {
 	id<MTLTexture> color = rmb_frame_color();
 
-	/* RT6: the next forward pass's translucent draws are stock, on every path out (a pass that failed to open too) */
-	rmb_rtw_view_end();
+	/* the effects' view ended (RT6: the next forward pass's translucent draws are stock), on every path out (a pass that failed to open too) */
+	rm_rtfx_view_end();
 
 	if (pass_kind == RMB_GB_PASS_NONE)
 	{
@@ -947,27 +959,25 @@ rmb_gbuf_pass_kind(void)
 id<MTLRenderPipelineState>
 rmb_gbuf_pipe3d(int pipe)
 {
-	if ((pipe < 0) || (pipe >= RM_PIPE_3D_COUNT))
-	{
-		return nil;
-	}
+	id<MTLRenderPipelineState> p;
 
-	switch (pass_kind)
+	/* the rule is rm_rtfx_pipe's (host-tested); an effect's forward pipeline comes back in fx_fwd */
+	switch (rm_rtfx_pipe(pass_kind, pipe, view_surf, rm_rtfx_forward, &fx_fwd))
 	{
-		case RMB_GB_PASS_RASTER:
-			return view_surf ? gbs_pipes[pipe] : gb_pipes[pipe];
-		case RMB_GB_PASS_MOTION:
-			/* RT6 (TASK58): a translucent face takes the reflection where it is the water the kernel found */
-			if ((pipe == RM_PIPE_WORLD_TEXC_BLEND) && rmb_rtw_forward_pipe())
-			{
-				return rmb_rtw_forward_pipe();
-			}
-
-			return mv_pipes[pipe];
-		case RMB_GB_PASS_OTHER:
-			return nil;
-		default:
+		case RM_RTFX_PIPE_STOCK:
 			return rmb_pipe3d(pipe);
+		case RM_RTFX_PIPE_RASTER:
+			return gb_pipes[pipe];
+		case RM_RTFX_PIPE_RASTER_SURF:
+			return gbs_pipes[pipe];
+		case RM_RTFX_PIPE_MOTION:
+			return mv_pipes[pipe];
+		case RM_RTFX_PIPE_FORWARD:
+			p = fx_fwd.pipe;
+			fx_fwd.pipe = nil;
+			return p;
+		default:
+			return nil;
 	}
 }
 
@@ -1063,10 +1073,12 @@ rmb_gbuf_bind_motion(id<MTLRenderCommandEncoder> enc, const float *mvp, const rm
 	[enc setVertexBytes:&u length:sizeof(u) atIndex:3];
 	[enc setFragmentBytes:&u length:sizeof(u) atIndex:3];
 
-	/* RT6 (TASK58): what rmb_rtw_forward_pipe's draws read, while the view traced */
+	/* what the effects' forward pipelines read (RT6, TASK58: the reflection's), while the view traced */
 	if (pass_kind == RMB_GB_PASS_MOTION)
 	{
-		rmb_rtw_bind_forward(enc);
+		fx_fwd.enc = enc;
+		rm_rtfx_bind(&fx_fwd);
+		fx_fwd.enc = nil;
 	}
 }
 
@@ -1192,7 +1204,7 @@ void
 rmb_gbuf_frame_reset(void)
 {
 	pass_kind = RMB_GB_PASS_NONE;
-	rmb_rtw_view_end();
+	rm_rtfx_view_end();
 	mv_set = 0;
 	alias_x = NULL;
 	dyn_n = NULL;

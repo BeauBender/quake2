@@ -45,6 +45,7 @@
 #include "header/rm_rtsunscene.h"
 #include "header/rm_rtwaterscene.h"
 #include "header/rm_fxscene.h"
+#include "header/rm_rtfx.h"
 #include "common/mtl_matrix.h"
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
@@ -101,7 +102,7 @@ RM_GB_Choose(const refdef_t *fd)
 	/* a ray-traced effect on (RT3's shadows, RM_RTS_Frame; RT5's AO, RM_RTAO_Frame; RT6's water reflections,
 	   RM_RTW_Frame; RT4's sun, RM_RTSun_Frame, never on a map under 2 % sky) takes the G-buffer;
 	   a MetalFX scaler asks for the motion path (TASK111) */
-	return rm_gb_path(RM_RTS_Active() || RM_RTAO_Active() || RM_RTW_Active() || RM_RTSun_Active(), r_rt_gbuffer->value, RM_FX_WantsMotion() ? 1.0f : r_rt_motion->value,
+	return rm_gb_path(rm_rtfx_active(), r_rt_gbuffer->value, RM_FX_WantsMotion() ? 1.0f : r_rt_motion->value,
 			(fd->rdflags & RDF_NOWORLDMODEL) != 0);
 }
 
