@@ -35,10 +35,12 @@
 -strafe
 -use
 alias
+bind
 bindlist
 centerview
 changing
 clear
+cmd
 cmdlist
 condump
 connect
@@ -64,6 +66,7 @@ heartbeat
 imagelist
 impulse
 inc
+info
 invdrop
 inven
 invnext
@@ -106,6 +109,7 @@ notarget
 packet
 pause
 pingservers
+play
 precache
 prog
 quit
@@ -120,6 +124,7 @@ say_team
 serverinfo
 serverrecord
 serverstop
+set
 setenv
 setmaster
 sizedown
@@ -130,13 +135,16 @@ snd_restart
 soundinfo
 soundlist
 status
+stop
 stopsound
 sv
 timerefresh
+toggle
 togglechat
 toggleconsole
 unbind
 unbindall
+use
 userinfo
 vid_listmodes
 vid_restart
