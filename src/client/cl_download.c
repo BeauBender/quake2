@@ -435,18 +435,21 @@ CL_RequestNextDownload(void)
 	cls.forcePacket = true;
 }
 
+/*
+ * Builds the path a download is written to. Every name goes under
+ * the write directory (FS_Gamedir()), so it is covered by the same
+ * existence check (FS_FileExists) and found by the search path.
+ *
+ * The original id code wrote "players*" names to BASEDIRNAME/players
+ * relative to the working directory, to share skins across mods.
+ * That path is outside the write directory (and outside the
+ * existence check) unless the working directory happens to be the
+ * game directory, so it is not used any more.
+ */
 void
 CL_DownloadFileName(char *dest, int destlen, char *fn)
 {
-	if (strncmp(fn, "players", 7) == 0)
-	{
-		Com_sprintf(dest, destlen, "%s/%s", BASEDIRNAME, fn);
-	}
-
-	else
-	{
-		Com_sprintf(dest, destlen, "%s/%s", FS_Gamedir(), fn);
-	}
+	Com_sprintf(dest, destlen, "%s/%s", FS_Gamedir(), fn);
 }
 
 /*
@@ -728,17 +731,31 @@ CL_ParseDownload(void)
 	{
 		char oldn[MAX_OSPATH];
 		char newn[MAX_OSPATH];
+		FILE *fp;
 
 		fclose(cls.download);
 
 		/* rename the temp file to its final name */
 		CL_DownloadFileName(oldn, sizeof(oldn), cls.downloadtempname);
 		CL_DownloadFileName(newn, sizeof(newn), cls.downloadname);
-		r = Sys_Rename(oldn, newn);
 
-		if (r)
+		/* never replace an existing file */
+		fp = Q_fopen(newn, "rb");
+
+		if (fp)
 		{
-			Com_Printf("failed to rename.\n");
+			fclose(fp);
+			Com_Printf("%s already exists, not replacing it.\n", cls.downloadname);
+			Sys_Remove(oldn);
+		}
+		else
+		{
+			r = Sys_Rename(oldn, newn);
+
+			if (r)
+			{
+				Com_Printf("failed to rename.\n");
+			}
 		}
 
 		cls.download = NULL;

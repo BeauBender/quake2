@@ -28,6 +28,7 @@
 
 /* Public in cl_download.c; cl_parse.c declares it locally the same way. */
 void CL_ParseDownload(void);
+void CL_DownloadFileName(char *dest, int destlen, char *fn);
 
 static byte netbuf[MAX_MSGLEN];
 
@@ -371,6 +372,100 @@ TEST(download_chunk_size)
 	}
 
 	T_EQ_INT(FS_LoadFile("maps/chunk.tmp", NULL), -1);
+}
+
+/* FIX161: a players/ download is written under the write directory, where
+   the filesystem finds it, not relative to the working directory. */
+TEST(download_players_lands_in_gamedir)
+{
+	void *buf;
+	int len;
+	char path[MAX_OSPATH];
+
+	reset_client();
+	Q_strlcpy(cls.downloadname, "players/f161m/skin.pcx", sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, "players/f161m/skin.tmp", sizeof(cls.downloadtempname));
+	Com_sprintf(path, sizeof(path), "%s/players/f161m/skin.pcx", FS_Gamedir());
+	Sys_Remove(path);
+
+	server_sends(3, 100, "abc", 3);
+	CL_ParseDownload();
+
+	T_CHECK(cls.download == NULL);
+	len = FS_LoadFile("players/f161m/skin.pcx", &buf);
+	T_EQ_INT(len, 3);
+
+	if (len == 3)
+	{
+		T_EQ_MEM(buf, "abc", 3);
+		FS_FreeFile(buf);
+	}
+
+	/* it is the file under the write directory */
+	{
+		FILE *fp = Q_fopen(path, "rb");
+
+		T_CHECK(fp != NULL);
+
+		if (fp)
+		{
+			fclose(fp);
+		}
+	}
+
+	Sys_Remove(path);
+}
+
+/* FIX161: the final rename never replaces an existing file. */
+TEST(download_players_existing_target_kept)
+{
+	char path[MAX_OSPATH];
+	char tmp[MAX_OSPATH];
+	char got[8] = { 0 };
+	FILE *fp;
+
+	reset_client();
+	Q_strlcpy(cls.downloadname, "players/f161k/skin.pcx", sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, "players/f161k/skin.tmp", sizeof(cls.downloadtempname));
+	CL_DownloadFileName(path, sizeof(path), cls.downloadname);
+	CL_DownloadFileName(tmp, sizeof(tmp), cls.downloadtempname);
+	FS_CreatePath(path);
+	fp = Q_fopen(path, "wb");
+	T_CHECK(fp != NULL);
+
+	if (!fp)
+	{
+		return;
+	}
+
+	fwrite("keep", 1, 4, fp);
+	fclose(fp);
+
+	server_sends(3, 100, "bad", 3);
+	t_console_reset();
+	CL_ParseDownload();
+	T_CHECK(cls.download == NULL);
+
+	fp = Q_fopen(path, "rb");
+	T_CHECK(fp != NULL);
+
+	if (fp)
+	{
+		T_EQ_INT((int)fread(got, 1, sizeof(got), fp), 4);
+		T_EQ_MEM(got, "keep", 4);
+		fclose(fp);
+	}
+
+	/* no runt temp file is left behind */
+	fp = Q_fopen(tmp, "rb");
+	T_CHECK(fp == NULL);
+
+	if (fp)
+	{
+		fclose(fp);
+	}
+
+	Sys_Remove(path);
 }
 
 TEST(loadgame_savedir)
