@@ -512,6 +512,18 @@ CL_DownloadFilter(const char *filename)
 		return true;
 	}
 
+	/* A name with no '/' is a file at the top of a game directory, the
+	   only place the filesystem mounts a container from (fs_packtypes)
+	   and the startup configs live. A case-folding volume resolves more
+	   than one spelling to such a file (KELVIN SIGN for the k in a
+	   "pakN.pak"), which the extension rules below compare bytewise and
+	   cannot see. A stock server never sends such a name. */
+	if (!strchr(filename, '/'))
+	{
+		Com_Printf("Refusing to download a file at the top of a game directory: %s\n", filename);
+		return true;
+	}
+
 	for (i = 0; extensions[i]; i++)
 	{
 		if (CL_DownloadHasExtension(filename, extensions[i]))

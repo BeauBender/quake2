@@ -216,7 +216,11 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   `autoexec.cfg`. A name ending in '.pak' is refused as well: the
   filesystem mounts such a container ahead of the loose files of its
   directory, so a `config.cfg` or `autoexec.cfg` inside it would be run
-  the same way. '..' or ':' inside filenames and '/' or '.'
+  the same way. A name with no '/' (a file at the top of a game
+  directory) is refused as well: the filesystem mounts containers only
+  from there, and a case-folding volume resolves more than one spelling
+  to the same file (the KELVIN SIGN for the 'k' in 'pak0.pak'), which the
+  extension rules cannot see. '..' or ':' inside filenames and '/' or '.'
   at the beginning of filenames to prevent downloading files into
   arbitrary directories.
 

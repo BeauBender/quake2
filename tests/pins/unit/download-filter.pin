@@ -15,11 +15,11 @@ maps/..                      refused: Refusing to download a path containing '..
 /etc/passwd                  refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': /etc/passwd
 c:/autoexec.cfg              refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': c:/autoexec.cfg
 maps:stream                  refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': maps:stream
-game.dll                     refused: Refusing to download a path ending in '.dll': game.dll
+game.dll                     refused: Refusing to download a file at the top of a game directory: game.dll
 baseq2/game.so               refused: Refusing to download a path ending in '.so': baseq2/game.so
 lib/libfoo.dylib             refused: Refusing to download a path ending in '.dylib': lib/libfoo.dylib
-thing.lib                    refused: Refusing to download a path ending in '.lib': thing.lib
-archive.a                    refused: Refusing to download a path ending in '.a': archive.a
+thing.lib                    refused: Refusing to download a file at the top of a game directory: thing.lib
+archive.a                    refused: Refusing to download a file at the top of a game directory: archive.a
 models/items/a.ase           sent "download models/items/a.ase" (temp models/items/a.tmp)
 sound/.au/x.wav              sent "download sound/.au/x.wav" (temp sound/.tmp)
-maps\sub\x.bsp               sent "download maps\sub\x.bsp" (temp maps\sub\x.tmp)
+maps\sub\x.bsp               refused: Refusing to download a file at the top of a game directory: maps\sub\x.bsp
