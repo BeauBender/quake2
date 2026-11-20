@@ -30,6 +30,7 @@
 #include "stub_client.h"
 
 extern sizebuf_t cmd_text; /* src/common/cmdparser.c */
+extern cvar_t *qport;      /* src/common/netchan.c */
 
 static byte msgbuf[4096];
 static byte netbuf[4096];
@@ -60,6 +61,17 @@ setup(void)
 	memset(&cls, 0, sizeof(cls));
 	memset(&cl, 0, sizeof(cl));
 	SZ_Init(&cls.netchan.message, netbuf, sizeof(netbuf));
+
+	/* CL_Disconnect sends its goodbye through Netchan_Transmit, which
+	   reads the qport and showpackets cvars. An IP address with no open
+	   socket sends nothing, where the zeroed loopback address would leave
+	   the packets queued for the server tests. */
+	if (!qport)
+	{
+		Netchan_Init();
+	}
+
+	cls.netchan.remote_address.type = NA_IP;
 	cls.state = ca_connected;
 	cls.serverProtocol = PROTOCOL_VERSION;
 	gated_runs = 0;
@@ -171,6 +183,5 @@ TEST(cl_server_alias_text_dropped)
 	stufftext("alias t_srv \"disconnect; t_gated\"\nt_srv\n");
 	drop_frame_then_next();
 	T_EQ_INT(gated_runs, 0);
-	Cbuf_AddText("unalias t_srv\n");
-	Cbuf_Execute();
+	T_EQ_INT(cmd_text.cursize, 0);
 }
