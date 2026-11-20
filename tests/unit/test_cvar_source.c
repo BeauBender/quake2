@@ -443,3 +443,72 @@ TEST(cvar_zrv_writer_skips_marked)
 
 	cs_teardown();
 }
+
+/* FIX168 step 1: a server writes a cvar the player had set. The file
+   keeps the player's earlier value; the player's own later write
+   replaces it. A cvar the server created stays out of the file. */
+TEST(cvar_fix168_keeps_players_earlier_value)
+{
+	char path[MAX_OSPATH];
+	FILE *f;
+
+	cs_setup();
+	player_line("set t_cs20 \"P\" a\n");
+	server_line("set t_cs20 \"V\"\n");
+	server_line("set t_cs21 \"V2\" a\n");
+	T_CHECK(Cvar_ServerWrote("t_cs20"));
+	T_EQ_STR(Cvar_VariableString("t_cs20"), "V");
+
+	Com_sprintf(path, sizeof(path), "%s/config_k.cfg", FS_Gamedir());
+	f = Q_fopen(path, "w");
+	T_REQUIRE(f != NULL);
+	fclose(f);
+	Cvar_WriteVariables(path);
+	T_CHECK(file_has(path, "set t_cs20 \"P\""));
+	T_CHECK(!file_has(path, "\"V\""));
+	T_CHECK(!file_has(path, "set t_cs21 "));
+
+	player_line("set t_cs20 \"Q\"\n");
+	f = Q_fopen(path, "w");
+	T_REQUIRE(f != NULL);
+	fclose(f);
+	Cvar_WriteVariables(path);
+	T_CHECK(file_has(path, "set t_cs20 \"Q\""));
+	T_CHECK(!file_has(path, "\"P\""));
+
+	cs_teardown();
+}
+
+/* FIX168 step 2: a reset to a default a server line created leaves
+   the cvar the server's. */
+TEST(cvar_fix168_reset_to_server_default_stays_marked)
+{
+	char path[MAX_OSPATH];
+	FILE *f;
+
+	cs_setup();
+	server_line("set t_cs22 \"t_cs_probe\" a\n");
+	player_line("set t_cs22 \"W\"\n");
+	T_CHECK(!Cvar_ServerWrote("t_cs22"));
+	player_line("reset t_cs22\n");
+	T_EQ_STR(Cvar_VariableString("t_cs22"), "t_cs_probe");
+	T_CHECK(Cvar_ServerWrote("t_cs22"));
+	player_line("vstr t_cs22\n");
+	T_EQ_INT(probe_runs, 1);
+	T_EQ_INT(probe_allowed, 0);
+
+	Com_sprintf(path, sizeof(path), "%s/config_r.cfg", FS_Gamedir());
+	f = Q_fopen(path, "w");
+	T_REQUIRE(f != NULL);
+	fclose(f);
+	Cvar_WriteVariables(path);
+	T_CHECK(!file_has(path, "t_cs_probe"));
+
+	/* the player writes a different value, then resetall */
+	player_line("set t_cs22 \"W\"\n");
+	T_CHECK(!Cvar_ServerWrote("t_cs22"));
+	player_line("resetall\n");
+	T_CHECK(Cvar_ServerWrote("t_cs22"));
+
+	cs_teardown();
+}
