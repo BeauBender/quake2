@@ -64,8 +64,6 @@ extern id<MTLCommandQueue> rmb_queue;
 extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
-/* rmb_encode.m */
-
 #define RMB_RT_MAX_MAP (1 + 1024)      /* the world and MAX_MAP_MODELS inline models */
 #define RMB_RT_MAX_MODELS 512          /* MAX_MOD_KNOWN */
 #define RMB_RT_POOL (2 * RM_MAX_ENTITIES)
