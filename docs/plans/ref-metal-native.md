@@ -44,6 +44,8 @@ src/client/refresh/metal/
   header/local.h      front-end types and globals; no GL type, no GL header
   header/model.h      model, surface and poly types, with retained-buffer offsets
   header/rmb.h        the back-end API in C: the only door to Metal
+  header/rmb_internal.h  the back-end files' own calls to each other (Objective-C only; FIX119): one prototype each,
+                      included by the defining and the calling rmb_*.m, no hand-written copy
   rm_main.c           GetRefAPI, cvars, Init/Shutdown, RenderFrame, view setup, entity list,
                       the screen blend (R_PolyBlend)                                        (from gl1_main.c)
   rm_sdl.c            window seat: PrepareForWindow, InitContext, drawable size, vsync     (from gl1_sdl.c)
