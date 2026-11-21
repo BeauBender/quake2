@@ -525,7 +525,8 @@ limit" "$out"
     for how in exec same; do
         rm -f "$w/tt-ready"
         if [ $how = exec ]; then
-            bash -c 'trap "exec sleep 20" TERM; : > "$0"; n=0; while [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done' "$w/tt-ready" &
+            # the exec is in the loop, not in the trap: a program exec'd from a trap keeps TERM blocked
+            bash -c 'x=; trap "x=1" TERM; : > "$0"; n=0; while [ $n -lt 200 ]; do [ -z "$x" ] || exec sleep 20; sleep 0.1; n=$((n+1)); done' "$w/tt-ready" &
         else
             bash -c 'c=0; trap "c=\$((c+1)); [ \$c -lt 2 ] || exit 0" TERM; : > "$0"; n=0; while [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done' "$w/tt-ready" &
         fi
@@ -536,7 +537,8 @@ limit" "$out"
         if [ $how = exec ]; then
             [ $tt = 2 ] || ko e2e-lock-term2 "a process that ran another program on the first SIGTERM was not seen changed (status $tt)"
             kill -0 $tp 2>/dev/null || ko e2e-lock-term2 "a second SIGTERM went to a process that had changed since it was read"
-            if kill -0 $tp 2>/dev/null; then kill -TERM $tp 2>/dev/null; fi
+            # PIPE, which the shell prints no job notice for; the sleep ends by itself within 20 s
+            if kill -0 $tp 2>/dev/null; then kill -PIPE $tp 2>/dev/null; fi
         else
             [ $tt = 0 ] || ko e2e-lock-term2 "a process that did not change did not get the second SIGTERM (status $tt)"
             n=0; while kill -0 $tp 2>/dev/null && [ $n -lt 30 ]; do sleep 0.1; n=$((n+1)); done
