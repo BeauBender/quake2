@@ -23,11 +23,14 @@
  * =======================================================================
  */
 
+#include <unistd.h>
+
 #include "test.h"
 #include "../../src/client/header/client.h"
 
 /* Public in cl_download.c; cl_parse.c declares it locally the same way. */
 void CL_ParseDownload(void);
+void CL_DownloadFileName(char *dest, int destlen, char *fn);
 
 static byte netbuf[MAX_MSGLEN];
 
@@ -150,6 +153,10 @@ TEST(download_filter_extension_table)
 		{"pak5.pak", true},
 		{"dir/X.PAK", true},
 		{"x.pak.1", true},
+		/* the temp name of a download, refused: no final name may equal one */
+		{"maps/x.tmp", true},
+		{"maps/x.TMP", true},
+		{"maps/x.tmp.1", true},
 		/* a name at the top of a game directory, refused: the filesystem
 		   mounts containers only from there, and a case-folding volume
 		   spells ".pak" in more ways than a byte comparison sees */
@@ -163,6 +170,7 @@ TEST(download_filter_extension_table)
 		{"players/x/y.pcx", false},
 		{"maps/x.cfgs", false},
 		{"maps/x.paks", false},
+		{"maps/x.tmpl", false},
 		{"cfg/x.wav", false},
 		{"maps/x.cfg.pcx", false},
 		/* the extension text inside a component, accepted */
@@ -395,6 +403,218 @@ TEST(download_chunk_size)
 	}
 
 	T_EQ_INT(FS_LoadFile("maps/chunk.tmp", NULL), -1);
+}
+
+/* FIX161: the players tests run with the working directory set to the
+   suite's scratch directory, so a regression that writes relative to it
+   cannot leave a file in the source tree. */
+static int
+cwd_enter(char *old, size_t len)
+{
+	old[0] = '\0';
+
+	if (!getcwd(old, len))
+	{
+		old[0] = '\0';
+		return 0;
+	}
+
+	return chdir(t_tmpdir()) == 0;
+}
+
+static void
+cwd_leave(const char *old)
+{
+	if (!old[0])
+	{
+		return;
+	}
+
+	if (chdir(old) != 0)
+	{
+		T_CHECK(!"restore the working directory");
+	}
+}
+
+/* FIX161: a players/ download is written under the write directory, where
+   the filesystem finds it, not relative to the working directory. */
+TEST(download_players_lands_in_gamedir)
+{
+	void *buf;
+	int len;
+	char path[MAX_OSPATH];
+	char cwd[MAX_OSPATH];
+
+	T_REQUIRE(cwd_enter(cwd, sizeof(cwd)));
+	reset_client();
+	Q_strlcpy(cls.downloadname, "players/f161m/skin.pcx", sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, "players/f161m/skin.tmp", sizeof(cls.downloadtempname));
+	Com_sprintf(path, sizeof(path), "%s/players/f161m/skin.pcx", FS_Gamedir());
+	Sys_Remove(path);
+
+	server_sends(3, 100, "abc", 3);
+	CL_ParseDownload();
+
+	T_CHECK(cls.download == NULL);
+	len = FS_LoadFile("players/f161m/skin.pcx", &buf);
+	T_EQ_INT(len, 3);
+
+	if (len == 3)
+	{
+		T_EQ_MEM(buf, "abc", 3);
+		FS_FreeFile(buf);
+	}
+
+	/* it is the file under the write directory */
+	{
+		FILE *fp = Q_fopen(path, "rb");
+
+		T_CHECK(fp != NULL);
+
+		if (fp)
+		{
+			fclose(fp);
+		}
+	}
+
+	Sys_Remove(path);
+	cwd_leave(cwd);
+}
+
+/* FIX161: the final rename never replaces an existing file. */
+TEST(download_players_existing_target_kept)
+{
+	char path[MAX_OSPATH];
+	char tmp[MAX_OSPATH];
+	char got[8] = { 0 };
+	char cwd[MAX_OSPATH];
+	FILE *fp;
+
+	T_REQUIRE(cwd_enter(cwd, sizeof(cwd)));
+	reset_client();
+	Q_strlcpy(cls.downloadname, "players/f161k/skin.pcx", sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, "players/f161k/skin.tmp", sizeof(cls.downloadtempname));
+	CL_DownloadFileName(path, sizeof(path), cls.downloadname);
+	CL_DownloadFileName(tmp, sizeof(tmp), cls.downloadtempname);
+	FS_CreatePath(path);
+	fp = Q_fopen(path, "wb");
+	T_CHECK(fp != NULL);
+
+	if (!fp)
+	{
+		cwd_leave(cwd);
+		return;
+	}
+
+	fwrite("keep", 1, 4, fp);
+	fclose(fp);
+
+	server_sends(3, 100, "bad", 3);
+	t_console_reset();
+	CL_ParseDownload();
+	T_CHECK(cls.download == NULL);
+
+	fp = Q_fopen(path, "rb");
+	T_CHECK(fp != NULL);
+
+	if (fp)
+	{
+		T_EQ_INT((int)fread(got, 1, sizeof(got), fp), 4);
+		T_EQ_MEM(got, "keep", 4);
+		fclose(fp);
+	}
+
+	/* no runt temp file is left behind */
+	fp = Q_fopen(tmp, "rb");
+	T_CHECK(fp == NULL);
+
+	if (fp)
+	{
+		fclose(fp);
+	}
+
+	Sys_Remove(path);
+	cwd_leave(cwd);
+}
+
+/* FIX161: a final name that is also its own temp name is refused by the
+   filter, so the no-replace guard never sees the file it has just written. */
+TEST(download_tmp_name_refused)
+{
+	reset_client();
+	t_console_reset();
+	T_CHECK(CL_CheckOrDownloadFile("maps/f161t.tmp"));
+	T_CHECK(CL_CheckOrDownloadFile("maps/f161t.TMP"));
+	T_EQ_INT(cls.netchan.message.cursize, 0);
+	T_CHECK(strstr(t_console(), ".tmp") != NULL);
+}
+
+/* FIX161: a path that does not fit is never truncated into another name. */
+TEST(download_filename_too_long)
+{
+	static char name[MAX_OSPATH + 64];
+	char dest[MAX_OSPATH];
+
+	memset(name, 'A', sizeof(name) - 1);
+	name[sizeof(name) - 1] = '\0';
+	memcpy(name, "maps/", 5);
+	strcpy(name + sizeof(name) - 5, ".pak");
+
+	memset(dest, 'x', sizeof(dest));
+	dest[sizeof(dest) - 1] = '\0';
+	CL_DownloadFileName(dest, sizeof(dest), name);
+	T_EQ_INT(dest[0], 0);
+
+	CL_DownloadFileName(dest, sizeof(dest), "maps/ok.bsp");
+	T_CHECK(strstr(dest, "/maps/ok.bsp") != NULL);
+}
+
+/* FIX161 r3: a temp name that does not fit leaves CL_DownloadFileName with an
+   empty buffer; CL_ParseDownload must refuse without handing it to
+   FS_CreatePath (an ASAN run reports the read past the terminator). */
+TEST(download_parse_name_too_long)
+{
+	static char longname[MAX_OSPATH + 64];
+	char cwd[MAX_OSPATH];
+	char tmp[MAX_OSPATH];
+	FILE *fp;
+
+	T_REQUIRE(cwd_enter(cwd, sizeof(cwd)));
+
+	/* the temp name is too long */
+	reset_client();
+	memset(longname, 'A', sizeof(longname) - 1);
+	longname[sizeof(longname) - 1] = '\0';
+	memcpy(longname, "maps/", 5);
+	Q_strlcpy(cls.downloadname, "maps/f161l.bsp", sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, longname, sizeof(cls.downloadtempname));
+	server_sends(3, 100, "abc", 3);
+	t_console_reset();
+	CL_ParseDownload();
+	T_CHECK(cls.download == NULL);
+	T_CONSOLE_HAS("Failed to open");
+
+	/* the temp name fits, the final name does not: no temp file is left */
+	reset_client();
+	Q_strlcpy(cls.downloadname, longname, sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, "maps/f161m.tmp", sizeof(cls.downloadtempname));
+	CL_DownloadFileName(tmp, sizeof(tmp), cls.downloadtempname);
+	server_sends(3, 100, "abc", 3);
+	t_console_reset();
+	CL_ParseDownload();
+	T_CHECK(cls.download == NULL);
+	T_CONSOLE_HAS("name too long");
+
+	fp = Q_fopen(tmp, "rb");
+	T_CHECK(fp == NULL);
+
+	if (fp)
+	{
+		fclose(fp);
+		Sys_Remove(tmp);
+	}
+
+	cwd_leave(cwd);
 }
 
 TEST(loadgame_savedir)

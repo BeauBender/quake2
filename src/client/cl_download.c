@@ -435,18 +435,38 @@ CL_RequestNextDownload(void)
 	cls.forcePacket = true;
 }
 
+/*
+ * Builds the path a download is written to. Every name goes under
+ * the write directory (FS_Gamedir()), so it is covered by the same
+ * existence check (FS_FileExists) and found by the search path.
+ *
+ * The original id code wrote "players*" names to BASEDIRNAME/players
+ * relative to the working directory, to share skins across mods.
+ * That path is outside the write directory (and outside the
+ * existence check) unless the working directory happens to be the
+ * game directory, so it is not used any more.
+ *
+ * Fails closed: if the path does not fit in destlen, dest is set to
+ * the empty string (a truncated path could name another file) and
+ * the callers refuse the download.
+ */
 void
 CL_DownloadFileName(char *dest, int destlen, char *fn)
 {
-	if (strncmp(fn, "players", 7) == 0)
+	const char *gamedir = FS_Gamedir();
+
+	if (destlen <= 0)
 	{
-		Com_sprintf(dest, destlen, "%s/%s", BASEDIRNAME, fn);
+		return;
 	}
 
-	else
+	if (strlen(gamedir) + 1 + strlen(fn) >= (size_t)destlen)
 	{
-		Com_sprintf(dest, destlen, "%s/%s", FS_Gamedir(), fn);
+		dest[0] = '\0';
+		return;
 	}
+
+	Com_sprintf(dest, destlen, "%s/%s", gamedir, fn);
 }
 
 /*
@@ -500,6 +520,9 @@ CL_DownloadFilter(const char *filename)
 		/* a container the filesystem mounts (fs_packtypes): its
 		   autoexec.cfg or config.cfg would be run as commands */
 		".pak",
+		/* the temp name of a download is the name without its
+		   extension plus ".tmp": no final name may collide with one */
+		".tmp",
 		NULL,
 	};
 
@@ -589,6 +612,12 @@ CL_CheckOrDownloadFile(const char *filename)
 	   not opened yet */
 	CL_DownloadFileName(name, sizeof(name), cls.downloadtempname);
 
+	if (!name[0])
+	{
+		Com_Printf("Refusing to download a name that is too long: %s\n", filename);
+		return true;
+	}
+
 	fp = Q_fopen(name, "r+b");
 
 	if (fp)
@@ -625,6 +654,7 @@ void
 CL_Download_f(void)
 {
 	char filename[MAX_OSPATH];
+	char name[MAX_OSPATH];
 
 	if (Cmd_Argc() != 2)
 	{
@@ -639,14 +669,22 @@ CL_Download_f(void)
 		return;
 	}
 
-	strcpy(cls.downloadname, filename);
+	Q_strlcpy(cls.downloadname, filename, sizeof(cls.downloadname));
 	Com_Printf("Downloading %s\n", cls.downloadname);
 
 	/* download to a temp name, and only rename
 	   to the real name when done, so if interrupted
 	   a runt file wont be left */
 	COM_StripExtension(cls.downloadname, cls.downloadtempname);
-	strcat(cls.downloadtempname, ".tmp");
+	Q_strlcat(cls.downloadtempname, ".tmp", sizeof(cls.downloadtempname));
+
+	CL_DownloadFileName(name, sizeof(name), cls.downloadtempname);
+
+	if (!name[0])
+	{
+		Com_Printf("Refusing to download a name that is too long: %s\n", filename);
+		return;
+	}
 
 	MSG_WriteByte(&cls.netchan.message, clc_stringcmd);
 	MSG_WriteString(&cls.netchan.message, va("download %s", cls.downloadname));
@@ -711,9 +749,12 @@ CL_ParseDownload(void)
 	{
 		CL_DownloadFileName(name, sizeof(name), cls.downloadtempname);
 
-		FS_CreatePath(name);
+		if (name[0])
+		{
+			FS_CreatePath(name);
+		}
 
-		cls.download = Q_fopen(name, "wb");
+		cls.download = name[0] ? Q_fopen(name, "wb") : NULL;
 
 		if (!cls.download)
 		{
@@ -740,17 +781,52 @@ CL_ParseDownload(void)
 	{
 		char oldn[MAX_OSPATH];
 		char newn[MAX_OSPATH];
+		FILE *fp;
 
 		fclose(cls.download);
 
 		/* rename the temp file to its final name */
 		CL_DownloadFileName(oldn, sizeof(oldn), cls.downloadtempname);
 		CL_DownloadFileName(newn, sizeof(newn), cls.downloadname);
-		r = Sys_Rename(oldn, newn);
+
+		if (!oldn[0] || !newn[0])
+		{
+			Com_Printf("failed to rename: name too long.\n");
+
+			/* the temp name may have fitted when the final one did not */
+			if (oldn[0])
+			{
+				Sys_Remove(oldn);
+			}
+
+			fp = NULL;
+			r = 1;
+		}
+		else
+		{
+			/* never replace an existing file */
+			fp = Q_fopen(newn, "rb");
+			r = 0;
+		}
 
 		if (r)
 		{
-			Com_Printf("failed to rename.\n");
+			/* nothing to do, reported above */
+		}
+		else if (fp)
+		{
+			fclose(fp);
+			Com_Printf("%s already exists, not replacing it.\n", cls.downloadname);
+			Sys_Remove(oldn);
+		}
+		else
+		{
+			r = Sys_Rename(oldn, newn);
+
+			if (r)
+			{
+				Com_Printf("failed to rename.\n");
+			}
 		}
 
 		cls.download = NULL;
