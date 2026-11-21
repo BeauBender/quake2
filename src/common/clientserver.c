@@ -273,6 +273,12 @@ Com_Error(int code, const char *fmt, ...)
 	}
 #endif
 
+	/* The error ends the line that raised it, a server line too: what
+	   the teardown below queues (CL_Disconnect's revert of `game` execs
+	   the player's configs) is the player's, and so is the next frame's
+	   text. A server line keeps its source only for its run (FIX153). */
+	Cbuf_ResetSource();
+
 	if (code == ERR_DISCONNECT)
 	{
 #ifndef DEDICATED_ONLY

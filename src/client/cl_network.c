@@ -153,6 +153,10 @@ CL_Drop(void)
 
 	if (cls.state == ca_disconnected)
 	{
+		/* drop the server's queued text; the command source is reset
+		   in Com_Error, before its teardown (Cbuf_ResetSource), not
+		   here; CL_Disconnect is not reached (FIX113) */
+		Cbuf_DropServerText();
 		return;
 	}
 
@@ -356,6 +360,9 @@ void
 CL_Disconnect(void)
 {
 	byte final[32];
+
+	/* what the server queued does not outlive its connection (FIX113) */
+	Cbuf_DropServerText();
 
 	if (cls.state == ca_disconnected)
 	{
