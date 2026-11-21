@@ -244,8 +244,8 @@ RTPreset_Save(const char *name)
 		const char *cv = VidRules_PresetCvar(i, NULL);
 		const char *v = Cvar_VariableString(cv);
 
-		/* unset (gl1 registers few of them) or not a value a preset may hold: no line */
-		if (v[0] && RTP_ValueOk(v))
+		/* unset (gl1 registers few of them), a value a server wrote (FIX168), or not a value a preset may hold: no line */
+		if (v[0] && !Cvar_ServerWrote(cv) && RTP_ValueOk(v))
 		{
 			fprintf(f, "set %s \"%s\"\n", cv, v);
 			saved++;
