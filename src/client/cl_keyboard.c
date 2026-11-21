@@ -52,7 +52,7 @@ int edit_line = 0;
 int history_line = 0;
 
 int key_waiting;
-char *keybindings[K_LAST];
+/* keybindings[] and who wrote each binding are in keybind.c (FIX156) */
 qboolean consolekeys[K_LAST]; /* if true, can't be rebound while in console */
 qboolean menubound[K_LAST]; /* if true, can't be rebound while in menu */
 int key_repeats[K_LAST]; /* if > 1, it is autorepeating */
@@ -836,7 +836,9 @@ Key_StringToKeynum(char *str)
 
 	if (!str[1])
 	{
-		return str[0];
+		/* 1 to 255, all below K_LAST: a byte 0x80 or above is not a
+		   negative index where char is signed (arm64) */
+		return (unsigned char)str[0];
 	}
 
 	for (kn = keynames; kn->name; kn++)
@@ -941,32 +943,6 @@ exit_sdl:
 	return gamepadbtns[key - K_JOY_FIRST_BTN];
 }
 
-void
-Key_SetBinding(int keynum, char *binding)
-{
-	char *new;
-	int l;
-
-	if (keynum == -1)
-	{
-		return;
-	}
-
-	/* free old bindings */
-	if (keybindings[keynum])
-	{
-		Z_Free(keybindings[keynum]);
-		keybindings[keynum] = NULL;
-	}
-
-	/* allocate memory for new binding */
-	l = strlen(binding);
-	new = Z_Malloc(l + 1);
-	strcpy(new, binding);
-	new[l] = 0;
-	keybindings[keynum] = new;
-}
-
 static void
 Key_Unbind_f(void)
 {
@@ -980,7 +956,7 @@ Key_Unbind_f(void)
 
 	b = Key_StringToKeynum(Cmd_Argv(1));
 
-	if (b == -1)
+	if ((b < 0) || (b >= K_LAST))
 	{
 		Com_Printf("\"%s\" isn't a valid key\n", Cmd_Argv(1));
 		return;
@@ -992,15 +968,7 @@ Key_Unbind_f(void)
 static void
 Key_Unbindall_f(void)
 {
-	int i;
-
-	for (i = 0; i < K_LAST; i++)
-	{
-		if (keybindings[i])
-		{
-			Key_SetBinding(i, "");
-		}
-	}
+	Key_UnbindAll();
 }
 
 /* ugly hack, set in Cmd_ExecuteString() when yq2.cfg is executed
@@ -1023,7 +991,7 @@ Key_Bind_f(void)
 
 	b = Key_StringToKeynum(Cmd_Argv(1));
 
-	if (b == -1)
+	if ((b < 0) || (b >= K_LAST))
 	{
 		Com_Printf("\"%s\" isn't a valid key\n", Cmd_Argv(1));
 		return;
@@ -1119,21 +1087,12 @@ Key_DefaultPadBinds(void)
 void
 Key_WriteBindings(FILE *f)
 {
-	int i;
-
 	if (cfg_unbindall->value)
 	{
 		fprintf(f, "unbindall\n");
 	}
 
-	for (i = 0; i < K_LAST; i++)
-	{
-		if (keybindings[i] && keybindings[i][0])
-		{
-			fprintf(f, "bind %s \"%s\"\n",
-					Key_KeynumToString(i), keybindings[i]);
-		}
-	}
+	Key_WriteBindingLines(f);
 }
 
 void
@@ -1332,15 +1291,7 @@ Key_Init(void)
 void
 Key_Shutdown(void)
 {
-	int i;
-	for (i = 0; i < K_LAST; ++i)
-	{
-		if (keybindings[i])
-		{
-			Z_Free(keybindings[i]);
-			keybindings[i] = NULL;
-		}
-	}
+	Key_FreeBindings();
 }
 
 /*
@@ -1393,6 +1344,12 @@ Key_Event(int key, qboolean down, qboolean special)
 	char *kb;
 	cvar_t *fullscreen;
 	unsigned int time = Sys_Milliseconds();
+
+	/* every table below is indexed by key */
+	if ((key < 0) || (key >= K_LAST))
+	{
+		return;
+	}
 
 	// evil hack for the joystick key altselector, which turns K_BTN_x into K_BTN_x_ALT
 	if(joy_altselector_pressed && key >= K_JOY_FIRST_BTN && key < K_JOY_FIRST_BTN_ALT)
@@ -1575,7 +1532,7 @@ Key_Event(int key, qboolean down, qboolean special)
 		if (kb && (kb[0] == '+'))
 		{
 			Com_sprintf(cmd, sizeof(cmd), "-%s %i %i\n", kb + 1, key, time);
-			Cbuf_AddText(cmd);
+			Key_AddBindingText(key, cmd);
 		}
 
 		return;
@@ -1593,12 +1550,12 @@ Key_Event(int key, qboolean down, qboolean special)
 			{
 				/* button commands add keynum and time as a parm */
 				Com_sprintf(cmd, sizeof(cmd), "%s %i %i\n", kb, key, time);
-				Cbuf_AddText(cmd);
+				Key_AddBindingText(key, cmd);
 			}
 			else
 			{
-				Cbuf_AddText(kb);
-				Cbuf_AddText("\n");
+				Key_AddBindingText(key, kb);
+				Key_AddBindingText(key, "\n");
 			}
 		}
 

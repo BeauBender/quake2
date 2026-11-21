@@ -117,6 +117,11 @@
 #     mutants of the two files must fail it. Then, comments and literals
 #     stripped, rm_main.c and rmb_gbuf.m name no effect's symbol (a prefix
 #     taken from the table's FX(...) rows); four mutants check the lint.
+# (j) Always: the HDR tone map's single-map order (TASK199), by source inspection of
+#     rm_main.c: R_ClearNoWorld(); is the first statement of R_RenderViewDraw, it draws
+#     over &r_view.vp, and R_SetupGL and R_HdrToneMap build their rectangle with
+#     rm_view_rect from the same refdef fields (x y width height); four scratch mutants
+#     (the clear removed, another rectangle, each rectangle's fields changed) must fail it.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -1411,7 +1416,106 @@ else
 	done
 fi
 
+# (j) TASK199: the HDR tone map runs once per pixel per frame because the menu's RDF_NOWORLDMODEL view starts
+# with R_ClearNoWorld, an opaque quad over r_view.vp, the rectangle R_HdrToneMap maps (R_SetupGL and
+# R_HdrToneMap build theirs with rm_view_rect from the same refdef fields). The host test cannot see rm_main.c,
+# so the order is held here, by source: hdr_body <file> <function> prints the function's body (comments and
+# literals stripped, up to the "}" in column 0); hdr_order <file> prints one line per rule the file breaks.
+hdr_body() {
+	strip "$1" | awk -v fn="$2" '
+		!b && !p && $0 ~ "^" fn "\\(" { p = 1 }
+		p && /;/ { p = 0; next }
+		p && /^{/ { b = 1; p = 0; next }
+		b && /^}/ { exit }
+		b { print }'
+}
+hdr_fields() {
+	hdr_body "$1" "$2" | tr '\n' ' ' | sed -n 's/.*rm_view_rect(\([^;]*\));.*/\1/p' |
+		grep -oE '(r_newrefdef\.|fd->)[a-z_]+' | sed -E 's/^(r_newrefdef\.|fd->)//' | tr '\n' ' ' | sed 's/ $//'
+}
+# hdr_args <file> <function>: the whole argument list of the function's rm_view_rect call, blanks and the
+# refdef prefix removed, without its last argument (the rectangle it fills); "N calls" when it is not one call
+hdr_args() {
+	calls=$(hdr_body "$1" "$2" | tr -d ' \t\n' | grep -oE 'rm_view_rect\([^;]*\);')
+	nc=$(printf '%s\n' "$calls" | grep -c rm_view_rect)
+	if [ "$nc" != 1 ]; then
+		echo "$nc calls"
+		return 0
+	fi
+	printf '%s\n' "$calls" | sed -E 's/^rm_view_rect\((.*)\);$/\1/; s/(r_newrefdef\.|fd->)//g; s/,&[A-Za-z_.]*$//'
+}
+# hdr_flat <file> <function>: the function's body with every blank removed
+hdr_flat() {
+	hdr_body "$1" "$2" | tr -d ' \t\n'
+}
+hdr_order() { # <rm_main.c> <rm_sdl.c>
+	first=$(hdr_body "$1" R_RenderViewDraw | grep -v '^[[:space:]]*$' | sed -n '1p' | awk '{ gsub(/^[ \t]+|[ \t]+$/, ""); print }')
+	[ "$first" = "R_ClearNoWorld();" ] || echo "R_RenderViewDraw does not start with R_ClearNoWorld(); (its first statement is \"$first\")"
+	hdr_body "$1" R_ClearNoWorld | tr '\n' ' ' | grep -qE 'rmb_draw_color\([^;]*&r_view\.vp[^;]*;' ||
+		echo "R_ClearNoWorld does not draw over &r_view.vp"
+	cnw=$(hdr_flat "$1" R_ClearNoWorld)
+	printf '%s\n' "$cnw" | grep -qF 'if(!(r_newrefdef.rdflags&RDF_NOWORLDMODEL)){return;}' ||
+		echo "R_ClearNoWorld does not begin with the !(r_newrefdef.rdflags & RDF_NOWORLDMODEL) guard that returns"
+	[ "$(printf '%s\n' "$cnw" | grep -o 'return' | wc -l | tr -d ' ')" = 1 ] ||
+		echo "R_ClearNoWorld returns anywhere but in its RDF_NOWORLDMODEL guard, so its draw may not run"
+	for hf in R_SetupGL R_HdrToneMap; do
+		got=$(hdr_fields "$1" "$hf")
+		[ "$got" = "x y width height" ] || echo "$hf builds its rectangle from \"$got\", not \"x y width height\", of one refdef"
+	done
+	sga=$(hdr_args "$1" R_SetupGL)
+	hga=$(hdr_args "$1" R_HdrToneMap)
+	[ "$sga" = "$hga" ] || echo "R_HdrToneMap's rm_view_rect arguments (\"$hga\") differ from R_SetupGL's (\"$sga\")"
+	hdr_flat "$1" R_HdrToneMap | grep -qF 'rmb_tonemap_pass((int)vp.x,(int)vp.y,(int)vp.w,(int)vp.h);' ||
+		echo "R_HdrToneMap's tone-map pass is not over the (int)vp.x, vp.y, vp.w, vp.h of its rm_view_rect"
+	hdr_flat "$2" RI_ShutdownContext | grep -qF 'RM_HdrProbeCancel();rmb_detach();' ||
+		echo "RI_ShutdownContext does not call RM_HdrProbeCancel(); before rmb_detach();"
+	hdr_flat "$1" RM_HdrProbeCancel | grep -qF 'rm_hdr_probe_cancel(&rm_hdr_probe_wait)' ||
+		echo "RM_HdrProbeCancel does not call rm_hdr_probe_cancel(&rm_hdr_probe_wait)"
+	return 0
+}
+hdr_mutants=0
+hout=$(hdr_order "$rm_dir/rm_main.c" "$rm_dir/rm_sdl.c")
+if [ -n "$hout" ]; then
+	printf '%s\n' "$hout"
+	bad "$rm_dir/rm_main.c or rm_sdl.c breaks the single tone-map order or the probe cancel (docs/plans/hdr-output.md, HD3)"
+fi
+for hm in noclear othervp fieldsw fieldss tmfull thtw retclear guardinv nocancel nobody; do
+	cp "$rm_dir/rm_main.c" "${tmp:?}/hdr-mutant.c"
+	cp "$rm_dir/rm_sdl.c" "${tmp:?}/hdr-mutant-sdl.c"
+	case $hm in
+		noclear) awk '/^R_RenderViewDraw\(/ { b = 1 } b && !d && /^[ \t]*R_ClearNoWorld\(\);/ { d = 1; next } { print }' \
+			"$rm_dir/rm_main.c" > "${tmp:?}/hdr-mutant.c"; want="does not start with R_ClearNoWorld" ;;
+		othervp) awk '/^R_ClearNoWorld\(/ { b = 1 } /^}/ { b = 0 } b { sub(/&r_view\.vp/, "\\&r_view.proj") } { print }' \
+			"$rm_dir/rm_main.c" > "${tmp:?}/hdr-mutant.c"; want="R_ClearNoWorld does not draw over" ;;
+		fieldsw) awk '/^R_HdrToneMap\(/ { b = 1 } /^}/ { b = 0 } b { sub(/fd->height/, "fd->width") } { print }' \
+			"$rm_dir/rm_main.c" > "${tmp:?}/hdr-mutant.c"; want="R_HdrToneMap builds its rectangle" ;;
+		fieldss) awk '/^R_SetupGL\(/ { b = 1 } /^}/ { b = 0 } b { sub(/r_newrefdef\.y,/, "r_newrefdef.x,") } { print }' \
+			"$rm_dir/rm_main.c" > "${tmp:?}/hdr-mutant.c"; want="R_SetupGL builds its rectangle" ;;
+		tmfull) awk '/^R_HdrToneMap\(/ { b = 1 } /^}/ { b = 0 } b { sub(/rmb_tonemap_pass\(.*\);/, "rmb_tonemap_pass(0, 0, tw, th);") } { print }' \
+			"$rm_dir/rm_main.c" > "${tmp:?}/hdr-mutant.c"; want="tone-map pass is not over" ;;
+		thtw) awk '/^R_HdrToneMap\(/ { b = 1 } /^}/ { b = 0 } b { sub(/th, &vp/, "tw, \\&vp") } { print }' \
+			"$rm_dir/rm_main.c" > "${tmp:?}/hdr-mutant.c"; want="rm_view_rect arguments" ;;
+		retclear) awk '/^R_ClearNoWorld\(/ { b = 1 } /^}/ { b = 0 } b && /rmb_draw_color/ && !d { d = 1; print "\treturn;" } { print }' \
+			"$rm_dir/rm_main.c" > "${tmp:?}/hdr-mutant.c"; want="returns anywhere but in its RDF_NOWORLDMODEL guard" ;;
+		guardinv) awk '/^R_ClearNoWorld\(/ { b = 1 } /^}/ { b = 0 } b { sub(/!\(r_newrefdef/, "(r_newrefdef") } { print }' \
+			"$rm_dir/rm_main.c" > "${tmp:?}/hdr-mutant.c"; want="does not begin with the !(r_newrefdef.rdflags" ;;
+		nocancel) awk '/^RI_ShutdownContext\(/ { b = 1 } /^}/ { b = 0 } b && /^[ \t]*RM_HdrProbeCancel\(\);/ { next } { print }' \
+			"$rm_dir/rm_sdl.c" > "${tmp:?}/hdr-mutant-sdl.c"; want="RI_ShutdownContext does not call RM_HdrProbeCancel" ;;
+		nobody) awk '/^RM_HdrProbeCancel\(/ { b = 1 } /^}/ { b = 0 } b { sub(/rm_hdr_probe_cancel\(&rm_hdr_probe_wait\)/, "0") } { print }' \
+			"$rm_dir/rm_main.c" > "${tmp:?}/hdr-mutant.c"; want="RM_HdrProbeCancel does not call rm_hdr_probe_cancel" ;;
+	esac
+	mout=$(hdr_order "${tmp:?}/hdr-mutant.c" "${tmp:?}/hdr-mutant-sdl.c")
+	if cmp -s "$rm_dir/rm_main.c" "${tmp:?}/hdr-mutant.c" && cmp -s "$rm_dir/rm_sdl.c" "${tmp:?}/hdr-mutant-sdl.c"; then
+		bad "the tone-map order mutant ($hm) changed nothing"
+	elif ! printf '%s\n' "$mout" | grep -qF "$want"; then
+		bad "the tone-map order check does not refuse the mutant ($hm): \"$mout\""
+	else
+		hdr_mutants=$((hdr_mutants + 1))
+		[ -z "${HDR_MUTANT_SHOW:-}" ] || printf 'mutant %s: %s\n' "$hm" "$mout"
+	fi
+done
+
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; RT data ${rtl:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused, $proto_ok shapes passed; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; RT data ${rtl:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, tone-map order and probe cancel held, $hdr_mutants order mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused, $proto_ok shapes passed; $build)"
 fi
 exit $fail

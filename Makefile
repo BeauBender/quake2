@@ -1239,6 +1239,7 @@ CLIENT_OBJS_ := \
 	src/client/cl_input.o \
 	src/client/cl_inventory.o \
 	src/client/cl_keyboard.o \
+	src/client/keybind.o \
 	src/client/cl_lights.o \
 	src/client/cl_main.o \
 	src/client/cl_pins.o \
@@ -1843,6 +1844,7 @@ endif
 # main.c; tests/unit/main.c supplies main(). The client objects
 # (cl_cinsize, cl_conback, cl_download, cl_entities, cl_network, cl_parse,
 # cl_screen, the input gate input/ingate.c, the touch layer input/touch.c,
+# the key bindings and who wrote them keybind.c,
 # the upscaler's checks and pixel arithmetic cl_upscale, the sound
 # frontend sound.c, the window code's SDL-free part vid/glimp_hidpi.c and
 # the video menu's rules menu/vidrules.c)
@@ -1891,6 +1893,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_upscale.o \
 	$(TESTDIR)/src/client/input/ingate.o \
 	$(TESTDIR)/src/client/input/touch.o \
+	$(TESTDIR)/src/client/keybind.o \
 	$(TESTDIR)/src/client/menu/rtpreset.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \

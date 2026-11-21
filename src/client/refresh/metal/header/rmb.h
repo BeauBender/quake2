@@ -1887,6 +1887,12 @@ int rm_hdr_probe_format(int fmt, int x, int y, const unsigned char *px, char *bu
 int rm_hdr_probe_args(const char *xs, const char *ys, int *x, int *y);
 
 /*
+ * A pending metal_hdr_probe wait (a frame count, 0 for none) is ended, as the
+ * renderer is shut down: 1 when one was pending, 0 otherwise; *wait is 0 after.
+ */
+int rm_hdr_probe_cancel(int *wait);
+
+/*
  * The probe's generation and state in one word (rmb_encode.m keeps it in
  * one atomic and compares and swaps the whole word), so a completion
  * from before a re-ask never matches the new probe's word: state in the
