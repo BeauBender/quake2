@@ -28,7 +28,9 @@
 #     generated lumps, TASK187), and
 #     tests/metal/rm_fx_test.c, the pure part of the MetalFX scalers
 #     (rm_metalfx.c, TASK111), and tests/metal/rm_rtgate_test.c, the
-#     hardware gate of ray tracing (rm_rtgate.c, RT8, TASK60). The gate's
+#     hardware gate of ray tracing (rm_rtgate.c, RT8, TASK60), and
+#     tests/metal/rm_retro_tex_test.c, Retro's texture upload and 480-line
+#     view (common/mtl_retro_tex.h, TASK185). The gate's
 #     table of the r_rt_* cvars is then held to the sources: every
 #     Cvar_Get("r_rt_ name of src/client/refresh/metal's .c and .m files
 #     (a call over several lines included) must have a row, every row
@@ -305,6 +307,20 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_fx_test" > "${tmp:?}/out" 2
 else
 	fx=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_fx_test: //')
 	case $fx in *", 0 failed") ;; *) bad "tests/metal/rm_fx_test.c printed no result line"; fx="";; esac
+fi
+
+# Retro's texture upload and 480-line view (TASK185, PM3): common/mtl_retro_tex.h alone
+retex=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags -o "${tmp:?}/rm_retro_tex_test" tests/metal/rm_retro_tex_test.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_retro_tex_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_retro_tex_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_retro_tex_test.c failed"
+else
+	retex=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_retro_tex_test: //')
+	case $retex in *", 0 failed") ;; *) bad "tests/metal/rm_retro_tex_test.c printed no result line"; retex="";; esac
 fi
 
 # the effect table (TASK179): rm_rtfx.c is built for the host with its entry points the recording stubs
@@ -1516,6 +1532,6 @@ for hm in noclear othervp fieldsw fieldss tmfull thtw retclear guardinv nocancel
 done
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; RT data ${rtl:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, tone-map order and probe cancel held, $hdr_mutants order mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused, $proto_ok shapes passed; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; RT data ${rtl:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, Retro textures ${retex:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, tone-map order and probe cancel held, $hdr_mutants order mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused, $proto_ok shapes passed; $build)"
 fi
 exit $fail

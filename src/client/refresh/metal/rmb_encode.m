@@ -77,6 +77,7 @@ static id<MTLTexture> color;     /* the frame's: own, or with display sync off a
 static id<MTLTexture> own;       /* the frame's own colour target, private */
 static id<MTLTexture> depth;     /* depth32Float_stencil8, private */
 static id<MTLTexture> retro_src; /* TASK184: the copy of the frame the Retro pass reads, made at its first use */
+static id<MTLTexture> retro_view_src; /* TASK185: the copy of a view's render-size target the Retro pass reads at its seat in the view */
 static id<MTLBuffer> readbuf;    /* shared, for rmb_read */
 static id<MTLTexture> hdr_read;  /* TASK196: rmb_read's 8-bit copy of a float16 frame, made at its first use */
 static int color_defined;        /* a pass has written color since it was made */
@@ -410,22 +411,25 @@ rmb_pass_2d(void)
  * The post-process seat (TASK184's Retro pass, TASK196's tone map): the
  * open pass ends, the rectangle (clipped to the target) is copied, and
  * one pass of the pipeline pipe() gives writes it back, with bytes at the
- * fragment's buffer 0. 0, the frame untouched, outside a frame, for an
- * empty rectangle or when the pipeline did not build.
+ * fragment's buffer 0. 0, the target untouched, outside a frame, for an
+ * empty rectangle or when the pipeline did not build. tgt is the frame's
+ * colour target or (TASK185, PM3) a view's render-size one; scratch is the
+ * copy's slot, made at the first use and again at a new size or format.
  */
 static int
-rmb_post_pass(id<MTLRenderPipelineState> (*pipe)(void), int x, int y, int w, int h, const void *bytes, size_t len)
+rmb_post_pass(id<MTLTexture> tgt, __strong id<MTLTexture> *scratch, id<MTLRenderPipelineState> (*pipe)(void),
+		int x, int y, int w, int h, const void *bytes, size_t len)
 {
 	id<MTLRenderPipelineState> pso;
 	int tw, th;
 
-	if (!frame_open || frame_skipped || !frame_cmd || !color)
+	if (!frame_open || frame_skipped || !frame_cmd || !tgt)
 	{
 		return 0;
 	}
 
-	tw = (int)color.width;
-	th = (int)color.height;
+	tw = (int)tgt.width;
+	th = (int)tgt.height;
 
 	/* clipped to the target */
 	if (x < 0)
@@ -456,12 +460,12 @@ rmb_post_pass(id<MTLRenderPipelineState> (*pipe)(void), int x, int y, int w, int
 		MTLViewport vp = { (double)x, (double)y, (double)w, (double)h, 0.0, 1.0 };
 		MTLScissorRect sc = { (NSUInteger)x, (NSUInteger)y, (NSUInteger)w, (NSUInteger)h };
 
-		if (!retro_src || (retro_src.width != color.width) || (retro_src.height != color.height)
-			|| (retro_src.pixelFormat != color.pixelFormat))
+		if (!*scratch || ((*scratch).width != tgt.width) || ((*scratch).height != tgt.height)
+			|| ((*scratch).pixelFormat != tgt.pixelFormat))
 		{
-			rmb_set_texture(&retro_src, rmb_new_target(color.pixelFormat, tw, th, MTLTextureUsageShaderRead));
+			rmb_set_texture(scratch, rmb_new_target(tgt.pixelFormat, tw, th, MTLTextureUsageShaderRead));
 
-			if (!retro_src)
+			if (!*scratch)
 			{
 				return 0;
 			}
@@ -469,13 +473,13 @@ rmb_post_pass(id<MTLRenderPipelineState> (*pipe)(void), int x, int y, int w, int
 
 		rmb_end_encoder();
 		blit = [frame_cmd blitCommandEncoder];
-		[blit copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake((NSUInteger)x, (NSUInteger)y, 0)
-				sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1) toTexture:retro_src destinationSlice:0
+		[blit copyFromTexture:tgt sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake((NSUInteger)x, (NSUInteger)y, 0)
+				sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1) toTexture:*scratch destinationSlice:0
 				destinationLevel:0 destinationOrigin:MTLOriginMake((NSUInteger)x, (NSUInteger)y, 0)];
 		[blit endEncoding];
 
 		rp = [MTLRenderPassDescriptor renderPassDescriptor];
-		rp.colorAttachments[0].texture = color;
+		rp.colorAttachments[0].texture = tgt;
 		rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
 		rp.colorAttachments[0].storeAction = MTLStoreActionStore;
 		enc = [frame_cmd renderCommandEncoderWithDescriptor:rp];
@@ -493,7 +497,7 @@ rmb_post_pass(id<MTLRenderPipelineState> (*pipe)(void), int x, int y, int w, int
 
 		[enc setViewport:vp];
 		[enc setScissorRect:sc];
-		[enc setFragmentTexture:retro_src atIndex:0];
+		[enc setFragmentTexture:*scratch atIndex:0];
 		[enc setFragmentBytes:bytes length:len atIndex:0];
 		[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 		[enc endEncoding];
@@ -502,11 +506,12 @@ rmb_post_pass(id<MTLRenderPipelineState> (*pipe)(void), int x, int y, int w, int
 	return 1;
 }
 
-int
-rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
+/* the Retro pass over the rectangle of the target tgt, its copy in the slot scratch */
+static int
+rmb_retro_pass_on(id<MTLTexture> tgt, __strong id<MTLTexture> *scratch, int x, int y, int w, int h, int filter, int curve)
 {
 	/* the fragment's box filter holds to the far corner of the rectangle clipped to the target */
-	const int tw = color ? (int)color.width : 0, th = color ? (int)color.height : 0;
+	const int tw = tgt ? (int)tgt.width : 0, th = tgt ? (int)tgt.height : 0;
 	const int cx = (x < 0) ? 0 : x, cy = (y < 0) ? 0 : y;
 	int cw = (x < 0) ? w + x : w, ch = (y < 0) ? h + y : h;
 	int p[6];
@@ -520,7 +525,20 @@ rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
 	p[4] = filter ? 1 : 0;
 	p[5] = curve;
 
-	return rmb_post_pass(rmb_retro_pipe, x, y, w, h, p, sizeof(p));
+	return rmb_post_pass(tgt, scratch, rmb_retro_pipe, x, y, w, h, p, sizeof(p));
+}
+
+int
+rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
+{
+	return rmb_retro_pass_on(color, &retro_src, x, y, w, h, filter, curve);
+}
+
+/* TASK185 (PM3): the same pass over a view's render-size target t, with a copy of its own (rmb_gbuf_view_end's seat) */
+int
+rmb_retro_pass_view(id<MTLTexture> t, int x, int y, int w, int h, int filter, int curve)
+{
+	return rmb_retro_pass_on(t, &retro_view_src, x, y, w, h, filter, curve);
 }
 
 /* the peak in force under r_hdr 1 (TASK196, HD3), set each frame by rmb_hdr_peak_set: the tone map's and the present's */
@@ -543,7 +561,7 @@ rmb_tonemap_pass(int x, int y, int w, int h)
 		return 0;
 	}
 
-	return rmb_post_pass(rmb_tonemap_pipe, x, y, w, h, &peak, sizeof(peak));
+	return rmb_post_pass(color, &retro_src, rmb_tonemap_pipe, x, y, w, h, &peak, sizeof(peak));
 }
 
 /*
@@ -1116,6 +1134,7 @@ rmb_encode_release(void)
 		rmb_set_texture(&own, nil);
 		rmb_set_texture(&depth, nil);
 		rmb_set_texture(&retro_src, nil);
+		rmb_set_texture(&retro_view_src, nil);
 		rmb_set_texture(&hdr_read, nil);
 
 		/* metal_hdr_probe: its buffer, and the word idle in the next generation, so no completion still in flight matches a later probe */
