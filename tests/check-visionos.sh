@@ -41,7 +41,9 @@
 #       visionOS's Files app, "On My Apple Vision Pro", and not the
 #       iPhone's "On My iPhone (or iPad)" (TASK175 slice 2b); its control
 #       is the other way round: the iOS simulator's system.o holds the
-#       iPhone's text and not the visionOS one.
+#       iPhone's text and not the visionOS one. And sdl3.o holds "the
+#       visionOS simulator" (the skip line of the simulator's own gamepad,
+#       TASK175 slice 2b), which the iOS simulator's sdl3.o does not.
 # It does not compare the iOS build with an earlier one; that comparison is
 # the review's before and after of make -n (docs/runbook/TASK175.md).
 # Each assertion first runs on a mutant it must refuse (an object built for
@@ -414,9 +416,10 @@ SDL_ORIENTATIONS
 SDL_IOS_HIDE_HOME_INDICATOR
 ios_orientation
 On My iPhone (or iPad)
-On My Apple Vision Pro'
+On My Apple Vision Pro
+the visionOS simulator'
 # an object that holds a pinned string is refused, and one without it fails the positive control
-printf 'const char *a = "SDL_RETURN_KEY_HIDES_IME";\nconst char *b = "SDL_ORIENTATIONS";\nconst char *c = "SDL_IOS_HIDE_HOME_INDICATOR";\nconst char *d = "ios_orientation";\nconst char *e = "Files > On My iPhone (or iPad) > Quake II";\nconst char *f = "Files > On My Apple Vision Pro > Quake II";\n' > "${tmp:?}/s.c"
+printf 'const char *a = "SDL_RETURN_KEY_HIDES_IME";\nconst char *b = "SDL_ORIENTATIONS";\nconst char *c = "SDL_IOS_HIDE_HOME_INDICATOR";\nconst char *d = "ios_orientation";\nconst char *e = "Files > On My iPhone (or iPad) > Quake II";\nconst char *f = "Files > On My Apple Vision Pro > Quake II";\nconst char *g = "Skipping joystick 1, the visionOS simulator";\n' > "${tmp:?}/s.c"
 xcrun --sdk xrsimulator clang -target "$xr_target" -c "${tmp:?}/s.c" -o "${tmp:?}/s.o"
 while read -r text; do
 	if assert_lacks "${tmp:?}/s.o" "$text" > "${tmp:?}/o" 2>&1; then
@@ -549,6 +552,7 @@ pin()
 		holds) assert_holds "$obj" "$4" ;;
 		no_need) assert_no_need "$obj" "$4" ;;
 		need) assert_need "$obj" "$4" ;;
+		*) echo "pin: unknown kind $1"; false ;;
 		esac > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) $5"; }
 	done < "${tmp:?}/named"
 	ios_object "$3" || return 0
@@ -565,6 +569,7 @@ pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_IOS_HIDE_HOME_INDICATOR "
 pin lacks vid.o src/client/vid/vid.c ios_orientation "the ios_orientation command is compiled into the visionOS build"
 pin lacks system.o src/backends/unix/system.c "On My iPhone (or iPad)" "the iPhone's missing-data text is compiled into the visionOS build"
 pin holds system.o src/backends/unix/system.c "On My Apple Vision Pro" "the visionOS build has no missing-data text naming its Files place"
+pin holds sdl3.o src/client/input/sdl3.c "the visionOS simulator" "the visionOS build does not pass over the simulator's own gamepad"
 # The restriction is kCGImageSourceAllowableTypes where the SDK declares
 # it (27.0 on); an older SDK (FIX138) builds without it, and the type
 # check on CGImageSourceGetType is the restriction then, as it is the

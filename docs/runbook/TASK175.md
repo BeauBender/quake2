@@ -352,6 +352,16 @@ On `a69c1016`, in the second run's hold:
 `tests/check-ios.sh` and `tests/check-tvos.sh` are unchanged. The guards add `TARGET_OS_VISION` beside
 `TARGET_OS_TV` and nothing else, so the iOS and macOS objects of sdl3.c and system.c compile the same code.
 
+### Round 2: the pad skip is pinned, and it is simulator-only
+
+- The visionOS skip applies to the simulator only: its half of the guard in src/client/input/sdl3.c is now
+  `(defined(TARGET_OS_VISION) && TARGET_OS_VISION && TARGET_OS_SIMULATOR)`, and tvOS keeps its existing behaviour
+  on a device (`TARGET_OS_TV`, unchanged).
+- `tests/check-visionos.sh` (e) pins it: `sdl3.o` holds `the visionOS simulator` (the skip line), with the iOS
+  simulator's `sdl3.o` as the control, and the text is in the mutant loop. With the sdl3.c hunk reverted, the
+  check fails on that pin.
+- `pin` refuses a kind it does not know (`pin: unknown kind <kind>`) instead of skipping the visionOS half.
+
 ## Left for slice 2c
 
 - Look-and-pinch menu navigation (a pinch reaches a UIKit app as an indirect touch or a pointer; SDL asks for
