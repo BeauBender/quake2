@@ -618,9 +618,10 @@ limit" "$out"
     want_not e2e-lock-wait "lock=free" "$labs"; want_not e2e-lock-wait "label=gate" "$labs"
     # the caller's LC_ALL comes back under the hold (bench.sh sets C for its command)
     want_has e2e-lock-wait "lc=POSIX " "$labs"; want_not e2e-lock-wait "lc=C " "$labs"
-    # the holder's sleep has ended by now (the records ran under the generator's own hold): a signal only
-    # while it still runs (FIX171)
-    if kill -0 $hp 2>/dev/null; then kill -TERM $hp 2>/dev/null; fi; wait $hp 2>/dev/null
+    # the holder's sleep has ended by now (the records ran under the generator's own hold), so no signal is
+    # sent: bash has already collected its exit and the PID could belong to another process (FIX171); only
+    # the wait remains
+    wait $hp 2>/dev/null
     [ "$(BENCH_STATE="$st" sh "$bsh" lock status 2>&1)" = lock=free ] || ko e2e-lock-wait "the lock is not free afterwards"
     # the lock is off, with one line on stderr that names why, as for the entry points: BENCH_LOCK=0, GitHub
     # Actions, no bench core in the tree, no state directory (each run is then refused as out of date)

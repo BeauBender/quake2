@@ -50,7 +50,7 @@
 #     any check, the scheduler, a make or the watcher starts.
 # Every pid the tests start is taken off the cleanup list once it has been
 # waited for, so the list is empty after them, and cleanup signals a listed
-# pid only while its start time and command line are still those recorded
+# pid only while its start time is still the one recorded
 # (t_cleanup_id); what a failing t_kgrp leaves running is stopped by pid,
 # after a check of its start time and command line. Then one
 # mutant per lock call (each removing it from a copy of its entry point)
