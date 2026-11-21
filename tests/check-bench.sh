@@ -784,6 +784,48 @@ SHAPES
 	[ "$fails" -eq 0 ]
 }
 
+# t_decoy_term: a signal inside a decoy window still lets cleanup stop what
+# the cleanup list holds (FIX171, round 2). decoy defines kill and, for nops,
+# ps, and an EXIT trap a signal runs there runs with them defined. A shell
+# the case starts sets the check's own cleanup trap on a list of its own,
+# lists a stand-in, opens a decoy window and waits in it (10 s at most); the
+# case sends that shell a TERM. A subshell's EXIT trap runs on a signal only
+# through a trap of its own for that signal (the system sh installs no
+# handler again in a subshell), so the shell also has trap 'exit 1' TERM.
+# The stand-in ends on TERM, and by itself within about 30 s.
+t_decoy_term() {
+	fresh decoy-term
+	printf '%s\n' 'trap "exit 0" TERM' 'n=0' 'while [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/loop.sh"
+	for _how in other none nops; do
+		rm -f "${E:?}/sd.pid" "${E:?}/open"
+		(
+			tmp=${E:?}/sub.$_how
+			mkdir "${tmp:?}" || exit 1
+			trap cleanup EXIT
+			trap 'exit 1' TERM
+			start sh "${E:?}/loop.sh" decoy-term-sd
+			echo "$BG" > "${E:?}/sd.pid"
+			decoy "$_how" "$(pid_id "$BG")"
+			echo open > "${E:?}/open"
+			_n=0
+			while [ "$_n" -lt 100 ]; do
+				sleep 0.1
+				_n=$((_n + 1))
+			done
+		) > /dev/null 2>&1 &
+		_s=$!
+		wait_file 10 "${E:?}/open" || bad "decoy-term: $_how: the shell never opened its decoy window"
+		_sd=$(cat "${E:?}/sd.pid" 2> /dev/null) || _sd=
+		if [ -n "$_sd" ]; then record "$_sd"; else bad "decoy-term: $_how: the shell listed no stand-in"; fi
+		kill -TERM "$_s" 2> /dev/null || true
+		wait_gone 5 "$_sd" || bad "decoy-term: $_how: a TERM inside a decoy window left the process on the cleanup list running 5 s later"
+		wait_gone 15 "$_s" || bad "decoy-term: $_how: the shell outlived its own bound"
+		collect "$_s" 2> /dev/null || true
+		wait_gone 40 "$_sd" || bad "decoy-term: $_how: pid $_sd outlived its own bound"
+	done
+	[ "$fails" -eq 0 ]
+}
+
 t_lock_exclusion() {
 	fresh excl
 	start sh "$R/bench.sh" lock run first -- sh -c 'echo first-start >> "$1"; sleep 2; echo first-end >> "$1"' x "${E:?}/log" > "${E:?}/first.out" 2>&1
@@ -2989,7 +3031,7 @@ t_digit_cap() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
+all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*

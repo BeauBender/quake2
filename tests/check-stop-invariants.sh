@@ -47,8 +47,10 @@ settings=.claude/settings.json
 me=check-stop-invariants
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/stopck.XXXXXX")
 tmp=$(CDPATH='' cd "${tmp:?}" && pwd -P)
-trap 'rm -rf "${tmp:?}"' EXIT
-trap 'exit 1' HUP INT TERM
+# A test override of kill or ps goes first, should a signal end the check
+# while one is defined (FIX171, round 2).
+trap 'unset -f kill ps 2> /dev/null || true; rm -rf "${tmp:?}"' EXIT
+trap 'unset -f kill ps 2> /dev/null || true; exit 1' HUP INT TERM
 
 fail()
 {

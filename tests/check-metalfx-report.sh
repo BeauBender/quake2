@@ -47,7 +47,8 @@ root=$(pwd -P)
 for v in $(env | sed -n 's/^\(GIT_[A-Za-z_]*\)=.*/\1/p'); do unset "$v"; done
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
 tmp=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/mfxtest.XXXXXX")" && pwd -P) || exit 1
-trap 'chmod -R u+w "${tmp:?}" 2>/dev/null; rm -rf "${tmp:?}"' EXIT
+# Test overrides of kill, ps and wait go first, should a signal end the check while one is defined (FIX171, round 2).
+trap 'unset -f kill ps wait 2>/dev/null || true; chmod -R u+w "${tmp:?}" 2>/dev/null; rm -rf "${tmp:?}"' EXIT
 export HOME="$tmp/home"; mkdir "$HOME" || exit 1
 
 HELP="$root/tests/metalfx-report-helper.py"

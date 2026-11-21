@@ -176,6 +176,9 @@ listed_same() {
 }
 
 cleanup() {
+	# A trap that runs this while a case's ps (or kill) stands in for the
+	# system's must not use them (FIX171, round 2), so they go first.
+	unset -f kill ps 2> /dev/null || true
 	# Stop any process this check started that still runs; nothing else.
 	stop_listed "${tmp:?}/pids"
 	rm -rf "${tmp:?}"
@@ -244,6 +247,27 @@ reaped() {
 	}
 	wait "$1" 2> /dev/null || RS=$?
 	forget "$1"
+}
+# reap_lint <file> <helpers>: prints each line of <file> that holds the word
+# reap (not reaped, reap_skip or t_reap_id: a word ends at a character other
+# than a letter, a digit, _ or -, and a path's /reap is not one), joined
+# with the lines a trailing \ continues, unless it is a whole-line comment or
+# lies in one of the functions <helpers> names (an awk alternation). A
+# function runs from a line that starts with its definition (a name of
+# [A-Za-z_][A-Za-z0-9_]*) to the next line that starts with }; no other line
+# is exempt, the top level included, so no form of a call outside the
+# helpers gets past it (FIX171).
+reap_lint() {
+	awk -v ok="$2" '
+	/\\$/ { b = b substr($0, 1, length($0) - 1); next }
+	{ $0 = b $0; b = "" }
+	/^(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)/ || /^function[ \t]/ {
+		f = $0; sub(/^function[ \t]+/, "", f); sub(/[^A-Za-z0-9_].*/, "", f)
+	}
+	/^}/ { f = ""; next }
+	f ~ ("^(" ok ")$") || /^[ \t]*#/ { next }
+	(" " $0 " ") ~ /[^A-Za-z0-9_\/-]reap[^A-Za-z0-9_-]/ { print FILENAME ":" FNR ": " $0 }
+	' "$1"
 }
 # forget <pid>: takes a pid this check has waited for off the cleanup list,
 # so that cleanup never signals a pid the system may since have given to
@@ -1039,8 +1063,9 @@ t_reap_id() {
 # time the first time it is asked), or with another (ps gives another the
 # first time). Each kind of caller, run, and reaped (which t_nested and
 # t_grace call), must return within 10 s and count the failure. And no line
-# outside reaped and reap's own tests calls reap bare: a caller that did
-# could wait for its pid with nothing to bound the wait.
+# outside reap, reap_skip, reaped and reap's own tests holds the word reap
+# (reap_lint, checked on its own shapes): a caller that did could wait for
+# its pid with nothing to bound the wait.
 t_reap_wait() {
 	_rd=${tmp:?}/reap-wait
 	rm -rf "${_rd:?}"
@@ -1087,8 +1112,45 @@ t_reap_wait() {
 		wait_gone 5 "$_c" || bad "reap-wait: $_k: pid $_c outlived its stop file"
 		forget "$_c"
 	done
-	_bare=$(awk '/^[a-z_]+\(\) \{$/ { f = $1 } (/^[ \t]*reap "[^"]*"[^|&;]*$/ || /[|&;][ \t]*reap "[^"]*"[^|&;]*$/) && f !~ /^(reaped|t_reap_id|t_reap_wait)\(\)$/ { print FILENAME ":" FNR ": " $0 }' "$0")
+	_bare=$(reap_lint "$0" 'reap|reap_skip|reaped|reap_lint|t_reap_id|t_reap_wait')
 	[ -z "$_bare" ] || bad "reap-wait: reap is called bare outside reaped, so a wait after it may have no bound: $_bare"
+	# The lint itself (FIX171, round 2): each shape below calls reap in a
+	# function after reaped's, and must be refused; reaped passes.
+	lint_shape() {
+		_ln=$1
+		shift
+		printf '%s\n' 'reaped() {' '	reap "$@"' '}' "$_ln() {" "$@" '}' > "${_rd:?}/lint.sh"
+		[ -n "$(reap_lint "${_rd:?}/lint.sh" reaped)" ] || bad "reap-wait: the lint let through, in $_ln: $*"
+	}
+	while IFS= read -r _s; do
+		lint_shape t_f "	$_s"
+	done << 'SHAPES'
+reap "$x"
+reap "$x"; wait "$x"
+reap "$x" || wait "$x"
+reap "$x" 2>&1
+reap "$_rp" 2>&1; wait "$_rp"
+if :; then reap "$x"; fi
+if :; then :; else reap "$x"; fi
+{ reap "$x"; }
+reap $x
+eval reap "$x"
+eval 'reap "$x"'
+r=reap; $r "$x"
+foo && reap "$x"
+wait_gone 60 "$_gp" || reap "$_gp"
+reap "$x" || true
+SHAPES
+	lint_shape t_f '	reap "$x" || true' '	wait "$x"'
+	lint_shape t_f '	reap \' '		"$x"'
+	lint_shape t_f '	re\' 'ap "$x"'
+	lint_shape t_x2 '	reap "$x"'
+	lint_shape Tx '	reap "$x"'
+	printf '%s\n' 'reaped() {' '	reap "$@"' 't_x2() {' '	reap "$x"' '}' > "${_rd:?}/lint.sh"
+	[ -n "$(reap_lint "${_rd:?}/lint.sh" reaped)" ] || bad "reap-wait: the lint let through a reap in t_x2() with no } before it"
+	printf '%s\n' 't_f() {' '	reaped "$x" || true' '	reaped "$x" 5 || bad "x: $RS"' '	# then reap it' '}' > "${_rd:?}/lint.sh"
+	_l=$(reap_lint "${_rd:?}/lint.sh" reaped)
+	[ -z "$_l" ] || bad "reap-wait: the lint refused a plain reaped: $_l"
 	[ "$fails" -eq 0 ]
 }
 
