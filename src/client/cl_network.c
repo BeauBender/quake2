@@ -153,6 +153,9 @@ CL_Drop(void)
 
 	if (cls.state == ca_disconnected)
 	{
+		/* a server line that dropped never returned to Cbuf_Execute
+		   to restore the source; CL_Disconnect is not reached (FIX113) */
+		Cbuf_DropServerText();
 		return;
 	}
 
@@ -356,6 +359,9 @@ void
 CL_Disconnect(void)
 {
 	byte final[32];
+
+	/* what the server queued does not outlive its connection (FIX113) */
+	Cbuf_DropServerText();
 
 	if (cls.state == ca_disconnected)
 	{
