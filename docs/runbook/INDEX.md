@@ -108,3 +108,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX113](../runbook/FIX113.md): server text in the command buffer does not outlive the connection it came from: the per-byte source record, the red and green runs, and every command that gates on the connection state
 - [FIX148](../runbook/FIX148.md): a demo's text ends with the demo when a local game replaces it, the defer copy of a full buffer stays in bounds, and why a server's aliases and `nextdemo` stay out of the threat model
 - [TASK199](../runbook/TASK199.md): HDR probe and tone-map follow-ups: the source-order check of the single tone map and its mutants, the probe cancelled by a renderer restart, timerefresh named, and the unchanged frame pins
+- [FIX161](../runbook/FIX161.md): every download lands under the write directory and the final rename never replaces an existing file; the `players*` special case is gone
