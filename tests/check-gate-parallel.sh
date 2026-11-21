@@ -758,6 +758,8 @@ c_tty() {
 		_ty=$(cat "$d/shpid" 2> /dev/null || :)
 		_tstate=
 		_tstop=
+		_tdesc=
+		_toth=
 		if [ -n "$_ty" ]; then
 			# the run's own processes: test.sh (its pid is recorded) and
 			# all that descends from it, read before any is ended; a
@@ -768,7 +770,22 @@ c_tty() {
 			for _tk in $_tpids; do
 				_tst=$(ps -o stat= -p "$_tk" 2> /dev/null | tr -d ' ' || :)
 				[ -z "$_tst" ] || _tstate="$_tstate $_tk=$_tst"
-				case $_tst in *T*) _tstop=1 ;; esac
+				case $_tst in
+				*T*) ;;
+				*) _toth="$_toth $_tk=$_tst" ;;
+				esac
+				case $_tst in
+				*T*)
+					_tstop=1
+					# what stopped, read now (before any is ended); the
+					# args lose $HOME (to ~) and are cut to 120 characters
+					_tgp=$(ps -o pgid= -p "$_tk" 2> /dev/null | tr -d ' ' || :)
+					_tcm=$(ps -o comm= -p "$_tk" 2> /dev/null || :)
+					_tar=$(ps -o args= -p "$_tk" 2> /dev/null | awk -v h="${HOME:-}" '
+						{ o = ""; while (h != "" && (i = index($0, h))) { o = o substr($0, 1, i - 1) "~"; $0 = substr($0, i + length(h)) } print substr(o $0, 1, 120) }' || :)
+					_tdesc="$_tdesc [pid=$_tk stat=$_tst pgid=$_tgp comm=$_tcm args=$_tar]"
+					;;
+				esac
 			done
 			for _tk in $(ps -ax -o pid= -o ppid= | awk -v p="$_ty" '$2 == p { print $1 }'); do
 				kill -s KILL -- "-$_tk" 2> /dev/null || kill -s KILL "$_tk" 2> /dev/null || :
@@ -781,7 +798,9 @@ c_tty() {
 		wait "$_lp" 2> /dev/null || :
 		_lp=
 		if [ -n "$_tstop" ]; then
-			say "tty: the run stopped on a terminal with tostop (test.sh pid ${_ty:-unknown}), and was ended by pid"
+			say "tty: the run stopped on a terminal with tostop (test.sh pid ${_ty:-unknown}), and was ended by pid; stopped:$_tdesc"
+			_tothers=$(printf '%s' "$_toth" | cut -c1-200)
+			say "tty: state:$_tothers"
 		elif [ -n "$_ty" ] && [ -z "$_tstate" ]; then
 			say "tty: timed out after $_tb s; the run's state could not be read (tostop not ruled out)"
 		else
@@ -812,6 +831,29 @@ c_ttymsg() {
 	case $_mo in
 	*"stopped on a terminal with tostop"*) ;;
 	*) say "ttymsg: a real stop did not say tostop: $_mo"; return 1 ;;
+	esac
+	# it names the stopped process: pid, stat, pgid, comm and args, and the
+	# others' states are on a state: line, not in the stop line
+	_ms=$(printf '%s\n' "$_mo" | grep 'stopped on a terminal with tostop')
+	case $_ms in
+	*"stopped: [pid="[0-9]*" stat=T"*" pgid="[0-9]*" comm="?*" args="?*) ;;
+	*) say "ttymsg: the stop line does not name the stopped process (pid, stat, pgid, comm, args): $_ms"; return 1 ;;
+	esac
+	case $_ms in
+	*" comm="*sh" args="*) ;;
+	*) say "ttymsg: the stopped process is not a shell (the scheduler's): $_ms"; return 1 ;;
+	esac
+	[ "$(printf '%s\n' "$_ms" | tr ' ' '\n' | grep -c 'stat=T')" -ge 1 ] || { say "ttymsg: no T state in the stop line: $_ms"; return 1; }
+	printf '%s\n' "$_mo" | grep -q '^check-gate-parallel: tty: state:' || { say "ttymsg: no state: line below the stop line: $_mo"; return 1; }
+	case $_ms in
+	*" stat=S"* | *" stat=R"*) say "ttymsg: a running process's state is in the stop line: $_ms"; return 1 ;;
+	esac
+	# no home path: HOME is the scratch dir the tree lives in, so args show ~
+	_mh=$(HOME=$tmp SCHED=$tmp/mut-ttymsg.sh quiet=0 c_tty) && { say "ttymsg: the run without the SIGTTOU ignore passed (HOME)"; return 1; }
+	case $_mh in
+	*"$tmp"*) say "ttymsg: the output holds a home path: $_mh"; return 1 ;;
+	*"args=~/"* | *"args="*" ~/"*) ;;
+	*) say "ttymsg: the args show no ~ for HOME: $_mh"; return 1 ;;
 	esac
 }
 
@@ -980,6 +1022,15 @@ smut() {
 }
 smut no-int-probe intskip "sh -c 'kill -INT \$\$; exit 0' 2> /dev/null || INT_OK=1" 'INT_OK=1'
 smut skip-unsaid intskip 'skipint() { say' 'skipint() { :'
+smut tty-no-pgid ttymsg ' pgid=$_tgp' ''
+smut tty-no-comm ttymsg ' comm=$_tcm' ''
+smut tty-no-args ttymsg ' args=$_tar]' ']'
+smut tty-no-stat ttymsg ' stat=$_tst pgid' ' pgid'
+smut tty-no-state-line ttymsg '			say "tty: state:$_tothers"' ':'
+smut tty-others-in-stop ttymsg 'stopped:$_tdesc"' 'stopped:$_tdesc$_toth"'
+smut tty-home-kept ttymsg 'h != "" && (i' 'h == "" && (i'
+smut tty-no-cut ttymsg 'substr(o $0, 1, 120)' 'o $0'
+smut tty-read-after-kill ttymsg '_tgp=$(ps -o pgid= -p "$_tk"' '_tgp=$(kill -s KILL "$_tk" 2> /dev/null; sleep 0.3; ps -o pgid= -p "$_tk"'
 smut launch-no-group intskip '{ "$@" > "$_ld/out"' '{ set +m; "$@" > "$_ld/out"'
 
 if [ "$fail" -ne 0 ]; then
