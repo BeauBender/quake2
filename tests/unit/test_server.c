@@ -526,3 +526,89 @@ TEST(sv_connect_ip_refusal_reply)
 	T_EQ_INT(used, 0);
 	svs.clients = saved_clients;
 }
+
+/*
+ * The game module's AddCommandString: a level name from map data must
+ * only name a level. ExitLevel builds "gamemap \"<changemap>\"\n"; a
+ * newline, or a ';' outside quotes, inside the name would otherwise
+ * start a second command. SV_GameAddCommandString refuses such text
+ * whole, using Cbuf_Execute's own split rule.
+ */
+static void
+fix160_probe(void)
+{
+	Com_Printf("probe %s\n", Cmd_Argc() > 1 ? Cmd_Argv(1) : "");
+}
+
+static void
+fix160_gamemap(void)
+{
+	Com_Printf("mapname %s\n", Cmd_Argv(1));
+}
+
+static void
+fix160_run(const char *text)
+{
+	t_console_reset();
+	SV_GameAddCommandString(text);
+	Cbuf_Execute();
+}
+
+TEST(sv_game_command_text_never_adds_a_command)
+{
+	Cmd_AddCommand("t_probe", fix160_probe);
+	Cmd_AddCommand("t_gamemap", fix160_gamemap);
+
+	/* The stock shape still reaches the buffer as one line. */
+	fix160_run("t_gamemap \"base2\"\n");
+	T_CONSOLE_HAS("mapname base2");
+	T_CHECK(strstr(t_console(), "probe") == NULL);
+	T_CHECK(strstr(t_console(), "refused") == NULL);
+
+	/* An embedded newline, as ED_NewString makes from "\n" in a map
+	   key, runs nothing at all. */
+	fix160_run("t_gamemap \"base2\nt_probe\n\"\n");
+	T_CHECK(strstr(t_console(), "probe ") == NULL);
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	/* A quote closed by map data, then ';' outside quotes. */
+	fix160_run("t_gamemap \"base2\";t_probe;\"\"\n");
+	T_CHECK(strstr(t_console(), "probe ") == NULL);
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	/* A bare ';'. */
+	fix160_run("t_gamemap base2;t_probe\n");
+	T_CHECK(strstr(t_console(), "probe ") == NULL);
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	/* A ';' inside quotes is an argument, not a split. */
+	fix160_run("t_gamemap \"a;b\"\n");
+	T_CONSOLE_HAS("mapname a;b");
+	T_CHECK(strstr(t_console(), "refused") == NULL);
+
+	/* CRLF is not a split point for Cbuf_Execute: it runs as on main. */
+	fix160_run("t_gamemap \"base2\"\r\n");
+	T_CONSOLE_HAS("mapname base2");
+	T_CHECK(strstr(t_console(), "refused") == NULL);
+
+	/* addon batch text, refused since FIX160: more than one command. */
+	fix160_run("t_gamemap a;t_gamemap b\n");
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	/* addon batch text, refused since FIX160: a newline before the end. */
+	fix160_run("t_gamemap a\nt_gamemap b\n");
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	/* addon batch text, refused since FIX160: a trailing ';'. */
+	fix160_run("t_gamemap a;\n");
+	T_CHECK(strstr(t_console(), "mapname") == NULL);
+	T_CONSOLE_HAS("refused command text");
+
+	Cmd_RemoveCommand("t_probe");
+	Cmd_RemoveCommand("t_gamemap");
+}

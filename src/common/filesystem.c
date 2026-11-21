@@ -216,6 +216,14 @@ FS_CreatePath(const char *path)
 		return;
 	}
 
+	/* Nothing to create for an empty path or a single character:
+	   the scan below looks at old + 1 and must not pass the
+	   terminator. */
+	if (path[0] == '\0' || path[1] == '\0')
+	{
+		return;
+	}
+
 	Q_strlcpy(dir_path, path, sizeof(dir_path));
 
 	cur = old = dir_path;
