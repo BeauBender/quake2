@@ -485,7 +485,7 @@ CL_UpscaleTextures_f(void)
 	if (!CL_UpscaleAllowed(cls.state >= ca_connected,
 		NET_IsLocalAddress(cls.netchan.remote_address), cl.attractloop))
 	{
-		Com_Printf("upscale_textures: refused while a demo plays or while connected to a remote server\n");
+		Com_Printf("upscale_textures: refused from a server's or a demo's text, while a demo plays or while connected to a remote server\n");
 		return;
 	}
 
