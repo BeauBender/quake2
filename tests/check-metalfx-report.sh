@@ -63,25 +63,51 @@ want_not() { case $3 in *"$2"*) ko "$1" "'$2' found";; esac; }
 # start time and command line read before the first, since a pid that has ended may be given to another
 # process (FIX171). Status 0: both were sent; 1: ps gave no answer for <pid> before the first, so the
 # second was not sent; 2: <pid> had changed (it ended, or ran another program), so the second was not sent
+# (FIX171, round 1) term_twice <pid> <start>: the first SIGTERM, too, goes only while <pid> still has <start>, the
+# start time read along with it; status 3: it had not, or the check could not tell, so neither was sent
 term_twice() {
     local id
-    id=$(ps -o lstart= -o args= -p "$1" 2>/dev/null)
+    judge "$1" "$2" || return 3
+    id=$(tt_id "$1")
     kill -TERM "$1" 2>/dev/null; sleep 1
     if [ -z "$id" ]; then sleep 1; return 1; fi
-    if [ "$(ps -o lstart= -o args= -p "$1" 2>/dev/null)" != "$id" ]; then sleep 1; return 2; fi
+    if [ "$(tt_id "$1")" != "$id" ]; then sleep 1; return 2; fi
     kill -TERM "$1" 2>/dev/null; sleep 1; return 0
 }
 # start_of <pid>: the start time ps prints for <pid>; empty when it is not a pid, does not run, or ps gives no answer
-start_of() { case $1 in ''|*[!0-9]*) return 0;; esac; ps -o lstart= -p "$1" 2>/dev/null; }
-# same_start <pid> <start>: <pid> still runs with the start time read along with it; never for an empty <start>. A
-# pid read from the stub's file is signalled only while this holds, since by then the system may have given it to
-# another process (FIX171)
-same_start() { [ -n "$2" ] && [ "$(start_of "$1")" = "$2" ]; }
+start_of() { case $1 in ''|*[!0-9]*) return 0;; esac; ps -o lstart= -p "$1" 2>/dev/null | awk '{ $1 = $1; print }'; }
+# (FIX171, round 1) start_of prints the one form of a start time: its words with one blank between them and none
+# around them (ps pads it with blanks at the end). Every start time here comes from it, term_twice's too:
+# tt_id <pid>: the start time and the command line of <pid>; empty when ps gives no answer for either
+tt_id() { local s a; s=$(start_of "$1"); a=$(ps -o args= -p "$1" 2>/dev/null); [ -n "$s" ] && [ -n "$a" ] && printf '%s|%s' "$s" "$a"; }
+# judge <pid> <start>: 0 while <pid> still runs with <start>; 1 when it has gone or runs with another start time;
+# 2 when the check cannot tell: no pid or no start time was read, or the pid answers kill -0 but ps gives no start
+# time for it now
+judge() {
+    local s
+    case $1 in ''|*[!0-9]*) return 2;; esac
+    [ -n "$2" ] || return 2
+    s=$(start_of "$1")
+    if [ -z "$s" ]; then kill -0 "$1" 2>/dev/null && return 2; return 1; fi
+    [ "$s" = "$2" ] || return 1
+}
 # group_left <pid> <start>: e2e-group's end: the child of pins.sh (MFX_STUB_CHILD), still the process read, is KILLed
 # and fails the case; another process in its pid gets nothing
-group_left() { if same_start "$1" "$2"; then kill -KILL "$1" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM"; fi; }
+group_left() {
+    local j=0; judge "$1" "$2" || j=$?
+    case $j in
+        0) kill -KILL "$1" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM";;
+        2) ko e2e-group "cannot tell whether pid $1 is still the child of pins.sh read (no start time from ps), so it gets no KILL";;
+    esac
+}
 # lock_left <how> <pid> <start>: e2e-lock's end, for the stub's shell (MFX_STUB_SH) and its child (MFX_STUB_CHILD): the same
-lock_left() { if same_start "$2" "$3"; then kill -KILL "$2" 2>/dev/null; ko e2e-lock "$1: the run under the lock was left running"; fi; }
+lock_left() {
+    local j=0; judge "$2" "$3" || j=$?
+    case $j in
+        0) kill -KILL "$2" 2>/dev/null; ko e2e-lock "$1: the run under the lock was left running";;
+        2) ko e2e-lock "$1: cannot tell whether pid $2 is still the process read (no start time from ps), so it gets no KILL";;
+    esac
+}
 
 cc -O2 -o "$tmp/framediff" "$root/scripts/pins/framediff.c" -lm || { bad "cannot build framediff"; exit 1; }
 
@@ -546,7 +572,7 @@ limit" "$out"
         tp=$!
         n=0; while [ ! -e "$w/tt-ready" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
         [ -e "$w/tt-ready" ] || ko e2e-lock-term2 "$how: the process did not start within 5 s"
-        tt=0; term_twice "$tp" || tt=$?
+        tt=0; term_twice "$tp" "$(start_of "$tp")" || tt=$?
         if [ $how = exec ]; then
             [ $tt = 2 ] || ko e2e-lock-term2 "a process that ran another program on the first SIGTERM was not seen changed (status $tt)"
             kill -0 $tp 2>/dev/null || ko e2e-lock-term2 "a second SIGTERM went to a process that had changed since it was read"
@@ -575,7 +601,7 @@ limit" "$out"
         fi
         pid=$!
         n=0; while [ ! -s "$w/lt-child" ] && kill -0 $pid 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
-        spid=$(cat "$w/lt-sh" 2>/dev/null); cpid=$(cat "$w/lt-child" 2>/dev/null); ppid=$(cat "$w/lt-parent" 2>/dev/null)
+        spid=$(cat "$w/lt-sh" 2>/dev/null); cpid=$(cat "$w/lt-child" 2>/dev/null); ppid=$(cat "$w/lt-parent" 2>/dev/null); pst=$(start_of "$ppid")
         # the stub's two pids are read with their start times, and signalled only while they still have them (FIX171)
         sst=$(start_of "$spid"); cst=$(start_of "$cpid")
         [ -n "$cpid" ] || ko e2e-lock "$how: the stub pins.sh did not start under the lock: $(tail -3 "$w/lt-$how.log")"
@@ -588,10 +614,11 @@ limit" "$out"
                 [ "$ppid" != "$pid" ] || ko e2e-lock "TERM2: the generator holds no lock of its own (the stub's parent is its pid)"
                 # the second TERM only while $ppid is still the generator read from the file (FIX171); a
                 # generator that ps gives no answer for, or that has changed, is a failure of its own
-                tt=0; term_twice "$ppid" || tt=$?
+                tt=0; term_twice "$ppid" "$pst" || tt=$?
                 case $tt in
                     1) ko e2e-lock "TERM2: ps gave no start time or command line for the generator, so no second SIGTERM was sent";;
                     2) ko e2e-lock "TERM2: the generator had changed 1 s after the first SIGTERM, so no second SIGTERM was sent";;
+                    3) ko e2e-lock "TERM2: the generator read from the file was not the process read, or ps gave no start time for it, so no SIGTERM was sent";;
                 esac
                 kill -0 "$ppid" 2>/dev/null || ko e2e-lock "TERM2: a second SIGTERM cut the stop short (the generator was gone 1 s later)";;
         esac
@@ -759,8 +786,9 @@ assertions "$tmp/real-tree/scripts/metalfx-report" "$SRC/ssim.c" "$tmp/real-run"
 # they test this check and not the generator: read with another start time, or with none, or with ps giving no
 # answer, it gets no KILL and fails no case; read with its own start time, it is KILLed and fails the case
 for site in group lock; do
-    bash -c 'n=0; while [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done' &
-    dp=$!
+    rm -f "$tmp/sd.pid"; (bash -c 'n=0; while [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done' & echo $! > "$tmp/sd.pid"; wait) > /dev/null 2>&1 &
+    sp=$!; n=0; while [ ! -s "$tmp/sd.pid" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
+    dp=$(cat "$tmp/sd.pid" 2>/dev/null)
     n=0; while [ -z "$(start_of $dp)" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
     ds=$(start_of $dp)
     [ -n "$ds" ] || ko e2e-$site-id "ps gave no start time for the stand-in"
@@ -771,14 +799,17 @@ for site in group lock; do
             none) got=$(FAILED=" "; left $dp '' > /dev/null; printf '%s' "$FAILED");;
             nops) got=$(ps() { return 1; }; FAILED=" "; left $dp "$ds" > /dev/null; printf '%s' "$FAILED");;
         esac
-        [ "$got" = " " ] || ko e2e-$site-id "$how: a process that is not the one read failed the case:$got"
+        # read with another start time it fails nothing; with none, or with ps giving no answer, the check cannot
+        # tell, and that fails the case (FIX171, round 1); none of the three gets a KILL
+        if [ $how = other ]; then want=" "; else want=" e2e-$site "; fi
+        [ "$got" = "$want" ] || ko e2e-$site-id "$how: the case's failures were '$got', not '$want'"
         kill -0 $dp 2>/dev/null || ko e2e-$site-id "$how: a KILL went to a process that is not the one read"
     done
     got=$(FAILED=" "; left $dp "$ds" > /dev/null; printf '%s' "$FAILED")
     [ "$got" = " e2e-$site " ] || ko e2e-$site-id "own: the process read, left running, did not fail the case:$got"
     n=0; while kill -0 $dp 2>/dev/null && [ $n -lt 30 ]; do sleep 0.1; n=$((n+1)); done
     kill -0 $dp 2>/dev/null && ko e2e-$site-id "own: the process read, left running, was not KILLed"
-    wait $dp 2>/dev/null
+    wait $sp 2>/dev/null
 done
 unset -f left
 if [ "$FAILED" != " " ]; then bad "assertions failed on the real code:$FAILED"; fi
