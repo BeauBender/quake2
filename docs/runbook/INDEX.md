@@ -121,3 +121,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX163](../runbook/FIX163.md): the Keys menu's unbind of a server-owned key gives the key back to the player's saved binding instead of erasing it
 - [FIX166](../runbook/FIX166.md): a bind line in `config.cfg` cannot split into a second command: the writer skips a body with a quote or a line break and says so, and why the key names cannot hold a splitting character
 - [FIX162](../runbook/FIX162.md): a source check holds the safe form of the key-binding call sites in `cl_keyboard.c`, which the unit suite cannot link: each rule, and the mutants that prove it
+- [FIX174](../runbook/FIX174.md): check-gate-parallel's tty case reports the tostop line only when a process of the run is stopped (state T), else "timed out after N s (state: ...)", so a slow run is told from the real bug; the `ttymsg` case and its mutant
