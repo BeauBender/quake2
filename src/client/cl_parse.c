@@ -959,6 +959,13 @@ CL_ParseServerData(void)
 
 	/* game directory */
 	str = MSG_ReadString(&net_message);
+
+	if (!FS_GameDirValid(str))
+	{
+		Com_Error(ERR_DROP, "Server sent an invalid game directory");
+		return;
+	}
+
 	Q_strlcpy(cl.gamedir, str, sizeof(cl.gamedir));
 
 	/* set gamedir */
