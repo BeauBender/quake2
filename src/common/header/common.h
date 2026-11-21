@@ -389,16 +389,25 @@ void Cbuf_DropServerText(void);
 /* line queues while it runs. Cbuf_DropServerText discards all of it, */
 /* and keeps the player's, when the connection it came from ends. */
 
+void Cbuf_AddPlayerText(const char *text);
+
+/* Cbuf_AddText, but marked as the player's even inside a server line: */
+/* the player's own config files the engine execs (Qcommon_ExecConfigs). */
+
 qboolean Cbuf_ExecutingServerText(void);
 
 /* true while Cbuf_Execute runs a line that holds any of the server's */
 /* bytes: a command that refuses a server's use refuses it then. */
-/* The line stays the server's after a Cbuf_DropServerText inside it. */
+/* A line's source is its own bytes', also in a Cbuf_Execute nested */
+/* inside a server line (FIX156). */
+
+/* It stays true for the rest of a server line that runs */
+/* Cbuf_DropServerText. */
 
 void Cbuf_ResetSource(void);
 
-/* where a Com_Error longjmp lands: the next line is the player's */
-/* unless it holds the server's bytes. */
+/* called by Com_Error before its teardown: the error ends the line, */
+/* and the next line is the player's unless it holds the server's bytes. */
 
 void Cbuf_ExecuteText(int exec_when, char *text);
 
