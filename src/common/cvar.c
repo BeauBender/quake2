@@ -395,6 +395,22 @@ typedef struct cvar_servermark_s
 	char *name;
 } cvar_servermark_t;
 
+/*
+ * The names of the cvars a server line created (FIX168): their
+ * default_string is the server's value, so the player's reset or
+ * resetall to it is not the player choosing a value. A name is added
+ * once, and a cvar is never removed, so the list is bounded by the
+ * cvar count.
+ */
+typedef struct cvar_serverdefault_s
+{
+	struct cvar_serverdefault_s *next;
+	char *name;
+	char *value; /* the value that created the cvar */
+} cvar_serverdefault_t;
+
+static cvar_serverdefault_t *cvar_serverdefaults;
+
 static cvar_servermark_t *cvar_servermarks;
 
 static cvar_servermark_t **
@@ -414,6 +430,24 @@ Cvar_FindServerMark(const char *var_name)
 }
 
 static void
+Cvar_FreeServerMark(cvar_servermark_t *m)
+{
+	Z_Free(m->name);
+	Z_Free(m);
+}
+
+static void
+Cvar_AddServerMark(const char *var_name)
+{
+	cvar_servermark_t *m;
+
+	m = Z_Malloc(sizeof(*m));
+	m->name = CopyString(var_name);
+	m->next = cvar_servermarks;
+	cvar_servermarks = m;
+}
+
+static void
 Cvar_FreeServerMarks(void)
 {
 	cvar_servermark_t *m;
@@ -422,9 +456,53 @@ Cvar_FreeServerMarks(void)
 	{
 		m = cvar_servermarks;
 		cvar_servermarks = m->next;
-		Z_Free(m->name);
-		Z_Free(m);
+		Cvar_FreeServerMark(m);
 	}
+
+	while (cvar_serverdefaults)
+	{
+		cvar_serverdefault_t *d = cvar_serverdefaults;
+
+		cvar_serverdefaults = d->next;
+		Z_Free(d->name);
+		Z_Free(d->value);
+		Z_Free(d);
+	}
+}
+
+static const cvar_serverdefault_t *
+Cvar_FindServerDefault(const char *var_name)
+{
+	const cvar_serverdefault_t *d;
+
+	for (d = cvar_serverdefaults; d; d = d->next)
+	{
+		if (!strcmp(d->name, var_name))
+		{
+			return d;
+		}
+	}
+
+	return NULL;
+}
+
+/* A cvar a server line just created: its default is the server's. */
+static void
+Cvar_NoteCreated(const cvar_t *var)
+{
+	cvar_serverdefault_t *d;
+
+	if (!var || !Cmd_ExecutingLine() || !Cbuf_ExecutingServerText() ||
+			Cvar_FindServerDefault(var->name))
+	{
+		return;
+	}
+
+	d = Z_Malloc(sizeof(*d));
+	d->name = CopyString(var->name);
+	d->value = CopyString(var->default_string);
+	d->next = cvar_serverdefaults;
+	cvar_serverdefaults = d;
 }
 
 /*
@@ -461,8 +539,7 @@ Cvar_NoteWriter(const cvar_t *var, qboolean changed)
 		{
 			m = *found;
 			*found = m->next;
-			Z_Free(m->name);
-			Z_Free(m);
+			Cvar_FreeServerMark(m);
 		}
 
 		return;
@@ -470,10 +547,7 @@ Cvar_NoteWriter(const cvar_t *var, qboolean changed)
 
 	if (changed && !found)
 	{
-		m = Z_Malloc(sizeof(*m));
-		m->name = CopyString(var->name);
-		m->next = cvar_servermarks;
-		cvar_servermarks = m;
+		Cvar_AddServerMark(var->name);
 	}
 }
 
@@ -615,6 +689,7 @@ Cvar_Set2(const char *var_name, const char *value, qboolean force)
 
 	var = Cvar_GetNew(var_name, value, 0);
 	Cvar_NoteWriter(var, true);
+	Cvar_NoteCreated(var);
 
 	return var;
 }
@@ -650,6 +725,7 @@ Cvar_FullSet(const char *var_name, const char *value, int flags)
 	{
 		var = Cvar_GetNew(var_name, value, flags);
 		Cvar_NoteWriter(var, true);
+		Cvar_NoteCreated(var);
 
 		return var;
 	}
@@ -993,6 +1069,34 @@ Cvar_Inc_f(void)
  * Resets a cvar to its default value.
  */
 static void
+Cvar_ResetVar(cvar_t *var)
+{
+	const cvar_serverdefault_t *d;
+	const char *was = var->latched_string ? var->latched_string : var->string;
+	qboolean changed = strcmp(was, var->default_string) != 0;
+
+	Cvar_SetVar(var, var->default_string, false);
+
+	/* a default a server line created is the server's value: the
+	   reset leaves the cvar the server's (FIX168). A reset that
+	   changed nothing changed no owner. */
+	d = Cvar_FindServerDefault(var->name);
+
+	/* only while the default is still the one the server's line created:
+	   Cvar_Get replaces it when the engine registers the cvar later */
+	if (changed && d && !strcmp(d->value, var->default_string) &&
+			!Cvar_FindServerMark(var->name))
+	{
+		was = var->latched_string ? var->latched_string : var->string;
+
+		if (!strcmp(was, var->default_string))
+		{
+			Cvar_AddServerMark(var->name);
+		}
+	}
+}
+
+static void
 Cvar_Reset_f(void)
 {
 	const char *var_name;
@@ -1014,7 +1118,7 @@ Cvar_Reset_f(void)
 	}
 
 	Com_Printf("%s: %s\n", var->name, var->default_string);
-	Cvar_SetVar(var, var->default_string, false);
+	Cvar_ResetVar(var);
 }
 
 /*
@@ -1037,7 +1141,7 @@ Cvar_ResetAll_f(void)
 			continue;
 		}
 
-		Cvar_SetVar(var, var->default_string, false);
+		Cvar_ResetVar(var);
 	}
 }
 

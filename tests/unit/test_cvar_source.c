@@ -28,6 +28,7 @@
 #include "test.h"
 #include "../../src/server/header/server.h"
 #include "../../src/client/header/upscale.h"
+#include "../../src/client/menu/header/vidrules.h"
 
 extern sizebuf_t cmd_text;      /* src/common/cmdparser.c */
 extern char defer_text_buf[];   /* src/common/cmdparser.c */
@@ -441,5 +442,233 @@ TEST(cvar_zrv_writer_skips_marked)
 	Cvar_WriteVariables(path);
 	T_CHECK(file_has(path, "set t_cs14 \"mine\""));
 
+	cs_teardown();
+}
+
+/* Writes the cvar file, empty first. */
+static void
+write_cfg(const char *path)
+{
+	FILE *f = Q_fopen(path, "w");
+
+	T_REQUIRE(f != NULL);
+	fclose(f);
+	Cvar_WriteVariables(path);
+}
+
+/* FIX168 round 2: a server write marks the cvar and the file omits it,
+   whatever the player held before (the skip is FIX158's). The player's
+   own later write is saved. */
+TEST(cvar_fix168_file_omits_marked_until_player_writes)
+{
+	char path[MAX_OSPATH];
+
+	cs_setup();
+	player_line("set t_cs20 \"P\" a\n");
+	server_line("set t_cs20 \"V\"\n");
+	server_line("set t_cs21 \"V2\" a\n");
+	T_CHECK(Cvar_ServerWrote("t_cs20"));
+	T_EQ_STR(Cvar_VariableString("t_cs20"), "V");
+
+	Com_sprintf(path, sizeof(path), "%s/config_k.cfg", FS_Gamedir());
+	write_cfg(path);
+	T_CHECK(!file_has(path, "set t_cs20 "));
+	T_CHECK(!file_has(path, "set t_cs21 "));
+	T_CHECK(!file_has(path, "\"P\""));
+
+	player_line("set t_cs20 \"Q\"\n");
+	write_cfg(path);
+	T_CHECK(file_has(path, "set t_cs20 \"Q\""));
+
+	cs_teardown();
+}
+
+/* Security round 1, B1: a value the engine copied from the network may
+   hold a newline. A server write after it must not get that value into
+   config.cfg, where it would split into the player's lines. */
+TEST(cvar_rvsec_engine_then_server_newline_not_written)
+{
+	char path[MAX_OSPATH];
+
+	cs_setup();
+	Cvar_Get("t_rvs_g", "", CVAR_LATCH | CVAR_SERVERINFO);
+	Com_SetServerState(ss_dead);
+	Cvar_Set("t_rvs_g", "x\nt_cs_probe\nx"); /* outside a line, as CL_ParseServerData does */
+	Com_SetServerState(ss_cinematic);
+	T_CHECK(!Cvar_ServerWrote("t_rvs_g"));
+	server_line("set t_rvs_g y a\n");
+	T_CHECK(Cvar_ServerWrote("t_rvs_g"));
+
+	Com_sprintf(path, sizeof(path), "%s/config_rvs.cfg", FS_Gamedir());
+	write_cfg(path);
+	T_CHECK(!file_has(path, "\nt_cs_probe\n"));
+	probe_runs = 0;
+	probe_allowed = 0;
+	player_line("exec config_rvs.cfg\n");
+	T_EQ_INT(probe_allowed, 0);
+	T_EQ_INT(probe_runs, 0);
+	cs_teardown();
+}
+
+/* Security round 1, I1: a latched cvar the server wrote while no local
+   server ran, then the player's latched write, then the server again:
+   the live value is the server's and is not in the file. */
+TEST(cvar_rvsec_latched_server_value_not_written)
+{
+	char path[MAX_OSPATH];
+
+	cs_setup();
+	Cvar_Get("t_rvs_l", "A", CVAR_LATCH | CVAR_ARCHIVE);
+	Com_SetServerState(ss_dead);
+	server_line("set t_rvs_l \"S1\"\n");
+	Com_SetServerState(ss_cinematic);
+	player_line("set t_rvs_l \"P\"\n");
+	server_line("set t_rvs_l \"S2\"\n");
+
+	Com_sprintf(path, sizeof(path), "%s/config_rvl.cfg", FS_Gamedir());
+	write_cfg(path);
+	T_CHECK(!file_has(path, "set t_rvs_l \"S1\""));
+	T_CHECK(!file_has(path, "set t_rvs_l \"S2\""));
+	cs_teardown();
+}
+
+/* Security round 1, I2: a server's archive flag does not make the
+   client save a value the player set on a cvar that was not archived. */
+TEST(cvar_rvsec_server_archive_flag_not_written)
+{
+	char path[MAX_OSPATH];
+
+	cs_setup();
+	Cvar_Get("t_rvs_pw", "", 0);
+	player_line("set t_rvs_pw secretpw\n");
+	server_line("set t_rvs_pw x a\n");
+
+	Com_sprintf(path, sizeof(path), "%s/config_rvp.cfg", FS_Gamedir());
+	write_cfg(path);
+	T_CHECK(!file_has(path, "secretpw"));
+	cs_teardown();
+}
+
+/* Puts the suite's cvar table, the preset directory and the scratch
+   cvar back, and removes the file the test wrote. The player's write
+   first clears the mark the table's cvar may still hold. */
+static void
+rtsave_restore(cvar_t *saved, const char *path)
+{
+	cvar_t *v;
+
+	player_line("set r_rt_ao \"9\"\n");
+	v = cvar_vars;
+	RTPreset_SetDir(NULL);
+	cvar_vars = saved;
+	remove(path);
+
+	while (v)
+	{
+		cvar_t *next = v->next;
+
+		Z_Free(v->name);
+		Z_Free(v->string);
+		Z_Free(v->default_string);
+		Z_Free(v->latched_string);
+		Z_Free(v);
+		v = next;
+	}
+
+	cs_teardown();
+}
+
+/* T_REQUIRE leaves the test: the suite's state is put back first */
+#define RTSAVE_REQUIRE(COND) \
+	do { if (!(COND)) { rtsave_restore(saved, path); T_REQUIRE(COND); } } while (0)
+
+/* FIX168 step 4: the RT preset save writes no value a server wrote,
+   and writes the player's own. */
+TEST(cvar_fix168_rt_preset_save_skips_marked)
+{
+	char path[MAX_OSPATH], text[4096];
+	cvar_t *saved = cvar_vars;
+	size_t got;
+	FILE *f;
+
+	cs_setup();
+	snprintf(path, sizeof(path), "%s/presets/rt-srv.cfg", t_tmpdir());
+	cvar_vars = NULL;
+	Cvar_Get("r_rt_ao", "1", CVAR_ARCHIVE);
+	RTPreset_SetDir(t_tmpdir());
+	server_line("set r_rt_ao \"2\"\n");
+	T_CHECK(Cvar_ServerWrote("r_rt_ao"));
+
+	T_EQ_INT(RTPreset_Save("srv"), 1);
+	f = fopen(path, "r");
+	RTSAVE_REQUIRE(f != NULL);
+	got = fread(text, 1, sizeof(text) - 1, f);
+	fclose(f);
+	text[got] = '\0';
+	T_CHECK(strstr(text, "r_rt_ao") == NULL);
+
+	/* the player's own write is saved */
+	player_line("set r_rt_ao \"3\"\n");
+	T_EQ_INT(RTPreset_Save("srv"), 1);
+	f = fopen(path, "r");
+	RTSAVE_REQUIRE(f != NULL);
+	got = fread(text, 1, sizeof(text) - 1, f);
+	fclose(f);
+	text[got] = '\0';
+	T_CHECK(strstr(text, "set r_rt_ao \"3\"") != NULL);
+
+	rtsave_restore(saved, path);
+}
+
+/* FIX168 step 2: a reset to a default a server line created leaves
+   the cvar the server's. `reset` on the named cvar, not `resetall`: a
+   resetall would reset every cvar of the shared test process. */
+TEST(cvar_fix168_reset_to_server_default_stays_marked)
+{
+	char path[MAX_OSPATH];
+
+	cs_setup();
+	server_line("set t_cs22 \"t_cs_probe\" a\n");
+	player_line("set t_cs22 \"W\"\n");
+	T_CHECK(!Cvar_ServerWrote("t_cs22"));
+	player_line("reset t_cs22\n");
+	T_EQ_STR(Cvar_VariableString("t_cs22"), "t_cs_probe");
+	T_CHECK(Cvar_ServerWrote("t_cs22"));
+	player_line("vstr t_cs22\n");
+	T_EQ_INT(probe_runs, 1);
+	T_EQ_INT(probe_allowed, 0);
+
+	Com_sprintf(path, sizeof(path), "%s/config_r.cfg", FS_Gamedir());
+	write_cfg(path);
+	T_CHECK(!file_has(path, "t_cs_probe"));
+
+	/* the player writes a different value, then resets again */
+	player_line("set t_cs22 \"W\"\n");
+	T_CHECK(!Cvar_ServerWrote("t_cs22"));
+	player_line("reset t_cs22\n");
+	T_CHECK(Cvar_ServerWrote("t_cs22"));
+
+	cs_teardown();
+}
+
+/* FIX168 round 2, correctness I1: a server line created the cvar before
+   the engine registered it. Cvar_Get replaced the default, so a reset
+   to it is the player's own default and not the server's. */
+TEST(cvar_rv168_stale_server_default)
+{
+	char path[MAX_OSPATH];
+
+	cs_setup();
+	server_line("set t_cs30 \"S\"\n");
+	Cvar_Get("t_cs30", "E", CVAR_ARCHIVE);
+	player_line("set t_cs30 \"W\"\n");
+	T_CHECK(!Cvar_ServerWrote("t_cs30"));
+	player_line("reset t_cs30\n");
+	T_EQ_STR(Cvar_VariableString("t_cs30"), "E");
+	T_CHECK(!Cvar_ServerWrote("t_cs30"));
+
+	Com_sprintf(path, sizeof(path), "%s/config_z.cfg", FS_Gamedir());
+	write_cfg(path);
+	T_CHECK(file_has(path, "set t_cs30 \"E\""));
 	cs_teardown();
 }
