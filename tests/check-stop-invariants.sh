@@ -54,6 +54,47 @@ now()
 	date +%s
 }
 
+# start_of <pid>: the start time ps prints for <pid>; empty when it is not a
+# pid, does not run, or ps gives no answer.
+start_of()
+{
+	case $1 in
+	'' | *[!0-9]*) return 0 ;;
+	esac
+	ps -o lstart= -p "$1" 2> /dev/null || true
+}
+
+# same_start <pid> <start>: <pid> still runs with the start time read along
+# with it; never for an empty <start>. A pid read from a file, or a child
+# that may have exited, is signalled only while this holds: by then the
+# system may have given the pid to another process (FIX171).
+same_start()
+{
+	[ -n "$2" ] && [ "$(start_of "$1")" = "$2" ]
+}
+
+# leave_stop <pid> <start>: TERM to the process check-leave.sh left behind,
+# read from leave.pid and leave.start, while it is still that process.
+leave_stop()
+{
+	if same_start "$1" "$2"; then kill "$1" 2> /dev/null || true; fi
+}
+
+# hook_sig <signal>: <signal> to the hook started in the background ($hp),
+# while it still has the start time read when it was started ($hps).
+hook_sig()
+{
+	if same_start "$hp" "$hps"; then kill -s "$1" "$hp" 2> /dev/null || true; fi
+}
+
+# stray_kill <pid> <start>: KILL to a process of the hanging check's group,
+# read from hang.pids, that still runs as that process; true when it did.
+stray_kill()
+{
+	same_start "$1" "$2" || return 1
+	kill -KILL "$1" 2> /dev/null || true
+}
+
 [ -f "$hook" ] || fail "$hook is missing"
 
 # The list: the lines between checks=' and the closing quote.
@@ -132,10 +173,61 @@ quiet()
 	[ -z "$out" ] || fail "selftest: $1: the hook printed: $out"
 }
 
+# idsig <site> <pid> <start>: the signal of one site above, to <pid> read
+# with <start>.
+idsig()
+{
+	case $1 in
+	leave) leave_stop "$2" "$3" ;;
+	hook) (hp=$2 hps=$3 && hook_sig KILL) ;;
+	stray) stray_kill "$2" "$3" || true ;;
+	esac
+}
+
+# The three sites that signal a pid read earlier (FIX171), each on a process
+# this check starts that stands in for a pid the system gave to another
+# process: a sleep in a subshell of its own, with no output, that ends by
+# itself within 10 s. Read with another start time, with none, or with ps
+# giving no answer, it gets no signal; read with its own, it gets it.
+idtest()
+{
+	for site in leave hook stray; do
+		rm -f "${tmp:?}/decoy.pid"
+		(sleep 10 & echo $! > "${tmp:?}/decoy.pid" && wait) > /dev/null 2>&1 &
+		sp=$!
+		n=0
+		until [ -s "${tmp:?}/decoy.pid" ]; do
+			n=$((n + 1))
+			[ "$n" -le 50 ] || fail "selftest: $site-id: the stand-in did not start"
+			sleep 0.1
+		done
+		d=$(cat "${tmp:?}/decoy.pid")
+		ds=$(start_of "$d")
+		[ -n "$ds" ] || fail "selftest: $site-id: ps gave no start time for the stand-in ($d)"
+		for how in other none nops; do
+			case $how in
+			other) idsig "$site" "$d" 'Thu Jan  1 00:00:00 2026' ;;
+			none) idsig "$site" "$d" '' ;;
+			nops) (ps() { return 1; } && idsig "$site" "$d" "$ds") ;;
+			esac
+			[ "$(start_of "$d")" = "$ds" ] || fail "selftest: $site-id: $how: a signal went to a process that is not the one read"
+		done
+		idsig "$site" "$d" "$ds"
+		n=0
+		while [ "$(start_of "$d")" = "$ds" ]; do
+			n=$((n + 1))
+			[ "$n" -le 30 ] || fail "selftest: $site-id: own: no signal went to the process read"
+			sleep 0.1
+		done
+		wait "$sp" || true
+	done
+}
+
 # The self-test: a copy of the hook with the list replaced by stubs, a
 # 2 s deadline and a 1 s grace, in a throwaway repository.
 selftest()
 {
+	idtest
 	r=${tmp:?}/st
 	mkdir -p "$r/.claude/hooks" "$r/tests" "$r/src"
 	printf '#!/bin/sh\necho "$0: ok"\n' > "$r/tests/check-pass.sh"
@@ -149,7 +241,9 @@ selftest()
 	printf '%s\n' '#!/bin/sh' 'trap "" TERM' 'echo $$ > "$STOPCK_TMP/hang.pids"' 'sleep 20 &' \
 		'echo $! >> "$STOPCK_TMP/hang.pids"' 'wait' > "$r/tests/check-hang.sh"
 	# Passes, and leaves a process behind that would hold the hook's output.
-	printf '%s\n' '#!/bin/sh' 'sleep 15 &' 'echo $! > "$STOPCK_TMP/leave.pid"' 'echo "$0: ok"' > "$r/tests/check-leave.sh"
+	# Its pid goes into leave.pid, with its start time beside it.
+	printf '%s\n' '#!/bin/sh' 'sleep 15 &' 'ps -o lstart= -p $! > "$STOPCK_TMP/leave.start" 2> /dev/null' \
+		'echo $! > "$STOPCK_TMP/leave.pid"' 'echo "$0: ok"' > "$r/tests/check-leave.sh"
 	# Leaves a mark that it ran, and fails.
 	printf '%s\n' '#!/bin/sh' ': > "$STOPCK_TMP/ran"' 'exit 1' > "$r/tests/check-mark.sh"
 	chmod 755 "$r"/tests/check-*.sh
@@ -191,7 +285,7 @@ selftest()
 	quiet "a check that leaves a process behind"
 	[ "$secs" -le 6 ] ||
 		fail "selftest: a check that leaves a process behind: the hook's output stayed open $secs s, held by that process"
-	kill "$(cat "${tmp:?}/leave.pid")" 2> /dev/null || true
+	leave_stop "$(cat "${tmp:?}/leave.pid" 2> /dev/null)" "$(cat "${tmp:?}/leave.start" 2> /dev/null)"
 
 	hookwith tests/check-pass.sh tests/check-fail.sh tests/check-pass2.sh
 	run st "$no"
@@ -242,21 +336,28 @@ selftest()
 	printf '%s\n' "$no" > "${tmp:?}/no.json"
 	(cd "$r" && exec "$hook" < "${tmp:?}/no.json" > /dev/null 2>&1) &
 	hp=$!
+	hps=$(start_of "$hp")
+	[ -n "$hps" ] || fail "selftest: TERM to the hook: ps gave no start time for the hook ($hp)"
 	n=0
 	until [ -s "${tmp:?}/hang.pids" ] && [ $(($(wc -l < "${tmp:?}/hang.pids"))) -ge 2 ]; do
 		n=$((n + 1))
-		[ "$n" -le 10 ] || { kill -KILL "$hp"; fail "selftest: TERM to the hook: the stub did not start"; }
+		[ "$n" -le 10 ] || { hook_sig KILL; fail "selftest: TERM to the hook: the stub did not start"; }
 		sleep 1
 	done
-	kill -TERM "$hp"
+	# The group's pids, read with their start times while they run (they
+	# ignore TERM, and the hook has not been signalled yet).
+	while read -r p; do
+		printf '%s %s\n' "$p" "$(start_of "$p")"
+	done < "${tmp:?}/hang.pids" > "${tmp:?}/hang.ids"
+	hook_sig TERM
 	rc=0
 	wait "$hp" || rc=$?
 	sleep 1
 	stray=
-	while read -r p; do
-		! kill -0 "$p" 2> /dev/null || stray="$stray $p"
-	done < "${tmp:?}/hang.pids"
-	[ -z "$stray" ] || kill -KILL $stray 2> /dev/null || true
+	while read -r p s; do
+		[ -n "$s" ] || fail "selftest: TERM to the hook: ps gave no start time for process $p of the check's group"
+		! stray_kill "$p" "$s" || stray="$stray $p"
+	done < "${tmp:?}/hang.ids"
 	[ "$rc" -eq 0 ] || fail "selftest: TERM to the hook: the hook exited $rc, not 0"
 	[ -z "$stray" ] || fail "selftest: TERM to the hook: process$stray of the check's group still ran 1 s later"
 
