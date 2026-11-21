@@ -199,6 +199,7 @@ RI_GetDrawableSize(int *width, int *height)
 void
 RI_ShutdownContext(void)
 {
+	RM_HdrProbeCancel();
 	rmb_detach();
 
 	if (view)
