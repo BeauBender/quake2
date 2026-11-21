@@ -1137,9 +1137,31 @@ CL_UpscalePathInGitTree(upscale_gitcache_t *cache, const char *path)
 	return CL_UpscaleCachedInGitTree(cache, dir, CL_UpscaleDirGit);
 }
 
+/* ss_demo of server_state_t (src/server/header/server.h, which the
+   client does not include). tests/unit/test_demo_gate.c drives the
+   real SV_Map to a demo and fails if the two values part. */
+#define UPSCALE_SERVER_DEMO 4
+
 int
 CL_UpscaleAllowed(int connected, int local, int demo)
 {
+	/* A line the server sent is refused whatever state it finds: the
+	   legs below read the state, which a server's own text can change
+	   before its next line runs (FIX151). */
+	if (Cbuf_ExecutingServerText())
+	{
+		return 0;
+	}
+
+	/* demo is cl.attractloop, which a demo's own serverdata sets, and
+	   `map x.dm2` plays a demo without attractloop. The local server's
+	   state is ss_demo for every demo it plays, however it was started
+	   (FIX151). */
+	if (Com_ServerState() == UPSCALE_SERVER_DEMO)
+	{
+		return 0;
+	}
+
 	return !demo && (!connected || local);
 }
 
