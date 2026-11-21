@@ -108,6 +108,44 @@ lock_left() {
         2) ko e2e-lock "$1: cannot tell whether pid $2 is still the process read (no start time from ps), so it gets no KILL";;
     esac
 }
+# standin <file>: starts a stand-in for a pid the system gave to another process (FIX171): a shell, a child of this
+# check, that ends by itself within 20 s, or within 0.1 s once <file>.stop exists; its pid is written to <file>. Sets
+# sp (the subshell to wait for), dp (the stand-in's pid) and ds (its start time)
+standin() {
+    local n=0
+    rm -f "$1" "$1.stop"
+    (bash -c 'n=0; while [ $n -lt 200 ] && [ ! -e "$0.stop" ]; do sleep 0.1; n=$((n+1)); done' "$1" & echo $! > "$1"; wait) > /dev/null 2>&1 &
+    sp=$!
+    while [ ! -s "$1" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
+    dp=$(cat "$1" 2>/dev/null)
+    n=0; while [ -z "$(start_of "$dp")" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
+    ds=$(start_of "$dp")
+}
+# standin_end <file>: the stand-in ends by its stop file, and is waited for
+standin_end() { : > "$1.stop"; wait $sp 2>/dev/null; }
+# The end-of-case sites (group_left, lock_left, the TERM2 term_twice) run first on the stand-in, once per word of
+# $decoys ("other none nops" on the real code, empty for a mutant), then on the pids read (own) (FIX171, round 1).
+decoys=
+# decoy_id <how> <pid> <start>: sets dq and dqs, the pid and start time one run of the site is given: the stand-in
+# (dp) read with another start time (other), with none (none), or with its own while ps gives no answer (nops); or
+# <pid> and <start> (own). For each but own, FAILED is kept in df first.
+decoy_id() {
+    [ $1 = own ] || df=$FAILED
+    dq=$dp
+    case $1 in
+        other) dqs='Thu Jan  1 00:00:00 2026';;
+        none) dqs=;;
+        nops) dqs=$ds; ps() { return 1; };;
+        own) dq=$2; dqs=$3;;
+    esac
+}
+# decoy_end <how> <case>: after that run, ps is the system's again and FAILED is what it was (the run judged the
+# stand-in, not the case); a signal that ended the stand-in fails <case>
+decoy_end() {
+    [ $1 != own ] || return 0
+    unset -f ps; FAILED=$df
+    kill -0 "$dp" 2>/dev/null || ko "$2" "$1: a signal went to a process that is not the one read (the stand-in)"
+}
 
 cc -O2 -o "$tmp/framediff" "$root/scripts/pins/framediff.c" -lm || { bad "cannot build framediff"; exit 1; }
 
@@ -527,7 +565,14 @@ limit" "$out"
         if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-group "the run did not end on SIGTERM during record"; fi
         wait $pid 2>/dev/null
         sleep 1
-        group_left "$cpid" "$cst"
+        [ -z "$decoys" ] || standin "$w/sd-group"
+        rcpid=$cpid rcst=$cst
+        for dh in $decoys own; do
+            decoy_id $dh "$rcpid" "$rcst"; cpid=$dq cst=$dqs
+            group_left "$cpid" "$cst"
+            decoy_end $dh e2e-group
+        done
+        [ -z "$decoys" ] || standin_end "$w/sd-group"
     fi
     unset -f kill wait
     grep -q '^wait ' "$w/nt-sig.log" || ko e2e-group "the run was never waited for"
@@ -614,7 +659,15 @@ limit" "$out"
                 [ "$ppid" != "$pid" ] || ko e2e-lock "TERM2: the generator holds no lock of its own (the stub's parent is its pid)"
                 # the second TERM only while $ppid is still the generator read from the file (FIX171); a
                 # generator that ps gives no answer for, or that has changed, is a failure of its own
-                tt=0; term_twice "$ppid" "$pst" || tt=$?
+                [ -z "$decoys" ] || standin "$w/sd-tt"
+                rppid=$ppid rpst=$pst
+                for dh in $decoys own; do
+                    decoy_id $dh "$rppid" "$rpst"; ppid=$dq pst=$dqs
+                    tt=0; term_twice "$ppid" "$pst" || tt=$?
+                    decoy_end $dh e2e-lock
+                    [ $dh = own ] || [ $tt = 3 ] || ko e2e-lock "TERM2: $dh: term_twice on the stand-in gave $tt, not 3"
+                done
+                [ -z "$decoys" ] || standin_end "$w/sd-tt"
                 case $tt in
                     1) ko e2e-lock "TERM2: ps gave no start time or command line for the generator, so no second SIGTERM was sent";;
                     2) ko e2e-lock "TERM2: the generator had changed 1 s after the first SIGTERM, so no second SIGTERM was sent";;
@@ -626,8 +679,16 @@ limit" "$out"
         if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-lock "$how: the generator did not end within 20 s"; fi
         wait $pid 2>/dev/null
         [ $how != timeout ] || want_has e2e-lock "timed out" "$(cat "$w/lt-$how.log")"
-        [ -z "$spid" ] || lock_left "$how" "$spid" "$sst"
-        [ -z "$cpid" ] || lock_left "$how" "$cpid" "$cst"
+        [ -z "$decoys" ] || standin "$w/sd-lock"
+        rspid=$spid rsst=$sst rcpid=$cpid rcst=$cst
+        for dh in $decoys own; do
+            decoy_id $dh "$rspid" "$rsst"; spid=$dq sst=$dqs
+            decoy_id $dh "$rcpid" "$rcst"; cpid=$dq cst=$dqs
+            [ -z "$spid" ] || lock_left "$how" "$spid" "$sst"
+            [ -z "$cpid" ] || lock_left "$how" "$cpid" "$cst"
+            decoy_end $dh e2e-lock
+        done
+        [ -z "$decoys" ] || standin_end "$w/sd-lock"
         ls=$(BENCH_STATE="$st" sh "$lt/scripts/bench/bench.sh" lock status 2>&1)
         [ "$ls" = lock=free ] || ko e2e-lock "$how: the lock is not free afterwards: $ls"
         case $FAILED in *" e2e-lock "*) break;; esac  # one way out failed: the others would wait their bound too
@@ -780,17 +841,15 @@ limit" "$out"
 # the real code
 FAILED=" "
 mkdir "$tmp/real-run"; mktree "$tmp/real-tree" "$SRC/mfx.py" || exit 1
+decoys="other none nops"
 assertions "$tmp/real-tree/scripts/metalfx-report" "$SRC/ssim.c" "$tmp/real-run" "${MFX_GROUPS:-}"  # MFX_GROUPS="lock": only these (while iterating)
+decoys=
 # the KILLs at the end of e2e-group and e2e-lock (FIX171), each on a process this check starts that stands in for a
 # pid the system gave to another process (a shell that ends by itself within 20 s), once and not per mutant, since
 # they test this check and not the generator: read with another start time, or with none, or with ps giving no
 # answer, it gets no KILL and fails no case; read with its own start time, it is KILLed and fails the case
 for site in group lock; do
-    rm -f "$tmp/sd.pid"; (bash -c 'n=0; while [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done' & echo $! > "$tmp/sd.pid"; wait) > /dev/null 2>&1 &
-    sp=$!; n=0; while [ ! -s "$tmp/sd.pid" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
-    dp=$(cat "$tmp/sd.pid" 2>/dev/null)
-    n=0; while [ -z "$(start_of $dp)" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
-    ds=$(start_of $dp)
+    standin "$tmp/sd.pid"
     [ -n "$ds" ] || ko e2e-$site-id "ps gave no start time for the stand-in"
     left() { if [ $site = group ]; then group_left "$@"; else lock_left id "$@"; fi; }
     for how in other none nops; do

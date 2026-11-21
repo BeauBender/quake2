@@ -309,6 +309,30 @@ reap_skip() {
 	bad "reap: no $1 to pid $2: it is not the process this check recorded (another identity, none, or no answer from ps), so it is not waited for"
 	return 1
 }
+# decoy <how> <identity>: sets _id, the identity one run of a signal site
+# checks, for a site that signals a pid read from a file (FIX171, round 1):
+# another (other), none (none), <identity> with ps giving no answer (nops),
+# or <identity> itself (own). For each but own, kill only notes the signal
+# it is asked for in $E/decoy.sig and sends nothing, so the site runs on
+# the real process and no signal reaches it.
+decoy() {
+	_id=$2
+	: > "${E:?}/decoy.sig"
+	case $1 in
+	own) return 0 ;;
+	other) _id=$(id_of 'Thu Jan  1 00:00:00 2026') ;;
+	none) _id= ;;
+	nops) ps() { return 1; } ;;
+	esac
+	kill() { printf '%s\n' "$*" >> "${E:?}/decoy.sig"; }
+}
+# decoy_end <how> <text>: after that run, kill and ps are the system's
+# again, and a signal the site asked for is a failure, <text>.
+decoy_end() {
+	[ "$1" != own ] || return 0
+	unset -f kill ps
+	[ ! -s "${E:?}/decoy.sig" ] || bad "$2: $1: a signal went to a process that is not the one read: $(tr '\n' ' ' < "${E:?}/decoy.sig")"
+}
 # ended <seconds> <pid> [<text>]: true once <pid>, a child this check
 # started, has ended within <seconds>. Past them, <text> (when given) is a
 # failure, <pid> is reaped, and ended is true only when reap ended it: the
@@ -864,8 +888,16 @@ t_lock_stop() {
 	wait_file 5 "${E:?}/s2/pid" || bad "stop: the stubborn command never started"
 	_sl=$(sed -n 's/^pid=//p' "${E:?}/s2/state/lock/holder")
 	record "$_sl"
+	_sli=$(pid_id "$_sl") || _sli=
 	_t0=$(date +%s)
-	{ listed_same "$_sl" && kill -TERM "$_sl"; } || bad "stop: the stubborn command's lock shell is not running, or is not the process read (FIX171)"
+	# The TERM goes only while the lock shell still has the identity read
+	# with it (FIX171): run with that identity replaced (decoy), the site
+	# sends nothing; the last run, own, sends it.
+	for _how in other none nops own; do
+		decoy "$_how" "$_sli"
+		{ pid_same "$_sl" "$_id" && kill -TERM "$_sl"; } || [ "$_how" != own ] || bad "stop: the stubborn command's lock shell is not running, or is not the process read (FIX171)"
+		decoy_end "$_how" "stop: the TERM to the stubborn command's lock shell"
+	done
 	# Ctrl-C at a terminal: INT to the lock shell's process group.
 	if [ -n "$INT_OK" ]; then
 		set -m
@@ -897,10 +929,15 @@ t_lock_stop() {
 	wait_held 5 stopped || bad "stop: the stopped command's holder never showed"
 	wait_file 5 "${E:?}/gc.stop" || bad "stop: the stopped command's grandchild never started"
 	# the group leader read with its identity, and the group stopped only
-	# while the leader still has it (FIX171)
+	# while the leader still has it (FIX171), after the decoy runs, as for
+	# the lock shell above
 	_c=$(sed -n 's/^child=//p' "${E:?}/state/lock/holder")
 	_ci=$(pid_id "$_c") || _ci=
-	{ pid_same "$_c" "$_ci" && kill -s STOP -- "-$_c"; } || bad "stop: the stopped command's group leader is gone, or ps gave no answer for it"
+	for _how in other none nops own; do
+		decoy "$_how" "$_ci"
+		{ pid_same "$_c" "$_id" && kill -s STOP -- "-$_c"; } || [ "$_how" != own ] || bad "stop: the stopped command's group leader is gone, or ps gave no answer for it"
+		decoy_end "$_how" "stop: the STOP to the stopped command's group"
+	done
 	_st=0
 	if ended 10 "$_h" "stop: lock run still waits on a stopped command"; then collect "$_h" || _st=$?; fi
 	[ "$_st" -eq 74 ] || bad "stop: wanted exit 74 from a stopped command, got $_st"
