@@ -269,6 +269,16 @@ R_HdrProbeFrame(void)
 	}
 }
 
+/* the renderer's shutdown: a probe still waiting for its drawable is cancelled, with one line, not timed out later */
+void
+RM_HdrProbeCancel(void)
+{
+	if (rm_hdr_probe_cancel(&rm_hdr_probe_wait))
+	{
+		R_Printf(PRINT_ALL, "ref_metal: hdr: probe cancelled (the renderer was shut down)\n");
+	}
+}
+
 /*
  * r_hdr_headroom (HD5): the potential headroom, which decides the menu's
  * greying of the HDR items, written when its value differs (Cvar_Set ignores
@@ -1324,7 +1334,11 @@ R_RetroFinish(const refdef_t *fd)
  * r_view.vp, which is this rectangle), so what the world's map wrote
  * there is gone before the second map runs. The shoulder is not
  * idempotent above white; a view that did not repaint its rectangle
- * would need its own scheme (the host test walks the order).
+ * would need its own scheme (the host test walks the order; tests/
+ * check-ref-metal.sh holds the source order). timerefresh (cl_screen.c)
+ * renders up to 128 world views in one frame: a pixel no surface covers
+ * (noclip into the void) is mapped once per view there. It is a
+ * benchmark, not a frame to look at.
  */
 static void
 R_HdrToneMap(const refdef_t *fd)

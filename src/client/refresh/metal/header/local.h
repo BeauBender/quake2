@@ -197,6 +197,8 @@ void RM_InitDraw(void);
 void RM_ShutdownDraw(void);
 /* draws the batched 2D quads, as gl1's R_ApplyGLBuffer does where it is called */
 void RM_Flush2D(void);
+/* rm_main.c: ends a pending metal_hdr_probe, as the context is shut down (a restart keeps the statics) */
+void RM_HdrProbeCancel(void);
 image_t *RDraw_FindPic(const char *name);
 void RDraw_GetPicSize(int *w, int *h, const char *name);
 void RDraw_PicScaled(int x, int y, const char *pic, float factor);
