@@ -457,9 +457,15 @@ limit" "$out"
     PATH="$tmp/maketrue:$PATH" MFX_STUB_CHILD="$w/childpid" python3 -I "$d/mfx.py" run --out "$w/of" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 \
         --scenarios world --only fx1-s75 --timeout 20 --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$w/nt/quake2" > "$w/nt.log" 2>&1 &
     pid=$!
-    n=0; while [ ! -s "$w/childpid" ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
+    n=0; while [ ! -s "$w/childpid" ] && kill -0 $pid 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
     cpid=$(cat "$w/childpid" 2>/dev/null)
-    if [ -z "$cpid" ]; then ko e2e-group "the stub pins.sh did not start"; else
+    # $pid is signalled only before the wait that collects it: once collected, the system may give the
+    # pid to another process (FIX171)
+    if [ -z "$cpid" ]; then
+        ko e2e-group "the stub pins.sh did not start"
+        if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; fi
+        wait $pid 2>/dev/null
+    else
         kill -TERM $pid 2>/dev/null
         n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
         if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-group "the run did not end on SIGTERM during record"; fi
@@ -467,7 +473,6 @@ limit" "$out"
         sleep 1
         if kill -0 "$cpid" 2>/dev/null; then kill -KILL "$cpid" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM"; fi
     fi
-    kill -KILL $pid 2>/dev/null
 
     fi
 
@@ -516,7 +521,12 @@ limit" "$out"
             deaf) kill -TERM $pid 2>/dev/null;;
             TERM2)
                 [ "$ppid" != "$pid" ] || ko e2e-lock "TERM2: the generator holds no lock of its own (the stub's parent is its pid)"
-                kill -TERM "$ppid" 2>/dev/null; sleep 1; kill -TERM "$ppid" 2>/dev/null; sleep 1
+                # the second TERM only while $ppid is still the generator read from the file: the same start
+                # time and command line as before the first (FIX171)
+                pidn=$(ps -o lstart= -o args= -p "$ppid" 2>/dev/null)
+                kill -TERM "$ppid" 2>/dev/null; sleep 1
+                if [ -n "$pidn" ] && [ "$(ps -o lstart= -o args= -p "$ppid" 2>/dev/null)" = "$pidn" ]; then kill -TERM "$ppid" 2>/dev/null; fi
+                sleep 1
                 kill -0 "$ppid" 2>/dev/null || ko e2e-lock "TERM2: a second SIGTERM cut the stop short (the generator was gone 1 s later)";;
         esac
         n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done
