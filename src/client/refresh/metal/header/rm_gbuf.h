@@ -302,6 +302,17 @@ int rmb_gbuf_resolve(const rm_gb_resolve_t *r);
  */
 void rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst);
 
+/*
+ * TASK185 (PM3), Retro: the next views' end runs the Retro post-process
+ * (rmb_retro_pass's, with filter and curve) over the render-size target's
+ * rectangle src before the stretch, so it is quantized at the view's own
+ * lines and the stretch enlarges the dithered texels. on 0: the stock
+ * view end. rmb_gbuf_retro_done is 1 once, after a view end that ran it
+ * (the frame's pass of rm_main.c's R_RetroFinish is then skipped), else 0.
+ */
+void rmb_gbuf_set_retro(int on, int filter, int curve);
+int rmb_gbuf_retro_done(void);
+
 /* the motion uniforms of the next draws; NULL: none, the draw's own matrix both now and before (no motion) */
 void rmb_gbuf_set_motion(const rm_gb_uniforms_t *u);
 

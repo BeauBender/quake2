@@ -35,6 +35,8 @@
 
 #include "header/local.h"
 #include "header/rm_rtsun.h"
+#include "header/rm_rtgate.h"
+#include "common/mtl_retro_tex.h"
 
 image_t gltextures[MAX_GLTEXTURES];
 int numgltextures;
@@ -50,6 +52,21 @@ int registration_sequence;
 static byte intensitytable[256];
 static int image_max = 0;
 static cvar_t *intensity;
+
+/* TASK185: what the Retro uploads of this renderer start did, for the report line (RM_RetroImageCounts) */
+static struct
+{
+	int rgb565, argb4444, capped, maxside;
+} retro_counts;
+
+void
+RM_RetroImageCounts(int *rgb565, int *argb4444, int *capped, int *maxside)
+{
+	*rgb565 = retro_counts.rgb565;
+	*argb4444 = retro_counts.argb4444;
+	*capped = retro_counts.capped;
+	*maxside = retro_counts.maxside;
+}
 
 /* gl_texturemode as R_TextureMode last set it */
 static int filter_min = 3, filter_mag = 1;
@@ -85,9 +102,11 @@ R_ImageSampler(const image_t *image, int mode_change)
 void
 R_TextureMode(const char *string)
 {
+	const int retro = (RM_PresentationMode() == RM_PRES_RETRO);
 	int i, min, mag;
 
-	if (!rm_texture_mode(string, &min, &mag))
+	/* Retro (TASK185) overlays the filter: bilinear magnification, the nearest mip, no anisotropy; no cvar is written */
+	if (!rm_texture_mode(retro ? MTL_RETRO_TEXMODE : string, &min, &mag))
 	{
 		R_Printf(PRINT_ALL, "bad filter name '%s'\n", string);
 		return;
@@ -97,12 +116,12 @@ R_TextureMode(const char *string)
 	filter_mag = mag;
 
 	/* clamp selected anisotropy: the shim's maximum is 16 */
-	if (gl_anisotropic->value > 16)
+	if (!retro && (gl_anisotropic->value > 16))
 	{
 		ri.Cvar_SetValue("r_anisotropic", 16);
 	}
 
-	rmb_samplers_set(filter_min, filter_mag, (int)gl_anisotropic->value);
+	rmb_samplers_set(filter_min, filter_mag, retro ? 0 : (int)gl_anisotropic->value);
 
 	/* r_2D_unfiltered and r_nolerp_list may have changed which images are unfiltered */
 	for (i = 0; i < numgltextures; i++)
@@ -225,6 +244,54 @@ R_Upload32(image_t *image, unsigned *data, int width, int height, qboolean mipma
 	}
 
 	R_LightScaleTexture(data, width, height, !mipmap);
+
+	/*
+	 * TASK185 (PM3), Retro: the texels as a 16-bit board stored them, in
+	 * the same BGRA8 texture. The 2D pics stay stock (plan call P6). The
+	 * 256 cap first, in place, then RGB565 for an opaque image and ARGB4444
+	 * for one with alpha, dithered by the texel's place in the image.
+	 */
+	if ((RM_PresentationMode() == RM_PRES_RETRO) && (image->type != it_pic))
+	{
+		int alpha = 0;
+
+		const int was_w = width, was_h = height;
+
+		mtl_retro_cap_apply((unsigned char *)data, &width, &height, MTL_RETRO_TEX_CAP);
+		c = (size_t)width * (size_t)height;
+		retro_counts.capped += (width != was_w) || (height != was_h);
+
+		if (Q_max(width, height) > retro_counts.maxside)
+		{
+			retro_counts.maxside = Q_max(width, height);
+		}
+
+		for (i = 0; i < c; i++)
+		{
+			if (((byte *)data)[i * 4 + 3] != 255)
+			{
+				alpha = 1;
+				break;
+			}
+		}
+
+		mtl_retro_tex_quantize((unsigned char *)data, width, height, alpha);
+
+		/*
+		 * Counted by the class the source's alpha chose and quantized in.
+		 * An ARGB4444 image whose alpha all rounds to 15 (254, say) is
+		 * still counted ARGB4444; only the opaque flag below, taken from
+		 * the quantized texels, calls it opaque.
+		 */
+		if (alpha)
+		{
+			retro_counts.argb4444++;
+		}
+		else
+		{
+			retro_counts.rgb565++;
+		}
+	}
 
 	/* TASK56 (RT4): a sky face's mean colour as it is drawn, sky_color of the ray-traced sun */
 	if (image->type == it_sky)
@@ -648,6 +715,7 @@ R_InitImages(void)
 	rm_sw_gamma = g;
 	registration_sequence = 1;
 	image_max = 0;
+	memset(&retro_counts, 0, sizeof(retro_counts));
 
 	intensity = ri.Cvar_Get("gl1_intensity", "2", CVAR_ARCHIVE);
 

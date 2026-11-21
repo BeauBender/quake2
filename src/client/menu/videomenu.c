@@ -353,8 +353,17 @@ static char s_built_renderer[32];
 static void
 SetRule(menucommon_s *item, viditem_t id, int scaler)
 {
-	const vidrule_t rule = VidRules_Item(id, s_built_renderer,
+	vidrule_t rule = VidRules_Item(id, s_built_renderer,
 			MetalModeMask(), scaler);
+
+	/* TASK197: Retro reads r_metalfx as 0, so the MetalFX items are not the
+	   user's to set; Apply skips a greyed item */
+	if ((id == VIDITEM_MFX_SCALER || id == VIDITEM_MFX_SCALE) &&
+		VidRules_MetalFXOverridden(s_built_renderer, Cvar_VariableValue("r_presentation")))
+	{
+		rule.enabled = 0;
+		rule.text = "set by the presentation";
+	}
 
 	if (rule.enabled)
 	{
@@ -924,7 +933,11 @@ TuneMenu_Values(void)
 		}
 		else if (c->choices)
 		{
-			l->curvalue = TuneIndex(c, Cvar_VariableValue(c->cvar));
+			/* an overridden row shows the value in use: Retro reads r_metalfx as 0 */
+			const int over = VidRules_TuneOverridden(i, s_built_renderer,
+				Cvar_VariableValue("r_presentation")) && !strcmp(c->cvar, "r_metalfx");
+
+			l->curvalue = TuneIndex(c, over ? 0.0f : Cvar_VariableValue(c->cvar));
 		}
 	}
 }
@@ -967,7 +980,9 @@ TuneMenu_Rules(void)
 					s_tune_hdr_note, sizeof(s_tune_hdr_note)));
 			continue;
 		}
-		RTSetRule(s_tune_items[i], VidRules_TuneItem(i, s_built_renderer, available, on));
+		RTSetRule(s_tune_items[i], VidRules_TuneOverridden(i, s_built_renderer, pres) ?
+			(vidrule_t){ 0, "set by the presentation" } :
+			VidRules_TuneItem(i, s_built_renderer, available, on));
 	}
 
 	snprintf(s_tune_ab_text, sizeof(s_tune_ab_text), "A/B: %s", TuneSide());
@@ -1260,7 +1275,14 @@ RTResetDefaults(void *unused)
 		const vidrt_control_t *c = VidRules_RTControl(i);
 
 		/* a switch the presentation decides is the user's own: not written */
-		if (VidRules_RTOverridden(i, s_built_renderer, available, pres))
+		const vidrt_control_t *e = (c->effect >= 0) ? VidRules_RTControl(c->effect) : NULL;
+		const vidrule_t row = VidRules_RTRow(i, s_built_renderer, available, pres,
+			e ? Cvar_VariableValue(e->cvar) : 0.0f);
+
+		/* a row greyed "set by the presentation" (a switch, or a tuning row of a
+		   switch Retro reads off) is not written (TASK197) */
+		if (VidRules_RTOverridden(i, s_built_renderer, available, pres) ||
+			(!row.enabled && row.text && !strcmp(row.text, "set by the presentation")))
 		{
 			kept = 1;
 			continue;
