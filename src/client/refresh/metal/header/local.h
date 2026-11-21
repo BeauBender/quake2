@@ -176,6 +176,8 @@ qboolean R_ImageHasFreeSpace(void);
 void R_BeginImageRegistration(void);
 void R_TextureMode(const char *string);
 int rm_image_flat_linear(void);
+/* TASK185: the Retro uploads since R_InitImages: textures kept as RGB565 and as ARGB4444, how many the 256 cap reduced, the largest side kept */
+void RM_RetroImageCounts(int *rgb565, int *argb4444, int *capped, int *maxside);
 void R_ImageList_f(void);
 void R_LightScaleTexture(unsigned *in, int inwidth, int inheight, qboolean only_gamma);
 image_t *R_FindImage(const char *name, imagetype_t type);
@@ -195,6 +197,8 @@ void RM_InitDraw(void);
 void RM_ShutdownDraw(void);
 /* draws the batched 2D quads, as gl1's R_ApplyGLBuffer does where it is called */
 void RM_Flush2D(void);
+/* rm_main.c: ends a pending metal_hdr_probe, as the context is shut down (a restart keeps the statics) */
+void RM_HdrProbeCancel(void);
 image_t *RDraw_FindPic(const char *name);
 void RDraw_GetPicSize(int *w, int *h, const char *name);
 void RDraw_PicScaled(int x, int y, const char *pic, float factor);
@@ -338,6 +342,8 @@ int RM_KeepMapped(void);
  * is 1 when either overlay supplies the value, 0 when it is the user's own.
  */
 float RM_Effect(const cvar_t *cv);
+/* the presentation mode this device runs (RM_PRES_*, rm_rtgate.h), as RI_Init read it: the image uploads and the 3D view's size follow it (TASK185) */
+int RM_PresentationMode(void);
 const char *RM_EffectString(const cvar_t *cv);
 int RM_EffectOverlaid(const cvar_t *cv);
 

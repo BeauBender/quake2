@@ -61,6 +61,8 @@ void rmb_encode_split(void);
 id<MTLRenderCommandEncoder> rmb_frame_open_pass(MTLRenderPassDescriptor *rp, int with_depth, int stencil, int keep);
 void rmb_frame_close_pass(void);
 id<MTLTexture> rmb_frame_color(void);
+/* TASK185 (PM3): the Retro pass (rmb_retro_pass's) over the rectangle of a view's render-size target t, with a copy of its own */
+int rmb_retro_pass_view(id<MTLTexture> t, int x, int y, int w, int h, int filter, int curve);
 int rmb_frame_cut(void);
 id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
 /* __strong is part of the type: a caller's "__strong id<MTLBuffer> buf" passes &buf as is */
