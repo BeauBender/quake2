@@ -59,7 +59,27 @@ static char *cmd_null_string = "";
 static char cmd_args[MAX_STRING_CHARS];
 sizebuf_t cmd_text;
 byte cmd_text_buf[32768];
-char defer_text_buf[32768];
+/* one more than cmd_text_buf for the terminator: Cbuf_InsertText can
+   fill cmd_text_buf to the last byte (FIX148) */
+char defer_text_buf[sizeof(cmd_text_buf) + 1];
+YQ2_STATIC_ASSERT(sizeof(defer_text_buf) > sizeof(cmd_text_buf),
+		"Cbuf_CopyToDefer writes a terminator at defer_text_buf[cmd_text.cursize]");
+
+/*
+ * Where each byte of cmd_text_buf and defer_text_buf came from (FIX113):
+ * CBUF_SERVER for text a server sent with svc_stufftext and for text a
+ * server line queues while it runs (an alias it expands, a file it
+ * execs), CBUF_PLAYER for everything else. Cbuf_DropServerText discards
+ * the server's bytes when the connection they came from ends, so a
+ * command the server queued behind a "disconnect" cannot run while the
+ * client is disconnected. The player's bytes are kept.
+ */
+#define CBUF_PLAYER 0
+#define CBUF_SERVER 1
+
+static byte cmd_text_src[sizeof(cmd_text_buf)];
+static byte defer_text_src[sizeof(defer_text_buf)];
+static byte cbuf_source = CBUF_PLAYER;
 
 /*
  * Causes execution of the remainder of the command buffer to be delayed
@@ -94,7 +114,80 @@ Cbuf_AddText(const char *text)
 		return;
 	}
 
+	memset(cmd_text_src + cmd_text.cursize, cbuf_source, l);
 	SZ_Write(&cmd_text, text, strlen(text));
+}
+
+/*
+ * Adds text a server sent (svc_stufftext) at the end of the buffer.
+ * Cbuf_DropServerText discards it when the connection ends.
+ */
+void
+Cbuf_AddServerText(const char *text)
+{
+	byte saved;
+
+	saved = cbuf_source;
+	cbuf_source = CBUF_SERVER;
+	Cbuf_AddText(text);
+	cbuf_source = saved;
+}
+
+/* Removes the server's bytes from buf, keeping the order of the rest.
+   Returns the new length. */
+static int
+Cbuf_StripServer(byte *buf, byte *src, int len)
+{
+	int i, kept;
+
+	kept = 0;
+
+	for (i = 0; i < len; i++)
+	{
+		if (src[i] != CBUF_SERVER)
+		{
+			buf[kept] = buf[i];
+			src[kept] = CBUF_PLAYER;
+			kept++;
+		}
+	}
+
+	return kept;
+}
+
+/*
+ * Discards every byte of server text still in the command buffer and
+ * the defer buffer. Called when the connection the text came from ends
+ * (CL_Disconnect). Text the player queued stays, in its order.
+ */
+void
+Cbuf_DropServerText(void)
+{
+	int len;
+
+	cmd_text.cursize = Cbuf_StripServer(cmd_text.data, cmd_text_src,
+			cmd_text.cursize);
+
+	len = Cbuf_StripServer((byte *)defer_text_buf, defer_text_src,
+			strlen(defer_text_buf));
+	defer_text_buf[len] = 0;
+
+	/* A server line that dropped the connection through Com_Error
+	   never returns to Cbuf_Execute to restore the source. */
+	cbuf_source = CBUF_PLAYER;
+}
+
+/*
+ * True while Cbuf_Execute runs a line that holds any of the server's
+ * bytes (FIX151). A command that refuses a server's use reads this, so
+ * it refuses such a line whatever state the line finds: a level change,
+ * a killserver or a demo ending before the line runs does not let it
+ * through.
+ */
+qboolean
+Cbuf_ExecutingServerText(void)
+{
+	return cbuf_source == CBUF_SERVER;
 }
 
 /*
@@ -106,14 +199,17 @@ Cbuf_InsertText(char *text)
 {
 	char *temp;
 	int templen;
+	int at;
 
 	/* copy off any commands still remaining in the exec buffer */
 	templen = cmd_text.cursize;
 
 	if (templen)
 	{
-		temp = Z_Malloc(templen);
+		/* the text, then where each byte came from */
+		temp = Z_Malloc(templen * 2);
 		memcpy(temp, cmd_text.data, templen);
+		memcpy(temp + templen, cmd_text_src, templen);
 		SZ_Clear(&cmd_text);
 	}
 	else
@@ -127,7 +223,9 @@ Cbuf_InsertText(char *text)
 	/* add the copied off data */
 	if (templen)
 	{
+		at = cmd_text.cursize;
 		SZ_Write(&cmd_text, temp, templen);
+		memcpy(cmd_text_src + at, temp + templen, templen);
 		Z_Free(temp);
 	}
 }
@@ -136,6 +234,7 @@ void
 Cbuf_CopyToDefer(void)
 {
 	memcpy(defer_text_buf, cmd_text_buf, cmd_text.cursize);
+	memcpy(defer_text_src, cmd_text_src, cmd_text.cursize);
 	defer_text_buf[cmd_text.cursize] = 0;
 	cmd_text.cursize = 0;
 }
@@ -143,7 +242,22 @@ Cbuf_CopyToDefer(void)
 void
 Cbuf_InsertFromDefer(void)
 {
+	int len, before;
+
+	len = strlen(defer_text_buf);
+	before = cmd_text.cursize;
+
 	Cbuf_InsertText(defer_text_buf);
+
+	/* the deferred text keeps where it came from. Cbuf_InsertText put
+	   it at the start only if the buffer grew by exactly its length:
+	   when Cbuf_AddText refuses it as an overflow, the buffer keeps its
+	   old size and its own tags are already right. */
+	if (cmd_text.cursize == before + len)
+	{
+		memcpy(cmd_text_src, defer_text_src, len);
+	}
+
 	defer_text_buf[0] = 0;
 }
 
@@ -169,10 +283,11 @@ Cbuf_ExecuteText(int exec_when, char *text)
 void
 Cbuf_Execute(void)
 {
-	int i;
+	int i, j;
 	char *text;
 	char line[1024];
 	int quotes;
+	byte saved, linesrc;
 
 	if(cmd_wait > 0)
 	{
@@ -223,6 +338,19 @@ Cbuf_Execute(void)
 			line[i] = 0;
 		}
 
+		/* a line with any server byte in it is the server's, and so is
+		   what it queues while it runs */
+		linesrc = cbuf_source;
+
+		for (j = 0; j < i; j++)
+		{
+			if (cmd_text_src[j] == CBUF_SERVER)
+			{
+				linesrc = CBUF_SERVER;
+				break;
+			}
+		}
+
 		/* delete the text from the command buffer and move remaining
 		   commands down this is necessary because commands (exec,
 		   alias) can insert data at the beginning of the text buffer */
@@ -235,10 +363,14 @@ Cbuf_Execute(void)
 			i++;
 			cmd_text.cursize -= i;
 			memmove(text, text + i, cmd_text.cursize);
+			memmove(cmd_text_src, cmd_text_src + i, cmd_text.cursize);
 		}
 
 		/* execute the command line */
+		saved = cbuf_source;
+		cbuf_source = linesrc;
 		Cmd_ExecuteString(line);
+		cbuf_source = saved;
 
 		if (cmd_wait > 0)
 		{

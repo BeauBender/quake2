@@ -732,6 +732,14 @@ SV_Shutdown(char *finalmsg, qboolean reconnect)
 		FS_FCloseFile(sv.demofile);
 	}
 
+	/* a demo's text ends with the demo however it ends: killserver in
+	   its own text would otherwise clear the state the upscale gate
+	   reads before the rest of that text runs (FIX151) */
+	if (sv.attractloop || (sv.state == ss_demo))
+	{
+		Cbuf_DropServerText();
+	}
+
 	StringList_Free(&sv.configstrings_overflow);
 	SV_ClearBaselines();
 	memset(&sv, 0, sizeof(sv));
