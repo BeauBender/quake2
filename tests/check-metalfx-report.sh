@@ -59,6 +59,18 @@ ko() { FAILED="$FAILED$1 "; [ "${VERBOSE:-0}" = 0 ] || echo "  failed: $1 ($(pri
 want_rc() { [ "$3" -eq "$2" ] || ko "$1" "rc $3, want $2"; }
 want_has() { case $3 in *"$2"*) ;; *) ko "$1" "no '$2' in: $3";; esac; }
 want_not() { case $3 in *"$2"*) ko "$1" "'$2' found";; esac; }
+# term_twice <pid>: two SIGTERMs to <pid>, 1 s apart, then 1 s; the second only while <pid> still has the
+# start time and command line read before the first, since a pid that has ended may be given to another
+# process (FIX171). Status 0: both were sent; 1: ps gave no answer for <pid> before the first, so the
+# second was not sent; 2: <pid> had changed (it ended, or ran another program), so the second was not sent
+term_twice() {
+    local id
+    id=$(ps -o lstart= -o args= -p "$1" 2>/dev/null)
+    kill -TERM "$1" 2>/dev/null; sleep 1
+    if [ -z "$id" ]; then sleep 1; return 1; fi
+    if [ "$(ps -o lstart= -o args= -p "$1" 2>/dev/null)" != "$id" ]; then sleep 1; return 2; fi
+    kill -TERM "$1" 2>/dev/null; sleep 1; return 0
+}
 
 cc -O2 -o "$tmp/framediff" "$root/scripts/pins/framediff.c" -lm || { bad "cannot build framediff"; exit 1; }
 
@@ -439,7 +451,7 @@ limit" "$out"
         ( PATH="$tmp/maketrue:$PATH" EXEC=exec e2e "$eng" "$o" --timeout 3 > "$w/lock-$which.log" 2>&1 ) &
         p2=$!
         n=0; while kill -0 $p2 2>/dev/null && [ $n -lt 40 ]; do sleep 0.1; n=$((n+1)); done
-        if kill -0 $p2 2>/dev/null; then kill -TERM $p2 2>/dev/null; n=0; while kill -0 $p2 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done; kill -KILL $p2 2>/dev/null; fi
+        if kill -0 $p2 2>/dev/null; then kill -TERM $p2 2>/dev/null; n=0; while kill -0 $p2 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done; if kill -0 $p2 2>/dev/null; then kill -KILL $p2 2>/dev/null; fi; fi
         wait $p2 2>/dev/null; rc2=$?
         want_rc "run-lock-$which" 3 $rc2
         want_has "run-lock-$which" "another run holds" "$(cat "$w/lock-$which.log")"
@@ -457,9 +469,20 @@ limit" "$out"
     PATH="$tmp/maketrue:$PATH" MFX_STUB_CHILD="$w/childpid" python3 -I "$d/mfx.py" run --out "$w/of" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 \
         --scenarios world --only fx1-s75 --timeout 20 --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$w/nt/quake2" > "$w/nt.log" 2>&1 &
     pid=$!
-    n=0; while [ ! -s "$w/childpid" ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
+    # every kill and wait that names the run's pid is logged, so that a signal sent after the wait that
+    # collected it fails the check (FIX171)
+    : > "$w/nt-sig.log"
+    kill() { case " $* " in *" $pid "*) echo "kill $*" >> "$w/nt-sig.log";; esac; builtin kill "$@"; }
+    wait() { case " $* " in *" $pid "*) echo "wait $*" >> "$w/nt-sig.log";; esac; builtin wait "$@"; }
+    n=0; while [ ! -s "$w/childpid" ] && kill -0 $pid 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
     cpid=$(cat "$w/childpid" 2>/dev/null)
-    if [ -z "$cpid" ]; then ko e2e-group "the stub pins.sh did not start"; else
+    # $pid is signalled only before the wait that collects it: once collected, the system may give the
+    # pid to another process (FIX171)
+    if [ -z "$cpid" ]; then
+        ko e2e-group "the stub pins.sh did not start"
+        if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; fi
+        wait $pid 2>/dev/null
+    else
         kill -TERM $pid 2>/dev/null
         n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
         if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-group "the run did not end on SIGTERM during record"; fi
@@ -467,7 +490,10 @@ limit" "$out"
         sleep 1
         if kill -0 "$cpid" 2>/dev/null; then kill -KILL "$cpid" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM"; fi
     fi
-    kill -KILL $pid 2>/dev/null
+    unset -f kill wait
+    grep -q '^wait ' "$w/nt-sig.log" || ko e2e-group "the run was never waited for"
+    late=$(awk '$1 == "wait" { w = 1; next } w && $1 == "kill" && $2 != "-0"' "$w/nt-sig.log")
+    [ -z "$late" ] || ko e2e-group "a signal went to the run's pid after the wait that collected it: $late"
 
     fi
 
@@ -493,6 +519,33 @@ limit" "$out"
     #            there 1 s later, and its KILL ends the stub;
     #   deaf     SIGTERM to the lock shell, the stub ignoring TERM: the generator's KILL of pins.sh must
     #            land before the lock shell's KILL of the generator, or pins.sh outlives the lock
+    # First TERM2's term_twice on two processes this check starts (FIX171): one that runs another program
+    # on the first SIGTERM (as a pid given to another process would be) gets no second, and is still there;
+    # one that does not change gets both, and ends on the second. Each loop ends by itself within 20 s.
+    for how in exec same; do
+        rm -f "$w/tt-ready"
+        if [ $how = exec ]; then
+            # the exec is in the loop, not in the trap: a program exec'd from a trap keeps TERM blocked
+            bash -c 'x=; trap "x=1" TERM; : > "$0"; n=0; while [ $n -lt 200 ]; do [ -z "$x" ] || exec sleep 20; sleep 0.1; n=$((n+1)); done' "$w/tt-ready" &
+        else
+            bash -c 'c=0; trap "c=\$((c+1)); [ \$c -lt 2 ] || exit 0" TERM; : > "$0"; n=0; while [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done' "$w/tt-ready" &
+        fi
+        tp=$!
+        n=0; while [ ! -e "$w/tt-ready" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
+        [ -e "$w/tt-ready" ] || ko e2e-lock-term2 "$how: the process did not start within 5 s"
+        tt=0; term_twice "$tp" || tt=$?
+        if [ $how = exec ]; then
+            [ $tt = 2 ] || ko e2e-lock-term2 "a process that ran another program on the first SIGTERM was not seen changed (status $tt)"
+            kill -0 $tp 2>/dev/null || ko e2e-lock-term2 "a second SIGTERM went to a process that had changed since it was read"
+            # PIPE, which the shell prints no job notice for; the sleep ends by itself within 20 s
+            if kill -0 $tp 2>/dev/null; then kill -PIPE $tp 2>/dev/null; fi
+        else
+            [ $tt = 0 ] || ko e2e-lock-term2 "a process that did not change did not get the second SIGTERM (status $tt)"
+            n=0; while kill -0 $tp 2>/dev/null && [ $n -lt 30 ]; do sleep 0.1; n=$((n+1)); done
+            if kill -0 $tp 2>/dev/null; then kill -TERM $tp 2>/dev/null; ko e2e-lock-term2 "a process that did not change was still there after the second SIGTERM"; fi
+        fi
+        wait $tp 2>/dev/null
+    done
     for how in timeout TERM INT TERM2 deaf; do
         st="$w/lt-state-$how"; rm -f "$w/lt-sh" "$w/lt-child" "$w/lt-parent"
         g=1; deaf=; case $how in TERM2) g=5; deaf=1;; deaf) deaf=1;; esac
@@ -516,7 +569,13 @@ limit" "$out"
             deaf) kill -TERM $pid 2>/dev/null;;
             TERM2)
                 [ "$ppid" != "$pid" ] || ko e2e-lock "TERM2: the generator holds no lock of its own (the stub's parent is its pid)"
-                kill -TERM "$ppid" 2>/dev/null; sleep 1; kill -TERM "$ppid" 2>/dev/null; sleep 1
+                # the second TERM only while $ppid is still the generator read from the file (FIX171); a
+                # generator that ps gives no answer for, or that has changed, is a failure of its own
+                tt=0; term_twice "$ppid" || tt=$?
+                case $tt in
+                    1) ko e2e-lock "TERM2: ps gave no start time or command line for the generator, so no second SIGTERM was sent";;
+                    2) ko e2e-lock "TERM2: the generator had changed 1 s after the first SIGTERM, so no second SIGTERM was sent";;
+                esac
                 kill -0 "$ppid" 2>/dev/null || ko e2e-lock "TERM2: a second SIGTERM cut the stop short (the generator was gone 1 s later)";;
         esac
         n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done
@@ -559,7 +618,10 @@ limit" "$out"
     want_not e2e-lock-wait "lock=free" "$labs"; want_not e2e-lock-wait "label=gate" "$labs"
     # the caller's LC_ALL comes back under the hold (bench.sh sets C for its command)
     want_has e2e-lock-wait "lc=POSIX " "$labs"; want_not e2e-lock-wait "lc=C " "$labs"
-    kill -TERM $hp 2>/dev/null; wait $hp 2>/dev/null
+    # the holder's sleep has ended by now (the records ran under the generator's own hold), so no signal is
+    # sent: bash has already collected its exit and the PID could belong to another process (FIX171); only
+    # the wait remains
+    wait $hp 2>/dev/null
     [ "$(BENCH_STATE="$st" sh "$bsh" lock status 2>&1)" = lock=free ] || ko e2e-lock-wait "the lock is not free afterwards"
     # the lock is off, with one line on stderr that names why, as for the entry points: BENCH_LOCK=0, GitHub
     # Actions, no bench core in the tree, no state directory (each run is then refused as out of date)

@@ -26,7 +26,11 @@
 #     saying a stopped target may be left;
 # (h) a TERM to the check while the stop stub holds the probe's target
 #     stopped (the gate stopping the check): the check ends the run and the
-#     target, as its bound would.
+#     target, as its bound would, and the check's watchdog is gone and no
+#     job-status line reaches its output (FIX150); the same with a failing
+#     ps(1): the reap line from the trap reaches the check's output.
+# The hanging stubs of (a) and (g) end by themselves after 120 s, and the
+# self-test ends any that is left.
 # Off Darwin the check runs no leaks(1); there the hanging stub must leave
 # the check passing.
 set -eu
@@ -51,7 +55,7 @@ cleanup()
 		done < "${tmp:?}/pids"
 	fi
 	# a target a stub stopped, whichever program it was (a red run leaves one)
-	for _f in "${tmp:?}/stop.pids" "${tmp:?}/late.pids" "${tmp:?}/nolist.pids" "${tmp:?}/term.pids"; do
+	for _f in "${tmp:?}/stop.pids" "${tmp:?}/late.pids" "${tmp:?}/nolist.pids" "${tmp:?}/term.pids" "${tmp:?}/termps.pids"; do
 		[ -f "$_f" ] || continue
 		while read -r _p; do
 			end_own "$_p" leakprobe
@@ -59,11 +63,19 @@ cleanup()
 		done < "$_f"
 	done
 	# the stub leaks(1) of case (h), if the check left it
-	if [ -f "${tmp:?}/term.run" ]; then
+	for _f in "${tmp:?}/term.run" "${tmp:?}/termps.run"; do
+		[ -f "$_f" ] || continue
 		while read -r _p; do
 			end_own "$_p" spawnstop
-		done < "${tmp:?}/term.run"
-	fi
+		done < "$_f"
+	done
+	# a watchdog the check left (case h), and a hang stub still looping
+	for _f in "${tmp:?}/term.dog" "${tmp:?}/termps.dog" "${tmp:?}/hang.pids"; do
+		[ -f "$_f" ] || continue
+		while read -r _p; do
+			end_own "$_p" sh
+		done < "$_f"
+	done
 	rm -rf "${tmp:?}"
 }
 trap cleanup EXIT
@@ -112,7 +124,12 @@ gone()
 
 cause='leaks(1) could not inspect a process within 2 s'
 
-stub hang 'while :; do sleep 1; done'
+# a stub that hangs for at most 120 s (FIX150) and records its PID in
+# ${tmp}/hang.pids, which cleanup reads
+hangbody="echo \$\$ >> \"${tmp:?}/hang.pids\"
+_n=0
+while [ \"\$_n\" -lt 120 ]; do sleep 1; _n=\$((_n + 1)); done"
+stub hang "$hangbody"
 stub good 'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift
 "$@"
@@ -270,7 +287,7 @@ other child: alive" ]; then
 fi
 
 # (g) ps(1) that gives no answer: the bound still ends the run
-stub psfail 'while :; do sleep 1; done'
+stub psfail "$hangbody"
 printf '#!/bin/sh\nexit 1\n' > "${tmp:?}/psfail/ps"
 chmod +x "${tmp:?}/psfail/ps"
 secs=40
@@ -301,29 +318,53 @@ if [ -f "${tmp:?}/nolist.pids" ]; then
 	done < "${tmp:?}/nolist.pids"
 fi
 
-# (h) a TERM to the check while leaks(1) holds the probe's target stopped
-stub termstop "echo \$\$ >> \"${tmp:?}/term.run\"
+# (h) a TERM to the check while leaks(1) holds the probe's target stopped.
+# termcase <name> <path prefix> <target>: the stub leaks(1) <name> records its
+# PID in ${tmp}/<name>.run and its target's in <name>.pids; the check records
+# its watchdog's PID in <name>.dog (IMGDEC_SELFTEST_DOGFILE). The TERM comes
+# once the target is stopped. The check's output is ${tmp}/<name>.out. The
+# stopped target is expected gone when <target> is 1 (with a failing ps(1)
+# reap kills the run only, and says so).
+termcase()
+{
+	stub "$1" "echo \$\$ >> \"${tmp:?}/$1.run\"
 while [ \"\$#\" -gt 0 ] && [ \"\$1\" != -- ]; do shift; done
 shift
-exec \"${tmp:?}/spawnstop\" \"${tmp:?}/term.pids\" \"\$@\""
-env PATH="${tmp:?}/termstop:$PATH" IMGDEC_CHECK_SECONDS=8 IMGDEC_LEAKS_PROBE_SECONDS=60 \
-	perl -e 'alarm 120; exec @ARGV' sh "$check" > "${tmp:?}/out" 2>&1 &
-chk=$!
-n=0
-while [ ! -s "${tmp:?}/term.pids" ] && [ "$n" -lt 600 ]; do
-	sleep 0.1
-	n=$((n + 1))
-done
-kill -TERM "$chk" 2>/dev/null || :
-rc=0
-wait "$chk" || rc=$?
-sleep 1
-if [ "$rc" -ne 143 ]; then
-	cat "${tmp:?}/out"
-	fail "(h) a TERM to the check: it did not end with status 143 (status $rc)"
+exec \"${tmp:?}/spawnstop\" \"${tmp:?}/$1.pids\" \"\$@\""
+	env PATH="${tmp:?}/$1:$2$PATH" IMGDEC_CHECK_SECONDS=8 IMGDEC_LEAKS_PROBE_SECONDS=60 \
+		IMGDEC_SELFTEST_DOGFILE="${tmp:?}/$1.dog" \
+		perl -e 'alarm 120; exec @ARGV' sh "$check" > "${tmp:?}/$1.out" 2>&1 &
+	chk=$!
+	n=0
+	while [ ! -s "${tmp:?}/$1.pids" ] && [ "$n" -lt 600 ]; do
+		sleep 0.1
+		n=$((n + 1))
+	done
+	kill -TERM "$chk" 2>/dev/null || :
+	rc=0
+	wait "$chk" || rc=$?
+	sleep 1
+	if [ "$rc" -ne 143 ]; then
+		cat "${tmp:?}/$1.out"
+		fail "(h) a TERM to the check ($1): it did not end with status 143 (status $rc)"
+	fi
+	if [ "$3" = 1 ]; then
+		gone "${tmp:?}/$1.pids" leakprobe || fail "(h) a TERM to the check ($1): the probe's stopped target is still there (or was never started)"
+		gone "${tmp:?}/$1.run" spawnstop || fail "(h) a TERM to the check ($1): the probe's leaks(1) is still there (or was never started)"
+	fi
+	gone "${tmp:?}/$1.dog" sh || fail "(h) a TERM to the check ($1): the check's watchdog is still there (or was never started)"
+}
+termcase term "" 1
+if grep -qF 'Terminated' "${tmp:?}/term.out"; then
+	cat "${tmp:?}/term.out"
+	fail "(h) a TERM to the check: a job status line ('Terminated') reached the output"
 fi
-gone "${tmp:?}/term.pids" leakprobe || fail "(h) a TERM to the check: the probe's stopped target is still there (or was never started)"
-gone "${tmp:?}/term.run" spawnstop || fail "(h) a TERM to the check: the probe's leaks(1) is still there (or was never started)"
+# the same with a failing ps(1): the trap's reap line reaches the check's output
+termcase termps "${tmp:?}/psfail:" 0
+if ! grep -qF 'ps(1) gave no answer' "${tmp:?}/termps.out"; then
+	cat "${tmp:?}/termps.out"
+	fail "(h) a TERM to the check with a failing ps(1): the trap's reap line did not reach the output"
+fi
 
 if [ "$fails" -ne 0 ]; then
 	echo "$me: $fails case(s) failed"
