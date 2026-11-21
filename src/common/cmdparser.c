@@ -59,7 +59,11 @@ static char *cmd_null_string = "";
 static char cmd_args[MAX_STRING_CHARS];
 sizebuf_t cmd_text;
 byte cmd_text_buf[32768];
-char defer_text_buf[32768];
+/* one more than cmd_text_buf for the terminator: Cbuf_InsertText can
+   fill cmd_text_buf to the last byte (FIX148) */
+char defer_text_buf[sizeof(cmd_text_buf) + 1];
+YQ2_STATIC_ASSERT(sizeof(defer_text_buf) > sizeof(cmd_text_buf),
+		"Cbuf_CopyToDefer writes a terminator at defer_text_buf[cmd_text.cursize]");
 
 /*
  * Where each byte of cmd_text_buf and defer_text_buf came from (FIX113):
@@ -171,6 +175,19 @@ Cbuf_DropServerText(void)
 	/* A server line that dropped the connection through Com_Error
 	   never returns to Cbuf_Execute to restore the source. */
 	cbuf_source = CBUF_PLAYER;
+}
+
+/*
+ * True while Cbuf_Execute runs a line that holds any of the server's
+ * bytes (FIX151). A command that refuses a server's use reads this, so
+ * it refuses such a line whatever state the line finds: a level change,
+ * a killserver or a demo ending before the line runs does not let it
+ * through.
+ */
+qboolean
+Cbuf_ExecutingServerText(void)
+{
+	return cbuf_source == CBUF_SERVER;
 }
 
 /*
