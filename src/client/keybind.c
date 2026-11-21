@@ -98,6 +98,30 @@ Key_BindingIsServer(int keynum)
 	return keybindserver[keynum];
 }
 
+/* The Keys menu clearing a key. A key the player owns becomes unbound,
+   which is what the player sees. A key the server owns shows the
+   server's command, and clearing it removes only that: the key goes
+   back to what the player saved (unbound if nothing), which the menu
+   never showed and so must not erase. */
+void
+Key_ClearForPlayer(int keynum)
+{
+	if ((keynum < 0) || (keynum >= K_LAST))
+	{
+		return;
+	}
+
+	if (keybindserver[keynum])
+	{
+		Key_SetBody(&keybindings[keynum],
+				keybindplayer[keynum] ? keybindplayer[keynum] : "");
+		keybindserver[keynum] = false;
+		return;
+	}
+
+	Key_SetBinding(keynum, "");
+}
+
 /* Queues text from key's binding, as the server's if a server wrote it;
    a key outside the tables has no binding and queues nothing. */
 void
