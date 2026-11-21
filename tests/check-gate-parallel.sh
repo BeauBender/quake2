@@ -843,16 +843,25 @@ c_ttymsg() {
 	*" comm="*sh" args="*) ;;
 	*) say "ttymsg: the stopped process is not a shell (the scheduler's): $_ms"; return 1 ;;
 	esac
+	# the stop line ends with the bracket of the stopped process (no other
+	# process's pid=stat after it), and its args are at most 120 characters
+	case $_ms in
+	*"]") ;;
+	*) say "ttymsg: the stop line holds more than the stopped process: $_ms"; return 1 ;;
+	esac
+	_ma=${_ms##* args=}
+	[ "${#_ma}" -le 121 ] || { say "ttymsg: the args are not cut to 120 characters (${#_ma}): $_ms"; return 1; }
 	[ "$(printf '%s\n' "$_ms" | tr ' ' '\n' | grep -c 'stat=T')" -ge 1 ] || { say "ttymsg: no T state in the stop line: $_ms"; return 1; }
 	printf '%s\n' "$_mo" | grep -q '^check-gate-parallel: tty: state:' || { say "ttymsg: no state: line below the stop line: $_mo"; return 1; }
 	case $_ms in
 	*" stat=S"* | *" stat=R"*) say "ttymsg: a running process's state is in the stop line: $_ms"; return 1 ;;
 	esac
-	# no home path: HOME is the scratch dir the tree lives in, so args show ~
-	_mh=$(HOME=$tmp SCHED=$tmp/mut-ttymsg.sh quiet=0 c_tty) && { say "ttymsg: the run without the SIGTTOU ignore passed (HOME)"; return 1; }
+	# no home path: the stopped shell runs as /bin/sh, so with HOME=/bin its
+	# args show ~/sh and never /bin/sh
+	_mh=$(HOME=/bin SCHED=$tmp/mut-ttymsg.sh quiet=0 c_tty) && { say "ttymsg: the run without the SIGTTOU ignore passed (HOME)"; return 1; }
 	case $_mh in
-	*"$tmp"*) say "ttymsg: the output holds a home path: $_mh"; return 1 ;;
-	*"args=~/"* | *"args="*" ~/"*) ;;
+	*"args=/bin"*) say "ttymsg: the args hold the home path: $_mh"; return 1 ;;
+	*"args=~/sh "*) ;;
 	*) say "ttymsg: the args show no ~ for HOME: $_mh"; return 1 ;;
 	esac
 }
@@ -896,6 +905,17 @@ c_intskip() {
 	done
 }
 
+# ttyself: ttymsg alone, run by this self-test (or $SELF) in a process of its
+# own, so a mutant of this self-test's ttymsg lines (smut) is run and caught
+c_ttyself() {
+	_xf=${SELF:-$top/tests/check-gate-parallel.sh}
+	d=$(newcase)
+	rc=0
+	bounded 240 "$d/out" env GP_ONLY=ttymsg TMPDIR="$d/td" sh "$_xf" || rc=$?
+	[ "$rc" -eq 0 ] || { say "ttyself: ttymsg run alone gave status $rc:"; [ "$quiet" = 1 ] || sed 's/^/  | /' "$d/out"; return 1; }
+	grep -qx "  ok   ttymsg" "$d/out" || { say "ttyself: ttymsg did not pass"; return 1; }
+}
+
 # lit <file> <old> <new> [<prefix>]: the file with its one occurrence of
 # <old> replaced by <new>, both taken literally (no backslash in either: awk
 # -v reads escapes), lines that start with <prefix> left as they are;
@@ -907,7 +927,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tty ttymsg leave intskip"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tty ttymsg leave intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
@@ -1022,15 +1042,15 @@ smut() {
 }
 smut no-int-probe intskip "sh -c 'kill -INT \$\$; exit 0' 2> /dev/null || INT_OK=1" 'INT_OK=1'
 smut skip-unsaid intskip 'skipint() { say' 'skipint() { :'
-smut tty-no-pgid ttymsg ' pgid=$_tgp' ''
-smut tty-no-comm ttymsg ' comm=$_tcm' ''
-smut tty-no-args ttymsg ' args=$_tar]' ']'
-smut tty-no-stat ttymsg ' stat=$_tst pgid' ' pgid'
-smut tty-no-state-line ttymsg '			say "tty: state:$_tothers"' ':'
-smut tty-others-in-stop ttymsg 'stopped:$_tdesc"' 'stopped:$_tdesc$_toth"'
-smut tty-home-kept ttymsg 'h != "" && (i' 'h == "" && (i'
-smut tty-no-cut ttymsg 'substr(o $0, 1, 120)' 'o $0'
-smut tty-read-after-kill ttymsg '_tgp=$(ps -o pgid= -p "$_tk"' '_tgp=$(kill -s KILL "$_tk" 2> /dev/null; sleep 0.3; ps -o pgid= -p "$_tk"'
+smut tty-no-pgid ttyself ' pgid=$_tgp' ''
+smut tty-no-comm ttyself ' comm=$_tcm' ''
+smut tty-no-args ttyself ' args=$_tar]' ']'
+smut tty-no-stat ttyself ' stat=$_tst pgid' ' pgid'
+smut tty-no-state-line ttyself '			say "tty: state:$_tothers"' ':'
+smut tty-others-in-stop ttyself 'stopped:$_tdesc"' 'stopped:$_tdesc$_toth"'
+smut tty-home-kept ttyself 'h != "" && (i' 'h == "" && (i'
+smut tty-no-cut ttyself 'substr(o $0, 1, 120)' 'o $0'
+smut tty-read-after-kill ttyself '_tgp=$(ps -o pgid= -p "$_tk"' '_tgp=$(kill -s KILL "$_tk" 2> /dev/null; sleep 0.3; ps -o pgid= -p "$_tk"'
 smut launch-no-group intskip '{ "$@" > "$_ld/out"' '{ set +m; "$@" > "$_ld/out"'
 
 if [ "$fail" -ne 0 ]; then
