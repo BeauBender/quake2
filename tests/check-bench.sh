@@ -265,12 +265,31 @@ wait_gone() {
 	forget "$2"
 	return 0
 }
-# reap <pid>: after a failed wait, ends a process this check started (TERM,
-# which its trap turns into a stop of its command; KILL after 30 s), so the
-# wait that follows cannot hang.
+# listed_id <pid>: the identity <pid> was put on the cleanup list with;
+# empty when it is not on the list or was put on it with none.
+listed_id() {
+	case $1 in
+	'' | *[!0-9]*) return 0 ;;
+	esac
+	sed -n "s/^$1 //p" "${tmp:?}/pids" | sed -n 1p
+}
+# reap <pid> [<seconds>]: after a failed wait, ends a process this check
+# started (TERM, which its trap turns into a stop of its command; KILL after
+# <seconds>, 30 by default), so the wait that follows cannot hang. Each of
+# the two signals goes only while <pid> still has the identity it was
+# recorded with on the cleanup list (FIX171): the KILL comes 30 s after the
+# TERM, time enough for the system to give the pid to another process. A
+# pid that has gone gets neither, and nothing is said; one that runs but is
+# not on the list, was listed with no identity, has another identity now, or
+# that ps gives no answer for, gets neither, and that is said.
 reap() {
-	kill -TERM "$1" 2> /dev/null || true
-	wait_gone 30 "$1" || kill -KILL "$1" 2> /dev/null || true
+	_rid=$(listed_id "$1")
+	if pid_same "$1" "$_rid"; then kill -TERM "$1" 2> /dev/null || true; else reap_skip TERM "$1"; fi
+	wait_gone "${2:-30}" "$1" && return 0
+	if pid_same "$1" "$_rid"; then kill -KILL "$1" 2> /dev/null || true; else reap_skip KILL "$1"; fi
+}
+reap_skip() {
+	! pid_running "$2" || echo "$me: reap: no $1 to pid $2: it is not the process this check recorded (another identity, none, or no answer from ps)"
 }
 # wait_held <seconds> <label>: the lock shows <label> with its child pid
 # (the holder's line, the first: a waiter's line has a label too).
@@ -522,6 +541,59 @@ t_cleanup_id() {
 	stop_listed "${E:?}/own"
 	for _q in "$_x" "$_y" "$_k" "$_e"; do
 		wait_gone 40 "$_q" || bad "cleanup-id: pid $_q outlived its own bound"
+		collect "$_q" 2> /dev/null || true
+	done
+	[ "$fails" -eq 0 ]
+}
+
+# t_reap_id: reap's TERM and its KILL each go only while the pid still has
+# the identity it was recorded with on the cleanup list (FIX171). The
+# check's own processes stand in for a pid the system gave to another
+# process: shells that note a TERM and go on (so that only a KILL ends
+# them), and end by themselves once the stop file is there, or within
+# about 30 s. Listed with another's identity, one gets no TERM (t) and one
+# no KILL (k), and reap says so; listed with no identity (none), not listed
+# (off), or with ps giving no start time (ps), one gets neither; listed
+# with its own identity (own), one gets the TERM and then the KILL.
+t_reap_id() {
+	fresh reap-id
+	printf '%s\n' 'trap "echo TERM >> \"\$1\"" TERM' 'n=0' 'while [ ! -e "$2" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/deaf.sh"
+	set --
+	for _q in t k none off ps own; do
+		start sh "${E:?}/deaf.sh" "${E:?}/$_q.sig" "${E:?}/stop"
+		set -- "$@" "$BG"
+	done
+	_o=$(pid_id 1) || bad "reap-id: ps gave no start time for pid 1"
+	for _q in "$1" "$2" "$3" "$4"; do forget "$_q"; done
+	printf '%s %s\n' "$1" "$_o" "$2" "$_o" >> "${tmp:?}/pids"
+	printf '%s \n' "$3" >> "${tmp:?}/pids"
+	reap "$1" 1 > "${E:?}/t.out"
+	[ ! -s "${E:?}/t.sig" ] || bad "reap-id: a TERM went to a pid listed with another identity"
+	grep -q "reap: no TERM to pid $1:" "${E:?}/t.out" || bad "reap-id: the TERM not sent was not said: $(cat "${E:?}/t.out")"
+	reap "$2" 1 > "${E:?}/k.out"
+	pid_running "$2" || bad "reap-id: a KILL went to a pid listed with another identity"
+	grep -q "reap: no KILL to pid $2:" "${E:?}/k.out" || bad "reap-id: the KILL not sent was not said: $(cat "${E:?}/k.out")"
+	reap "$3" 1 > /dev/null
+	[ ! -s "${E:?}/none.sig" ] && pid_running "$3" || bad "reap-id: a signal went to a pid listed with no identity"
+	reap "$4" 1 > /dev/null
+	[ ! -s "${E:?}/off.sig" ] && pid_running "$4" || bad "reap-id: a signal went to a pid not on the list"
+	(
+		ps() {
+			case " $* " in
+			*' lstart= '*) return 1 ;;
+			esac
+			command ps "$@"
+		}
+		reap "$5" 1
+	) > "${E:?}/ps.out"
+	[ ! -s "${E:?}/ps.sig" ] && pid_running "$5" || bad "reap-id: a signal went to a pid that ps gave no start time for"
+	grep -q "reap: no KILL to pid $5:" "${E:?}/ps.out" || bad "reap-id: the signals not sent with no answer from ps were not said: $(cat "${E:?}/ps.out")"
+	reap "$6" 1 > /dev/null
+	grep -qx TERM "${E:?}/own.sig" 2> /dev/null || bad "reap-id: no TERM went to a pid listed with its own identity"
+	wait_gone 5 "$6" || bad "reap-id: no KILL went to a pid listed with its own identity"
+	: > "${E:?}/stop"
+	for _q in "$@"; do
+		wait_gone 40 "$_q" || bad "reap-id: pid $_q outlived its own bound"
 		collect "$_q" 2> /dev/null || true
 	done
 	[ "$fails" -eq 0 ]
@@ -2741,7 +2813,7 @@ t_digit_cap() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_cleanup_id t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
+all="t_hygiene t_generic t_cleanup_id t_reap_id t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
