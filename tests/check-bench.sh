@@ -659,7 +659,11 @@ t_lock_stop() {
 	start sh "$R/bench.sh" lock run quiet -- sh "${E:?}/gc.sh" "${E:?}/gc.quiet" "${E:?}/log" quiet 3 > "${E:?}/quiet.out" 2>&1
 	_h=$BG
 	wait_file 5 "${E:?}/gc.quiet" || bad "stop: the quiet probe's grandchild never started"
-	kill -TERM "$(cat "${E:?}/gc.quiet")" 2> /dev/null || bad "stop: the quiet probe's grandchild is gone"
+	# the pid read with its start time, and signalled only while it still
+	# has it (FIX171)
+	_gq=$(cat "${E:?}/gc.quiet" 2> /dev/null) || _gq=
+	_gi=$(pid_id "$_gq") || _gi=
+	{ pid_same "$_gq" "$_gi" && kill -TERM "$_gq" 2> /dev/null; } || bad "stop: the quiet probe's grandchild is gone, or ps gave no answer for it"
 	if ! wait_gone 15 "$_h"; then
 		bad "stop: the quiet probe's lock shell did not exit"
 		reap "$_h"
@@ -1422,8 +1426,11 @@ t_lock_zombie_waiter() {
 	_zp=$BG
 	wait_said 10 "${E:?}/z.out" || bad "zombie waiter: Z never waited"
 	_z=$(cat "${E:?}/z.pid" 2> /dev/null) || _z=
+	# the pid read with its start time, and signalled only while it still
+	# has it (FIX171)
+	_zi=$(pid_id "$_z") || _zi=
 	[ -n "$_z" ] && [ -n "$(ticket_of "$_z")" ] || bad "zombie waiter: Z showed no ticket: $(tickets | tr '\n' ' ')"
-	kill -KILL "$_z" 2> /dev/null || true
+	if pid_same "$_z" "$_zi"; then kill -KILL "$_z" 2> /dev/null || true; fi
 	wait_gone 5 "$_z" || bad "zombie waiter: Z did not die"
 	kill -0 "$_z" 2> /dev/null || bad "zombie waiter: Z was reaped at once, so this tests no zombie"
 	# Review round 2: lock status skips the zombie's ticket too. No waiter
