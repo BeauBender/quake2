@@ -131,6 +131,13 @@ bad() { echo "check-ref-metal: $*"; fail=1; }
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ref-metal.XXXXXX")
 trap 'rm -rf "${tmp:?}"' EXIT
 
+# The summary line is built from segments: every sub-check block ends with one line
+#   seg <n> "<joiner><text>"
+# (the text may use variables the block has just set). n is the segment's place in the printed
+# line, which is not the order the blocks run in; the joiner ("; " or ", ") is part of the text,
+# so the final echo names no sub-check. A new sub-check picks an unused n and adds its seg line.
+seg() { printf '%s\t%s\n' "$1" "$2" >> "${tmp:?}/summary"; }
+
 cc=${CC:-cc}
 rm_dir=src/client/refresh/metal
 flags="-std=gnu99 -Wall -Wextra -Werror -g -O1 -fno-strict-aliasing -fwrapv"
@@ -173,6 +180,7 @@ else
 	host=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_host_test: //')
 	case $host in *", 0 failed") ;; *) bad "tests/metal/rm_host_test.c printed no result line"; host="";; esac
 fi
+seg 1 "${host:-host test}"
 
 # the pure part of the ray tracing (RT1, TASK53): rm_rt.c with rm_pure.c, whose entity matrix it reuses
 rt=""
@@ -189,6 +197,7 @@ else
 	rt=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rt_test: //')
 	case $rt in *", 0 failed") ;; *) bad "tests/metal/rm_rt_test.c printed no result line"; rt="";; esac
 fi
+seg 2 "; ray tracing ${rt:-host test}"
 
 # the pure part of the G-buffer (RT2, TASK54): rm_gbuf.c and common/mtl_gbuf_math.h, with rm_pure.c for the alias stream
 gb=""
@@ -205,6 +214,7 @@ else
 	gb=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_gbuf_test: //')
 	case $gb in *", 0 failed") ;; *) bad "tests/metal/rm_gbuf_test.c printed no result line"; gb="";; esac
 fi
+seg 3 "; G-buffer ${gb:-host test}"
 
 # the pure part of the dynamic-light shadows (RT3, TASK55): rm_rtshadow.c and common/mtl_rts_math.h,
 # held to gl1's falloff and lightmap store (rm_pure.c), with rm_rt.c for the material ids
@@ -222,6 +232,7 @@ else
 	rts=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtshadow_test: //')
 	case $rts in *", 0 failed") ;; *) bad "tests/metal/rm_rtshadow_test.c printed no result line"; rts="";; esac
 fi
+seg 4 "; shadows ${rts:-host test}"
 
 # the pure part of the ambient occlusion (RT5, TASK57): rm_rtao.c and common/mtl_rtao_math.h, with
 # rm_rtshadow.c for the view's inverse, rm_rt.c for the instances AO rays test and rm_pure.c
@@ -239,6 +250,7 @@ else
 	ao=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtao_test: //')
 	case $ao in *", 0 failed") ;; *) bad "tests/metal/rm_rtao_test.c printed no result line"; ao="";; esac
 fi
+seg 5 "; AO ${ao:-host test}"
 
 # the pure part of the water reflections (RT6, TASK58): rm_rtwater.c and common/mtl_rtw_math.h, with
 # rm_rtshadow.c for the view's inverse, rm_rt.c for the instances the rays test and rm_pure.c for gl1's warp
@@ -256,6 +268,7 @@ else
 	rtw=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtwater_test: //')
 	case $rtw in *", 0 failed") ;; *) bad "tests/metal/rm_rtwater_test.c printed no result line"; rtw="";; esac
 fi
+seg 6 "; water ${rtw:-host test}"
 
 # the pure part of the sun and sky shadow (RT4, TASK56): rm_rtsun.c and common/mtl_rtsun_math.h, with
 # rm_rtshadow.c for the view's inverse, rm_rt.c for the material ids and rm_pure.c; it reads the
@@ -274,6 +287,7 @@ else
 	rtsun=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtsun_test: //')
 	case $rtsun in *", 0 failed") ;; *) bad "tests/metal/rm_rtsun_test.c printed no result line"; rtsun="";; esac
 fi
+seg 7 "; sun ${rtsun:-host test}"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)
@@ -291,6 +305,7 @@ else
 	rtl=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtlights_test: //')
 	case $rtl in *", 0 failed") ;; *) bad "tests/metal/rm_rtlights_test.c printed no result line"; rtl="";; esac
 fi
+seg 8 "; RT data ${rtl:-host test}"
 
 # the pure part of the MetalFX scalers (TASK111): rm_metalfx.c alone
 fx=""
@@ -306,6 +321,7 @@ else
 	fx=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_fx_test: //')
 	case $fx in *", 0 failed") ;; *) bad "tests/metal/rm_fx_test.c printed no result line"; fx="";; esac
 fi
+seg 9 "; MetalFX ${fx:-host test}"
 
 # the effect table (TASK179): rm_rtfx.c is built for the host with its entry points the recording stubs
 # of tests/metal/rm_rtfx_host.h (RM_RTFX_HOST), so the gate, which takes its effect switches from it, and
@@ -326,6 +342,7 @@ else
 	rtg=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtgate_test: //')
 	case $rtg in *", 0 failed") ;; *) bad "tests/metal/rm_rtgate_test.c printed no result line"; rtg="";; esac
 fi
+seg 10 "; ray-tracing gate ${rtg:-host test}"
 
 # the effect table (TASK179): tests/metal/rm_rtfx_test.c over rm_rtfx.c and rm_rtgate.c, the order every walk
 # takes, each row's switch against the gate's table, and the pipeline rule of rmb_gbuf_pipe3d. fxbuild <dir>
@@ -345,6 +362,7 @@ else
 	rtfx=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtfx_test: //')
 	case $rtfx in *", 0 failed") ;; *) bad "tests/metal/rm_rtfx_test.c printed no result line"; rtfx="";; esac
 fi
+seg 11 ", effect table ${rtfx:-host test}"
 # Scratch mutants the test must fail: two effects swapped in the order; the AO's switch changed in the
 # table but not in the gate, then in the gate but not in the table; the raster's surface choice inverted;
 # the forward pipeline asked for every pipe but the blended world face's; the AO row's show and post
@@ -387,6 +405,7 @@ if [ -n "$rtfx" ]; then
 		fi
 	done
 fi
+seg 12 ", $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m"
 
 # the preset to table script (TASK195, slice 2): the rows it prints for a fixture preset, compiled
 # into rm_rtgate.c as the enhanced overlay, must make rm_pres_value return the preset's values; a
@@ -472,6 +491,7 @@ if [ -x "${tmp:?}/rm_rtgate_test" ]; then
 		rtg_mut=$((rtg_mut + 1))
 	done
 fi
+seg 15 ", ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused"
 
 # strip <file>: the file with its comments and the contents of its string and
 # character literals blanked, its line numbers kept (for the code-only patterns)
@@ -632,6 +652,7 @@ if ! vocab "$rm_dir" > "${tmp:?}/vocab.tree"; then
 	cat "${tmp:?}/vocab.tree"
 	bad "$rm_dir fails the vocabulary check (${causes:-a tool error}; opengl: OpenGL vocabulary, symlink: a symbolic link, unscanned: a file of another kind)"
 fi
+seg 16 "; $mutants vocabulary mutants refused"
 
 # (d) the flush points. flushed <file> <function> <call>: 0 when the function is
 # defined in the file (its name at the start of a line, its body up to the next
@@ -691,6 +712,7 @@ for point in "rm_main.c RI_RenderFrame rmb_pass_3d(" "rm_main.c RI_EndFrame rmb_
 		fi
 	done
 done
+seg 17 "; 3 flush points, $flush_mutants flush mutants refused"
 
 # (g) the ray-tracing gate's call seats in rm_main.c (TASK60). seated <file>: after comments and
 # string literals are stripped, prints the broken rules, one word each, and returns 1 if any; 2 when
@@ -806,6 +828,7 @@ else
 		fi
 	done
 fi
+seg 19 "; 5 gate-seat rules, $seat_mutants seat mutants refused"
 
 # (e) the kernels call the helpers their host tests drive. kcalls <file> <kernel> <helper>: 0 when
 # the kernel is defined in the file (its name at the start of a line, its body up to the next "}" in
@@ -915,6 +938,7 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 		bad "the kernel-call check refuses a call kept in the #else part of an #if 0 ($kn, $hp)"
 	fi
 done
+seg 20 "; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused"
 
 # (f) the colour-space probe. probe_run <dir with rmb_device.m or empty> <exe>: builds
 # tests/metal/rmb_cs_probe.m, which includes rmb_device.m (found in <dir> first, else in
@@ -1058,6 +1082,7 @@ else
 		[ "$probe_skipped" = 0 ] || probe="$probe, $probe_skipped skipped ($probe_skip_why)"
 	fi
 fi
+seg 21 "; colour space ${probe}"
 
 # (f2) FIX133: the probe's cases hold for every draw and present only when each bind of a
 # frame pipeline goes through rmb_fmt_bind and its result is tested (a draw is skipped when it
@@ -1125,6 +1150,7 @@ else
 		bad "the blend-factor check refuses a literal factor on another pipeline"
 	fi
 fi
+seg 18 "; blend factors once, $blend_mutants mutants refused"
 
 # (b) the build, where it can be built
 skip=""
@@ -1200,6 +1226,7 @@ else
 	fi
 	build="ref_metal built"
 fi
+seg 24 "; $build"
 
 # metal_rate_start is read once, in RI_Init (TASK161): the cvar's value is used nowhere else in
 # rm_main.c, so a per-frame read, which a mid-run set would move, cannot come back. Scratch mutants:
@@ -1220,6 +1247,7 @@ for rate_mut in 's/rm_rate_start);/metal_rate_start->value);/' 's/&rm_rate, rm_r
 		rate_mutants=$((rate_mutants + 1))
 	fi
 done
+seg 22 "; metal_rate_start read once, $rate_mutants mutants refused"
 
 # (h) FIX119: one internal header for ref_metal's backend files. A function one rmb_*.m file
 # defines and another calls is declared once, in header/rmb_internal.h, and the file that
@@ -1348,6 +1376,7 @@ for pf in "$rm_dir"/*.m; do
 		bad "$pf declares a function by hand: put it in $rm_dir/header/rmb_internal.h"
 	fi
 done
+seg 23 "; no hand prototype in a .m file, $proto_mutants mutants refused, $proto_ok shapes passed"
 
 # (i) TASK179: rm_main.c and rmb_gbuf.m reach the ray-traced effects only through the effect table's walks
 # (rm_rtfx.c). fx_vocab <table>: the effects' prefixes, from the identifiers the table's rows name in FX(...),
@@ -1415,6 +1444,7 @@ else
 		fi
 	done
 fi
+seg 13 ", $fx_mutants call mutants refused"
 
 # (j) TASK199: the HDR tone map runs once per pixel per frame because the menu's RDF_NOWORLDMODEL view starts
 # with R_ClearNoWorld, an opaque quad over r_view.vp, the rectangle R_HdrToneMap maps (R_SetupGL and
@@ -1514,8 +1544,9 @@ for hm in noclear othervp fieldsw fieldss tmfull thtw retclear guardinv nocancel
 		[ -z "${HDR_MUTANT_SHOW:-}" ] || printf 'mutant %s: %s\n' "$hm" "$mout"
 	fi
 done
+seg 14 ", tone-map order and probe cancel held, $hdr_mutants order mutants refused"
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; RT data ${rtl:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, effect table ${rtfx:-host test}, $fxh_mutants table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, $fx_mutants call mutants refused, tone-map order and probe cancel held, $hdr_mutants order mutants refused, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; no hand prototype in a .m file, $proto_mutants mutants refused, $proto_ok shapes passed; $build)"
+	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"
 fi
 exit $fail
