@@ -111,3 +111,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK199](../runbook/TASK199.md): HDR probe and tone-map follow-ups: the source-order check of the single tone map and its mutants, the probe cancelled by a renderer restart, timerefresh named, and the unchanged frame pins
 - [FIX151](../runbook/FIX151.md): a demo the local server plays counts as a demo for the upscale gate whichever command started it, why the gate reads the server state, and the `nextdemo` decision
 - [FIX161](../runbook/FIX161.md): every download lands under the write directory and the final rename never replaces an existing file; the `players*` special case is gone
+- [FIX153](../runbook/FIX153.md): a server line may not set `nextserver` or `nextdemo`, so its text cannot come back as the player's when a demo or cinematic ends: why refusing the write was chosen over tagging the value, every route that writes them, and the attract loop

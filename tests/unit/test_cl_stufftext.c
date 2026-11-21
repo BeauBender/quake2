@@ -322,8 +322,9 @@ TEST(cbuf_executing_server_text_for_a_mixed_line)
 }
 
 /* False again after a server line leaves Cbuf_Execute through
-   Com_Error, once CL_Drop has run, as Com_Error runs it in the client
-   (FIX113 resets the source there). */
+   Com_Error, once CL_Drop has run, as Com_Error runs it in the client.
+   Com_Error resets the source itself, before its teardown (FIX153;
+   FIX113 reset it in Cbuf_DropServerText). */
 TEST(cbuf_executing_server_text_false_after_error_drop)
 {
 	src_setup();

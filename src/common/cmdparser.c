@@ -159,6 +159,13 @@ Cbuf_StripServer(byte *buf, byte *src, int len)
  * Discards every byte of server text still in the command buffer and
  * the defer buffer. Called when the connection the text came from ends
  * (CL_Disconnect). Text the player queued stays, in its order.
+ *
+ * It does not change the source of the line that runs now: a server
+ * line that drops stays the server's for the rest of its run, so what
+ * it does after the drop is still refused where a server's use is
+ * (FIX153). The source is the player's again at the next line, which
+ * Cbuf_Execute tags itself, or when the line ends in Com_Error
+ * (Cbuf_ResetSource).
  */
 void
 Cbuf_DropServerText(void)
@@ -171,9 +178,18 @@ Cbuf_DropServerText(void)
 	len = Cbuf_StripServer((byte *)defer_text_buf, defer_text_src,
 			strlen(defer_text_buf));
 	defer_text_buf[len] = 0;
+}
 
-	/* A server line that dropped the connection through Com_Error
-	   never returns to Cbuf_Execute to restore the source. */
+/*
+ * Called by Com_Error before its teardown and its longjmp: the error
+ * ends the line that raised it, which never returns to Cbuf_Execute to
+ * restore the source. Without it the teardown's text (the configs
+ * CL_Disconnect execs) and the next frame's lines would be the
+ * server's.
+ */
+void
+Cbuf_ResetSource(void)
+{
 	cbuf_source = CBUF_PLAYER;
 }
 
