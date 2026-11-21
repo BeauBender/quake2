@@ -25,6 +25,10 @@
 #    to /tmp when $TMPDIR is missing, and with no temporary directory at
 #    all (a mktemp that fails) runs no check, says so and blocks once;
 #    exits 0 on its own error (here a date command that prints nothing);
+#    and each signal to a pid read earlier (the process check-leave.sh
+#    leaves, the hook run in the background, the hanging check's group)
+#    goes to a process of this check's that stands in for that pid only
+#    while it still has the start time read with it (FIX171);
 #  - the real hook, run on a copy of HEAD with the working tree's hook and
 #    listed checks put in and a new file under src/, does not exit 0
 #    silently, or takes more than half the timeout; or, with an
