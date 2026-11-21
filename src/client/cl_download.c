@@ -494,12 +494,30 @@ CL_DownloadFilter(const char *filename)
 		".lib",
 		".so",
 		".a",
+		/* a script the engine runs as commands (exec, and at startup
+		   config.cfg and autoexec.cfg): a download is never run */
+		".cfg",
+		/* a container the filesystem mounts (fs_packtypes): its
+		   autoexec.cfg or config.cfg would be run as commands */
+		".pak",
 		NULL,
 	};
 
 	if ((*filename == '.') || (*filename == '/') || strchr(filename, ':') || strstr(filename, ".."))
 	{
 		Com_Printf("Refusing to download a path containing '..' or ':' or starting with '.' or '/': %s\n", filename);
+		return true;
+	}
+
+	/* A name with no '/' is a file at the top of a game directory, the
+	   only place the filesystem mounts a container from (fs_packtypes)
+	   and the startup configs live. A case-folding volume resolves more
+	   than one spelling to such a file (KELVIN SIGN for the k in a
+	   "pakN.pak"), which the extension rules below compare bytewise and
+	   cannot see. A stock server never sends such a name. */
+	if (!strchr(filename, '/'))
+	{
+		Com_Printf("Refusing to download a file at the top of a game directory: %s\n", filename);
 		return true;
 	}
 
