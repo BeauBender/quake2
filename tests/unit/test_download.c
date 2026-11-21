@@ -23,11 +23,14 @@
  * =======================================================================
  */
 
+#include <unistd.h>
+
 #include "test.h"
 #include "../../src/client/header/client.h"
 
 /* Public in cl_download.c; cl_parse.c declares it locally the same way. */
 void CL_ParseDownload(void);
+void CL_DownloadFileName(char *dest, int destlen, char *fn);
 
 static byte netbuf[MAX_MSGLEN];
 
@@ -94,7 +97,9 @@ TEST(download_filter)
 		   extension, does not end the name. */
 		"models/items/a.ase",
 		"sound/.au/x.wav",
-		/* Backslashes are not special to the filter. */
+		/* A backslash is not a separator to the filter (the caller of the
+		   download path turns them into slashes first), so this has no
+		   "/" and is refused as a top-level name. */
 		"maps\\sub\\x.bsp",
 	};
 	t_text_t pin = {0};
@@ -136,35 +141,67 @@ TEST(download_filter_extension_table)
 		{"x.a", true},
 		{"dir/x.A", true},
 		{"a/b/x.a", true},
+		/* a script the engine runs as commands, refused */
+		{"autoexec.cfg", true},
+		{"config.cfg", true},
+		{"foo.CFG", true},
+		{"dir/x.cfg", true},
+		{"default.Cfg", true},
+		{"x.cfg.1", true},
+		/* a container the filesystem mounts, refused */
+		{"x.pak", true},
+		{"pak5.pak", true},
+		{"dir/X.PAK", true},
+		{"x.pak.1", true},
+		/* the temp name of a download, refused: no final name may equal one */
+		{"maps/x.tmp", true},
+		{"maps/x.TMP", true},
+		{"maps/x.tmp.1", true},
+		/* a name at the top of a game directory, refused: the filesystem
+		   mounts containers only from there, and a case-folding volume
+		   spells ".pak" in more ways than a byte comparison sees */
+		{"x.bsp", true},
+		{"foo.wav", true},
+		{"pak9.pa\xe2\x84\xaa", true},
+		{"x", true},
+		/* ordinary assets and cfg text elsewhere, accepted */
+		{"maps/x.bsp", false},
+		{"sound/x.wav", false},
+		{"players/x/y.pcx", false},
+		{"maps/x.cfgs", false},
+		{"maps/x.paks", false},
+		{"maps/x.tmpl", false},
+		{"cfg/x.wav", false},
+		{"maps/x.cfg.pcx", false},
 		/* the extension text inside a component, accepted */
 		{"maps/a.area.bsp", false},
-		{"x.solid.pcx", false},
+		{"maps/x.solid.pcx", false},
 		{"textures/e1u1/a.lib_wall.wal", false},
 		{"sound/.au/x.wav", false},
 		{"models/items/a.ase", false},
 		{"a.dll_x/y.wav", false},
 		{"x.dylibs/y.wav", false},
 		{"x.so_called/y.wav", false},
-		{"x.dll.pcx", false},
-		{"x.so.bsp", false},
+		{"maps/x.dll.pcx", false},
+		{"maps/x.so.bsp", false},
 		/* no extension text at all */
 		{"maps/q2dm1.bsp", false},
 		{"players/male/grunt.pcx", false},
 		/* a version group that is not numeric does not count */
-		{"libx.so.x", false},
-		{"libx.so.", false},
-		{"libx.so.1a", false},
-		{"x.dll1", false},
-		{"libx.so2", false},
-		{"x.a7", false},
-		{"x.dll_1", false},
+		{"maps/libx.so.x", false},
+		{"maps/libx.so.", false},
+		{"maps/libx.so.1a", false},
+		{"maps/x.dll1", false},
+		{"maps/libx.so2", false},
+		{"maps/x.a7", false},
+		{"maps/x.dll_1", false},
 		/* names shorter than the extension */
-		{"x", false},
-		{"so", false},
-		{"dll", false},
+		{"maps/x", false},
+		{"maps/so", false},
+		{"maps/dll", false},
 		/* only digit groups: the version scan stops at the start */
-		{"123", false},
-		{"1.2", false},
+		{"maps/123", false},
+		{"maps/1.2", false},
 		/* the other rules, byte for byte as before */
 		{".x.wav", true},
 		{"/x.wav", true},
@@ -177,7 +214,7 @@ TEST(download_filter_extension_table)
 	for (i = 0; i < sizeof(table) / sizeof(table[0]); i++)
 	{
 		reset_client();
-		Cmd_TokenizeString(va("download %s", table[i].name), false);
+		Cmd_TokenizeString(va("download \"%s\"", table[i].name), false);
 		CL_Download_f();
 
 		if ((cls.netchan.message.cursize == 0) != table[i].refused)
@@ -187,6 +224,67 @@ TEST(download_filter_extension_table)
 				(int)table[i].refused);
 		}
 	}
+}
+
+static byte f159buf[512];
+
+/* A hostile server offers a pak holding autoexec.cfg under the given name
+   (a spelling of "pakN.pak" the volume may resolve to a real one): it must
+   not be downloaded, so the config is not run when the search path is
+   rebuilt. */
+static void
+pak_cfg_never_runs(const char *name)
+{
+	static byte pak[12 + 18 + 64];
+
+	memset(pak, 0, sizeof(pak));
+	memcpy(pak, "PACK", 4);
+	pak[4] = 30;
+	pak[8] = 64;
+	memcpy(pak + 12, "set f159probe pak\n", 18);
+	memcpy(pak + 30, "autoexec.cfg", 12);
+	pak[86] = 12;
+	pak[90] = 18;
+
+	/* a pak left by an earlier run would be mounted below */
+	FS_BuildGameSpecificSearchPath("t_f159");
+	Sys_Remove(va("%s/%s", FS_Gamedir(), name));
+	FS_BuildGameSpecificSearchPath("t_f159");
+	Cbuf_Execute();
+	T_EQ_STR(Cvar_VariableString("f159probe"), "");
+
+	reset_client();
+	Cmd_TokenizeString(va("download \"%s\"", name), false);
+	CL_Download_f();
+	T_EQ_INT(cls.netchan.message.cursize, 0);
+
+	/* A server that streams it anyway (the old behaviour) is shown up
+	   by the config running after the rebuild. */
+	if (cls.netchan.message.cursize != 0)
+	{
+		SZ_Init(&net_message, f159buf, sizeof(f159buf));
+		MSG_WriteShort(&net_message, sizeof(pak));
+		MSG_WriteByte(&net_message, 100);
+		SZ_Write(&net_message, pak, sizeof(pak));
+		MSG_BeginReading(&net_message);
+		CL_ParseDownload();
+	}
+
+	FS_BuildGameSpecificSearchPath("t_f159");
+	Cbuf_Execute();
+	T_EQ_STR(Cvar_VariableString("f159probe"), "");
+}
+
+TEST(download_pak_cfg_never_runs)
+{
+	pak_cfg_never_runs("evil.pak");
+}
+
+/* KELVIN SIGN (U+212A) folds to "k" on a case-folding volume, so this name
+   opens pak9.pak at the next start; it is refused as a top-level name. */
+TEST(download_pak_cfg_never_runs_kelvin)
+{
+	pak_cfg_never_runs("pak9.pa\xe2\x84\xaa");
 }
 
 TEST(download_filter_nodownload_list_and_existing)
@@ -305,6 +403,218 @@ TEST(download_chunk_size)
 	}
 
 	T_EQ_INT(FS_LoadFile("maps/chunk.tmp", NULL), -1);
+}
+
+/* FIX161: the players tests run with the working directory set to the
+   suite's scratch directory, so a regression that writes relative to it
+   cannot leave a file in the source tree. */
+static int
+cwd_enter(char *old, size_t len)
+{
+	old[0] = '\0';
+
+	if (!getcwd(old, len))
+	{
+		old[0] = '\0';
+		return 0;
+	}
+
+	return chdir(t_tmpdir()) == 0;
+}
+
+static void
+cwd_leave(const char *old)
+{
+	if (!old[0])
+	{
+		return;
+	}
+
+	if (chdir(old) != 0)
+	{
+		T_CHECK(!"restore the working directory");
+	}
+}
+
+/* FIX161: a players/ download is written under the write directory, where
+   the filesystem finds it, not relative to the working directory. */
+TEST(download_players_lands_in_gamedir)
+{
+	void *buf;
+	int len;
+	char path[MAX_OSPATH];
+	char cwd[MAX_OSPATH];
+
+	T_REQUIRE(cwd_enter(cwd, sizeof(cwd)));
+	reset_client();
+	Q_strlcpy(cls.downloadname, "players/f161m/skin.pcx", sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, "players/f161m/skin.tmp", sizeof(cls.downloadtempname));
+	Com_sprintf(path, sizeof(path), "%s/players/f161m/skin.pcx", FS_Gamedir());
+	Sys_Remove(path);
+
+	server_sends(3, 100, "abc", 3);
+	CL_ParseDownload();
+
+	T_CHECK(cls.download == NULL);
+	len = FS_LoadFile("players/f161m/skin.pcx", &buf);
+	T_EQ_INT(len, 3);
+
+	if (len == 3)
+	{
+		T_EQ_MEM(buf, "abc", 3);
+		FS_FreeFile(buf);
+	}
+
+	/* it is the file under the write directory */
+	{
+		FILE *fp = Q_fopen(path, "rb");
+
+		T_CHECK(fp != NULL);
+
+		if (fp)
+		{
+			fclose(fp);
+		}
+	}
+
+	Sys_Remove(path);
+	cwd_leave(cwd);
+}
+
+/* FIX161: the final rename never replaces an existing file. */
+TEST(download_players_existing_target_kept)
+{
+	char path[MAX_OSPATH];
+	char tmp[MAX_OSPATH];
+	char got[8] = { 0 };
+	char cwd[MAX_OSPATH];
+	FILE *fp;
+
+	T_REQUIRE(cwd_enter(cwd, sizeof(cwd)));
+	reset_client();
+	Q_strlcpy(cls.downloadname, "players/f161k/skin.pcx", sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, "players/f161k/skin.tmp", sizeof(cls.downloadtempname));
+	CL_DownloadFileName(path, sizeof(path), cls.downloadname);
+	CL_DownloadFileName(tmp, sizeof(tmp), cls.downloadtempname);
+	FS_CreatePath(path);
+	fp = Q_fopen(path, "wb");
+	T_CHECK(fp != NULL);
+
+	if (!fp)
+	{
+		cwd_leave(cwd);
+		return;
+	}
+
+	fwrite("keep", 1, 4, fp);
+	fclose(fp);
+
+	server_sends(3, 100, "bad", 3);
+	t_console_reset();
+	CL_ParseDownload();
+	T_CHECK(cls.download == NULL);
+
+	fp = Q_fopen(path, "rb");
+	T_CHECK(fp != NULL);
+
+	if (fp)
+	{
+		T_EQ_INT((int)fread(got, 1, sizeof(got), fp), 4);
+		T_EQ_MEM(got, "keep", 4);
+		fclose(fp);
+	}
+
+	/* no runt temp file is left behind */
+	fp = Q_fopen(tmp, "rb");
+	T_CHECK(fp == NULL);
+
+	if (fp)
+	{
+		fclose(fp);
+	}
+
+	Sys_Remove(path);
+	cwd_leave(cwd);
+}
+
+/* FIX161: a final name that is also its own temp name is refused by the
+   filter, so the no-replace guard never sees the file it has just written. */
+TEST(download_tmp_name_refused)
+{
+	reset_client();
+	t_console_reset();
+	T_CHECK(CL_CheckOrDownloadFile("maps/f161t.tmp"));
+	T_CHECK(CL_CheckOrDownloadFile("maps/f161t.TMP"));
+	T_EQ_INT(cls.netchan.message.cursize, 0);
+	T_CHECK(strstr(t_console(), ".tmp") != NULL);
+}
+
+/* FIX161: a path that does not fit is never truncated into another name. */
+TEST(download_filename_too_long)
+{
+	static char name[MAX_OSPATH + 64];
+	char dest[MAX_OSPATH];
+
+	memset(name, 'A', sizeof(name) - 1);
+	name[sizeof(name) - 1] = '\0';
+	memcpy(name, "maps/", 5);
+	strcpy(name + sizeof(name) - 5, ".pak");
+
+	memset(dest, 'x', sizeof(dest));
+	dest[sizeof(dest) - 1] = '\0';
+	CL_DownloadFileName(dest, sizeof(dest), name);
+	T_EQ_INT(dest[0], 0);
+
+	CL_DownloadFileName(dest, sizeof(dest), "maps/ok.bsp");
+	T_CHECK(strstr(dest, "/maps/ok.bsp") != NULL);
+}
+
+/* FIX161 r3: a temp name that does not fit leaves CL_DownloadFileName with an
+   empty buffer; CL_ParseDownload must refuse without handing it to
+   FS_CreatePath (an ASAN run reports the read past the terminator). */
+TEST(download_parse_name_too_long)
+{
+	static char longname[MAX_OSPATH + 64];
+	char cwd[MAX_OSPATH];
+	char tmp[MAX_OSPATH];
+	FILE *fp;
+
+	T_REQUIRE(cwd_enter(cwd, sizeof(cwd)));
+
+	/* the temp name is too long */
+	reset_client();
+	memset(longname, 'A', sizeof(longname) - 1);
+	longname[sizeof(longname) - 1] = '\0';
+	memcpy(longname, "maps/", 5);
+	Q_strlcpy(cls.downloadname, "maps/f161l.bsp", sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, longname, sizeof(cls.downloadtempname));
+	server_sends(3, 100, "abc", 3);
+	t_console_reset();
+	CL_ParseDownload();
+	T_CHECK(cls.download == NULL);
+	T_CONSOLE_HAS("Failed to open");
+
+	/* the temp name fits, the final name does not: no temp file is left */
+	reset_client();
+	Q_strlcpy(cls.downloadname, longname, sizeof(cls.downloadname));
+	Q_strlcpy(cls.downloadtempname, "maps/f161m.tmp", sizeof(cls.downloadtempname));
+	CL_DownloadFileName(tmp, sizeof(tmp), cls.downloadtempname);
+	server_sends(3, 100, "abc", 3);
+	t_console_reset();
+	CL_ParseDownload();
+	T_CHECK(cls.download == NULL);
+	T_CONSOLE_HAS("name too long");
+
+	fp = Q_fopen(tmp, "rb");
+	T_CHECK(fp == NULL);
+
+	if (fp)
+	{
+		fclose(fp);
+		Sys_Remove(tmp);
+	}
+
+	cwd_leave(cwd);
 }
 
 TEST(loadgame_savedir)
