@@ -550,6 +550,21 @@ SV_Map(qboolean attractloop, char *levelstring, qboolean loadgame, qboolean isau
 	char spawnpoint[MAX_QPATH];
 	const char *ext;
 
+	/* a demo's text (its svc_stufftext) ends with the demo, as a
+	   server's ends with its connection: it must not reach a game
+	   that is not a demo through Cbuf_CopyToDefer (FIX148). When
+	   this fires inside a demo's own line, the rest of that line runs
+	   as the player's; that is harmless, the new game is local.
+	   A demo started by `map x.dm2` has attractloop 0, so the server's
+	   state says it is a demo too (FIX151). That is Com_ServerState(),
+	   not sv.state: SV_Map_f sets sv.state to ss_dead before
+	   SV_GameMap_f, so only Com_ServerState() still shows the demo on
+	   the map path. */
+	if ((sv.attractloop || (Com_ServerState() == ss_demo)) && !attractloop)
+	{
+		Cbuf_DropServerText();
+	}
+
 	sv.loadgame = loadgame;
 	sv.attractloop = attractloop;
 

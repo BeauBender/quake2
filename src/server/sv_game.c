@@ -446,6 +446,41 @@ GI_FreeTags(int tag)
 	Z_FreeTags((unsigned short)tag);
 }
 
+/*
+ * The game module's AddCommandString. Text from the game runs as at
+ * most one command line: it is refused whole if Cbuf_Execute would
+ * split it, which is the rule in Cbuf_Execute (cmdparser.c) applied
+ * here: a '\n' before the last character, or a ';' outside quotes
+ * (an even count of '"' before it). A level name from map data (the
+ * "gamemap" an ExitLevel builds from level.changemap) could otherwise
+ * close the quote and start a second command. A ';' inside quotes is
+ * an argument and stays allowed. '\r' is not a split point for
+ * Cbuf_Execute, so it is not refused. The stock game sends
+ * "gamemap \"<name>\"\n" and "menu_loadgame\n", both fine.
+ */
+void
+SV_GameAddCommandString(const char *text)
+{
+	const char *p;
+	int quotes = 0;
+
+	for (p = text; *p != '\0'; p++)
+	{
+		if (*p == '"')
+		{
+			quotes++;
+		}
+
+		if (((*p == ';') && !(quotes & 1)) || ((*p == '\n') && (p[1] != '\0')))
+		{
+			Com_Printf("%s: refused command text that holds more than one command.\n", __func__);
+			return;
+		}
+	}
+
+	Cbuf_AddText(text);
+}
+
 void
 SV_InitGameProgs(void)
 {
@@ -507,7 +542,7 @@ SV_InitGameProgs(void)
 	import.argc = Cmd_Argc;
 	import.argv = Cmd_Argv;
 	import.args = Cmd_Args;
-	import.AddCommandString = Cbuf_AddText;
+	import.AddCommandString = SV_GameAddCommandString;
 
 #ifndef DEDICATED_ONLY
 	import.DebugGraph = SCR_DebugGraph;
