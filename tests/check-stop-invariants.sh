@@ -466,17 +466,20 @@ selftest()
 	# TERM to the hook, as at a timeout: it kills the running check's group
 	# on the way out. A 20 s deadline keeps the watcher from doing it first.
 	#
-	# term_hook: runs the copy of the hook in $r in the background, with
-	# check-hang.sh listed, and sends it TERM once the check's group runs.
-	# Sets rc (the hook's status) and stray (the pids of the group it left
-	# running, now KILLed). Each signal to a pid read earlier goes only while
-	# it still has the start time read with it (FIX171): the TERM to the hook
-	# is sent first with that start time replaced by another, by none, and
-	# with ps giving no answer, and the hook must run on each time; a
-	# stand-in listed with the group, with another start time, must be
-	# neither KILLed nor named.
+	# term_hook all|own: runs the copy of the hook in $r in the background,
+	# with check-hang.sh listed, and sends it TERM once the check's group
+	# runs. Sets rc (the hook's status) and stray (the pids of the group it
+	# left running, now KILLed). Each signal to a pid read earlier goes only
+	# while it still has the start time read with it (FIX171). With all, the
+	# TERM to the hook is sent first with that start time replaced by
+	# another, by none, and with ps giving no answer, and the hook must run
+	# on each time. In both, a stand-in listed with the group, with another
+	# start time, must be neither KILLed nor named. With own (the second run, on a
+	# copy of the hook whose TERM trap leaves the group), the TERM to the
+	# hook is sent once, as read: the first run's decoys cover that site.
 	term_hook()
 	{
+		th=$1
 		rm -f "${tmp:?}/hang.pids"
 		standin "${tmp:?}/sd.pid"
 		(cd "$r" && exec "$hook" < "${tmp:?}/no.json" > /dev/null 2>&1) &
@@ -487,17 +490,19 @@ selftest()
 		n=0
 		until [ -s "${tmp:?}/hang.pids" ] && [ $(($(wc -l < "${tmp:?}/hang.pids"))) -ge 2 ]; do
 			n=$((n + 1))
-			[ "$n" -le 10 ] || {
+			[ "$n" -le 100 ] || {
 				hsig=KILL
 				break
 			}
-			sleep 1
+			sleep 0.1
 		done
 		# The group's pids, read with their start times while they run (they
 		# ignore TERM, and the hook has not been signalled yet).
 		[ "$hsig" = KILL ] || group_ids "${tmp:?}/hang.pids" "${tmp:?}/hang.ids"
 		hown=$hps
-		for how in other none nops own; do
+		hows='other none nops'
+		[ "$th" != own ] || hows=
+		for how in $hows own; do
 			case $how in
 			other) hps='Thu Jan 1 00:00:00 2026' ;;
 			none) hps= ;;
@@ -542,7 +547,7 @@ selftest()
 	sed 's/^deadline=2$/deadline=20/' "$r/$hook" > "${tmp:?}/h" && cat "${tmp:?}/h" > "$r/$hook"
 	grep -qx 'deadline=20' "$r/$hook" || fail "selftest: TERM to the hook: cannot set the deadline in the copy of $hook"
 	printf '%s\n' "$no" > "${tmp:?}/no.json"
-	term_hook
+	term_hook all
 	[ "$rc" -eq 0 ] || fail "selftest: TERM to the hook: the hook exited $rc, not 0"
 	[ -z "$stray" ] || fail "selftest: TERM to the hook: process$stray of the check's group still ran 1 s later"
 	# The same with a copy whose TERM trap leaves the check's group running:
@@ -552,7 +557,7 @@ selftest()
 		{ print }
 		END { exit n != 1 }' "$r/$hook" > "${tmp:?}/h" && cat "${tmp:?}/h" > "$r/$hook" ||
 		fail "selftest: cannot take the group's KILL out of the TERM trap in the copy of $hook"
-	term_hook
+	term_hook own
 	[ -n "$stray" ] || fail "selftest: TERM to a hook that leaves the check's group running: the group was not seen left running"
 
 	# No job control: a copy of the hook with set -m taken out.
