@@ -144,6 +144,12 @@ static cvar_t *r_retro_gamma;
 /* TASK195: the tuning harness's B side, "" for A (the client's rt_ab writes it) */
 static cvar_t *r_rt_ab;
 
+int
+RM_PresentationMode(void)
+{
+	return rm_presentation;
+}
+
 const char *
 RM_EffectString(const cvar_t *cv)
 {
@@ -662,6 +668,9 @@ RI_Init(void)
 		rm_presentation = rm_pres_decide(r_presentation->value, rm_rtg.path, &why);
 		rm_pres_format(r_presentation->value, rm_presentation, why, line, sizeof(line));
 		R_Printf(PRINT_ALL, "%s\n", line);
+
+		/* TASK185: no Retro view pass left from before a vid_restart (the image stays mapped); RI_RenderFrame sets it per frame */
+		rmb_gbuf_set_retro(0, 0, 0);
 	}
 
 	if (!rm_caps_floor_ok(caps.families))
@@ -1302,6 +1311,12 @@ R_RetroFinish(const refdef_t *fd)
 	rm_viewport_t vp;
 	int tw = 0, th = 0;
 
+	/* TASK185: a view drawn at 480 lines ran the pass at its own size, before its blit; the frame's copy would quantize it twice */
+	if (rmb_gbuf_retro_done())
+	{
+		return;
+	}
+
 	rmb_target_size(&tw, &th);
 	rm_view_rect(fd->x, fd->y, fd->width, fd->height, vid.width, vid.height, th, &vp);
 	rmb_retro_pass((int)vp.x, (int)vp.y, (int)vp.w, (int)vp.h, r_retro_filter->value != 0,
@@ -1357,6 +1372,19 @@ RI_RenderFrame(refdef_t *fd)
 	 * reflections
 	 */
 	rm_rtfx_frame(fd, RM_RT_SceneReady());
+
+	/*
+	 * Retro's pass is made at the view's own lines when it has them
+	 * (TASK185), with this frame's settings. Set on every frame, off in
+	 * every other mode: the renderer stays mapped across vid_restart, so
+	 * a Retro session's setting would otherwise outlive it.
+	 */
+	{
+		const float rc = r_retro_gamma->value;
+
+		rmb_gbuf_set_retro(rm_presentation == RM_PRES_RETRO, r_retro_filter->value != 0,
+				((rc >= 0.0f) && (rc < (float)MTL_RETRO_CURVES)) ? (int)rc : 0);
+	}
 
 	/*
 	 * Colour loaded, so 2D drawn before a view (the player-config menu)

@@ -447,6 +447,8 @@ static void
 test_pres_overlay(void)
 {
 	static const char *const decided[] = { "r_rt_ao", "r_rt_shadows", "r_rt_sun", "r_rt_water" };
+	/* TASK197 (P8): what Retro reads as 0, the four effects, the gun shadow and the scaler */
+	static const char *const retro_off[] = { "r_rt_ao", "r_rt_shadows", "r_rt_sun", "r_rt_water", "r_rt_gunshadow", "r_metalfx" };
 	const float users[] = { 0.0f, 0.5f, 2.0f, -1.0f };
 	int i, j, k, mode, effect;
 
@@ -471,8 +473,18 @@ test_pres_overlay(void)
 				CHECK(rm_pres_value(m, name, users[j]) == want);
 			}
 
-			/* the modes of later slices decide nothing in this one */
-			CHECK(rm_pres_value(RM_PRES_RETRO, name, users[j]) == users[j]);
+			/* Retro reads its effects and the scaler as 0 and decides nothing else (TASK197) */
+			{
+				int off = 0;
+
+				for (k = 0; k < (int)(sizeof(retro_off) / sizeof(retro_off[0])); k++)
+				{
+					off |= !strcmp(name, retro_off[k]);
+				}
+				CHECK(rm_pres_value(RM_PRES_RETRO, name, users[j]) == (off ? 0.0f : users[j]));
+			}
+
+			/* the mode of a later slice decides nothing in this one */
 			CHECK(rm_pres_value(RM_PRES_RTPRIMARY, name, users[j]) == users[j]);
 		}
 	}
@@ -483,6 +495,17 @@ test_pres_overlay(void)
 		i = rm_rtg_find(decided[k]);
 		CHECK(i >= 0 && rm_rtg_cvar(i, &effect) && effect == 1);
 	}
+
+	/* Retro: every one reads 0, r_metalfx too (it is no gate cvar), and the overlay is reported */
+	for (k = 0; k < (int)(sizeof(retro_off) / sizeof(retro_off[0])); k++)
+	{
+		CHECK(rm_pres_value(RM_PRES_RETRO, retro_off[k], 3.0f) == 0.0f);
+		CHECK(rm_effect_overlaid(RM_PRES_RETRO, "", retro_off[k]));
+		CHECK(!rm_effect_overlaid(RM_PRES_STOCK, "", retro_off[k]));
+	}
+	CHECK(rm_pres_value(RM_PRES_RETRO, "r_retro_filter", 1.0f) == 1.0f);
+	CHECK(rm_pres_value(RM_PRES_RETRO, "r_rt_ao_range", 256.0f) == 256.0f);
+	CHECK(!rm_effect_overlaid(RM_PRES_RETRO, "", "r_rt_ao_range"));
 
 	CHECK(rm_pres_value(RM_PRES_ENHANCED, "vid_gamma", 1.2f) == 1.2f);
 	CHECK(rm_pres_value(RM_PRES_ENHANCED, NULL, 3.0f) == 3.0f);
@@ -515,7 +538,7 @@ test_pres_format(void)
 	CHECK(pres_is(2, RM_PRES_STOCK, RM_PRES_WHY_NOTBUILT,
 			"ref_metal: presentation: stock; r_presentation 2 (retro) reads 0: not in this build"));
 	CHECK(pres_is(2, RM_PRES_RETRO, RM_PRES_WHY_OK,
-			"ref_metal: presentation: retro (r_presentation 2): the 3D view in RGB565 with the 4 x 4 dither, r_retro_filter and r_retro_gamma read each frame"));
+			"ref_metal: presentation: retro (r_presentation 2): the 3D view in RGB565 with the 4 x 4 dither, r_retro_filter and r_retro_gamma read each frame; r_rt_shadows, r_rt_sun, r_rt_ao, r_rt_water, r_rt_gunshadow and r_metalfx read 0"));
 	CHECK(pres_is(7, RM_PRES_STOCK, RM_PRES_WHY_NOTBUILT,
 			"ref_metal: presentation: stock; r_presentation 7 reads 0: not in this build"));
 	CHECK(!rm_pres_format(1, RM_PRES_ENHANCED, RM_PRES_WHY_OK, small, sizeof(small)) && small[0] == '\0');

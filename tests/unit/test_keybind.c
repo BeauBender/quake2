@@ -74,13 +74,15 @@ T_Kb_Bind_f(void)
 	Key_SetBinding(k[0] && !k[1] ? (unsigned char)k[0] : -1, cmd);
 }
 
-/* Key_Unbind_f for a single-character key. */
+/* Key_Unbind_f for a single-character key: it mirrors the real command
+   after the key-name lookup and calls the same Key_ClearForPlayer;
+   `make client` builds the real call. */
 static void
 T_Kb_Unbind_f(void)
 {
 	const char *k = Cmd_Argv(1);
 
-	Key_SetBinding(k[0] && !k[1] ? (unsigned char)k[0] : -1, "");
+	Key_ClearForPlayer(k[0] && !k[1] ? (unsigned char)k[0] : -1);
 }
 
 /* Key_SetBinding with a raw key number, as `bind "<0x80>" x` reached it
@@ -524,4 +526,99 @@ TEST(keybind_bad_keynum_refused)
 			t_fail(__FILE__, __LINE__, "a refused key number allocated:\n%s", out);
 		}
 	}
+}
+
+/* The Keys menu clears a key the server owns: the player saw the
+   server's command and removed it, so the key goes back to the
+   player's saved binding, and config.cfg keeps it. */
+TEST(keybind_menu_clear_restores_player_body)
+{
+	char out[4096];
+
+	kb_setup();
+
+	player_line("bind a \"+moveleft\"\n");
+	server_line("bind a \"+attack\"\n");
+	T_CHECK(Key_BindingIsServer('a'));
+
+	Key_ClearForPlayer('a');
+	T_EQ_STR(keybindings['a'], "+moveleft");
+	T_CHECK(!Key_BindingIsServer('a'));
+
+	kb_written(out, sizeof(out));
+	T_EQ_STR(out, "bind a \"+moveleft\"\n");
+
+	kb_teardown();
+}
+
+/* A key the player owns clears to nothing, as before. */
+TEST(keybind_menu_clear_player_key)
+{
+	char out[4096];
+
+	kb_setup();
+
+	player_line("bind a \"+moveleft\"\n");
+	Key_ClearForPlayer('a');
+	T_EQ_STR(keybindings['a'], "");
+	T_CHECK(!Key_BindingIsServer('a'));
+
+	kb_written(out, sizeof(out));
+	T_EQ_STR(out, "");
+
+	kb_teardown();
+}
+
+/* A server's key where the player saved nothing clears to nothing. */
+TEST(keybind_menu_clear_server_key_no_player_body)
+{
+	kb_setup();
+
+	server_line("bind a \"+attack\"\n");
+	T_CHECK(Key_BindingIsServer('a'));
+
+	Key_ClearForPlayer('a');
+	T_EQ_STR(keybindings['a'], "");
+	T_CHECK(!Key_BindingIsServer('a'));
+
+	/* a key outside the tables is ignored */
+	Key_ClearForPlayer(-1);
+	Key_ClearForPlayer(K_LAST);
+
+	kb_teardown();
+}
+
+/* The console's unbind on a key a server owns gives the key back to the
+   player's saved body (FIX167), as the Keys menu does. */
+TEST(keybind_console_unbind_restores_player_body)
+{
+	char out[4096];
+
+	kb_setup();
+
+	player_line("bind a \"+moveleft\"\n");
+	server_line("bind a \"+attack\"\n");
+	T_CHECK(Key_BindingIsServer('a'));
+
+	player_line("unbind a\n");
+	T_EQ_STR(keybindings['a'], "+moveleft");
+	T_CHECK(!Key_BindingIsServer('a'));
+
+	kb_written(out, sizeof(out));
+	T_EQ_STR(out, "bind a \"+moveleft\"\n");
+
+	kb_teardown();
+}
+
+/* A key the player owns clears to nothing. */
+TEST(keybind_console_unbind_player_key)
+{
+	kb_setup();
+
+	player_line("bind a \"+moveleft\"\n");
+	player_line("unbind a\n");
+	T_EQ_STR(keybindings['a'] ? keybindings['a'] : "", "");
+	T_CHECK(!Key_BindingIsServer('a'));
+
+	kb_teardown();
 }

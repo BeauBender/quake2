@@ -295,6 +295,7 @@ void Key_WriteConsoleHistory();
 void Key_SetBinding(int keynum, char *binding);
 /* keybind.c: who wrote each binding (FIX156) */
 qboolean Key_BindingIsServer(int keynum);
+void Key_ClearForPlayer(int keynum);
 void Key_AddBindingText(int key, const char *text);
 void Key_UnbindAll(void);
 void Key_WriteBindingLines(FILE *f);
