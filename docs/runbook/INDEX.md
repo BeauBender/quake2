@@ -104,6 +104,7 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX116](../runbook/FIX116.md): the unit suite under ASan and UBSan in the gate and CI (`tests/check-unit-sanitizers.sh`): the options, the time and the PCX mutant
 - [FIX141](../runbook/FIX141.md): a fully transparent image compares alpha only in the decoder round trip, because macOS 26's ImageIO drops its colour; a mixed control keeps colour under alpha 0 pinned, and check-image-decoder returns to CI
 - [TASK179](../runbook/TASK179.md): one effect table for ref_metal's ray-traced effects: the walks that replaced the hand-written calls, the order and pipeline rule a host test drives, the gate's switches from the table, the call lint and its mutants, and the unchanged frame pins
+- [FIX170](../runbook/FIX170.md): FS_FOpenFile refuses a name with a `..` component after its clean-up, so a server's cinematic name cannot read a file outside the search paths; the other opens and why they are safe
 - [FIX160](../runbook/FIX160.md): a level name from map data cannot add a command: the AddCommandString import refuses text that Cbuf_Execute would split into more than one command
 - [FIX159](../runbook/FIX159.md): a downloaded .cfg is refused by the download filter, so a server cannot plant an autoexec.cfg that runs at the next start
 - [FIX113](../runbook/FIX113.md): server text in the command buffer does not outlive the connection it came from: the per-byte source record, the red and green runs, and every command that gates on the connection state

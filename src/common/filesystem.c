@@ -362,6 +362,56 @@ FS_PackQuickSearch(const fsPack_t *pak, const char *name)
 }
 
 /*
+ * Returns true if a track name from the server (CS_CDTRACK) is a bare
+ * file name that may be joined onto "<path>/music/". Anything with a
+ * path separator, and "." and "..", is refused.
+ */
+qboolean
+FS_TrackNameValid(const char *track)
+{
+	if (track == NULL || track[0] == '\0')
+	{
+		return false;
+	}
+
+	if (strchr(track, '/') != NULL || strchr(track, '\\') != NULL)
+	{
+		return false;
+	}
+
+	if (strcmp(track, ".") == 0 || strcmp(track, "..") == 0)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * Returns true if a name has a ".." component, separated by '/' or '\\'.
+ * Such a name would leave the search paths when joined onto one. "a..b"
+ * and "..foo" are ordinary names, not escapes.
+ */
+static qboolean
+FS_NameEscapes(const char *name)
+{
+	const char *c = name;
+
+	while (*c)
+	{
+		if (c[0] == '.' && c[1] == '.' && (c == name || c[-1] == '/' || c[-1] == '\\')
+				&& (c[2] == '\0' || c[2] == '/' || c[2] == '\\'))
+		{
+			return true;
+		}
+
+		c++;
+	}
+
+	return false;
+}
+
+/*
  * Finds the file in the search path. Returns filesize and an open FILE *. Used
  * for streaming data out of either a pak file or a seperate file.
  */
@@ -432,6 +482,25 @@ FS_FOpenFile(const char *rawname, fileHandle_t *f, qboolean gamedir_only)
 
 		name[output] = rawname[input];
 		output++;
+	}
+
+	// Never leave the search paths: a ".." component is refused as if
+	// the file were missing. Checked after the clean-up above, so
+	// ".//../x" is caught too.
+	if (FS_NameEscapes(name))
+	{
+		Com_DPrintf("%s: refusing name with '..' component: %.64s\n",
+				__func__, name);
+		return -1;
+	}
+
+	// handle->name holds MAX_QPATH bytes and is what gets joined onto the
+	// search paths. A longer name is truncated there, after the check
+	// above, and could never match a pak entry or a real asset anyway.
+	if (strlen(name) >= MAX_QPATH)
+	{
+		Com_DPrintf("%s: refusing overlong name: %.64s\n", __func__, name);
+		return -1;
 	}
 
 	file_from_protected_pak = false;
