@@ -544,6 +544,9 @@ lwait() {
 	_wn=0
 	while kill -0 "$_lp" 2> /dev/null; do
 		if [ "$_wn" -ge $(($1 * 5)) ]; then
+			# with a second argument ("keep") the run is left alone: the
+			# caller reads its state first and ends it (and _lp) itself
+			[ -z "${2:-}" ] || return 124
 			kill -s KILL "$_lp" 2> /dev/null || :
 			wait "$_lp" 2> /dev/null || :
 			_lp=
@@ -739,30 +742,77 @@ c_sigs() {
 # `stty tostop`. The scheduler is in a process group of its own, not the
 # terminal's foreground group, so it must ignore SIGTTOU or its first write
 # to the terminal stops it and the gate hangs. The run must end with status
-# 0 within 30 s and show the check's line; on timeout what it left (test.sh,
+# 0 within 90 s and show the check's line; on timeout what it left (test.sh,
 # whose pid is recorded before its exec, and what descends from it) is
 # ended by pid
 c_tty() {
 	_tf=${WIRING:-$top/scripts/test.sh}
+	_tb=${TTY_BOUND:-90}
 	d=$(newcase)
-	gtree "$d" "$_tf" 1 0 0
+	if [ -n "${TTY_HOLD:-}" ]; then gtree "$d" "$_tf" 1 0 0 hold "$TTY_HOLD"; else gtree "$d" "$_tf" 1 0 0; fi
 	launch "$d" script -q /dev/null sh -c 'printf "%s\n" "$$" > "$1/shpid"; stty tostop; shift; exec "$@"' sh "$d" \
 		env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PATH="$tmp/make:$PATH" sh "$d/tree/scripts/test.sh"
 	rc=0
-	lwait 30 || rc=$?
+	lwait "$_tb" keep || rc=$?
 	if [ "$rc" -eq 124 ]; then
 		_ty=$(cat "$d/shpid" 2> /dev/null || :)
+		_tstate=
+		_tstop=
 		if [ -n "$_ty" ]; then
+			# the run's own processes: test.sh (its pid is recorded) and
+			# all that descends from it, read before any is ended; a
+			# state with a T is a stop (a slow run is S or R)
+			_tpids=$(ps -ax -o pid= -o ppid= | awk -v p="$_ty" '
+				{ par[$1] = $2 }
+				END { for (q in par) { x = q; while (x != "" && x != 0 && x != p) x = (x in par) ? par[x] : 0; if (x == p) print q } }')
+			for _tk in $_tpids; do
+				_tst=$(ps -o stat= -p "$_tk" 2> /dev/null | tr -d ' ' || :)
+				[ -z "$_tst" ] || _tstate="$_tstate $_tk=$_tst"
+				case $_tst in *T*) _tstop=1 ;; esac
+			done
 			for _tk in $(ps -ax -o pid= -o ppid= | awk -v p="$_ty" '$2 == p { print $1 }'); do
 				kill -s KILL -- "-$_tk" 2> /dev/null || kill -s KILL "$_tk" 2> /dev/null || :
 			done
 			kill -s KILL "$_ty" 2> /dev/null || :
 		fi
-		say "tty: the run stopped on a terminal with tostop (test.sh pid ${_ty:-unknown}), and was ended by pid"
+		# only now is script(1) itself ended (its pty closing could
+		# hang up the run before its state was read)
+		kill -s KILL "$_lp" 2> /dev/null || :
+		wait "$_lp" 2> /dev/null || :
+		_lp=
+		if [ -n "$_tstop" ]; then
+			say "tty: the run stopped on a terminal with tostop (test.sh pid ${_ty:-unknown}), and was ended by pid"
+		elif [ -n "$_ty" ] && [ -z "$_tstate" ]; then
+			say "tty: timed out after $_tb s; the run's state could not be read (tostop not ruled out)"
+		else
+			say "tty: timed out after $_tb s (state:$_tstate), not stopped: a slow run, not the tostop bug"
+		fi
 		return 1
 	fi
 	[ "$rc" -eq 0 ] || { say "tty: status $rc on a terminal with tostop, want 0"; return 1; }
 	grep -q 'a line 1' "$d/out" || { say "tty: the check's line did not reach the terminal"; return 1; }
+}
+
+# ttymsg: what c_tty says on a timeout tells a slow run from a real stop. A
+# check that holds 20 s with nothing written to the terminal, against a 3 s
+# bound, fails the case with the "timed out" line, never the tostop one; and
+# the scheduler without its SIGTTOU ignore (a mutant) still fails it with the
+# tostop line
+c_ttymsg() {
+	_mo=$(TTY_BOUND=3 TTY_HOLD=20 quiet=0 c_tty) && { say "ttymsg: a run that outlived the bound passed"; return 1; }
+	case $_mo in
+	*"tty: timed out after 3 s (state:"*) ;;
+	*) say "ttymsg: a slow run did not say it timed out: $_mo"; return 1 ;;
+	esac
+	case $_mo in
+	*tostop*"ended by pid"*) say "ttymsg: a slow run was reported as stopped on tostop: $_mo"; return 1 ;;
+	esac
+	lit "$real" "trap '' TTOU" ':' "	trap '' TTOU #" > "$tmp/mut-ttymsg.sh" || { say "ttymsg: its mutant does not apply"; return 1; }
+	_mo=$(SCHED=$tmp/mut-ttymsg.sh quiet=0 c_tty) && { say "ttymsg: the run without the SIGTTOU ignore passed"; return 1; }
+	case $_mo in
+	*"stopped on a terminal with tostop"*) ;;
+	*) say "ttymsg: a real stop did not say tostop: $_mo"; return 1 ;;
+	esac
 }
 
 # leave: a check that leaves a sleep running in the background (its output
@@ -815,7 +865,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tty leave intskip"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tty ttymsg leave intskip"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
