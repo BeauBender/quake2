@@ -71,6 +71,17 @@ term_twice() {
     if [ "$(ps -o lstart= -o args= -p "$1" 2>/dev/null)" != "$id" ]; then sleep 1; return 2; fi
     kill -TERM "$1" 2>/dev/null; sleep 1; return 0
 }
+# start_of <pid>: the start time ps prints for <pid>; empty when it is not a pid, does not run, or ps gives no answer
+start_of() { case $1 in ''|*[!0-9]*) return 0;; esac; ps -o lstart= -p "$1" 2>/dev/null; }
+# same_start <pid> <start>: <pid> still runs with the start time read along with it; never for an empty <start>. A
+# pid read from the stub's file is signalled only while this holds, since by then the system may have given it to
+# another process (FIX171)
+same_start() { [ -n "$2" ] && [ "$(start_of "$1")" = "$2" ]; }
+# group_left <pid> <start>: e2e-group's end: the child of pins.sh (MFX_STUB_CHILD), still the process read, is KILLed
+# and fails the case; another process in its pid gets nothing
+group_left() { if same_start "$1" "$2"; then kill -KILL "$1" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM"; fi; }
+# lock_left <how> <pid> <start>: e2e-lock's end, for the stub's shell (MFX_STUB_SH) and its child (MFX_STUB_CHILD): the same
+lock_left() { if same_start "$2" "$3"; then kill -KILL "$2" 2>/dev/null; ko e2e-lock "$1: the run under the lock was left running"; fi; }
 
 cc -O2 -o "$tmp/framediff" "$root/scripts/pins/framediff.c" -lm || { bad "cannot build framediff"; exit 1; }
 
@@ -475,7 +486,8 @@ limit" "$out"
     kill() { case " $* " in *" $pid "*) echo "kill $*" >> "$w/nt-sig.log";; esac; builtin kill "$@"; }
     wait() { case " $* " in *" $pid "*) echo "wait $*" >> "$w/nt-sig.log";; esac; builtin wait "$@"; }
     n=0; while [ ! -s "$w/childpid" ] && kill -0 $pid 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
-    cpid=$(cat "$w/childpid" 2>/dev/null)
+    # the child's pid is read with its start time, and signalled only while it still has it (FIX171)
+    cpid=$(cat "$w/childpid" 2>/dev/null); cst=$(start_of "$cpid")
     # $pid is signalled only before the wait that collects it: once collected, the system may give the
     # pid to another process (FIX171)
     if [ -z "$cpid" ]; then
@@ -483,12 +495,13 @@ limit" "$out"
         if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; fi
         wait $pid 2>/dev/null
     else
+        [ -n "$cst" ] || ko e2e-group "ps gave no start time for the child of pins.sh when its pid was read"
         kill -TERM $pid 2>/dev/null
         n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
         if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-group "the run did not end on SIGTERM during record"; fi
         wait $pid 2>/dev/null
         sleep 1
-        if kill -0 "$cpid" 2>/dev/null; then kill -KILL "$cpid" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM"; fi
+        group_left "$cpid" "$cst"
     fi
     unset -f kill wait
     grep -q '^wait ' "$w/nt-sig.log" || ko e2e-group "the run was never waited for"
@@ -563,7 +576,11 @@ limit" "$out"
         pid=$!
         n=0; while [ ! -s "$w/lt-child" ] && kill -0 $pid 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
         spid=$(cat "$w/lt-sh" 2>/dev/null); cpid=$(cat "$w/lt-child" 2>/dev/null); ppid=$(cat "$w/lt-parent" 2>/dev/null)
+        # the stub's two pids are read with their start times, and signalled only while they still have them (FIX171)
+        sst=$(start_of "$spid"); cst=$(start_of "$cpid")
         [ -n "$cpid" ] || ko e2e-lock "$how: the stub pins.sh did not start under the lock: $(tail -3 "$w/lt-$how.log")"
+        [ -z "$spid" ] || [ -n "$sst" ] || ko e2e-lock "$how: ps gave no start time for the stub's shell when its pid was read"
+        [ -z "$cpid" ] || [ -n "$cst" ] || ko e2e-lock "$how: ps gave no start time for the stub's child when its pid was read"
         case $how in
             TERM|INT) kill -$how $pid 2>/dev/null;;
             deaf) kill -TERM $pid 2>/dev/null;;
@@ -582,9 +599,8 @@ limit" "$out"
         if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-lock "$how: the generator did not end within 20 s"; fi
         wait $pid 2>/dev/null
         [ $how != timeout ] || want_has e2e-lock "timed out" "$(cat "$w/lt-$how.log")"
-        for q in $spid $cpid; do
-            if kill -0 "$q" 2>/dev/null; then kill -KILL "$q" 2>/dev/null; ko e2e-lock "$how: the run under the lock was left running"; fi
-        done
+        [ -z "$spid" ] || lock_left "$how" "$spid" "$sst"
+        [ -z "$cpid" ] || lock_left "$how" "$cpid" "$cst"
         ls=$(BENCH_STATE="$st" sh "$lt/scripts/bench/bench.sh" lock status 2>&1)
         [ "$ls" = lock=free ] || ko e2e-lock "$how: the lock is not free afterwards: $ls"
         case $FAILED in *" e2e-lock "*) break;; esac  # one way out failed: the others would wait their bound too
@@ -738,6 +754,33 @@ limit" "$out"
 FAILED=" "
 mkdir "$tmp/real-run"; mktree "$tmp/real-tree" "$SRC/mfx.py" || exit 1
 assertions "$tmp/real-tree/scripts/metalfx-report" "$SRC/ssim.c" "$tmp/real-run" "${MFX_GROUPS:-}"  # MFX_GROUPS="lock": only these (while iterating)
+# the KILLs at the end of e2e-group and e2e-lock (FIX171), each on a process this check starts that stands in for a
+# pid the system gave to another process (a shell that ends by itself within 20 s), once and not per mutant, since
+# they test this check and not the generator: read with another start time, or with none, or with ps giving no
+# answer, it gets no KILL and fails no case; read with its own start time, it is KILLed and fails the case
+for site in group lock; do
+    bash -c 'n=0; while [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done' &
+    dp=$!
+    n=0; while [ -z "$(start_of $dp)" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
+    ds=$(start_of $dp)
+    [ -n "$ds" ] || ko e2e-$site-id "ps gave no start time for the stand-in"
+    left() { if [ $site = group ]; then group_left "$@"; else lock_left id "$@"; fi; }
+    for how in other none nops; do
+        case $how in
+            other) got=$(FAILED=" "; left $dp 'Thu Jan  1 00:00:00 2026'; printf '%s' "$FAILED");;
+            none) got=$(FAILED=" "; left $dp ''; printf '%s' "$FAILED");;
+            nops) got=$(ps() { return 1; }; FAILED=" "; left $dp "$ds"; printf '%s' "$FAILED");;
+        esac
+        [ "$got" = " " ] || ko e2e-$site-id "$how: a process that is not the one read failed the case:$got"
+        kill -0 $dp 2>/dev/null || ko e2e-$site-id "$how: a KILL went to a process that is not the one read"
+    done
+    got=$(FAILED=" "; left $dp "$ds"; printf '%s' "$FAILED")
+    [ "$got" = " e2e-$site " ] || ko e2e-$site-id "own: the process read, left running, did not fail the case:$got"
+    n=0; while kill -0 $dp 2>/dev/null && [ $n -lt 30 ]; do sleep 0.1; n=$((n+1)); done
+    kill -0 $dp 2>/dev/null && ko e2e-$site-id "own: the process read, left running, was not KILLed"
+    wait $dp 2>/dev/null
+done
+unset -f left
 if [ "$FAILED" != " " ]; then bad "assertions failed on the real code:$FAILED"; fi
 # the scratch scenarios the generator writes into scripts/pins/scenarios are ignored by git (and the check fails without the rule)
 ign() { grep -qxF '/scripts/pins/scenarios/mfxr-*.cfg' "$1"; }
