@@ -123,6 +123,9 @@ standin() {
 }
 # standin_end <file>: the stand-in ends by its stop file, and is waited for
 standin_end() { : > "$1.stop"; wait $sp 2>/dev/null; }
+# standin_hit <case> <text>: fails <case> with <text> when the stand-in has ended: gone, or a zombie, which kill -0
+# still answers for. A signal sent to it has landed within 0.1 s
+standin_hit() { local s; sleep 0.1; s=$(ps -o stat= -p "$dp" 2>/dev/null); case $s in ''|Z*) ko "$1" "$2";; esac; }
 # The end-of-case sites (group_left, lock_left, the TERM2 term_twice) run first on the stand-in, once per word of
 # $decoys ("other none nops" on the real code, empty for a mutant), then on the pids read (own) (FIX171, round 1).
 decoys= din=
@@ -145,7 +148,7 @@ decoy_id() {
 decoy_end() {
     [ $1 != own ] || return 0
     unset -f ps; FAILED=$df; VERBOSE=$dv; din=
-    kill -0 "$dp" 2>/dev/null || ko "$2" "$1: a signal went to a process that is not the one read (the stand-in)"
+    standin_hit "$2" "$1: a signal went to a process that is not the one read (the stand-in)"
 }
 
 cc -O2 -o "$tmp/framediff" "$root/scripts/pins/framediff.c" -lm || { bad "cannot build framediff"; exit 1; }
@@ -863,7 +866,7 @@ for site in group lock; do
         # tell, and that fails the case (FIX171, round 1); none of the three gets a KILL
         if [ $how = other ]; then want=" "; else want=" e2e-$site "; fi
         [ "$got" = "$want" ] || ko e2e-$site-id "$how: the case's failures were '$got', not '$want'"
-        kill -0 $dp 2>/dev/null || ko e2e-$site-id "$how: a KILL went to a process that is not the one read"
+        standin_hit e2e-$site-id "$how: a KILL went to a process that is not the one read"
     done
     got=$(FAILED=" "; left $dp "$ds" > /dev/null; printf '%s' "$FAILED")
     [ "$got" = " e2e-$site " ] || ko e2e-$site-id "own: the process read, left running, did not fail the case:$got"
