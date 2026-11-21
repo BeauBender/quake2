@@ -51,4 +51,10 @@ extern int stub_pins_run;
 /* Creates the cvar pointers cl_*.c read without checking for NULL. */
 void stub_client_cvars(void);
 
+/* A client connected to a remote server, for a file that cannot include
+   client.h (server.h has its own client_state_t): an IP address with no
+   open socket, so CL_Disconnect's goodbye sends nothing. */
+void stub_client_connect(void);
+int stub_client_connected(void);  /* cls.state >= ca_connected */
+
 #endif

@@ -115,6 +115,35 @@ stub_client_cvars(void)
 	}
 }
 
+extern cvar_t *qport; /* src/common/netchan.c */
+
+void
+stub_client_connect(void)
+{
+	static byte netbuf[1024];
+
+	stub_client_cvars();
+	memset(&cls, 0, sizeof(cls));
+	memset(&cl, 0, sizeof(cl));
+	SZ_Init(&cls.netchan.message, netbuf, sizeof(netbuf));
+
+	/* CL_Disconnect's goodbye reads the qport and showpackets cvars */
+	if (!qport)
+	{
+		Netchan_Init();
+	}
+
+	cls.netchan.remote_address.type = NA_IP;
+	cls.state = ca_connected;
+	cls.serverProtocol = PROTOCOL_VERSION;
+}
+
+int
+stub_client_connected(void)
+{
+	return cls.state >= ca_connected;
+}
+
 /* One slot per entity number a message can name (MAX_CL_ENTNUM). */
 centity_t *
 CL_AllocEntity(int entnum)
