@@ -754,8 +754,19 @@ c_tty() {
 	if [ "$rc" -eq 124 ]; then
 		_ty=$(cat "$d/shpid" 2> /dev/null || :)
 		_tstate=
-		_tstop=1
+		_tstop=
 		if [ -n "$_ty" ]; then
+			# the run's own processes: test.sh (its pid is recorded) and
+			# all that descends from it, read before any is ended; a
+			# state with a T is a stop (a slow run is S or R)
+			_tpids=$(ps -ax -o pid= -o ppid= | awk -v p="$_ty" '
+				{ par[$1] = $2 }
+				END { for (q in par) { x = q; while (x != "" && x != 0 && x != p) x = par[x]; if (x == p) print q } }')
+			for _tk in $_tpids; do
+				_tst=$(ps -o stat= -p "$_tk" 2> /dev/null | tr -d ' ' || :)
+				[ -z "$_tst" ] || _tstate="$_tstate $_tk=$_tst"
+				case $_tst in *T*) _tstop=1 ;; esac
+			done
 			for _tk in $(ps -ax -o pid= -o ppid= | awk -v p="$_ty" '$2 == p { print $1 }'); do
 				kill -s KILL -- "-$_tk" 2> /dev/null || kill -s KILL "$_tk" 2> /dev/null || :
 			done
