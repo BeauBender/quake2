@@ -265,3 +265,74 @@ TEST(cl_drop_while_disconnected_resets_source_to_player)
 	Cbuf_Execute();
 	T_EQ_INT(player_runs, 1);
 }
+
+/* Cbuf_ExecutingServerText (FIX151): what t_src saw, and how often. */
+static int src_seen;
+static int src_runs;
+
+static void
+T_Src_f(void)
+{
+	src_seen = Cbuf_ExecutingServerText();
+	src_runs++;
+}
+
+static void
+src_setup(void)
+{
+	setup();
+	src_seen = -1;
+	src_runs = 0;
+
+	if (!Cmd_Exists("t_src"))
+	{
+		Cmd_AddCommand("t_src", T_Src_f);
+	}
+}
+
+/* True only while a server line runs: not while its text waits in the
+   buffer, not after it, and not for the player's line. */
+TEST(cbuf_executing_server_text_only_inside_a_server_line)
+{
+	src_setup();
+	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+	Cbuf_AddServerText("t_src\n");
+	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+	Cbuf_Execute();
+	T_EQ_INT(src_runs, 1);
+	T_EQ_INT(src_seen, 1);
+	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+
+	Cbuf_AddText("t_src\n");
+	Cbuf_Execute();
+	T_EQ_INT(src_runs, 2);
+	T_EQ_INT(src_seen, 0);
+}
+
+/* A line with any server byte in it is the server's. */
+TEST(cbuf_executing_server_text_for_a_mixed_line)
+{
+	src_setup();
+	Cbuf_AddServerText("t_s");
+	Cbuf_AddText("rc\n");
+	Cbuf_Execute();
+	T_EQ_INT(src_runs, 1);
+	T_EQ_INT(src_seen, 1);
+	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+}
+
+/* False again after a server line leaves Cbuf_Execute through
+   Com_Error, once CL_Drop has run, as Com_Error runs it in the client
+   (FIX113 resets the source there). */
+TEST(cbuf_executing_server_text_false_after_error_drop)
+{
+	src_setup();
+	Cbuf_AddServerText("t_err\n");
+	drop_frame_then_next();
+	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+
+	Cbuf_AddText("t_src\n");
+	Cbuf_Execute();
+	T_EQ_INT(src_runs, 1);
+	T_EQ_INT(src_seen, 0);
+}
