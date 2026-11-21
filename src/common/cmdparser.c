@@ -86,6 +86,15 @@ static byte cmd_text_src[sizeof(cmd_text_buf)];
 static byte defer_text_src[sizeof(defer_text_buf)];
 static byte cbuf_source = CBUF_PLAYER;
 
+/* How many Cmd_ExecuteString calls are running: a cvar write outside
+   any of them is the engine's own, and keeps whose value it was
+   (Cmd_ExecutingLine, FIX158). */
+static int cmd_line_depth;
+
+/* Set by Cmd_MacroExpandString when the line it expands takes a value
+   a server line wrote: the line is then the server's (FIX158). */
+static qboolean cmd_macro_server;
+
 /*
  * Causes execution of the remainder of the command buffer to be delayed
  * until next frame.  This allows commands like: bind g "impulse 5 ;
@@ -210,12 +219,26 @@ Cbuf_DropServerText(void)
  * ends the line that raised it, which never returns to Cbuf_Execute to
  * restore the source. Without it the teardown's text (the configs
  * CL_Disconnect execs) and the next frame's lines would be the
- * server's.
+ * server's. The error ends every line that runs, so none is running
+ * after it (Cmd_ExecutingLine).
  */
 void
 Cbuf_ResetSource(void)
 {
 	cbuf_source = CBUF_PLAYER;
+	cmd_line_depth = 0;
+}
+
+/*
+ * True while Cmd_ExecuteString runs a line, from the buffer, EXEC_NOW
+ * or any other caller (FIX158). A cvar write outside every line is the
+ * engine's own: no text wrote the value, so it neither makes the value
+ * the player's nor the server's (Cvar_NoteWriter).
+ */
+qboolean
+Cmd_ExecutingLine(void)
+{
+	return cmd_line_depth > 0;
 }
 
 /*
@@ -572,11 +595,17 @@ Cmd_Exec_f(void)
 
 /*
  * Inserts the current value of a variable as command text
+ *
+ * A value a server line wrote is the server's (FIX158): it is queued
+ * as server text whoever runs vstr, as an alias a server defined is
+ * (FIX156), until the player's text writes the cvar again. The text
+ * behind it keeps its own source.
  */
 static void
 Cmd_Vstr_f(void)
 {
 	const char	*v;
+	byte saved;
 
 	if (Cmd_Argc() != 2) {
 		Com_Printf("vstr <variablename> : execute a variable command\n");
@@ -584,7 +613,16 @@ Cmd_Vstr_f(void)
 	}
 
 	v = Cvar_VariableString(Cmd_Argv(1));
+
+	saved = cbuf_source;
+
+	if (Cvar_ServerWrote(Cmd_Argv(1)))
+	{
+		cbuf_source = CBUF_SERVER;
+	}
+
 	Cbuf_InsertText(va("%s\n", v));
+	cbuf_source = saved;
 }
 
 /*
@@ -777,6 +815,13 @@ Cmd_MacroExpandString(char *text)
 			continue;
 		}
 
+		/* a value a server line wrote makes the line the server's
+		   (FIX158), as a byte the server sent does */
+		if (Cvar_ServerWrote(token))
+		{
+			cmd_macro_server = true;
+		}
+
 		token = (char *)Cvar_VariableString(token);
 
 		j = strlen(token);
@@ -832,6 +877,7 @@ Cmd_TokenizeString(char *text, qboolean macroExpand)
 
 	cmd_argc = 0;
 	cmd_args[0] = 0;
+	cmd_macro_server = false;
 
 	/* macro expand the text */
 	if (macroExpand)
@@ -1278,14 +1324,22 @@ qboolean doneWithDefaultCfg;
 /*
  * A complete command line has been parsed, so try to execute it
  */
-void
-Cmd_ExecuteString(char *text)
+static void
+Cmd_ExecuteLine(char *text)
 {
 	cmd_function_t *cmd;
 	cmdalias_t *a;
 	byte saved;
 
 	Cmd_TokenizeString(text, true);
+
+	/* a line that expanded a value a server line wrote is the
+	   server's for its run, and so is what it queues and writes
+	   (FIX158). Cmd_ExecuteString restores the source after it. */
+	if (cmd_macro_server)
+	{
+		cbuf_source = CBUF_SERVER;
+	}
 
 	/* execute the command line */
 	if (!Cmd_Argc())
@@ -1356,6 +1410,30 @@ Cmd_ExecuteString(char *text)
 	/* send it as a server command if we are connected */
 	Cmd_ForwardToServer();
 #endif
+}
+
+/*
+ * Runs one line. It counts as running for Cmd_ExecutingLine, and the
+ * source it starts with is the one it leaves (FIX158): a line that a
+ * server's `$` value made the server's is so for its own run only.
+ * Com_Error leaves through Cbuf_ResetSource instead.
+ */
+void
+Cmd_ExecuteString(char *text)
+{
+	byte saved;
+
+	saved = cbuf_source;
+	cmd_line_depth++;
+
+	Cmd_ExecuteLine(text);
+
+	if (cmd_line_depth > 0)
+	{
+		cmd_line_depth--;
+	}
+
+	cbuf_source = saved;
 }
 
 static void

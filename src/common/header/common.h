@@ -409,6 +409,11 @@ void Cbuf_ResetSource(void);
 /* called by Com_Error before its teardown: the error ends the line, */
 /* and the next line is the player's unless it holds the server's bytes. */
 
+qboolean Cmd_ExecutingLine(void);
+
+/* true while Cmd_ExecuteString runs a line; a cvar write outside */
+/* every line is the engine's own (FIX158). */
+
 void Cbuf_ExecuteText(int exec_when, char *text);
 
 /* this can be used in place of either Cbuf_AddText or Cbuf_InsertText */
@@ -536,6 +541,12 @@ float Cvar_VariableValue(const char *var_name);
 const char *Cvar_VariableString(const char *var_name);
 
 /* returns an empty string if not defined */
+
+qboolean Cvar_ServerWrote(const char *var_name);
+
+/* true if a server line wrote the value the cvar holds and the */
+/* player's text has not written it since (FIX158): vstr queues it */
+/* as server text, and a line that expands it with $ is the server's. */
 
 char *Cvar_CompleteVariable(char *partial);
 
