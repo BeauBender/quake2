@@ -856,6 +856,14 @@ TEST(vidrules_rt_status_names_the_presentation)
 	T_CHECK(strstr(VidRules_RTStatus("gl1", 1, 1), "overrides") == NULL);
 	T_CHECK(strstr(VidRules_RTStatus("metal", 1, 2), "overrides") == NULL);
 	T_CHECK(strstr(VidRules_RTStatus("metal", 1, NAN), "overrides") == NULL);
+	/* TASK197: Retro says what it reads off, on any device, and only on Metal */
+	T_CHECK(strstr(VidRules_RTStatus("metal", 0, 2), "Retro") != NULL);
+	T_CHECK(strstr(VidRules_RTStatus("gl1", 1, 2), "Retro") == NULL);
+	T_CHECK(VidRules_RTOverridden(4, "metal", 0, 2) && !VidRules_RTOverridden(4, "metal", 1, 1));
+	T_CHECK(!VidRules_RTOverridden(5, "metal", 1, 2) && !VidRules_RTOverridden(0, "gl1", 1, 2));
+	T_CHECK(!VidRules_RTEffective(0, "metal", 1, 2, 1.0f) && VidRules_RTEffective(0, "metal", 1, 1, 0.0f));
+	T_CHECK(VidRules_TuneOverridden(5, "metal", 2) && !VidRules_TuneOverridden(5, "metal", 1));
+	T_CHECK(!VidRules_TuneOverridden(4, "metal", 2));   /* flat light stays the user's */
 }
 
 /* TASK183: r_presentation survives a restart, written and read back as config.cfg is */
