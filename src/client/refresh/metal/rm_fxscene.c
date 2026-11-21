@@ -36,6 +36,7 @@
 
 #include "header/local.h"
 #include "header/rm_fxscene.h"
+#include "header/rm_rtgate.h"
 
 /* a metal_stats line every this many scaled views, and on each that resets */
 #define RM_FX_STATS_EVERY 60
@@ -206,6 +207,13 @@ RM_FX_Begin(const rm_viewport_t *out, const float *vieworg, int *rw, int *rh, rm
 
 	fx_view = 0;
 	rmb_fx_unready();   /* nothing left prepared from an earlier view, whatever this one does */
+
+	/* Retro (TASK185): the 3D view's size is Retro's 480 lines and the blit enlarges it; no MetalFX */
+	if (RM_PresentationMode() == RM_PRES_RETRO)
+	{
+		return 0;
+	}
+
 	RM_FX_Read();
 	rmb_fx_set_timing(metal_stats && metal_stats->value);
 

@@ -98,6 +98,30 @@ Key_BindingIsServer(int keynum)
 	return keybindserver[keynum];
 }
 
+/* The Keys menu clearing a key. A key the player owns becomes unbound,
+   which is what the player sees. A key the server owns shows the
+   server's command, and clearing it removes only that: the key goes
+   back to what the player saved (unbound if nothing), which the menu
+   never showed and so must not erase. */
+void
+Key_ClearForPlayer(int keynum)
+{
+	if ((keynum < 0) || (keynum >= K_LAST))
+	{
+		return;
+	}
+
+	if (keybindserver[keynum])
+	{
+		Key_SetBody(&keybindings[keynum],
+				keybindplayer[keynum] ? keybindplayer[keynum] : "");
+		keybindserver[keynum] = false;
+		return;
+	}
+
+	Key_SetBinding(keynum, "");
+}
+
 /* Queues text from key's binding, as the server's if a server wrote it;
    a key outside the tables has no binding and queues nothing. */
 void
@@ -141,13 +165,34 @@ void
 Key_WriteBindingLines(FILE *f)
 {
 	int i;
+	const char *name;
 
 	for (i = 0; i < K_LAST; i++)
 	{
 		if (keybindplayer[i] && keybindplayer[i][0])
 		{
-			fprintf(f, "bind %s \"%s\"\n",
-					Key_KeynumToString(i), keybindplayer[i]);
+			name = Key_KeynumToString(i);
+
+			/* a body with a quote ends its own quoted string, one
+			   with a line break ends the line: the rest would run as
+			   a second command at the next start (FIX166). The key
+			   names are the engine's (a printable character other
+			   than ; " ' $ and space, or a table name), but a name
+			   that is empty or holds one of those is refused too. */
+			if (!name[0] || strpbrk(name, " ;\"$\t\r\n"))
+			{
+				Com_Printf("Not saving bind for a key whose name cannot be written back.\n");
+				continue;
+			}
+
+			if (strpbrk(keybindplayer[i], "\"\n\r"))
+			{
+				Com_Printf("Not saving bind for %s: its body holds a quote or a line break.\n",
+						name);
+				continue;
+			}
+
+			fprintf(f, "bind %s \"%s\"\n", name, keybindplayer[i]);
 		}
 	}
 }
