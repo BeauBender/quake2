@@ -889,6 +889,15 @@ rm_hdr_probe_arg(const char *s, int *v)
 }
 
 int
+rm_hdr_probe_cancel(int *wait)
+{
+	int pending = (*wait != 0);
+
+	*wait = 0;
+	return pending;
+}
+
+int
 rm_hdr_probe_args(const char *xs, const char *ys, int *x, int *y)
 {
 	int a, b;
