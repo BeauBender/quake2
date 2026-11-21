@@ -767,14 +767,14 @@ for site in group lock; do
     left() { if [ $site = group ]; then group_left "$@"; else lock_left id "$@"; fi; }
     for how in other none nops; do
         case $how in
-            other) got=$(FAILED=" "; left $dp 'Thu Jan  1 00:00:00 2026'; printf '%s' "$FAILED");;
-            none) got=$(FAILED=" "; left $dp ''; printf '%s' "$FAILED");;
-            nops) got=$(ps() { return 1; }; FAILED=" "; left $dp "$ds"; printf '%s' "$FAILED");;
+            other) got=$(FAILED=" "; left $dp 'Thu Jan  1 00:00:00 2026' > /dev/null; printf '%s' "$FAILED");;
+            none) got=$(FAILED=" "; left $dp '' > /dev/null; printf '%s' "$FAILED");;
+            nops) got=$(ps() { return 1; }; FAILED=" "; left $dp "$ds" > /dev/null; printf '%s' "$FAILED");;
         esac
         [ "$got" = " " ] || ko e2e-$site-id "$how: a process that is not the one read failed the case:$got"
         kill -0 $dp 2>/dev/null || ko e2e-$site-id "$how: a KILL went to a process that is not the one read"
     done
-    got=$(FAILED=" "; left $dp "$ds"; printf '%s' "$FAILED")
+    got=$(FAILED=" "; left $dp "$ds" > /dev/null; printf '%s' "$FAILED")
     [ "$got" = " e2e-$site " ] || ko e2e-$site-id "own: the process read, left running, did not fail the case:$got"
     n=0; while kill -0 $dp 2>/dev/null && [ $n -lt 30 ]; do sleep 0.1; n=$((n+1)); done
     kill -0 $dp 2>/dev/null && ko e2e-$site-id "own: the process read, left running, was not KILLed"

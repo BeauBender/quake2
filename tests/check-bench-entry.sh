@@ -926,7 +926,7 @@ t_reap_id() {
 	mkdir -p "${_rd:?}"
 	printf '%s\n' 'trap "echo TERM >> \"\$1\"" TERM' 'n=0' 'while [ ! -e "$2" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${_rd:?}/deaf.sh"
 	set --
-	for _q in t k none off ps own; do
+	for _q in t k none off ps; do
 		sh "${_rd:?}/deaf.sh" "${_rd:?}/$_q.sig" "${_rd:?}/stop" &
 		set -- "$@" "$!"
 		settle "$!"
@@ -957,9 +957,21 @@ t_reap_id() {
 	) > "${_rd:?}/ps.out"
 	[ ! -s "${_rd:?}/ps.sig" ] && pid_running "$5" || bad "reap-id: a signal went to a pid that ps gave no start time for"
 	grep -q "reap: no KILL to pid $5:" "${_rd:?}/ps.out" || bad "reap-id: the signals not sent with no answer from ps were not said: $(cat "${_rd:?}/ps.out")"
-	reap "$6" 1 > /dev/null
-	grep -qx TERM "${_rd:?}/own.sig" 2> /dev/null || bad "reap-id: no TERM went to a pid listed with its own identity"
-	wait_gone 5 "$6" || bad "reap-id: no KILL went to a pid listed with its own identity"
+	# own: started, reaped and collected in a subshell with no standard
+	# error, so that the shell's job notice for the KILL is not printed
+	_f0=$fails
+	(
+		sh "${_rd:?}/deaf.sh" "${_rd:?}/own.sig" "${_rd:?}/stop" &
+		_op=$!
+		settle "$_op"
+		record "$_op"
+		reap "$_op" 1 > /dev/null
+		grep -qx TERM "${_rd:?}/own.sig" 2> /dev/null || bad "reap-id: no TERM went to a pid listed with its own identity"
+		wait_gone 5 "$_op" || bad "reap-id: no KILL went to a pid listed with its own identity"
+		wait "$_op" || true
+		forget "$_op"
+		[ "$fails" -eq "$_f0" ]
+	) 2> /dev/null || bad "reap-id: the case listed with its own identity failed"
 	: > "${_rd:?}/stop"
 	for _q in "$@"; do
 		wait_gone 40 "$_q" || bad "reap-id: pid $_q outlived its own bound"
