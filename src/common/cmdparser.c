@@ -47,6 +47,7 @@ typedef struct cmdalias_s
 	struct cmdalias_s *next;
 	char name[MAX_ALIAS_NAME];
 	char *value;
+	qboolean server; /* a server line wrote value (FIX156) */
 } cmdalias_t;
 
 char retval[256];
@@ -59,7 +60,40 @@ static char *cmd_null_string = "";
 static char cmd_args[MAX_STRING_CHARS];
 sizebuf_t cmd_text;
 byte cmd_text_buf[32768];
-char defer_text_buf[32768];
+/* one more than cmd_text_buf for the terminator: Cbuf_InsertText can
+   fill cmd_text_buf to the last byte (FIX148) */
+char defer_text_buf[sizeof(cmd_text_buf) + 1];
+YQ2_STATIC_ASSERT(sizeof(defer_text_buf) > sizeof(cmd_text_buf),
+		"Cbuf_CopyToDefer writes a terminator at defer_text_buf[cmd_text.cursize]");
+
+/*
+ * Where each byte of cmd_text_buf and defer_text_buf came from (FIX113):
+ * CBUF_SERVER for text a server sent with svc_stufftext, for text a
+ * server line queues while it runs (an alias it expands, a file it
+ * execs) and for the body of an alias a server line defined, whoever
+ * runs it (FIX156), CBUF_PLAYER for everything else, the player's
+ * config files a server line's game directory change execs among them
+ * (Cbuf_AddPlayerText, FIX156).
+ * Cbuf_DropServerText discards the server's bytes when the connection
+ * they came from ends, so a command the server queued behind a
+ * "disconnect" cannot run while the client is disconnected. The
+ * player's bytes are kept.
+ */
+#define CBUF_PLAYER 0
+#define CBUF_SERVER 1
+
+static byte cmd_text_src[sizeof(cmd_text_buf)];
+static byte defer_text_src[sizeof(defer_text_buf)];
+static byte cbuf_source = CBUF_PLAYER;
+
+/* How many Cmd_ExecuteString calls are running: a cvar write outside
+   any of them is the engine's own, and keeps whose value it was
+   (Cmd_ExecutingLine, FIX158). */
+static int cmd_line_depth;
+
+/* Set by Cmd_MacroExpandString when the line it expands takes a value
+   a server line wrote: the line is then the server's (FIX158). */
+static qboolean cmd_macro_server;
 
 /*
  * Causes execution of the remainder of the command buffer to be delayed
@@ -94,7 +128,130 @@ Cbuf_AddText(const char *text)
 		return;
 	}
 
+	memset(cmd_text_src + cmd_text.cursize, cbuf_source, l);
 	SZ_Write(&cmd_text, text, strlen(text));
+}
+
+/*
+ * Adds text a server sent (svc_stufftext) at the end of the buffer.
+ * Cbuf_DropServerText discards it when the connection ends.
+ */
+void
+Cbuf_AddServerText(const char *text)
+{
+	byte saved;
+
+	saved = cbuf_source;
+	cbuf_source = CBUF_SERVER;
+	Cbuf_AddText(text);
+	cbuf_source = saved;
+}
+
+/*
+ * Adds the player's own text at the end of the buffer, marked as the
+ * player's even while a server line runs: the engine's exec of the
+ * player's config files when the game directory changes
+ * (Qcommon_ExecConfigs), whichever line changed it (FIX156). The files
+ * are the player's, not the server's bytes, and run as the player's
+ * text, so the binds in them stay the player's and config.cfg saves
+ * them back unchanged.
+ */
+void
+Cbuf_AddPlayerText(const char *text)
+{
+	byte saved;
+
+	saved = cbuf_source;
+	cbuf_source = CBUF_PLAYER;
+	Cbuf_AddText(text);
+	cbuf_source = saved;
+}
+
+/* Removes the server's bytes from buf, keeping the order of the rest.
+   Returns the new length. */
+static int
+Cbuf_StripServer(byte *buf, byte *src, int len)
+{
+	int i, kept;
+
+	kept = 0;
+
+	for (i = 0; i < len; i++)
+	{
+		if (src[i] != CBUF_SERVER)
+		{
+			buf[kept] = buf[i];
+			src[kept] = CBUF_PLAYER;
+			kept++;
+		}
+	}
+
+	return kept;
+}
+
+/*
+ * Discards every byte of server text still in the command buffer and
+ * the defer buffer. Called when the connection the text came from ends
+ * (CL_Disconnect). Text the player queued stays, in its order.
+ *
+ * It does not change the source of the line that runs now: a server
+ * line that drops stays the server's for the rest of its run, so what
+ * it does after the drop is still refused where a server's use is
+ * (FIX153). The source is the player's again at the next line, which
+ * Cbuf_Execute tags itself, or when the line ends in Com_Error
+ * (Cbuf_ResetSource).
+ */
+void
+Cbuf_DropServerText(void)
+{
+	int len;
+
+	cmd_text.cursize = Cbuf_StripServer(cmd_text.data, cmd_text_src,
+			cmd_text.cursize);
+
+	len = Cbuf_StripServer((byte *)defer_text_buf, defer_text_src,
+			strlen(defer_text_buf));
+	defer_text_buf[len] = 0;
+}
+
+/*
+ * Called by Com_Error before its teardown and its longjmp: the error
+ * ends the line that raised it, which never returns to Cbuf_Execute to
+ * restore the source. Without it the teardown's text (the configs
+ * CL_Disconnect execs) and the next frame's lines would be the
+ * server's. The error ends every line that runs, so none is running
+ * after it (Cmd_ExecutingLine).
+ */
+void
+Cbuf_ResetSource(void)
+{
+	cbuf_source = CBUF_PLAYER;
+	cmd_line_depth = 0;
+}
+
+/*
+ * True while Cmd_ExecuteString runs a line, from the buffer, EXEC_NOW
+ * or any other caller (FIX158). A cvar write outside every line is the
+ * engine's own: no text wrote the value, so it neither makes the value
+ * the player's nor the server's (Cvar_NoteWriter).
+ */
+qboolean
+Cmd_ExecutingLine(void)
+{
+	return cmd_line_depth > 0;
+}
+
+/*
+ * True while Cbuf_Execute runs a line that holds any of the server's
+ * bytes (FIX151). A command that refuses a server's use reads this, so
+ * it refuses such a line whatever state the line finds: a level change,
+ * a killserver or a demo ending before the line runs does not let it
+ * through.
+ */
+qboolean
+Cbuf_ExecutingServerText(void)
+{
+	return cbuf_source == CBUF_SERVER;
 }
 
 /*
@@ -106,14 +263,17 @@ Cbuf_InsertText(char *text)
 {
 	char *temp;
 	int templen;
+	int at;
 
 	/* copy off any commands still remaining in the exec buffer */
 	templen = cmd_text.cursize;
 
 	if (templen)
 	{
-		temp = Z_Malloc(templen);
+		/* the text, then where each byte came from */
+		temp = Z_Malloc(templen * 2);
 		memcpy(temp, cmd_text.data, templen);
+		memcpy(temp + templen, cmd_text_src, templen);
 		SZ_Clear(&cmd_text);
 	}
 	else
@@ -127,7 +287,9 @@ Cbuf_InsertText(char *text)
 	/* add the copied off data */
 	if (templen)
 	{
+		at = cmd_text.cursize;
 		SZ_Write(&cmd_text, temp, templen);
+		memcpy(cmd_text_src + at, temp + templen, templen);
 		Z_Free(temp);
 	}
 }
@@ -136,6 +298,7 @@ void
 Cbuf_CopyToDefer(void)
 {
 	memcpy(defer_text_buf, cmd_text_buf, cmd_text.cursize);
+	memcpy(defer_text_src, cmd_text_src, cmd_text.cursize);
 	defer_text_buf[cmd_text.cursize] = 0;
 	cmd_text.cursize = 0;
 }
@@ -143,7 +306,22 @@ Cbuf_CopyToDefer(void)
 void
 Cbuf_InsertFromDefer(void)
 {
+	int len, before;
+
+	len = strlen(defer_text_buf);
+	before = cmd_text.cursize;
+
 	Cbuf_InsertText(defer_text_buf);
+
+	/* the deferred text keeps where it came from. Cbuf_InsertText put
+	   it at the start only if the buffer grew by exactly its length:
+	   when Cbuf_AddText refuses it as an overflow, the buffer keeps its
+	   old size and its own tags are already right. */
+	if (cmd_text.cursize == before + len)
+	{
+		memcpy(cmd_text_src, defer_text_src, len);
+	}
+
 	defer_text_buf[0] = 0;
 }
 
@@ -169,10 +347,11 @@ Cbuf_ExecuteText(int exec_when, char *text)
 void
 Cbuf_Execute(void)
 {
-	int i;
+	int i, j;
 	char *text;
 	char line[1024];
 	int quotes;
+	byte saved, linesrc;
 
 	if(cmd_wait > 0)
 	{
@@ -223,6 +402,25 @@ Cbuf_Execute(void)
 			line[i] = 0;
 		}
 
+		/* a line with any server byte in it is the server's, and so is
+		   what it queues while it runs. Its source is its own bytes',
+		   in a Cbuf_Execute nested inside a server line too: the
+		   player's text there (queued before that line, or through
+		   Cbuf_AddPlayerText, as the configs a game directory change
+		   execs) runs as the player's (FIX156). FIX113 had the nested
+		   lines take the current source, which made the player's own
+		   config files the server's there. */
+		linesrc = CBUF_PLAYER;
+
+		for (j = 0; j < i; j++)
+		{
+			if (cmd_text_src[j] == CBUF_SERVER)
+			{
+				linesrc = CBUF_SERVER;
+				break;
+			}
+		}
+
 		/* delete the text from the command buffer and move remaining
 		   commands down this is necessary because commands (exec,
 		   alias) can insert data at the beginning of the text buffer */
@@ -235,10 +433,14 @@ Cbuf_Execute(void)
 			i++;
 			cmd_text.cursize -= i;
 			memmove(text, text + i, cmd_text.cursize);
+			memmove(cmd_text_src, cmd_text_src + i, cmd_text.cursize);
 		}
 
 		/* execute the command line */
+		saved = cbuf_source;
+		cbuf_source = linesrc;
 		Cmd_ExecuteString(line);
+		cbuf_source = saved;
 
 		if (cmd_wait > 0)
 		{
@@ -393,11 +595,17 @@ Cmd_Exec_f(void)
 
 /*
  * Inserts the current value of a variable as command text
+ *
+ * A value a server line wrote is the server's (FIX158): it is queued
+ * as server text whoever runs vstr, as an alias a server defined is
+ * (FIX156), until the player's text writes the cvar again. The text
+ * behind it keeps its own source.
  */
 static void
 Cmd_Vstr_f(void)
 {
 	const char	*v;
+	byte saved;
 
 	if (Cmd_Argc() != 2) {
 		Com_Printf("vstr <variablename> : execute a variable command\n");
@@ -405,7 +613,16 @@ Cmd_Vstr_f(void)
 	}
 
 	v = Cvar_VariableString(Cmd_Argv(1));
+
+	saved = cbuf_source;
+
+	if (Cvar_ServerWrote(Cmd_Argv(1)))
+	{
+		cbuf_source = CBUF_SERVER;
+	}
+
 	Cbuf_InsertText(va("%s\n", v));
+	cbuf_source = saved;
 }
 
 /*
@@ -427,6 +644,15 @@ Cmd_Echo_f(void)
 /*
  * Creates a new command that executes
  * a command string (possibly ; seperated)
+ *
+ * An alias a server line defines is the server's (FIX156): its body
+ * runs as server text whenever it is expanded (Cmd_ExecuteString), so
+ * the player's own use of the name, typed, bound or named by another
+ * alias, does not run the server's body as the player's. It stays the
+ * server's until the player's text defines it again. A server line
+ * that writes the body the alias already has leaves its owner as it
+ * was, so a server that runs the player's own configuration again does
+ * not take over the player's aliases.
  */
 static void
 Cmd_Alias_f(void)
@@ -435,6 +661,7 @@ Cmd_Alias_f(void)
 	char cmd[1024];
 	int i, c;
 	char *s;
+	qboolean server;
 
 	if (Cmd_Argc() == 1)
 	{
@@ -461,7 +688,6 @@ Cmd_Alias_f(void)
 	{
 		if (!strcmp(s, a->name))
 		{
-			Z_Free(a->value);
 			break;
 		}
 	}
@@ -491,7 +717,22 @@ Cmd_Alias_f(void)
 
 	Q_strlcat(cmd, "\n", sizeof(cmd));
 
+	/* the player's text makes it the player's; the server's makes it
+	   the server's unless the body is the one already there */
+	server = Cbuf_ExecutingServerText();
+
+	if (a->value)
+	{
+		if (server && !strcmp(a->value, cmd))
+		{
+			server = a->server;
+		}
+
+		Z_Free(a->value);
+	}
+
 	a->value = CopyString(cmd);
+	a->server = server;
 }
 
 int
@@ -574,6 +815,13 @@ Cmd_MacroExpandString(char *text)
 			continue;
 		}
 
+		/* a value a server line wrote makes the line the server's
+		   (FIX158), as a byte the server sent does */
+		if (Cvar_ServerWrote(token))
+		{
+			cmd_macro_server = true;
+		}
+
 		token = (char *)Cvar_VariableString(token);
 
 		j = strlen(token);
@@ -629,6 +877,7 @@ Cmd_TokenizeString(char *text, qboolean macroExpand)
 
 	cmd_argc = 0;
 	cmd_args[0] = 0;
+	cmd_macro_server = false;
 
 	/* macro expand the text */
 	if (macroExpand)
@@ -1075,13 +1324,22 @@ qboolean doneWithDefaultCfg;
 /*
  * A complete command line has been parsed, so try to execute it
  */
-void
-Cmd_ExecuteString(char *text)
+static void
+Cmd_ExecuteLine(char *text)
 {
 	cmd_function_t *cmd;
 	cmdalias_t *a;
+	byte saved;
 
 	Cmd_TokenizeString(text, true);
+
+	/* a line that expanded a value a server line wrote is the
+	   server's for its run, and so is what it queues and writes
+	   (FIX158). Cmd_ExecuteString restores the source after it. */
+	if (cmd_macro_server)
+	{
+		cbuf_source = CBUF_SERVER;
+	}
 
 	/* execute the command line */
 	if (!Cmd_Argc())
@@ -1125,7 +1383,19 @@ Cmd_ExecuteString(char *text)
 				return;
 			}
 
+			/* a server's body is queued as the server's, whoever
+			   names it; a player's as the line that names it, so a
+			   server line that names it still queues server text
+			   (FIX156). The text behind it keeps its own source. */
+			saved = cbuf_source;
+
+			if (a->server)
+			{
+				cbuf_source = CBUF_SERVER;
+			}
+
 			Cbuf_InsertText(a->value);
+			cbuf_source = saved;
 			return;
 		}
 	}
@@ -1140,6 +1410,30 @@ Cmd_ExecuteString(char *text)
 	/* send it as a server command if we are connected */
 	Cmd_ForwardToServer();
 #endif
+}
+
+/*
+ * Runs one line. It counts as running for Cmd_ExecutingLine, and the
+ * source it starts with is the one it leaves (FIX158): a line that a
+ * server's `$` value made the server's is so for its own run only.
+ * Com_Error leaves through Cbuf_ResetSource instead.
+ */
+void
+Cmd_ExecuteString(char *text)
+{
+	byte saved;
+
+	saved = cbuf_source;
+	cmd_line_depth++;
+
+	Cmd_ExecuteLine(text);
+
+	if (cmd_line_depth > 0)
+	{
+		cmd_line_depth--;
+	}
+
+	cbuf_source = saved;
 }
 
 static void

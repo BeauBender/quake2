@@ -3625,6 +3625,12 @@ IN_Probe_f(void)
 
 		Com_Printf("in_probe: %s bound to \"%s\"\n", Cmd_Argv(2), keybindings[k] ? keybindings[k] : "");
 	}
+	else if (!strcmp(what, "script") && Cbuf_ExecutingServerText())
+	{
+		/* the script's lines are queued as the player's, so a line the
+		   server sent may not start one (FIX153) */
+		Com_Printf("in_probe: a server may not start a script\n");
+	}
 	else if (!strcmp(what, "script"))
 	{
 		char *buf;
