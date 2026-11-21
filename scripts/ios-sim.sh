@@ -263,12 +263,15 @@ printf '%s\n' "$*" >> "$st/calls"
 [ "${1:-}" = simctl ] || { echo "fake xcrun: simctl only" >&2; exit 1; }
 shift
 drop() { awk -v u="$1" '$1 != u' "$st/devices" > "$st/devices.new" && mv "$st/devices.new" "$st/devices"; }
+# hang <seconds>: this call hangs: it becomes a sleep whose command line, unique to its pid, is in
+# hang.cmd, written before hang.pid, so that the selftest signals that pid only while it still runs it
+hang() { echo "sleep $1.$$" > "$st/hang.cmd"; echo $$ > "$st/hang.pid"; exec sleep "$1.$$"; }
 case ${1:-} in
 list)
 	case ${2:-} in
 	devices)
 		case $sc in
-		hang) echo $$ > "$st/hang.pid"; exec sleep 30 ;;
+		hang) hang 30 ;;
 		samename) grep -q '^55555555-' "$st/devices" || printf '%s\n' "55555555-5555-5555-5555-555555555555 yq2-ios-sim-$PPID" >> "$st/devices" ;;
 		empty) exit 0 ;;
 		listfail) echo "fake xcrun: CoreSimulatorService is not running" >&2; exit 1 ;;
@@ -332,8 +335,7 @@ create)
 			"44444444-4444-4444-4444-444444444444 Previews gone" >> "$st/devices"
 	fi
 	if [ "$sc" = createhang ] || [ "$sc" = samename ]; then
-		echo $$ > "$st/hang.pid"
-		exec sleep 30
+		hang 30
 	fi
 	echo "$u" ;;
 terminate)
@@ -366,8 +368,8 @@ spawn)
 		crashstatus) [ "$n" -gt 1 ] && ls=-11 ;;
 		restart) [ "$n" -gt 1 ] && lp=200 ;;
 		bootcrash) lp=200; ls=-11 ;;
-		hang1) [ "$n" -eq 1 ] && { echo $$ > "$st/hang.pid"; exec sleep 180; } ;;
-		hang2) [ "$n" -gt 1 ] && { echo $$ > "$st/hang.pid"; exec sleep 180; } ;;
+		hang1) [ "$n" -eq 1 ] && { hang 180; } ;;
+		hang2) [ "$n" -gt 1 ] && { hang 180; } ;;
 		qfail) [ "$n" -gt 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		qfailbase) [ "$n" -eq 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		nolabel) lab=com.apple.other ;;
@@ -450,15 +452,14 @@ launch)
 	echo "Metal API Validation Enabled"
 	wait "$p"
 	# a launch client that ignores TERM and outlives the app
-	[ "$sc" = launchterm ] && { echo $$ > "$st/hang.pid"; exec sleep 60; }
+	[ "$sc" = launchterm ] && { hang 60; }
 	exit 0 ;;
 get_app_container)
 	[ "$sc" = nocontainer ] && { echo "fake xcrun: no such container" >&2; exit 1; }
 	# containerhang: the first call hangs
 	if [ "$sc" = containerhang ] && [ ! -f "$st/hung" ]; then
 		: > "$st/hung"
-		echo $$ > "$st/hang.pid"
-		exec sleep 30
+		hang 30
 	fi
 	mkdir -p "$st/container"; echo "$st/container" ;;
 delete)
@@ -594,7 +595,9 @@ EOF
 		if [ "$sc" = samename ] && ! grep '^55555555-' "${d:?}/state/devices" >/dev/null; then
 			why="${why:+$why; }a device named like this run's, listed before it, was deleted"
 		fi
-		if [ -f "${d:?}/state/hang.pid" ] && kill -0 "$(cat "${d:?}/state/hang.pid")" 2>/dev/null; then
+		# only the fake's hung call: the PID in hang.pid still runs the command in hang.cmd (FIX171)
+		if [ -f "${d:?}/state/hang.pid" ] && [ -s "${d:?}/state/hang.cmd" ] \
+			&& [ "$(ps -o command= -p "$(cat "${d:?}/state/hang.pid")" 2>/dev/null)" = "$(cat "${d:?}/state/hang.cmd")" ]; then
 			kill -9 "$(cat "${d:?}/state/hang.pid")" 2>/dev/null
 			why="${why:+$why; }the hung simctl call was left running"
 		fi
@@ -649,7 +652,9 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		fi
 		wait "$spid" 2>/dev/null || rc=$?
 		sleep 3
-		if [ -n "$hp" ] && kill -0 "$hp" 2>/dev/null; then
+		# only the fake's hung call: the PID in hang.pid still runs the command in hang.cmd (FIX171)
+		if [ -n "$hp" ] && [ -s "${d:?}/state/hang.cmd" ] \
+			&& [ "$(ps -o command= -p "$hp" 2>/dev/null)" = "$(cat "${d:?}/state/hang.cmd")" ]; then
 			kill -9 "$hp" 2>/dev/null
 			[ "$intdisp" != default ] || why="${why:+$why; }the bounded launcher read (pid $hp) still ran 3 s after the script exited on $sig"
 		fi
