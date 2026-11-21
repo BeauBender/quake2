@@ -903,11 +903,11 @@ c_ttymsg() {
 	*) say "ttymsg: the stop line does not name the stopped process (pid, stat, pgid, comm, args): $_ms"; return 1 ;;
 	esac
 	case $_ms in
-	*" comm=~/sh args=~/sh "*) ;;
-	*) say "ttymsg: the stopped process's comm and args are not ~/sh (the scheduler's shell, with HOME=/bin): $_ms"; return 1 ;;
+	*"/bin/"* | *"/bin "* | *"/bin]"*) say "ttymsg: the stop line holds a path under HOME (/bin): $_ms"; return 1 ;;
 	esac
 	case $_ms in
-	*"/bin/"* | *"/bin "* | *"/bin]"*) say "ttymsg: the stop line holds a path under HOME (/bin): $_ms"; return 1 ;;
+	*" comm=~/sh args=~/sh "*) ;;
+	*) say "ttymsg: the stopped process's comm and args are not ~/sh (the scheduler's shell, with HOME=/bin): $_ms"; return 1 ;;
 	esac
 	# it ends with the bracket of the stopped process (no other process's
 	# pid=stat after it), and its args are at most 120 characters
