@@ -389,10 +389,30 @@ void Cbuf_DropServerText(void);
 /* line queues while it runs. Cbuf_DropServerText discards all of it, */
 /* and keeps the player's, when the connection it came from ends. */
 
+void Cbuf_AddPlayerText(const char *text);
+
+/* Cbuf_AddText, but marked as the player's even inside a server line: */
+/* the player's own config files the engine execs (Qcommon_ExecConfigs). */
+
 qboolean Cbuf_ExecutingServerText(void);
 
 /* true while Cbuf_Execute runs a line that holds any of the server's */
 /* bytes: a command that refuses a server's use refuses it then. */
+/* A line's source is its own bytes', also in a Cbuf_Execute nested */
+/* inside a server line (FIX156). */
+
+/* It stays true for the rest of a server line that runs */
+/* Cbuf_DropServerText. */
+
+void Cbuf_ResetSource(void);
+
+/* called by Com_Error before its teardown: the error ends the line, */
+/* and the next line is the player's unless it holds the server's bytes. */
+
+qboolean Cmd_ExecutingLine(void);
+
+/* true while Cmd_ExecuteString runs a line; a cvar write outside */
+/* every line is the engine's own (FIX158). */
 
 void Cbuf_ExecuteText(int exec_when, char *text);
 
@@ -521,6 +541,12 @@ float Cvar_VariableValue(const char *var_name);
 const char *Cvar_VariableString(const char *var_name);
 
 /* returns an empty string if not defined */
+
+qboolean Cvar_ServerWrote(const char *var_name);
+
+/* true if a server line wrote the value the cvar holds and the */
+/* player's text has not written it since (FIX158): vstr queues it */
+/* as server text, and a line that expands it with $ is the server's. */
 
 char *Cvar_CompleteVariable(char *partial);
 

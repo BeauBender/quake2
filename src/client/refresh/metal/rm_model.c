@@ -52,6 +52,7 @@
 
 #include "header/local.h"
 #include "header/rm_rtscene.h"
+#include "header/rm_rtdata.h"
 #include "header/rm_gbufscene.h"
 #include "header/rm_fxscene.h"
 
@@ -1126,6 +1127,7 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 		&header->lumps[LUMP_NODES]);
 	Mod_LoadSubmodels(mod, mod_base, &header->lumps[LUMP_MODELS]);
 	mod->numframes = 2; /* regular and alternate animation */
+	RM_RTD_BrushLoaded(mod->name, mod_base, header);   /* the lights and emitters, under r_rt_stats only (TASK187) */
 }
 
 /*
@@ -1253,6 +1255,7 @@ RI_EndRegistration(void)
 	model_t *mod;
 
 	RM_RT_MapLoaded();   /* the map's acceleration structures, when ray tracing is on (TASK53) */
+	RM_RTD_MapLoaded();  /* the ray-traced presentation's data line, under r_rt_stats (TASK187) */
 	RM_GB_Reset();       /* no previous frame for the G-buffer's motion (TASK54) */
 	RM_FX_Reset();       /* nor for the MetalFX scaler's history (TASK111) */
 

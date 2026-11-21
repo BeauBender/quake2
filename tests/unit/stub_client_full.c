@@ -115,6 +115,35 @@ stub_client_cvars(void)
 	}
 }
 
+extern cvar_t *qport; /* src/common/netchan.c */
+
+void
+stub_client_connect(void)
+{
+	static byte netbuf[1024];
+
+	stub_client_cvars();
+	memset(&cls, 0, sizeof(cls));
+	memset(&cl, 0, sizeof(cl));
+	SZ_Init(&cls.netchan.message, netbuf, sizeof(netbuf));
+
+	/* CL_Disconnect's goodbye reads the qport and showpackets cvars */
+	if (!qport)
+	{
+		Netchan_Init();
+	}
+
+	cls.netchan.remote_address.type = NA_IP;
+	cls.state = ca_connected;
+	cls.serverProtocol = PROTOCOL_VERSION;
+}
+
+int
+stub_client_connected(void)
+{
+	return cls.state >= ca_connected;
+}
+
 /* One slot per entity number a message can name (MAX_CL_ENTNUM). */
 centity_t *
 CL_AllocEntity(int entnum)
@@ -134,6 +163,26 @@ qboolean CL_PinsRun(void) { return stub_pins_run ? true : false; }
 
 /* What reaches the client's key and character entry points (test_ingate.c). */
 stub_keys_t stub_keys;
+
+/* The writer's key names (keybind.c, test_keybind.c): a printable
+   character is itself, as in cl_keyboard.c; the tests bind no other. */
+char *
+Key_KeynumToString(int keynum)
+{
+	static char name[16];
+
+	if ((keynum > 32) && (keynum < 127))
+	{
+		name[0] = (char)keynum;
+		name[1] = 0;
+	}
+	else
+	{
+		snprintf(name, sizeof(name), "<KEY %d>", keynum);
+	}
+
+	return name;
+}
 
 void
 Key_Event(int key, qboolean down, qboolean special)

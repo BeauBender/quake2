@@ -147,11 +147,90 @@ pid_running() {
 	return 0
 }
 
+# The cleanup list holds a line per process this check started, or read
+# from a file, and has not seen end: "<pid> <identity>", the identity taken
+# when the pid was put on it: its start time. A pid is signalled only while
+# it still runs with that start time: one that has gone, or that ps gives no
+# answer for, is not, since the system may have given its pid to another
+# process by then (FIX171). The command line is no part of it: a process
+# this check started may exec another program after it was put on the list
+# (bench.sh baseline put re-execs under the lock), and it is still this
+# check's to stop; another process in the pid with the same start time would
+# need the pid counter to go round within that second. The same primitive is
+# in tests/check-bench-entry.sh.
+# pid_id <pid>: the identity of a running <pid>, a checksum of its start
+# time as ps prints it; fails when it does not run or ps gives no answer.
+pid_id() {
+	pid_running "$1" || return 1
+	_il=$(ps -o lstart= -p "$1" 2> /dev/null) || return 1
+	[ -n "$_il" ] || return 1
+	id_of "$_il"
+}
+# id_of <start time>: the identity of a process started then.
+id_of() {
+	printf '%s\n' "$1" | cksum
+}
+# pid_same <pid> <identity>: <pid> runs and is still the process recorded
+# with <identity>; never for an empty <identity>.
+pid_same() {
+	[ -n "${2:-}" ] || return 1
+	_is=$(pid_id "$1") || return 1
+	[ "$_is" = "$2" ]
+}
+# record <pid> [<list>]: puts <pid> on the cleanup list (or on <list>) with
+# its identity now. A pid that has already ended, or that ps gives no answer
+# for, is put on it with no identity: it is never signalled, and it stays on
+# the list until it is forgotten.
+record() {
+	_ri=$(pid_id "$1") || _ri=
+	printf '%s %s\n' "$1" "$_ri" >> "${2:-${tmp:?}/pids}"
+}
+# settle <pid>: waits, at most 1 s, until a child this shell has just
+# started has become its command (until its exec the child has this shell's
+# command line, and env's until env execs the command), so that a signal to
+# it reaches the command and not the forked shell. The identity does not
+# depend on it: an exec keeps the start time.
+self_args=$(ps -o args= -p "$$" 2> /dev/null || true)
+settle() {
+	_sn=0
+	while [ "$_sn" -lt 20 ]; do
+		case $(ps -o args= -p "$1" 2> /dev/null || true) in
+		"$self_args" | 'env '*) ;;
+		*) return 0 ;;
+		esac
+		sleep 0.05
+		_sn=$((_sn + 1))
+	done
+	return 0
+}
+# forget <pid>: takes <pid> off the cleanup list once it has been waited for
+# or seen gone.
+forget() {
+	case $1 in
+	'' | *[!0-9]*) return 0 ;;
+	esac
+	grep -v -- "^$1 " "${tmp:?}/pids" > "${tmp:?}/pids.new" || true
+	mv "${tmp:?}/pids.new" "${tmp:?}/pids"
+}
+# collect <pid>: waits for a child this check started (the status is
+# wait's), then forgets it.
+collect() {
+	_cs=0
+	wait "$1" || _cs=$?
+	forget "$1"
+	return "$_cs"
+}
+# stop_listed <list>: TERM to each pid on <list> that is still the process
+# recorded there; nothing else.
+stop_listed() {
+	while read -r _p _i; do
+		if pid_same "$_p" "$_i"; then kill -TERM "$_p" 2> /dev/null || true; fi
+	done < "$1"
+}
+
 cleanup() {
-	# Stop any holder this check started that still runs; nothing else.
-	while read -r _p; do
-		if pid_running "$_p"; then kill -TERM "$_p" 2> /dev/null || true; fi
-	done < "${tmp:?}/pids"
+	# Stop any process this check started that still runs; nothing else.
+	stop_listed "${tmp:?}/pids"
 	rm -rf "${tmp:?}"
 	[ "${_ok:-}" = 1 ] || exit 1
 }
@@ -168,13 +247,14 @@ bad() {
 B() {
 	sh "$R/bench.sh" "$@"
 }
-# start <command...>: runs it in the background (BG), remembered for cleanup.
+# start <command...>: runs it in the background (BG), recorded for cleanup.
 start() {
 	"$@" &
 	BG=$!
-	echo "$BG" >> "${tmp:?}/pids"
+	settle "$BG"
+	record "$BG"
 }
-# wait_gone <seconds> <pid>
+# wait_gone <seconds> <pid>: once <pid> is seen gone, it is forgotten.
 wait_gone() {
 	_n=0
 	while pid_running "$2"; do
@@ -182,6 +262,7 @@ wait_gone() {
 		sleep 0.1
 		_n=$((_n + 1))
 	done
+	forget "$2"
 	return 0
 }
 # reap <pid>: after a failed wait, ends a process this check started (TERM,
@@ -375,6 +456,77 @@ t_generic() {
 	[ "$fails" -eq 0 ]
 }
 
+# t_cleanup_id: cleanup's stop (stop_listed) signals a listed pid only while
+# it still runs with the start time recorded there. Live processes listed
+# with another's identity (its pid given to a stranger) or with their own
+# command line but another start time (the pid reused by the same command)
+# are left running, as are lines that name no pid and a pid recorded after
+# it ended (listed with no identity). The one listed with its own identity
+# is stopped, and so is one that exec'd another program after it was
+# recorded (bench.sh baseline put re-execs under the lock): the same start
+# time with another command line is still the process this check started.
+# The processes are shells that end on TERM, and by themselves within about
+# 30 s, so no wait here outlives that even when TERM is ignored.
+t_cleanup_id() {
+	fresh cleanup-id
+	: > "${E:?}/list"
+	: > "${E:?}/own"
+	printf '%s\n' 'trap "exit 0" TERM' 'n=0' 'while [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/loop.sh"
+	start sh "${E:?}/loop.sh" cleanup-id-x
+	_x=$BG
+	start sh "${E:?}/loop.sh" cleanup-id-y
+	_y=$BG
+	start sh "${E:?}/loop.sh" cleanup-id-k
+	_k=$BG
+	# runs its sleep 1 when recorded, then execs the loop
+	start sh -c 'sleep 1; exec sh "$0" "$1"' "${E:?}/loop.sh" cleanup-id-e
+	_e=$BG
+	record "$_e" "${E:?}/list"
+	case $(ps -o args= -p "$_e" 2> /dev/null) in
+	*'exec sh'*) ;;
+	*) bad "cleanup-id: the exec case had exec'd, or ps gave no answer for it, before it was recorded" ;;
+	esac
+	record "$_x" "${E:?}/own"
+	record "$_y" "${E:?}/own"
+	true &
+	_d=$!
+	wait "$_d" || true
+	_o=$(pid_id 1) || bad "cleanup-id: ps gave no start time for pid 1"
+	printf '%s %s\n' "$_x" "$_o" >> "${E:?}/list"
+	printf '%s %s\n' "$_y" "$(id_of 'Thu Jan  1 00:00:00 2026')" >> "${E:?}/list"
+	printf '%s\n' '' x "0 $(pid_id "$_x")" "$_x" >> "${E:?}/list"
+	record "$_d" "${E:?}/list"
+	grep -qx "$_d " "${E:?}/list" || bad "cleanup-id: a pid recorded after it ended is not on the list with no identity"
+	record "$_k" "${E:?}/list"
+	_n=0
+	while [ "$_n" -lt 50 ]; do
+		case $(ps -o args= -p "$_e" 2> /dev/null) in
+		*'exec sh'*) ;;
+		*) break ;;
+		esac
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	case $(ps -o args= -p "$_e" 2> /dev/null) in
+	*'exec sh'*) bad "cleanup-id: the exec case did not exec within 5 s" ;;
+	*cleanup-id-e*) ;;
+	*) bad "cleanup-id: ps gave no answer for the exec case" ;;
+	esac
+	record "$_e" "${E:?}/own"
+	stop_listed "${E:?}/list"
+	wait_gone 10 "$_k" || bad "cleanup-id: the process listed with its own identity was not stopped"
+	wait_gone 10 "$_e" || bad "cleanup-id: a process this check started that exec'd after it was recorded was left running"
+	sleep 0.5
+	pid_running "$_x" || bad "cleanup-id: a process listed with another's identity was signalled"
+	pid_running "$_y" || bad "cleanup-id: a process listed with another start time was signalled"
+	stop_listed "${E:?}/own"
+	for _q in "$_x" "$_y" "$_k" "$_e"; do
+		wait_gone 40 "$_q" || bad "cleanup-id: pid $_q outlived its own bound"
+		collect "$_q" 2> /dev/null || true
+	done
+	[ "$fails" -eq 0 ]
+}
+
 t_lock_exclusion() {
 	fresh excl
 	start sh "$R/bench.sh" lock run first -- sh -c 'echo first-start >> "$1"; sleep 2; echo first-end >> "$1"' x "${E:?}/log" > "${E:?}/first.out" 2>&1
@@ -385,9 +537,9 @@ t_lock_exclusion() {
 	wait_gone 15 "$_a" || bad "exclusion: the first holder did not finish"
 	wait_gone 15 "$_b" || bad "exclusion: the second holder did not finish"
 	_sa=0
-	wait "$_a" || _sa=$?
+	collect "$_a" || _sa=$?
 	_sb=0
-	wait "$_b" || _sb=$?
+	collect "$_b" || _sb=$?
 	[ "$_sa" -eq 0 ] && [ "$_sb" -eq 0 ] || bad "exclusion: the holders exited $_sa and $_sb"
 	_got=$(tr '\n' ' ' < "${E:?}/log")
 	[ "$_got" = "first-start first-end second-start second-end " ] || bad "exclusion: the two commands overlapped: $_got"
@@ -422,7 +574,7 @@ t_lock_tokens() {
 		_kind=${_ip%%:*}
 		wait_gone 10 "${_ip#*:}" || bad "tokens: the $_kind-token waiter did not give up"
 		_st=0
-		wait "${_ip#*:}" || _st=$?
+		collect "${_ip#*:}" || _st=$?
 		[ "$_st" -eq 75 ] || bad "tokens: a $_kind token: wanted exit 75, got $_st"
 		[ ! -s "${E:?}/int.$_kind.out" ] || bad "tokens: a $_kind token ran its command under someone else's lock"
 		grep -q 'still held by holder-h (pid ' "${E:?}/int.$_kind.err" || bad "tokens: the $_kind-token waiter did not name the holder"
@@ -433,7 +585,7 @@ t_lock_tokens() {
 	kill -TERM "$_h"
 	wait_gone 15 "$_h" || bad "release: the holder did not exit on TERM"
 	_st=0
-	wait "$_h" || _st=$?
+	collect "$_h" || _st=$?
 	[ "$_st" -eq 143 ] || bad "release: wanted exit 143 on TERM, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "release: TERM did not release the lock"
 	wait_gone 5 "$_c" || bad "release: the command outlived its holder"
@@ -443,7 +595,7 @@ t_lock_tokens() {
 	kill -HUP "$_h"
 	wait_gone 15 "$_h" || bad "release: the holder did not exit on HUP"
 	_st=0
-	wait "$_h" || _st=$?
+	collect "$_h" || _st=$?
 	[ "$_st" -eq 129 ] || bad "release: wanted exit 129 on HUP, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "release: HUP did not release the lock"
 	# EXIT: a failing command gives its status and frees the lock.
@@ -507,13 +659,17 @@ t_lock_stop() {
 	start sh "$R/bench.sh" lock run quiet -- sh "${E:?}/gc.sh" "${E:?}/gc.quiet" "${E:?}/log" quiet 3 > "${E:?}/quiet.out" 2>&1
 	_h=$BG
 	wait_file 5 "${E:?}/gc.quiet" || bad "stop: the quiet probe's grandchild never started"
-	kill -TERM "$(cat "${E:?}/gc.quiet")" 2> /dev/null || bad "stop: the quiet probe's grandchild is gone"
+	# the pid read with its start time, and signalled only while it still
+	# has it (FIX171)
+	_gq=$(cat "${E:?}/gc.quiet" 2> /dev/null) || _gq=
+	_gi=$(pid_id "$_gq") || _gi=
+	{ pid_same "$_gq" "$_gi" && kill -TERM "$_gq" 2> /dev/null; } || bad "stop: the quiet probe's grandchild is gone, or ps gave no answer for it"
 	if ! wait_gone 15 "$_h"; then
 		bad "stop: the quiet probe's lock shell did not exit"
 		reap "$_h"
 	fi
 	_st=0
-	wait "$_h" || _st=$?
+	collect "$_h" || _st=$?
 	[ "$_st" -eq 143 ] || bad "stop: the quiet probe: wanted exit 143 from gc.sh after its grandchild's TERM, got $_st"
 	if foreign "${E:?}/quiet.out" > "${E:?}/foreign"; then
 		cat "${E:?}/foreign"
@@ -527,7 +683,7 @@ t_lock_stop() {
 	kill -TERM "$_h"
 	wait_gone 15 "$_h" || bad "stop: the lock shell did not exit on TERM"
 	_st=0
-	wait "$_h" || _st=$?
+	collect "$_h" || _st=$?
 	[ "$_st" -eq 143 ] || bad "stop: wanted exit 143 on TERM, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "stop: TERM did not release the lock"
 	if pid_running "$(cat "${E:?}/gc.term")"; then bad "stop: a grandchild of the command outlived the lock (TERM)"; fi
@@ -540,7 +696,7 @@ t_lock_stop() {
 	start sh -c 'st=0; env BENCH_STATE="$1/state" BENCH_STOP_GRACE=0 sh "$2/bench.sh" lock run stubborn -- sh "$3" "$1/pid" "$1/log" > "$1/out" 2>&1 || st=$?; echo "$st" > "$1/st"; date +%s > "$1/end"' x "${E:?}/s2" "$R" "${E:?}/stubborn.sh"
 	wait_file 5 "${E:?}/s2/pid" || bad "stop: the stubborn command never started"
 	_sl=$(sed -n 's/^pid=//p' "${E:?}/s2/state/lock/holder")
-	echo "$_sl" >> "${tmp:?}/pids"
+	record "$_sl"
 	_t0=$(date +%s)
 	pid_running "$_sl" && kill -TERM "$_sl" || bad "stop: the stubborn command's lock shell is not running"
 	# Ctrl-C at a terminal: INT to the lock shell's process group.
@@ -549,12 +705,13 @@ t_lock_stop() {
 		sh "$R/bench.sh" lock run cc -- sh "${E:?}/gc.sh" "${E:?}/gc.int" "${E:?}/log" int > "${E:?}/int.out" 2>&1 &
 		_h=$!
 		set +m
-		echo "$_h" >> "${tmp:?}/pids"
+		settle "$_h"
+		record "$_h"
 		wait_file 5 "${E:?}/gc.int" || bad "stop: the grandchild never started (INT)"
 		kill -s INT -- "-$_h"
 		wait_gone 15 "$_h" || bad "stop: the lock shell did not exit on INT to its group"
 		_st=0
-		wait "$_h" 2> /dev/null || _st=$?
+		collect "$_h" 2> /dev/null || _st=$?
 		[ "$_st" -eq 130 ] || bad "stop: wanted exit 130 on INT, got $_st"
 		[ "$(B lock status)" = lock=free ] || bad "stop: INT did not release the lock"
 		if pid_running "$(cat "${E:?}/gc.int")"; then bad "stop: a grandchild of the command outlived the lock (INT)"; fi
@@ -579,7 +736,7 @@ t_lock_stop() {
 		reap "$_h"
 	fi
 	_st=0
-	wait "$_h" || _st=$?
+	collect "$_h" || _st=$?
 	[ "$_st" -eq 74 ] || bad "stop: wanted exit 74 from a stopped command, got $_st"
 	grep -q '^bench: the command stopped' "${E:?}/stopped.out" || bad "stop: a stopped command was not said"
 	[ "$(B lock status)" = lock=free ] || bad "stop: a stopped command's lock was not released"
@@ -623,6 +780,7 @@ t_lock_stop() {
 	fi
 	# The command that catches TERM, started above: killed after the floor.
 	wait_file 15 "${E:?}/s2/end" || bad "stop: the lock shell did not exit after TERM to a command that ignores it"
+	pid_running "$_sl" || forget "$_sl"
 	_t1=$(cat "${E:?}/s2/end" 2> /dev/null || echo 0)
 	[ "$(cat "${E:?}/s2/st" 2> /dev/null)" = 143 ] || bad "stop: wanted exit 143 from the stubborn command's lock shell, got $(cat "${E:?}/s2/st" 2> /dev/null)"
 	[ $((_t1 - _t0)) -ge 4 ] || bad "stop: with BENCH_STOP_GRACE=0 the lock shell killed its command after $((_t1 - _t0)) s, under its floor of 5 s"
@@ -715,7 +873,7 @@ t_lock_defer() {
 		reap "$_h"
 	fi
 	_st=0
-	wait "$_h" || _st=$?
+	collect "$_h" || _st=$?
 	[ "$_st" -eq 143 ] || bad "defer: wanted exit 143 on a TERM in the window, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "defer: the lock was not released"
 	if pid_running "$(cat "${E:?}/d.gc")"; then bad "defer: a TERM in the window left the command's grandchild running"; fi
@@ -785,7 +943,7 @@ t_lock_reclaim() {
 	mkdir -p "${E:?}/state"
 	sh -c 'exit 0' &
 	_dead=$!
-	wait "$_dead" || true
+	collect "$_dead" || true
 	ghost() {
 		mkdir "${E:?}/state/lock"
 		printf 'label=ghost\npid=%s\nchild=\nstart=2020-01-01T00:00:00Z\ntoken=t-%s-1-ghost%s\n' "$_dead" "$_dead" "$1" > "${E:?}/state/lock/holder"
@@ -806,9 +964,9 @@ t_lock_reclaim() {
 		wait_gone 15 "$_p1" || bad "reclaim race $_i: a waiter did not finish"
 		wait_gone 15 "$_p2" || bad "reclaim race $_i: a waiter did not finish"
 		_s1=0
-		wait "$_p1" || _s1=$?
+		collect "$_p1" || _s1=$?
 		_s2=0
-		wait "$_p2" || _s2=$?
+		collect "$_p2" || _s2=$?
 		[ "$_s1" -eq 0 ] && [ "$_s2" -eq 0 ] || bad "reclaim race $_i: the waiters exited $_s1 and $_s2"
 		case $(tr '\n' ' ' < "${E:?}/log$_i") in
 		"w1-start w1-end w2-start w2-end " | "w2-start w2-end w1-start w1-end ") ;;
@@ -831,7 +989,7 @@ t_lock_guard() {
 	mkdir -p "${E:?}/state"
 	sh -c 'exit 0' &
 	_dead=$!
-	wait "$_dead" || true
+	collect "$_dead" || true
 	# A dead holder's lock whose reclaim guard another waiter holds: left alone.
 	mkdir "${E:?}/state/lock" "${E:?}/state/reclaim.t-$_dead-1-guarded"
 	printf 'label=ghost\npid=%s\nchild=\nstart=2020-01-01T00:00:00Z\ntoken=t-%s-1-guarded\n' "$_dead" "$_dead" > "${E:?}/state/lock/holder"
@@ -847,9 +1005,10 @@ t_lock_guard() {
 	sh -c 'sleep 30 & echo $! > "$1"' x "${E:?}/member" > /dev/null 2>&1 &
 	_g=$!
 	set +m
-	wait "$_g" 2> /dev/null || true
+	collect "$_g" 2> /dev/null || true
 	wait_file 5 "${E:?}/member" || bad "guard: the group member never started"
-	cat "${E:?}/member" >> "${tmp:?}/pids"
+	_m=$(cat "${E:?}/member")
+	record "$_m"
 	mkdir "${E:?}/state/lock"
 	printf 'label=ghost\npid=%s\nchild=%s\nstart=2020-01-01T00:00:00Z\ntoken=t-%s-1-group\n' "$_dead" "$_g" "$_dead" > "${E:?}/state/lock/holder"
 	_st=0
@@ -861,6 +1020,7 @@ t_lock_guard() {
 	*) bad "guard: lock status does not call a holder with a live group alive" ;;
 	esac
 	kill -TERM -- "-$_g" 2> /dev/null || true
+	wait_gone 5 "$_m" || bad "guard: the group member outlived a TERM to its group"
 	rm -rf "${E:?}/state/lock"
 	# A lock directory with no holder file, inside its grace: left alone.
 	mkdir "${E:?}/state/lock"
@@ -886,11 +1046,11 @@ t_lock_guard() {
 		kill -KILL "$_w" 2> /dev/null || true
 	fi
 	_st=0
-	wait "$_w" 2> /dev/null || _st=$?
+	collect "$_w" 2> /dev/null || _st=$?
 	[ "$_st" -eq 75 ] || bad "poll: the waiter with a long poll exited $_st, not 75"
 	kill -TERM "$_h"
 	wait_gone 15 "$_h" || bad "poll: the holder did not exit on TERM"
-	wait "$_h" 2> /dev/null || true
+	collect "$_h" 2> /dev/null || true
 	[ "$fails" -eq 0 ]
 }
 
@@ -947,9 +1107,9 @@ t_lock_stall() {
 		reap "$_c"
 	}
 	_s1=0
-	wait "$_mk" || _s1=$?
+	collect "$_mk" || _s1=$?
 	_s2=0
-	wait "$_c" || _s2=$?
+	collect "$_c" || _s2=$?
 	[ "$_s1" -eq 0 ] && [ "$_s2" -eq 0 ] || bad "stall: the maker and the taker exited $_s1 and $_s2"
 	case $(tr '\n' ' ' < "${E:?}/slog") in
 	"C-start C-end N-start N-end " | "N-start N-end C-start C-end ") ;;
@@ -1034,7 +1194,7 @@ finish() {
 		reap "$2"
 	}
 	_st=0
-	wait "$2" || _st=$?
+	collect "$2" || _st=$?
 	[ "$_st" -eq "$3" ] || bad "$1: pid $2 exited $_st, not $3"
 }
 
@@ -1099,7 +1259,7 @@ t_lock_dead_waiter() {
 		bad "dead waiter: the first waiter's ticket is not first in the queue: $(tickets | tr '\n' ' ')"
 	kill -KILL "$_w1"
 	# Reaped: a zombie still answers kill -0.
-	wait "$_w1" 2> /dev/null || true
+	collect "$_w1" 2> /dev/null || true
 	: > "${E:?}/release"
 	finish "dead waiter" "$_w2" 0
 	finish "dead waiter" "$HOLDER" 0
@@ -1266,8 +1426,11 @@ t_lock_zombie_waiter() {
 	_zp=$BG
 	wait_said 10 "${E:?}/z.out" || bad "zombie waiter: Z never waited"
 	_z=$(cat "${E:?}/z.pid" 2> /dev/null) || _z=
+	# the pid read with its start time, and signalled only while it still
+	# has it (FIX171)
+	_zi=$(pid_id "$_z") || _zi=
 	[ -n "$_z" ] && [ -n "$(ticket_of "$_z")" ] || bad "zombie waiter: Z showed no ticket: $(tickets | tr '\n' ' ')"
-	kill -KILL "$_z" 2> /dev/null || true
+	if pid_same "$_z" "$_zi"; then kill -KILL "$_z" 2> /dev/null || true; fi
 	wait_gone 5 "$_z" || bad "zombie waiter: Z did not die"
 	kill -0 "$_z" 2> /dev/null || bad "zombie waiter: Z was reaped at once, so this tests no zombie"
 	# Review round 2: lock status skips the zombie's ticket too. No waiter
@@ -2027,7 +2190,7 @@ t_gate() {
 	_t0=$(date +%s)
 	start sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
 	_st=0
-	if wait_gone 30 "$BG"; then wait "$BG" || _st=$?; else
+	if wait_gone 30 "$BG"; then collect "$BG" || _st=$?; else
 		reap "$BG"
 		bad "gate: the gate waited past its bound of 2 s"
 	fi
@@ -2097,7 +2260,7 @@ settle_put() {
 	BENCH_GATE_POLL=${4:-0.05}
 	export BENCH_GATE_POLL
 	start env PATH="${E:?}/napbin:$PATH" sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
-	if wait_gone 40 "$BG"; then wait "$BG" || _st=$?; else
+	if wait_gone 40 "$BG"; then collect "$BG" || _st=$?; else
 		reap "$BG"
 		_st=99
 	fi
@@ -2331,7 +2494,7 @@ EOF
 		rm -rf "${BENCH_TMP:?}"
 	)
 	kill "$_p" 2> /dev/null || true
-	wait "$_p" 2> /dev/null || true
+	collect "$_p" 2> /dev/null || true
 	grep -q '^top\.1=[0-9.]* sleep$' "${E:?}/snap" || bad "snap argv: the top line is not the kernel's name: $(grep '^top\.1=' "${E:?}/snap")"
 	grep '^top\.' "${E:?}/snap" | grep -q 'zzqsecret1\|--token\|zzqfake\|example' && bad "snap argv: a top line holds the rewritten argv[0]: $(grep '^top\.' "${E:?}/snap" | tr '\n' ' ')"
 	[ "$fails" -eq 0 ]
@@ -2400,7 +2563,7 @@ t_gate_poll() {
 	printf '50\n' > "${STUB:?}/gpu.gate"
 	_t0=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 	start env BENCH_GATE_POLL=20 sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
-	if wait_gone 12 "$BG"; then wait "$BG" || true; else
+	if wait_gone 12 "$BG"; then collect "$BG" || true; else
 		reap "$BG"
 		bad "gate poll: a poll of 20 s was not cut to the gate's wait of 4 s"
 	fi
@@ -2578,7 +2741,7 @@ t_digit_cap() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
+all="t_hygiene t_generic t_cleanup_id t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*

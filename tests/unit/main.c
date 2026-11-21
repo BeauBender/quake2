@@ -845,6 +845,14 @@ main(int argc, char **argv)
 			{
 				t_current->fn();
 			}
+			else
+			{
+				/* A failed assertion's longjmp (t_abort_test) can
+				   leave a server line mid-run with no Com_Error to
+				   reset the source: the next test's lines are not
+				   the server's (FIX153). */
+				Cbuf_ResetSource();
+			}
 		}
 
 		ran++;
