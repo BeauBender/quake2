@@ -483,7 +483,6 @@ selftest()
 	{
 		th=$1
 		rm -f "${tmp:?}/hang.pids"
-		standin "${tmp:?}/sd.pid"
 		(cd "$r" && exec "$hook" < "${tmp:?}/no.json" > /dev/null 2>&1) &
 		hp=$!
 		hps=$(start_of "$hp")
@@ -498,6 +497,9 @@ selftest()
 			}
 			sleep 0.1
 		done
+		# The stand-in starts once the group runs, so a slow hook start does
+		# not use up its 10 s before the stray check reads it.
+		standin "${tmp:?}/sd.pid"
 		# The group's pids, read with their start times while they run (they
 		# ignore TERM, and the hook has not been signalled yet).
 		[ "$hsig" = KILL ] || group_ids "${tmp:?}/hang.pids" "${tmp:?}/hang.ids"
@@ -542,7 +544,7 @@ selftest()
 		case " $stray " in
 		*" $sd "*) fail "selftest: stray-id: the stand-in listed with another start time was named as left running" ;;
 		esac
-		alive "$sd" "$sds" || fail "selftest: stray-id: a KILL went to the stand-in listed with another start time"
+		alive "$sd" "$sds" || fail "selftest: stray-id: the stand-in listed with another start time ended or was killed"
 		standin_end
 	}
 	hookwith tests/check-hang.sh
