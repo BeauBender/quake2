@@ -240,6 +240,9 @@ listed_same() {
 }
 
 cleanup() {
+	# A signal inside a decoy window runs this with decoy's kill and ps
+	# still defined, so they go first (FIX171, round 2; t_decoy_term).
+	unset -f kill ps 2> /dev/null || true
 	# Stop any process this check started that still runs; nothing else.
 	stop_listed "${tmp:?}/pids"
 	rm -rf "${tmp:?}"
@@ -341,6 +344,27 @@ ended() {
 	wait_gone "$1" "$2" && return 0
 	[ -z "${3:-}" ] || bad "$3"
 	reap "$2"
+}
+# reap_lint <file> <helpers>: prints each line of <file> that holds the word
+# reap (not reaped, reap_skip or t_reap_id: a word ends at a character other
+# than a letter, a digit, _ or -, and a path's /reap is not one), joined
+# with the lines a trailing \
+# continues, unless it is a whole-line comment or lies in one of the
+# functions <helpers> names (an awk alternation). A function runs from a line
+# that starts with its definition (a name of [A-Za-z_][A-Za-z0-9_]*) to the
+# next line that starts with }; no other line is exempt, the top level
+# included, so no form of a call outside the helpers gets past it (FIX171).
+reap_lint() {
+	awk -v ok="$2" '
+	/\\$/ { b = b substr($0, 1, length($0) - 1); next }
+	{ $0 = b $0; b = "" }
+	/^(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)/ || /^function[ \t]/ {
+		f = $0; sub(/^function[ \t]+/, "", f); sub(/[^A-Za-z0-9_].*/, "", f)
+	}
+	/^}/ { f = ""; next }
+	f ~ ("^(" ok ")$") || /^[ \t]*#/ { next }
+	(" " $0 " ") ~ /[^A-Za-z0-9_\/-]reap[^A-Za-z0-9_-]/ { print FILENAME ":" FNR ": " $0 }
+	' "$1"
 }
 # wait_held <seconds> <label>: the lock shows <label> with its child pid
 # (the holder's line, the first: a waiter's line has a label too).
@@ -686,8 +710,9 @@ t_reap_id() {
 # there (or after about 30 s) is listed with no identity, or with another's.
 # Each kind of caller, finish and ended (then collect, as each caller of
 # ended does), must return within 10 s and count the failure. And no line
-# outside ended and reap's own tests calls reap: a caller that did would
-# wait for its pid with nothing to bound the wait.
+# outside reap, reap_skip, ended and reap's own tests holds the word reap
+# (reap_lint, checked on its own shapes): a caller that did would wait for
+# its pid with nothing to bound the wait.
 t_reap_wait() {
 	fresh reap-wait
 	printf '%s\n' 'trap "echo TERM >> \"\$1\"" TERM' 'n=0' 'while [ ! -e "$2" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/deaf.sh"
@@ -717,8 +742,45 @@ t_reap_wait() {
 		wait_gone 5 "$_c" || bad "reap-wait: $_k: pid $_c outlived its stop file"
 		forget "$_c"
 	done
-	_bare=$(awk '/^[a-z_]+\(\) \{$/ { f = $1 } (/^[ \t]*reap "[^"]*"[^|&;]*$/ || /[|&;][ \t]*reap "[^"]*"[^|&;]*$/) && f !~ /^(ended|t_reap_id|t_reap_wait)\(\)$/ { print FILENAME ":" FNR ": " $0 }' "$0")
+	_bare=$(reap_lint "$0" 'reap|reap_skip|ended|reap_lint|t_reap_id|t_reap_wait')
 	[ -z "$_bare" ] || bad "reap-wait: reap is called outside ended, so a wait after it may have no bound: $_bare"
+	# The lint itself (FIX171, round 2): each shape below calls reap in a
+	# function after ended's, and must be refused; ended and collect pass.
+	lint_shape() {
+		_ln=$1
+		shift
+		printf '%s\n' 'ended() {' '	reap "$2"' '}' "$_ln() {" "$@" '}' > "${E:?}/lint.sh"
+		[ -n "$(reap_lint "${E:?}/lint.sh" ended)" ] || bad "reap-wait: the lint let through, in $_ln: $*"
+	}
+	while IFS= read -r _s; do
+		lint_shape t_f "	$_s"
+	done << 'SHAPES'
+reap "$x"
+reap "$x"; collect "$x"
+reap "$x" || wait "$x"
+reap "$x" 2>&1
+reap "$x" 2>&1; wait "$x"
+if :; then reap "$x"; fi
+if :; then :; else reap "$x"; fi
+{ reap "$x"; }
+reap $x
+eval reap "$x"
+eval 'reap "$x"'
+r=reap; $r "$x"
+foo && reap "$x"
+reap "$BG" || true
+SHAPES
+	lint_shape t_f '	reap "$x" || true' '	collect "$x"'
+	lint_shape t_f '	reap "$x" || true' '	wait "$x"'
+	lint_shape t_f '	reap \' '		"$x"'
+	lint_shape t_f '	re\' 'ap "$x"'
+	lint_shape t_x2 '	reap "$x"'
+	lint_shape Tx '	reap "$x"'
+	printf '%s\n' 'ended() {' '	reap "$2"' 't_x2() {' '	reap "$x"' '}' > "${E:?}/lint.sh"
+	[ -n "$(reap_lint "${E:?}/lint.sh" ended)" ] || bad "reap-wait: the lint let through a reap in t_x2() with no } before it"
+	printf '%s\n' 't_f() {' '	if ended 10 "$x"; then collect "$x" || true; fi' '	ended 0 "$BG" || true' '	# then reap it' '}' > "${E:?}/lint.sh"
+	_l=$(reap_lint "${E:?}/lint.sh" ended)
+	[ -z "$_l" ] || bad "reap-wait: the lint refused a plain ended: $_l"
 	[ "$fails" -eq 0 ]
 }
 
@@ -889,11 +951,12 @@ t_lock_stop() {
 	_sl=$(sed -n 's/^pid=//p' "${E:?}/s2/state/lock/holder")
 	record "$_sl"
 	_sli=$(pid_id "$_sl") || _sli=
-	_t0=$(date +%s)
 	# The TERM goes only while the lock shell still has the identity read
 	# with it (FIX171): run with that identity replaced (decoy), the site
-	# sends nothing; the last run, own, sends it.
+	# sends nothing; the last run, own, sends it. The grace floor is timed
+	# from that TERM, not from before the decoy runs.
 	for _how in other none nops own; do
+		[ "$_how" != own ] || _t0=$(date +%s)
 		decoy "$_how" "$_sli"
 		{ pid_same "$_sl" "$_id" && kill -TERM "$_sl"; } || [ "$_how" != own ] || bad "stop: the stubborn command's lock shell is not running, or is not the process read (FIX171)"
 		decoy_end "$_how" "stop: the TERM to the stubborn command's lock shell"
@@ -2376,7 +2439,7 @@ t_gate() {
 	start sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
 	_st=0
 	if wait_gone 30 "$BG"; then collect "$BG" || _st=$?; else
-		reap "$BG" || true
+		ended 0 "$BG" || true
 		bad "gate: the gate waited past its bound of 2 s"
 	fi
 	_t=$(($(date +%s) - _t0))
@@ -2446,7 +2509,7 @@ settle_put() {
 	export BENCH_GATE_POLL
 	start env PATH="${E:?}/napbin:$PATH" sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
 	if wait_gone 40 "$BG"; then collect "$BG" || _st=$?; else
-		reap "$BG" || true
+		ended 0 "$BG" || true
 		_st=99
 	fi
 	_took=$(($(date +%s) - _t0))
@@ -2560,7 +2623,7 @@ t_quiet_marker() {
 		wait_file 10 "$_q" || bad "marker: not written by a lock shell for $_sig"
 		kill -s "$_sig" "$BG" 2> /dev/null || true
 		wait_gone 40 "$BG" || {
-			reap "$BG" || true
+			ended 0 "$BG" || true
 			bad "marker: the lock shell did not end on $_sig"
 		}
 		[ ! -e "$_q" ] || bad "marker: left after $_sig to the lock shell"
@@ -2749,7 +2812,7 @@ t_gate_poll() {
 	_t0=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 	start env BENCH_GATE_POLL=20 sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
 	if wait_gone 12 "$BG"; then collect "$BG" || true; else
-		reap "$BG" || true
+		ended 0 "$BG" || true
 		bad "gate poll: a poll of 20 s was not cut to the gate's wait of 4 s"
 	fi
 	_t=$(perl -MTime::HiRes=time -e 'printf "%.3f", time - $ARGV[0]' "$_t0")
