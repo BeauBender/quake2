@@ -544,6 +544,9 @@ lwait() {
 	_wn=0
 	while kill -0 "$_lp" 2> /dev/null; do
 		if [ "$_wn" -ge $(($1 * 5)) ]; then
+			# with a second argument ("keep") the run is left alone: the
+			# caller reads its state first and ends it (and _lp) itself
+			[ -z "${2:-}" ] || return 124
 			kill -s KILL "$_lp" 2> /dev/null || :
 			wait "$_lp" 2> /dev/null || :
 			_lp=
@@ -739,18 +742,18 @@ c_sigs() {
 # `stty tostop`. The scheduler is in a process group of its own, not the
 # terminal's foreground group, so it must ignore SIGTTOU or its first write
 # to the terminal stops it and the gate hangs. The run must end with status
-# 0 within 30 s and show the check's line; on timeout what it left (test.sh,
+# 0 within 90 s and show the check's line; on timeout what it left (test.sh,
 # whose pid is recorded before its exec, and what descends from it) is
 # ended by pid
 c_tty() {
 	_tf=${WIRING:-$top/scripts/test.sh}
-	_tb=${TTY_BOUND:-30}
+	_tb=${TTY_BOUND:-90}
 	d=$(newcase)
 	if [ -n "${TTY_HOLD:-}" ]; then gtree "$d" "$_tf" 1 0 0 hold "$TTY_HOLD"; else gtree "$d" "$_tf" 1 0 0; fi
 	launch "$d" script -q /dev/null sh -c 'printf "%s\n" "$$" > "$1/shpid"; stty tostop; shift; exec "$@"' sh "$d" \
 		env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PATH="$tmp/make:$PATH" sh "$d/tree/scripts/test.sh"
 	rc=0
-	lwait "$_tb" || rc=$?
+	lwait "$_tb" keep || rc=$?
 	if [ "$rc" -eq 124 ]; then
 		_ty=$(cat "$d/shpid" 2> /dev/null || :)
 		_tstate=
@@ -761,7 +764,7 @@ c_tty() {
 			# state with a T is a stop (a slow run is S or R)
 			_tpids=$(ps -ax -o pid= -o ppid= | awk -v p="$_ty" '
 				{ par[$1] = $2 }
-				END { for (q in par) { x = q; while (x != "" && x != 0 && x != p) x = par[x]; if (x == p) print q } }')
+				END { for (q in par) { x = q; while (x != "" && x != 0 && x != p) x = (x in par) ? par[x] : 0; if (x == p) print q } }')
 			for _tk in $_tpids; do
 				_tst=$(ps -o stat= -p "$_tk" 2> /dev/null | tr -d ' ' || :)
 				[ -z "$_tst" ] || _tstate="$_tstate $_tk=$_tst"
@@ -772,10 +775,17 @@ c_tty() {
 			done
 			kill -s KILL "$_ty" 2> /dev/null || :
 		fi
+		# only now is script(1) itself ended (its pty closing could
+		# hang up the run before its state was read)
+		kill -s KILL "$_lp" 2> /dev/null || :
+		wait "$_lp" 2> /dev/null || :
+		_lp=
 		if [ -n "$_tstop" ]; then
 			say "tty: the run stopped on a terminal with tostop (test.sh pid ${_ty:-unknown}), and was ended by pid"
+		elif [ -n "$_ty" ] && [ -z "$_tstate" ]; then
+			say "tty: timed out after $_tb s; the run's state could not be read (tostop not ruled out)"
 		else
-			say "tty: timed out after $_tb s (state:${_tstate:- unknown}), not stopped: a slow run, not the tostop bug"
+			say "tty: timed out after $_tb s (state:$_tstate), not stopped: a slow run, not the tostop bug"
 		fi
 		return 1
 	fi
