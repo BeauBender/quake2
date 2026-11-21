@@ -149,42 +149,47 @@ pid_running() {
 
 # The cleanup list holds a line per process this check started, or read
 # from a file, and has not seen end: "<pid> <identity>", the identity taken
-# when the pid was put on it. A pid is signalled only while it is still that
-# process, with the same start time and the same command line: one that has
-# gone, or that ps gives no answer for, is not, since the system may have
-# given its pid to another process by then (FIX171). The same primitive is
+# when the pid was put on it: its start time. A pid is signalled only while
+# it still runs with that start time: one that has gone, or that ps gives no
+# answer for, is not, since the system may have given its pid to another
+# process by then (FIX171). The command line is no part of it: a process
+# this check started may exec another program after it was put on the list
+# (bench.sh baseline put re-execs under the lock), and it is still this
+# check's to stop; another process in the pid with the same start time would
+# need the pid counter to go round within that second. The same primitive is
 # in tests/check-bench-entry.sh.
 # pid_id <pid>: the identity of a running <pid>, a checksum of its start
-# time and its command line as ps prints them; fails when it does not run or
-# ps gives no answer for either.
+# time as ps prints it; fails when it does not run or ps gives no answer.
 pid_id() {
 	pid_running "$1" || return 1
 	_il=$(ps -o lstart= -p "$1" 2> /dev/null) || return 1
-	_ia=$(ps -o args= -p "$1" 2> /dev/null) || return 1
-	[ -n "$_il" ] && [ -n "$_ia" ] || return 1
-	id_of "$_il" "$_ia"
+	[ -n "$_il" ] || return 1
+	id_of "$_il"
 }
-# id_of <start time> <command line>: the identity of a process with them.
+# id_of <start time>: the identity of a process started then.
 id_of() {
-	printf '%s|%s\n' "$1" "$2" | cksum
+	printf '%s\n' "$1" | cksum
 }
 # pid_same <pid> <identity>: <pid> runs and is still the process recorded
-# with <identity>.
+# with <identity>; never for an empty <identity>.
 pid_same() {
 	[ -n "${2:-}" ] || return 1
 	_is=$(pid_id "$1") || return 1
 	[ "$_is" = "$2" ]
 }
-# record <pid> [<list>]: puts a running <pid> on the cleanup list (or on
-# <list>) with its identity now; a pid that does not run is not put on it.
+# record <pid> [<list>]: puts <pid> on the cleanup list (or on <list>) with
+# its identity now. A pid that has already ended, or that ps gives no answer
+# for, is put on it with no identity: it is never signalled, and it stays on
+# the list until it is forgotten.
 record() {
-	_ri=$(pid_id "$1") || return 0
+	_ri=$(pid_id "$1") || _ri=
 	printf '%s %s\n' "$1" "$_ri" >> "${2:-${tmp:?}/pids}"
 }
 # settle <pid>: waits, at most 1 s, until a child this shell has just
-# started has become its command, so that the identity recorded is the
-# command's: until its exec the child has this shell's command line, and
-# env's until env execs the command.
+# started has become its command (until its exec the child has this shell's
+# command line, and env's until env execs the command), so that a signal to
+# it reaches the command and not the forked shell. The identity does not
+# depend on it: an exec keeps the start time.
 self_args=$(ps -o args= -p "$$" 2> /dev/null || true)
 settle() {
 	_sn=0
@@ -452,38 +457,71 @@ t_generic() {
 }
 
 # t_cleanup_id: cleanup's stop (stop_listed) signals a listed pid only while
-# it is still the process recorded there. Live processes listed with
-# another's identity (its pid given to a stranger), with their own command
-# line but another start time (the pid reused by the same command), or with
-# their own start time but another command line (another program run in the
-# pid) are left running, as are lines that name no pid; the one listed with
-# its own identity is stopped.
+# it still runs with the start time recorded there. Live processes listed
+# with another's identity (its pid given to a stranger) or with their own
+# command line but another start time (the pid reused by the same command)
+# are left running, as are lines that name no pid and a pid recorded after
+# it ended (listed with no identity). The one listed with its own identity
+# is stopped, and so is one that exec'd another program after it was
+# recorded (bench.sh baseline put re-execs under the lock): the same start
+# time with another command line is still the process this check started.
+# The processes are shells that end on TERM, and by themselves within about
+# 30 s, so no wait here outlives that even when TERM is ignored.
 t_cleanup_id() {
 	fresh cleanup-id
 	: > "${E:?}/list"
-	start sleep 300
+	: > "${E:?}/own"
+	printf '%s\n' 'trap "exit 0" TERM' 'n=0' 'while [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/loop.sh"
+	start sh "${E:?}/loop.sh" cleanup-id-x
 	_x=$BG
-	start sleep 301
+	start sh "${E:?}/loop.sh" cleanup-id-y
 	_y=$BG
-	start sleep 302
-	_z=$BG
-	start sh -c 'trap "exit 0" TERM; while :; do sleep 0.1; done' cleanup-id-k
+	start sh "${E:?}/loop.sh" cleanup-id-k
 	_k=$BG
-	printf '%s %s\n' "$_x" "$(pid_id "$$")" >> "${E:?}/list"
-	printf '%s %s\n' "$_y" "$(id_of 'Thu Jan  1 00:00:00 2026' "$(ps -o args= -p "$_y")")" >> "${E:?}/list"
-	printf '%s %s\n' "$_z" "$(id_of "$(ps -o lstart= -p "$_z")" 'sleep 9')" >> "${E:?}/list"
+	# runs its sleep 1 when recorded, then execs the loop
+	start sh -c 'sleep 1; exec sh "$0" "$1"' "${E:?}/loop.sh" cleanup-id-e
+	_e=$BG
+	record "$_e" "${E:?}/list"
+	case $(ps -o args= -p "$_e" 2> /dev/null) in
+	*'exec sh'*) ;;
+	*) bad "cleanup-id: the exec case had exec'd, or ps gave no answer for it, before it was recorded" ;;
+	esac
+	record "$_x" "${E:?}/own"
+	record "$_y" "${E:?}/own"
+	true &
+	_d=$!
+	wait "$_d" || true
+	_o=$(pid_id 1) || bad "cleanup-id: ps gave no start time for pid 1"
+	printf '%s %s\n' "$_x" "$_o" >> "${E:?}/list"
+	printf '%s %s\n' "$_y" "$(id_of 'Thu Jan  1 00:00:00 2026')" >> "${E:?}/list"
 	printf '%s\n' '' x "0 $(pid_id "$_x")" "$_x" >> "${E:?}/list"
+	record "$_d" "${E:?}/list"
+	grep -qx "$_d " "${E:?}/list" || bad "cleanup-id: a pid recorded after it ended is not on the list with no identity"
 	record "$_k" "${E:?}/list"
+	_n=0
+	while [ "$_n" -lt 50 ]; do
+		case $(ps -o args= -p "$_e" 2> /dev/null) in
+		*'exec sh'*) ;;
+		*) break ;;
+		esac
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	case $(ps -o args= -p "$_e" 2> /dev/null) in
+	*'exec sh'*) bad "cleanup-id: the exec case did not exec within 5 s" ;;
+	*cleanup-id-e*) ;;
+	*) bad "cleanup-id: ps gave no answer for the exec case" ;;
+	esac
+	record "$_e" "${E:?}/own"
 	stop_listed "${E:?}/list"
 	wait_gone 10 "$_k" || bad "cleanup-id: the process listed with its own identity was not stopped"
+	wait_gone 10 "$_e" || bad "cleanup-id: a process this check started that exec'd after it was recorded was left running"
 	sleep 0.5
 	pid_running "$_x" || bad "cleanup-id: a process listed with another's identity was signalled"
 	pid_running "$_y" || bad "cleanup-id: a process listed with another start time was signalled"
-	pid_running "$_z" || bad "cleanup-id: a process listed with another command line was signalled"
-	for _q in "$_x" "$_y" "$_z"; do
-		kill -PIPE "$_q" 2> /dev/null || true
-	done
-	for _q in "$_x" "$_y" "$_z" "$_k"; do
+	stop_listed "${E:?}/own"
+	for _q in "$_x" "$_y" "$_k" "$_e"; do
+		wait_gone 40 "$_q" || bad "cleanup-id: pid $_q outlived its own bound"
 		collect "$_q" 2> /dev/null || true
 	done
 	[ "$fails" -eq 0 ]
