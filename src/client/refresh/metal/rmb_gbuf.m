@@ -69,6 +69,26 @@ static int surf_pipes_state;   /* as pipes_state, made at the first view with th
 
 /* the view */
 static int pass_kind, view_path, view_scaled, view_cleared;
+/* TASK185 (PM3): Retro's pass at the view's own size (rmb_gbuf_set_retro), and whether the last view end ran it */
+static int retro_on, retro_filter, retro_curve, retro_done;
+
+void
+rmb_gbuf_set_retro(int on, int filter, int curve)
+{
+	retro_on = on;
+	retro_filter = filter;
+	retro_curve = curve;
+	retro_done = 0;
+}
+
+int
+rmb_gbuf_retro_done(void)
+{
+	const int d = retro_done;
+
+	retro_done = 0;
+	return d;
+}
 static __weak id<MTLRenderCommandEncoder> raster_enc;   /* TASK162: the raster's encoder while it is open */
 static int surf_want, view_surf;   /* the next view asks for the surface attachment; this one has it */
 static float flat_level;           /* TASK173: r_rt_flatlight's level for the raster, 0 off */
@@ -906,6 +926,12 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 	{
 		rmb_counts.draws++;
 		return;
+	}
+
+	/* TASK185: Retro's pass at the view's own lines, then the stretch below enlarges it (no scaler runs under Retro) */
+	if (retro_on && rmb_retro_pass_view(t_rcolor, (int)src->x, (int)src->y, (int)src->w, (int)src->h, retro_filter, retro_curve))
+	{
+		retro_done = 1;
 	}
 
 	@autoreleasepool
