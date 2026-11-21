@@ -226,6 +226,13 @@ TEST(fs_refused_paths)
 	FS_CreatePath(path);
 	T_CONSOLE_HAS("WARNING: refusing to create relative path");
 
+	/* FIX161 r3: an empty path and a one character path return at once
+	   (the scan used to read past the terminator). */
+	t_console_reset();
+	FS_CreatePath("");
+	FS_CreatePath("x");
+	T_EQ_INT((int)strlen(t_console()), 0);
+
 	/* ...and creates every directory of a good one. */
 	Com_sprintf(path, sizeof(path), "%s/made/x/y/file", t_tmpdir());
 	FS_CreatePath(path);
