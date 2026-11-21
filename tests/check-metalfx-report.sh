@@ -67,7 +67,7 @@ want_not() { case $3 in *"$2"*) ko "$1" "'$2' found";; esac; }
 # start time read along with it; status 3: it had not, or the check could not tell, so neither was sent
 term_twice() {
     local id
-    judge "$1" "$2" || return 3
+    judge "$1" "${2:-}" || return 3
     id=$(tt_id "$1")
     kill -TERM "$1" 2>/dev/null; sleep 1
     if [ -z "$id" ]; then sleep 1; return 1; fi
@@ -125,12 +125,13 @@ standin() {
 standin_end() { : > "$1.stop"; wait $sp 2>/dev/null; }
 # The end-of-case sites (group_left, lock_left, the TERM2 term_twice) run first on the stand-in, once per word of
 # $decoys ("other none nops" on the real code, empty for a mutant), then on the pids read (own) (FIX171, round 1).
-decoys=
+decoys= din=
 # decoy_id <how> <pid> <start>: sets dq and dqs, the pid and start time one run of the site is given: the stand-in
 # (dp) read with another start time (other), with none (none), or with its own while ps gives no answer (nops); or
-# <pid> and <start> (own). For each but own, FAILED is kept in df first.
+# <pid> and <start> (own). For each but own, FAILED is kept in df first, and VERBOSE is 0 until decoy_end (the case
+# lines of a run on the stand-in are not the case's).
 decoy_id() {
-    [ $1 = own ] || df=$FAILED
+    if [ $1 != own ] && [ -z "$din" ]; then din=1; df=$FAILED; dv=${VERBOSE:-0}; VERBOSE=0; fi
     dq=$dp
     case $1 in
         other) dqs='Thu Jan  1 00:00:00 2026';;
@@ -139,11 +140,11 @@ decoy_id() {
         own) dq=$2; dqs=$3;;
     esac
 }
-# decoy_end <how> <case>: after that run, ps is the system's again and FAILED is what it was (the run judged the
+# decoy_end <how> <case>: after that run, ps is the system's again and FAILED and VERBOSE are what they were (the run judged the
 # stand-in, not the case); a signal that ended the stand-in fails <case>
 decoy_end() {
     [ $1 != own ] || return 0
-    unset -f ps; FAILED=$df
+    unset -f ps; FAILED=$df; VERBOSE=$dv; din=
     kill -0 "$dp" 2>/dev/null || ko "$2" "$1: a signal went to a process that is not the one read (the stand-in)"
 }
 
