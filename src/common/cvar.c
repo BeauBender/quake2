@@ -381,6 +381,112 @@ Cvar_RefusedFromServer(const char *var_name)
 	return true;
 }
 
+/*
+ * The cvars whose value a server line wrote (FIX158), by name: cvar_t
+ * crosses the game API and takes no new field. vstr of such a cvar
+ * queues its value as server text, and a line that expands it with $
+ * runs as the server's (src/common/cmdparser.c), so a server that sets
+ * `x "<gated command>"` cannot have it run as the player's text. It is
+ * FIX156's rule for aliases and binds.
+ */
+typedef struct cvar_servermark_s
+{
+	struct cvar_servermark_s *next;
+	char *name;
+} cvar_servermark_t;
+
+static cvar_servermark_t *cvar_servermarks;
+
+static cvar_servermark_t **
+Cvar_FindServerMark(const char *var_name)
+{
+	cvar_servermark_t **m;
+
+	for (m = &cvar_servermarks; *m; m = &(*m)->next)
+	{
+		if (!strcmp((*m)->name, var_name))
+		{
+			return m;
+		}
+	}
+
+	return NULL;
+}
+
+static void
+Cvar_FreeServerMarks(void)
+{
+	cvar_servermark_t *m;
+
+	while (cvar_servermarks)
+	{
+		m = cvar_servermarks;
+		cvar_servermarks = m->next;
+		Z_Free(m->name);
+		Z_Free(m);
+	}
+}
+
+/*
+ * Records who wrote a cvar's value. Every write that was not refused
+ * calls it, changed or not. A write that leaves the value as it is
+ * never changes the owner, whichever source wrote it:
+ * - the player's line makes the value the player's if it changed it,
+ *   so the player takes a value back by writing another one, and the
+ *   server's own config.cfg round trip (a game directory change writes
+ *   config.cfg and runs it as the player's text) cannot clear a mark;
+ * - a server line makes it the server's if it changed the value, so a
+ *   server that runs the player's config.cfg again does not take over
+ *   the player's values;
+ * - the engine's own write, outside any line, leaves the owner as it
+ *   was: no text chose the value, so nothing makes it the player's.
+ */
+static void
+Cvar_NoteWriter(const cvar_t *var, qboolean changed)
+{
+	cvar_servermark_t **found, *m;
+
+	if (!var || !Cmd_ExecutingLine())
+	{
+		return;
+	}
+
+	found = Cvar_FindServerMark(var->name);
+
+	if (!Cbuf_ExecutingServerText())
+	{
+		/* a write that leaves the value as it is changes no owner,
+		   whoever wrote it */
+		if (found && changed)
+		{
+			m = *found;
+			*found = m->next;
+			Z_Free(m->name);
+			Z_Free(m);
+		}
+
+		return;
+	}
+
+	if (changed && !found)
+	{
+		m = Z_Malloc(sizeof(*m));
+		m->name = CopyString(var->name);
+		m->next = cvar_servermarks;
+		cvar_servermarks = m;
+	}
+}
+
+/*
+ * True if a server line wrote the value var_name holds now, and the
+ * player's text has not written it since.
+ */
+qboolean
+Cvar_ServerWrote(const char *var_name)
+{
+	return Cvar_FindServerMark(Cvar_CheckReplacement(var_name, false)) != NULL;
+}
+
 static cvar_t *
 Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 {
@@ -419,6 +525,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 			{
 				if (strcmp(value, var->latched_string) == 0)
 				{
+					Cvar_NoteWriter(var, false);
 					return var;
 				}
 
@@ -429,9 +536,15 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 			{
 				if (strcmp(value, var->string) == 0)
 				{
+					Cvar_NoteWriter(var, false);
 					return var;
 				}
 			}
+
+			/* the latched value is the one the cvar takes next: its
+			   writer owns the cvar from now (Cvar_GetLatchedVars,
+			   the engine's, keeps the owner) */
+			Cvar_NoteWriter(var, true);
 
 			if (Com_ServerState())
 			{
@@ -463,6 +576,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 
 	if (!strcmp(value, var->string))
 	{
+		Cvar_NoteWriter(var, false);
 		return var;
 	}
 
@@ -475,6 +589,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 
 	var->string = Cvar_CopyString(var->string, value);
 	var->value = strtod(var->string, (char **)NULL);
+	Cvar_NoteWriter(var, true);
 
 	return var;
 }
@@ -493,8 +608,15 @@ Cvar_Set2(const char *var_name, const char *value, qboolean force)
 	}
 
 	/* a refused write still returns a cvar, created empty */
-	return Cvar_GetNew(var_name,
-			Cvar_RefusedFromServer(var_name) ? "" : value, 0);
+	if (Cvar_RefusedFromServer(var_name))
+	{
+		return Cvar_GetNew(var_name, "", 0);
+	}
+
+	var = Cvar_GetNew(var_name, value, 0);
+	Cvar_NoteWriter(var, true);
+
+	return var;
 }
 
 cvar_t *
@@ -513,6 +635,7 @@ cvar_t *
 Cvar_FullSet(const char *var_name, const char *value, int flags)
 {
 	cvar_t *var;
+	qboolean changed;
 
 	var_name = Cvar_CheckReplacement(var_name, true);
 	var = Cvar_FindVar(var_name);
@@ -525,7 +648,10 @@ Cvar_FullSet(const char *var_name, const char *value, int flags)
 
 	if (!var)
 	{
-		return Cvar_GetNew(var_name, value, flags);
+		var = Cvar_GetNew(var_name, value, flags);
+		Cvar_NoteWriter(var, true);
+
+		return var;
 	}
 
 	var->modified = true;
@@ -542,10 +668,13 @@ Cvar_FullSet(const char *var_name, const char *value, int flags)
 		value = "";
 	}
 
+	changed = strcmp(var->string, value) != 0;
+
 	var->string = Cvar_CopyString(var->string, value);
 	var->value = (float)strtod(var->string, (char **)NULL);
 
 	var->flags = flags;
+	Cvar_NoteWriter(var, changed);
 
 	return var;
 }
@@ -706,6 +835,7 @@ Cvar_WriteVariables(const char *path)
 	{
 		if (var->flags & CVAR_ARCHIVE)
 		{
+			if (Cvar_ServerWrote(var->name)) continue;
 			fprintf(f, "set %s \"%s\"\n", var->name, var->string);
 		}
 	}
@@ -1008,6 +1138,7 @@ Cvar_FreeList(void)
 	}
 
 	cvar_vars = NULL;
+	Cvar_FreeServerMarks();
 }
 
 void
