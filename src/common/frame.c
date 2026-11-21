@@ -221,10 +221,17 @@ Qcommon_Mainloop(void)
 	}
 }
 
+/*
+ * The player's own config files run as the player's text, whichever
+ * line changed the game directory: a server line's `game <dir>` too
+ * (FIX156). They are the player's files, not the server's bytes, and so
+ * the binds in them stay the player's and the next config.cfg write
+ * leaves that directory's config.cfg as it was.
+ */
 void Qcommon_ExecConfigs(qboolean gameStartUp)
 {
-	Cbuf_AddText("exec default.cfg\n");
-	Cbuf_AddText("exec yq2.cfg\n");
+	Cbuf_AddPlayerText("exec default.cfg\n");
+	Cbuf_AddPlayerText("exec yq2.cfg\n");
 
 #ifndef DEDICATED_ONLY
 	/* Pin harness: a pin run depends on its scenario and command line
@@ -233,8 +240,8 @@ void Qcommon_ExecConfigs(qboolean gameStartUp)
 	if (!CL_PinsRun())
 #endif
 	{
-		Cbuf_AddText("exec config.cfg\n");
-		Cbuf_AddText("exec autoexec.cfg\n");
+		Cbuf_AddPlayerText("exec config.cfg\n");
+		Cbuf_AddPlayerText("exec autoexec.cfg\n");
 	}
 
 	if (gameStartUp)

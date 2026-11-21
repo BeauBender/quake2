@@ -164,6 +164,26 @@ qboolean CL_PinsRun(void) { return stub_pins_run ? true : false; }
 /* What reaches the client's key and character entry points (test_ingate.c). */
 stub_keys_t stub_keys;
 
+/* The writer's key names (keybind.c, test_keybind.c): a printable
+   character is itself, as in cl_keyboard.c; the tests bind no other. */
+char *
+Key_KeynumToString(int keynum)
+{
+	static char name[16];
+
+	if ((keynum > 32) && (keynum < 127))
+	{
+		name[0] = (char)keynum;
+		name[1] = 0;
+	}
+	else
+	{
+		snprintf(name, sizeof(name), "<KEY %d>", keynum);
+	}
+
+	return name;
+}
+
 void
 Key_Event(int key, qboolean down, qboolean special)
 {
