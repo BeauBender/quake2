@@ -1087,7 +1087,7 @@ t_reap_wait() {
 		wait_gone 5 "$_c" || bad "reap-wait: $_k: pid $_c outlived its stop file"
 		forget "$_c"
 	done
-	_bare=$(awk '/^[a-z_]+\(\) \{$/ { f = $1 } /^[ \t]*reap "[^"]*"[^|&;]*$/ && f !~ /^(reaped|t_reap_id|t_reap_wait)\(\)$/ { print FILENAME ":" FNR ": " $0 }' "$0")
+	_bare=$(awk '/^[a-z_]+\(\) \{$/ { f = $1 } (/^[ \t]*reap "[^"]*"[^|&;]*$/ || /[|&;][ \t]*reap "[^"]*"[^|&;]*$/) && f !~ /^(reaped|t_reap_id|t_reap_wait)\(\)$/ { print FILENAME ":" FNR ": " $0 }' "$0")
 	[ -z "$_bare" ] || bad "reap-wait: reap is called bare outside reaped, so a wait after it may have no bound: $_bare"
 	[ "$fails" -eq 0 ]
 }
