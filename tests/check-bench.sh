@@ -467,7 +467,7 @@ t_cleanup_id() {
 	_y=$BG
 	start sleep 302
 	_z=$BG
-	start sleep 303
+	start sh -c 'trap "exit 0" TERM; while :; do sleep 0.1; done' cleanup-id-k
 	_k=$BG
 	printf '%s %s\n' "$_x" "$(pid_id "$$")" >> "${E:?}/list"
 	printf '%s %s\n' "$_y" "$(id_of 'Thu Jan  1 00:00:00 2026' "$(ps -o args= -p "$_y")")" >> "${E:?}/list"
@@ -481,7 +481,7 @@ t_cleanup_id() {
 	pid_running "$_y" || bad "cleanup-id: a process listed with another start time was signalled"
 	pid_running "$_z" || bad "cleanup-id: a process listed with another command line was signalled"
 	for _q in "$_x" "$_y" "$_z"; do
-		kill -TERM "$_q" 2> /dev/null || true
+		kill -PIPE "$_q" 2> /dev/null || true
 	done
 	for _q in "$_x" "$_y" "$_z" "$_k"; do
 		collect "$_q" 2> /dev/null || true

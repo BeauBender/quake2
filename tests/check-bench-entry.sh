@@ -815,8 +815,13 @@ t_cleanup_id() {
 	_l=${tmp:?}/cleanup-id.list
 	: > "${_l:?}"
 	set --
-	for _q in 300 301 302 303 304; do
-		sleep "$_q" &
+	# three sleeps, and two shells that exit 0 on TERM (so that no job notice
+	# is printed for the two this test stops)
+	for _q in 300 301 302 k1 k2; do
+		case $_q in
+		k*) sh -c 'trap "exit 0" TERM; while :; do sleep 0.1; done' "cleanup-id-$_q" & ;;
+		*) sleep "$_q" & ;;
+		esac
 		set -- "$@" "$!"
 		settle "$!"
 		record "$!"
@@ -828,16 +833,17 @@ t_cleanup_id() {
 	record "$4" "${_l:?}"
 	stop_listed "${_l:?}"
 	wait_gone 10 "$4" || bad "cleanup-id: the process listed with its own identity was not stopped"
-	stray_stop "$5" 'Thu Jan  1 00:00:00 2026' 'sleep 304'
+	stray_stop "$5" 'Thu Jan  1 00:00:00 2026' cleanup-id-k2
 	sleep 0.5
 	pid_running "$1" || bad "cleanup-id: a process listed with another's identity was signalled"
 	pid_running "$2" || bad "cleanup-id: a process listed with another start time was signalled"
 	pid_running "$3" || bad "cleanup-id: a process listed with another command line was signalled"
 	pid_running "$5" || bad "cleanup-id: stray_stop signalled a process with another start time"
-	stray_stop "$5" "$(pid_start "$5")" 'sleep 304'
+	stray_stop "$5" "$(pid_start "$5")" cleanup-id-k2
 	pid_running "$5" && bad "cleanup-id: stray_stop did not stop a process with the start time read"
+	# PIPE, which the shell prints no job notice for
 	for _q in "$1" "$2" "$3"; do
-		kill -TERM "$_q" 2> /dev/null || true
+		kill -PIPE "$_q" 2> /dev/null || true
 	done
 	for _q in "$@"; do
 		wait "$_q" 2> /dev/null || true
