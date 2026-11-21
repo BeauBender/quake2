@@ -28,7 +28,9 @@
 #     generated lumps, TASK187), and
 #     tests/metal/rm_fx_test.c, the pure part of the MetalFX scalers
 #     (rm_metalfx.c, TASK111), and tests/metal/rm_rtgate_test.c, the
-#     hardware gate of ray tracing (rm_rtgate.c, RT8, TASK60). The gate's
+#     hardware gate of ray tracing (rm_rtgate.c, RT8, TASK60), and
+#     tests/metal/rm_retro_tex_test.c, Retro's texture upload and 480-line
+#     view (common/mtl_retro_tex.h, TASK185). The gate's
 #     table of the r_rt_* cvars is then held to the sources: every
 #     Cvar_Get("r_rt_ name of src/client/refresh/metal's .c and .m files
 #     (a call over several lines included) must have a row, every row
@@ -322,6 +324,21 @@ else
 	case $fx in *", 0 failed") ;; *) bad "tests/metal/rm_fx_test.c printed no result line"; fx="";; esac
 fi
 seg 9 "; MetalFX ${fx:-host test}"
+
+# Retro's texture upload and 480-line view (TASK185, PM3): common/mtl_retro_tex.h alone
+retex=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags -o "${tmp:?}/rm_retro_tex_test" tests/metal/rm_retro_tex_test.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_retro_tex_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_retro_tex_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_retro_tex_test.c failed"
+else
+	retex=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_retro_tex_test: //')
+	case $retex in *", 0 failed") ;; *) bad "tests/metal/rm_retro_tex_test.c printed no result line"; retex="";; esac
+fi
+seg 10.5 ", Retro textures ${retex:-host test}"
 
 # the effect table (TASK179): rm_rtfx.c is built for the host with its entry points the recording stubs
 # of tests/metal/rm_rtfx_host.h (RM_RTFX_HOST), so the gate, which takes its effect switches from it, and
