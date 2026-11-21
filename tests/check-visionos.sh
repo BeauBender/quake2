@@ -37,7 +37,11 @@
 #       Each string or symbol is the positive control's too: the iOS
 #       simulator's object of the same file, compiled with the command
 #       make -n gives for it, must hold it, so a rename fails the check
-#       instead of passing it.
+#       instead of passing it. And system.o holds the missing-data text of
+#       visionOS's Files app, "On My Apple Vision Pro", and not the
+#       iPhone's "On My iPhone (or iPad)" (TASK175 slice 2b); its control
+#       is the other way round: the iOS simulator's system.o holds the
+#       iPhone's text and not the visionOS one.
 # It does not compare the iOS build with an earlier one; that comparison is
 # the review's before and after of make -n (docs/runbook/TASK175.md).
 # Each assertion first runs on a mutant it must refuse (an object built for
@@ -408,9 +412,11 @@ fi
 pin_texts='SDL_RETURN_KEY_HIDES_IME
 SDL_ORIENTATIONS
 SDL_IOS_HIDE_HOME_INDICATOR
-ios_orientation'
+ios_orientation
+On My iPhone (or iPad)
+On My Apple Vision Pro'
 # an object that holds a pinned string is refused, and one without it fails the positive control
-printf 'const char *a = "SDL_RETURN_KEY_HIDES_IME";\nconst char *b = "SDL_ORIENTATIONS";\nconst char *c = "SDL_IOS_HIDE_HOME_INDICATOR";\nconst char *d = "ios_orientation";\n' > "${tmp:?}/s.c"
+printf 'const char *a = "SDL_RETURN_KEY_HIDES_IME";\nconst char *b = "SDL_ORIENTATIONS";\nconst char *c = "SDL_IOS_HIDE_HOME_INDICATOR";\nconst char *d = "ios_orientation";\nconst char *e = "Files > On My iPhone (or iPad) > Quake II";\nconst char *f = "Files > On My Apple Vision Pro > Quake II";\n' > "${tmp:?}/s.c"
 xcrun --sdk xrsimulator clang -target "$xr_target" -c "${tmp:?}/s.c" -o "${tmp:?}/s.o"
 while read -r text; do
 	if assert_lacks "${tmp:?}/s.o" "$text" > "${tmp:?}/o" 2>&1; then
@@ -524,10 +530,11 @@ ios_object()
 	fi
 }
 
-# pin <lacks|need|no_need> <object name> <source> <text or symbol> <what>:
+# pin <lacks|holds|need|no_need> <object name> <source> <text or symbol> <what>:
 # every visionOS object called <name> (one at least) and the iOS
-# simulator's object of <source>, the control: lacks (iOS: holds), no_need
-# (iOS: needs), need (iOS: needs too)
+# simulator's object of <source>, the control: lacks (iOS: holds), holds
+# (iOS: lacks, the text is visionOS's own), no_need (iOS: needs), need
+# (iOS: needs too)
 pin()
 {
 	awk -v n="/$2" 'substr($0, length($0) - length(n) + 1) == n' "${tmp:?}/objs" > "${tmp:?}/named"
@@ -539,6 +546,7 @@ pin()
 	while read -r obj; do
 		case $1 in
 		lacks) assert_lacks "$obj" "$4" ;;
+		holds) assert_holds "$obj" "$4" ;;
 		no_need) assert_no_need "$obj" "$4" ;;
 		need) assert_need "$obj" "$4" ;;
 		esac > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) $5"; }
@@ -546,14 +554,17 @@ pin()
 	ios_object "$3" || return 0
 	case $1 in
 	lacks) assert_holds "$(cat "${tmp:?}/ios_one")" "$4" ;;
+	holds) assert_lacks "$(cat "${tmp:?}/ios_one")" "$4" ;;
 	*) assert_need "$(cat "${tmp:?}/ios_one")" "$4" ;;
-	esac > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the positive control failed: the pin on \"$4\" would pass whatever the visionOS build holds"; }
+	esac > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the control failed: the pin on \"$4\" would pass whatever the visionOS build holds, or the iOS build has it too"; }
 }
 pin lacks sdl3.o src/client/input/sdl3.c SDL_RETURN_KEY_HIDES_IME "the iPhone's in_touch default and keyboard hint are compiled into the visionOS build"
 pin no_need sdl3.o src/client/input/sdl3.c _Touch_TextInput "the on-screen keyboard's follow-up is compiled into the visionOS build"
 pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_ORIENTATIONS "the orientation hint is compiled into the visionOS build"
 pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_IOS_HIDE_HOME_INDICATOR "the home indicator hint is compiled into the visionOS build"
 pin lacks vid.o src/client/vid/vid.c ios_orientation "the ios_orientation command is compiled into the visionOS build"
+pin lacks system.o src/backends/unix/system.c "On My iPhone (or iPad)" "the iPhone's missing-data text is compiled into the visionOS build"
+pin holds system.o src/backends/unix/system.c "On My Apple Vision Pro" "the visionOS build has no missing-data text naming its Files place"
 # The restriction is kCGImageSourceAllowableTypes where the SDK declares
 # it (27.0 on); an older SDK (FIX138) builds without it, and the type
 # check on CGImageSourceGetType is the restriction then, as it is the
