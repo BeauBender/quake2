@@ -1741,7 +1741,7 @@ IN_Update(void)
 		IN_TouchSend();
 	}
 
-#if defined(__APPLE__) && TARGET_OS_IOS
+#if defined(__APPLE__) && (TARGET_OS_IOS || (defined(TARGET_OS_VISION) && TARGET_OS_VISION))
 	{
 		// The on-screen keyboard only while text is typed: in the console,
 		// in a chat message or in a menu's text field (TASK150).
@@ -3776,10 +3776,13 @@ IN_Init(void)
 
 #if defined(__APPLE__) && TARGET_OS_IOS
 	in_touch = Cvar_Get("in_touch", "1", CVAR_ARCHIVE);
-	// the keyboard stays up across Enter in the console
-	SDL_SetHint(SDL_HINT_RETURN_KEY_HIDES_IME, "0");
 #else
 	in_touch = Cvar_Get("in_touch", "0", CVAR_ARCHIVE);
+#endif
+#if defined(__APPLE__) && (TARGET_OS_IOS || (defined(TARGET_OS_VISION) && TARGET_OS_VISION))
+	// the keyboard stays up across Enter in the console (the keyboard's
+	// follow-up above runs on visionOS too; the touch overlay does not)
+	SDL_SetHint(SDL_HINT_RETURN_KEY_HIDES_IME, "0");
 #endif
 	in_touch_scale = Cvar_Get("in_touch_scale", "1", CVAR_ARCHIVE);
 	in_touch_swap = Cvar_Get("in_touch_swap", "0", CVAR_ARCHIVE);
