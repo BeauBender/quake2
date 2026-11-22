@@ -432,11 +432,27 @@ Two runs of `scripts/ios-sim.sh run` (`IOS_SIM_SDK=xrsimulator`), each on a devi
 - `check-ios: ok (54 mutants refused; 192 smoke selftest cases; 65 device selftest cases; 184 objects for the
   simulator; 184 for a device; ios_objects)`.
 - `check-tvos: ok (184 objects for the tvOS simulator, platform 8, the iOS simulator's list)`. Its (d) source
-  list lost the keyboard site (its guard is now an `||`, and (d) accepts only a chain of `&&`); the object pins
-  of (e) still keep `_Touch_TextInput` and `SDL_RETURN_KEY_HIDES_IME` out of tvOS.
+  list lost the keyboard site (its guard is now an `||`, and (d) accepts only a chain of `&&`). Round 1: a new
+  step (d2) takes the two iPhone, iPad and visionOS sites (the follow-up in `IN_Update` and the Enter hint in
+  `IN_Init`), evaluates each guard line with `cc -E` under iOS, visionOS, tvOS and macOS macro sets (simulator
+  on and off), and requires true on the first two and false on the others. It runs before the SDK skips, so
+  a guard widened to `TARGET_OS_IPHONE`, or with `|| TARGET_OS_TV` or `|| 1`, or negated, is refused on every
+  host (each proven red on the real file with the tvOS SDK forced absent). The object pins of (e) still keep
+  `_Touch_TextInput` and `SDL_RETURN_KEY_HIDES_IME` out of tvOS.
+
+### Files of this slice
+
+- `src/client/input/sdl3.c`
+- `stuff/ios/Info-visionos.plist.in`
+- `tests/check-tvos.sh`
+- `tests/check-visionos.sh`
+- `docs/runbook/TASK175.md`
 
 ## Left for slice 2c
 
+- In-game pointer behaviour on visionOS is not checked yet: the plist key also turns on SDL's GCMouse
+  relative-mode hook (`SDL_uikitevents.m`) there, so the client's relative-mouse grab now succeeds where it
+  failed before.
 - A person's check of a real pinch and of typing on the visionOS keyboard (slice 2c-1's proof stops at the
   engine log and the plist).
 - Look-and-pinch moving the menu cursor: the menu has no pointer hit test, a pinch activates the current item.
