@@ -68,8 +68,11 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   load. Latched, and advertised in the server info.
 
 * **game**: The game (mod) directory to load, for example `rogue`. The
-  empty string (the default) is `baseq2`. Latched, and advertised in the
-  server info.
+  empty string (the default) is `baseq2`. It must be a single directory
+  name: a value with a path separator (`/` or `\`), `:`, `..`, a control
+  byte, or 64 or more characters is refused with a message and the old
+  value stays, whoever writes it (console, `config.cfg`, `+set`, a server).
+  Latched, and advertised in the server info.
 
 * **maxclients**: The number of player slots of the server. `1` (the
   default of the engine) is a single-player game. Latched, and advertised
@@ -1042,9 +1045,23 @@ marked `(n/a)` and skipped.
   quantized to RGB565 (5, 6 and 5 bits) with a 4 x 4 ordered dither,
   optionally box-filtered (`r_retro_filter`), through one gamma curve
   on top of `vid_gamma` (`r_retro_gamma`); the 2D layer stays stock and
-  no fog is drawn. It needs no ray tracing and runs on every device; its
-  textures and its low-resolution view are later work. `3` (*Ray
-  traced*) is reserved for later work. Retro and Ray traced are greyed in
+  no fog is drawn. The textures are uploaded as such a board stored
+  them: opaque ones in RGB565, ones with alpha in ARGB4444, both
+  dithered, in the usual 8-bit textures, and no texture is larger than
+  256 x 256 (a larger one is halved until it fits). The textures are
+  sampled with bilinear magnification and the nearest mip level, with no
+  anisotropy, in place of `gl_texturemode` and `r_anisotropic`, which keep
+  their values. In a window taller than 480 lines the frame's 3D layer
+  is drawn as if the window were 480 lines tall, at the window's
+  aspect (a view smaller than the window, at `viewsize` below 100, is
+  drawn at the same fraction of those 480 lines), quantized there, and
+  enlarged to its rectangle with a bilinear blit. Retro reads
+  `r_rt_shadows`, `r_rt_sun`, `r_rt_ao`, `r_rt_water`, `r_rt_gunshadow`
+  and `r_metalfx` as `0` (no cvar is written, and the Ray tracing and
+  Tuning screens grey those rows "set by the presentation"), so no
+  ray-traced layer and no MetalFX scaler runs. The player model of the menu is quantized at the window's size. The pictures
+  of the 2D layer are not changed. It needs no ray tracing and runs on
+  every device. `3` (*Ray traced*) is reserved for later work. Retro and Ray traced are greyed in
   the menu "awaiting review" until their look is accepted, and work from
   the console; the values are never renumbered. Read at start-up and at
   `vid_restart`, which say which presentation runs in one line

@@ -13,6 +13,7 @@
 #   pins.sh where   <scenario> --off <dir|id> --on <dir|id> --out <dir> [--renderer r]
 #                   [--mask-dir d] [--top N] [--delta n]
 #   pins.sh check-content                      the scenarios README's content tags, against the cfg files
+#   pins.sh check-text <trace> [demo [every]]  a captured frame with text the demo's table does not declare (FIX157)
 #   pins.sh make-demo <name> [--replace]       make demos/<name>.dm2 beside the binary
 #   pins.sh list                               what the store holds
 #   pins.sh selftest [case...]                 no engine, no game data
@@ -358,13 +359,68 @@ need_tools() {
 # the external tools record and replay call (make and cc are optional: a
 # missing make skips the staleness check, compare alone builds framediff)
 pins_tools="awk basename cat cksum date dirname find git grep head ls mkdir rm sleep tr wc"
-difftool() {
-    if [ -n "${PINS_DIFF:-}" ]; then echo "$PINS_DIFF"; return; fi
-    local bin="$(store)/bin/framediff"
-    if [ ! -x "$bin" ] || [ "$root/scripts/pins/framediff.c" -nt "$bin" ]; then
-        mkdir -p "$(dirname "$bin")"; cc -O2 -o "$bin" "$root/scripts/pins/framediff.c" -lm || die "cannot build framediff"
+# build_tool <name> <what> <source>...: prints the path of <name> in the store's
+# bin/, built with cc when missing or older than any source (the first is the
+# program). It builds to a temporary name and moves it into place, so a
+# concurrent first build never runs a half-written binary. Dies if cc fails.
+build_tool() {
+    local name=$1 what=$2 bin tmp s stale=0; shift 2
+    bin="$(store)/bin/$name"
+    [ -x "$bin" ] || stale=1
+    for s in "$@"; do if [ "$s" -nt "$bin" ]; then stale=1; fi; done
+    if [ "$stale" = 1 ]; then
+        mkdir -p "$(dirname "$bin")"
+        tmp="$bin.$$.tmp"
+        if [ "$name" = charscan ]; then
+            cc -std=gnu99 -O1 -DYQ2OSTYPE='"pins"' -DYQ2ARCH='"pins"' -o "$tmp" "$1" "$root/src/client/vid/refrecord.c" -lm ||
+                { rm -f "$tmp"; die "cannot build $what"; }
+        else
+            cc -O2 -o "$tmp" "$1" -lm || { rm -f "$tmp"; die "cannot build $what"; }
+        fi
+        mv -f "$tmp" "$bin" || { rm -f "$tmp"; die "cannot move $what into place"; }
     fi
     echo "$bin"
+}
+difftool() {
+    if [ -n "${PINS_DIFF:-}" ]; then echo "$PINS_DIFF"; return; fi
+    build_tool framediff framediff "$root/scripts/pins/framediff.c"
+}
+
+# textscan: the path of the trace's character-draw counter (FIX157),
+# tests/refrecord/charscan.c built against the real src/client/vid/refrecord.c
+textscan() {
+    build_tool charscan "the scanner (charscan)" "$root/tests/refrecord/charscan.c" \
+        "$root/src/client/vid/refrecord.c" "$root/src/client/vid/header/refrecord.h"
+}
+
+# check_trace_text <trace> <demo> <every>: a demo frame that the run captured
+# and that holds a character draw must be declared in
+# scripts/pins/text/<demo>-every<every>.txt ("pin <k> <count>", k the capture
+# number); no such file declares none. A character draw nobody declared is text
+# whose appearance can depend on the wall clock (console notify lines, FIX155),
+# so the pin would flip from run to run. Prints the difference and returns 1.
+check_trace_text() {
+    local trace=$1 demo=$2 every=$3 decl got want bin scan
+    decl="$root/scripts/pins/text/$demo-every$every.txt"
+    bin=$(textscan) || { echo "pins: $trace: could not build the scanner" >&2; return 1; }
+    scan=$("$bin" "$trace") || { echo "pins: $trace: charscan could not read the trace (bad header, unfinished or damaged), so no text check was made" >&2; return 1; }
+    got=$(printf '%s\n' "$scan" | grep '^pin ' || true)
+    want=""
+    if [ -f "$decl" ]; then want=$(grep '^pin ' "$decl" || true); fi
+    if [ "$got" != "$want" ]; then
+        echo "pins: $trace: a captured demo frame draws characters the scenario does not declare (found on the left, declared in $demo-every$every.txt on the right; \"pin <capture> <characters>\"):" >&2
+        diff <(if [ -n "$got" ]; then printf '%s\n' "$got"; fi) <(if [ -n "$want" ]; then printf '%s\n' "$want"; fi) >&2 || true
+        return 1
+    fi
+}
+
+cmd_check_text() {
+    need_tools check-text cc diff grep
+    local trace=${1:-} demo=${2:-demo1.dm2} every=${3:-30}
+    [ -f "$trace" ] || die "usage: pins.sh check-text <trace.q2r> [demo [every]]"
+    check_demo "$demo"; check_count every "$every"
+    check_trace_text "$trace" "$demo" "$every" || exit 1
+    echo "pins: $trace: no undeclared text in a captured frame"
 }
 
 # Fills the global array engine_args for <renderer> <scenario> <outdir>.
@@ -397,6 +453,7 @@ build_args() {
     local hd; hd=$(hidpi) || exit 1
     engine_args+=(+set vid_renderer "$(engine_renderer "$renderer")" +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
+        +set con_notifytime -1
         +set s_initsound 0 +set vid_highdpiaware "$hd"
         +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}")
     if [ "${PINS_TRACE:-1}" != 0 ]; then engine_args+=(+set pins_record trace.q2r); fi
@@ -520,6 +577,7 @@ check_seed() {
 
 cmd_record() {
     need_tools record $pins_tools
+    if [ "${PINS_TRACE:-1}" != 0 ]; then need_tools record cc diff; fi
     local renderer=$1 scenario=$2 run=1 replace=0; shift 2
     local bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
     check_name renderer "$renderer"; check_name scenario "$scenario"
@@ -566,6 +624,15 @@ cmd_record() {
     run_engine "$bin" "$out" "$limit"
     judge_pin "$out" "$renderer" "$limit"
     if [ -z "$reason" ]; then judge_frames "$out/timedemo.txt" "$scenario" "${PINS_DEMO:-demo1.dm2}" "the engine"; fi
+    if [ -z "$reason" ] && [ "${PINS_TRACE:-1}" != 0 ]; then
+        # the engine exits 0 when it cannot open the trace; a record without one was not text-checked
+        if [ ! -f "$out/trace.q2r" ]; then
+            reason="the engine wrote no trace.q2r, so no text check was made"
+        else
+            check_trace_text "$out/trace.q2r" "${PINS_DEMO:-demo1.dm2}" "${PINS_EVERY:-30}" 2> "$out/text.txt" ||
+                reason="a captured frame draws text the scenario does not declare, or the trace could not be read (see $out/text.txt)"
+        fi
+    fi
     if [ -n "$reason" ]; then
         echo "$reason" > "$out/incomplete"
         die "$reason; the pin in $out is incomplete (see $out/engine.log)"
@@ -1956,9 +2023,10 @@ cmd_make_demo() {
 # no line), then runs the command
 fake_engine() {
     printf '%s\n' '#!/bin/bash' \
-        'while [ $# -gt 0 ]; do case $1 in pins_dir) d=$2;; vid_renderer) r=$2;; pins_scenario) s=$2;; esac; shift; done' \
+        'while [ $# -gt 0 ]; do case $1 in pins_dir) d=$2;; vid_renderer) r=$2;; pins_scenario) s=$2;; pins_record) rec=$2;; esac; shift; done' \
         "[ \"$2\" = - ] || r=$2" \
         "cp '$tmp/a.tga' \"\$d/\$s-000000.tga\"" 'echo "$s-000000.tga $r 64x48" >> "$d/manifest.txt"' \
+        '[ -z "${rec-}" ] || [ -n "${FAKE_NOTRACE-}" ] || cp "$FAKE_TRACE" "$d/$rec"' \
         '[ "${FAKE_FRAMES-689}" = none ] || printf "%s frames, 0.3 seconds: 2296.7 fps\\n\\n" "${FAKE_FRAMES-689}"' \
         "$3" > "$1"
     chmod +x "$1"
@@ -2483,6 +2551,13 @@ st_incomplete() { # C-I1
 }
 st_record_engine() {
     PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 world >/dev/null || st_fail "record must pass with an engine that exits 0" || return 1
+    # FIX157: an engine that exits 0 but wrote no trace is refused (it was not text-checked), unless no trace was asked for
+    if (FAKE_NOTRACE=1 PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 world --replace) >/dev/null 2>&1; then st_fail "record must fail when the engine wrote no trace.q2r"; return 1; fi
+    grep -q 'no trace.q2r' "$PINS_STORE/world/gl1/$cid/incomplete" || st_fail "the reason must say the engine wrote no trace.q2r" || return 1
+    [ ! -f "$PINS_STORE/world/gl1/$cid/complete" ] || st_fail "a record with no trace must not be complete" || return 1
+    FAKE_NOTRACE=1 PINS_TRACE=0 PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 world --replace >/dev/null || st_fail "PINS_TRACE=0 asks for no trace, so none is not a refusal" || return 1
+    cp "$tmp/ok.q2r" "$tmp/trunc.q2r"; printf '\001' | dd of="$tmp/trunc.q2r" bs=1 seek=16 count=1 conv=notrunc 2>/dev/null
+    if (FAKE_TRACE="$tmp/trunc.q2r" PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 world --replace) >/dev/null 2>&1; then st_fail "record must fail on a truncated trace"; return 1; fi
     local rep; rep=$( (PINS_BIN="$tmp/no-such-engine" cmd_record gl1 world) 2>&1 ) && { st_fail "record must refuse without an engine binary"; return 1; }
     case $rep in "pins: no engine binary at $tmp/no-such-engine"*) ;; *) st_fail "a missing PINS_BIN must give the clean error, got: $rep"; return 1;; esac
     rep=$( (PINS_BIN="$tmp/no-such-engine" PINS_DRYRUN=1 cmd_record gl1 world) 2>&1 ) && { st_fail "a dry run must refuse a missing PINS_BIN too"; return 1; }
@@ -2781,7 +2856,7 @@ st_engine_id() { # TASK39 (h): the id sees uncommitted source, untracked source 
     rep=$( (root="$m" PINS_BIN= PINS_BASEDIR="$tmp/gd" cmd_record gl1 world) 2>&1 ) && { st_fail "record must refuse a binary older than a header"; return 1; }
     case $rep in *"the build is out of date"*"older than a header"*) ;; *) st_fail "record must report the stale build, got: $rep"; return 1;; esac
     touch -t 203601010000 "$m/release/quake2"
-    (root="$m" PINS_BIN= PINS_BASEDIR="$tmp/gd" cmd_record gl1 world) >/dev/null 2>&1 || st_fail "record must pass with a build newer than every header" || return 1
+    (root="$m" PINS_TRACE=0 PINS_BIN= PINS_BASEDIR="$tmp/gd" cmd_record gl1 world) >/dev/null 2>&1 || st_fail "record must pass with a build newer than every header" || return 1
 }
 st_metal_shim() { # TASK47: gl1-metal is ref_gl1 built with WITH_METAL_SHIM=yes
     local rep id m="$tmp/mkm"
@@ -3347,6 +3422,10 @@ cmd_selftest() {
     "$diff" --gen "$tmp/big.tga" 640 480 1
     "$diff" --block "$tmp/big.tga" "$tmp/bigblock.tga" 100 100 77 77 255 2>/dev/null || cp "$tmp/big.tga" "$tmp/bigblock.tga"
     mkdir -p "$tmp/gd/baseq2"
+    # the trace a fake engine writes beside its frame (FAKE_NOTRACE=1: none), one that draws exactly what demo1's table declares
+    mkdir -p "$(store)/bin"
+    local ts; ts=$(textscan) && "$ts" --make-table "$tmp/ok.q2r" "$root/scripts/pins/text/demo1.dm2-every30.txt" >/dev/null 2>&1 || die "selftest: cannot make the stub trace"
+    export FAKE_TRACE="$tmp/ok.q2r"
     fake_engine "$tmp/fake-ok" - 'exit 0'
     fake_engine "$tmp/fake-crash" - 'exit 139'
     fake_engine "$tmp/fake-other" soft 'exit 0'
@@ -3418,6 +3497,7 @@ case "${1:-}" in
     where)    [ $# -ge 4 ] || die "usage: pins.sh where <scenario> --off <dir|id> --on <dir|id> --out <dir> [--renderer r] [--mask-dir d] [--top N] [--delta n]"; lock_self pins-where "$@"; shift; cmd_where "$@";;
     check-content) check_content "$scen_dir/README.md" "$scen_dir" && echo "pins: content tags ok";;
     make-demo) [ $# -ge 2 ] || die "usage: pins.sh make-demo <name> [--replace]"; [ -n "${PINS_DRYRUN:-}" ] || lock_self pins-make-demo "$@"; shift; cmd_make_demo "$@";;
+    check-text) shift; cmd_check_text "$@";;
     list)     cmd_list;;
     selftest) lock_self pins-selftest "$@"; shift; cmd_selftest "$@";;
     evidence) lock_self pins-evidence "$@"; shift; cmd_evidence "$@";;

@@ -269,12 +269,14 @@ TEST(cl_drop_while_disconnected_resets_source_to_player)
 /* Cbuf_ExecutingServerText (FIX151): what t_src saw, and how often. */
 static int src_seen;
 static int src_runs;
+static int src_server; /* of src_runs, how many as the server's */
 
 static void
 T_Src_f(void)
 {
 	src_seen = Cbuf_ExecutingServerText();
 	src_runs++;
+	src_server += src_seen;
 }
 
 static void
@@ -283,6 +285,7 @@ src_setup(void)
 	setup();
 	src_seen = -1;
 	src_runs = 0;
+	src_server = 0;
 
 	if (!Cmd_Exists("t_src"))
 	{
@@ -319,6 +322,64 @@ TEST(cbuf_executing_server_text_for_a_mixed_line)
 	T_EQ_INT(src_runs, 1);
 	T_EQ_INT(src_seen, 1);
 	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+}
+
+/* t_src_player [nested]: queues t_src as the player's text, as
+   Qcommon_ExecConfigs queues its execs; with "nested", runs it inside
+   the line, as Qcommon_ExecConfigs's own Cbuf_Execute does. */
+static int src_after_add;
+
+static void
+T_Src_Player_f(void)
+{
+	Cbuf_AddPlayerText("t_src\n");
+	src_after_add = Cbuf_ExecutingServerText();
+
+	if (Cmd_Argc() > 1)
+	{
+		Cbuf_Execute();
+	}
+}
+
+/* Text queued through Cbuf_AddPlayerText inside a server line runs as
+   the player's, queued after the line or run inside it, and the line
+   that queued it stays the server's (FIX156). */
+TEST(cbuf_add_player_text_inside_a_server_line_is_the_players)
+{
+	src_setup();
+
+	if (!Cmd_Exists("t_src_player"))
+	{
+		Cmd_AddCommand("t_src_player", T_Src_Player_f);
+	}
+
+	src_after_add = -1;
+	Cbuf_AddServerText("t_src_player\n");
+	Cbuf_Execute();
+	T_EQ_INT(src_after_add, 1);
+	T_EQ_INT(src_runs, 1);
+	T_EQ_INT(src_seen, 0);
+
+	src_after_add = -1;
+	Cbuf_AddServerText("t_src_player nested\n");
+	Cbuf_Execute();
+	T_EQ_INT(src_after_add, 1);
+	T_EQ_INT(src_runs, 2);
+	T_EQ_INT(src_seen, 0);
+	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+
+	T_EQ_INT(src_server, 0);
+
+	/* the server's text behind the line, run inside it before the
+	   player's, stays the server's */
+	Cbuf_AddServerText("t_src_player nested\nt_src\n");
+	Cbuf_Execute();
+	T_EQ_INT(src_runs, 4);
+	T_EQ_INT(src_server, 1);
+	T_EQ_INT(src_seen, 0);
+	T_EQ_INT(Cbuf_ExecutingServerText(), 0);
+
+	Cmd_RemoveCommand("t_src_player");
 }
 
 /* False again after a server line leaves Cbuf_Execute through

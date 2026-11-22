@@ -380,6 +380,56 @@ FS_PackQuickSearch(const fsPack_t *pak, const char *name)
 }
 
 /*
+ * Returns true if a track name from the server (CS_CDTRACK) is a bare
+ * file name that may be joined onto "<path>/music/". Anything with a
+ * path separator, and "." and "..", is refused.
+ */
+qboolean
+FS_TrackNameValid(const char *track)
+{
+	if (track == NULL || track[0] == '\0')
+	{
+		return false;
+	}
+
+	if (strchr(track, '/') != NULL || strchr(track, '\\') != NULL)
+	{
+		return false;
+	}
+
+	if (strcmp(track, ".") == 0 || strcmp(track, "..") == 0)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * Returns true if a name has a ".." component, separated by '/' or '\\'.
+ * Such a name would leave the search paths when joined onto one. "a..b"
+ * and "..foo" are ordinary names, not escapes.
+ */
+static qboolean
+FS_NameEscapes(const char *name)
+{
+	const char *c = name;
+
+	while (*c)
+	{
+		if (c[0] == '.' && c[1] == '.' && (c == name || c[-1] == '/' || c[-1] == '\\')
+				&& (c[2] == '\0' || c[2] == '/' || c[2] == '\\'))
+		{
+			return true;
+		}
+
+		c++;
+	}
+
+	return false;
+}
+
+/*
  * Finds the file in the search path. Returns filesize and an open FILE *. Used
  * for streaming data out of either a pak file or a seperate file.
  */
@@ -450,6 +500,25 @@ FS_FOpenFile(const char *rawname, fileHandle_t *f, qboolean gamedir_only)
 
 		name[output] = rawname[input];
 		output++;
+	}
+
+	// Never leave the search paths: a ".." component is refused as if
+	// the file were missing. Checked after the clean-up above, so
+	// ".//../x" is caught too.
+	if (FS_NameEscapes(name))
+	{
+		Com_DPrintf("%s: refusing name with '..' component: %.64s\n",
+				__func__, name);
+		return -1;
+	}
+
+	// handle->name holds MAX_QPATH bytes and is what gets joined onto the
+	// search paths. A longer name is truncated there, after the check
+	// above, and could never match a pak entry or a real asset anyway.
+	if (strlen(name) >= MAX_QPATH)
+	{
+		Com_DPrintf("%s: refusing overlong name: %.64s\n", __func__, name);
+		return -1;
 	}
 
 	file_from_protected_pak = false;
@@ -1777,6 +1846,35 @@ extern qboolean menu_startdemoloop;
 void CL_WriteConfiguration(void);
 #endif
 
+/*
+ * Returns true if name can be a game directory: a single file
+ * name, without path separators, ':', '..' or control bytes, and
+ * shorter than MAX_QPATH, the size of the buffers it is kept in
+ * (userGivenGame, cl.gamedir). The empty string is valid and means
+ * baseq2.
+ */
+qboolean
+FS_GameDirValid(const char *name)
+{
+	const unsigned char *c;
+
+	if (!strcmp(name, ".") || strstr(name, "..") ||
+		strlen(name) >= MAX_QPATH)
+	{
+		return false;
+	}
+
+	for (c = (const unsigned char *)name; *c; c++)
+	{
+		if (*c < ' ' || *c == 0x7f || *c == '/' || *c == '\\' || *c == ':')
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
 void
 FS_BuildGameSpecificSearchPath(const char *dir)
 {
@@ -1801,7 +1899,7 @@ FS_BuildGameSpecificSearchPath(const char *dir)
 
 	// This is against PEBCAK. The user may give us paths like
 	// xatrix/ or even /home/stupid/quake2/xatrix.
-	if (!strcmp(dir, ".") || strstr(dir, "..") || strstr(dir, "/") || strstr(dir, "\\"))
+	if (!FS_GameDirValid(dir))
 	{
 		Com_Printf("Gamedir should be a single filename, not a path.\n");
 		return;

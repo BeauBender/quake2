@@ -49,8 +49,10 @@
 #     parent at start is pid 1, says so in one line and exits 143 before
 #     any check, the scheduler, a make or the watcher starts.
 # Every pid the tests start is taken off the cleanup list once it has been
-# waited for, so the list is empty after them; what a failing t_kgrp leaves
-# running is stopped by pid, after a check of its command line. Then one
+# waited for, so the list is empty after them, and cleanup signals a listed
+# pid only while its start time is still the one recorded
+# (t_cleanup_id); what a failing t_kgrp leaves running is stopped by pid,
+# after a check of its start time and command line. Then one
 # mutant per lock call (each removing it from a copy of its entry point)
 # and more: the run under the lock taking the lock again (the gate,
 # pins.sh), a BENCH_LOCK_ENTRY without a token taken as a hold, an unset
@@ -97,11 +99,88 @@ pid_running() {
 	return 0
 }
 
+# The cleanup list holds a line per process this check started, or read
+# from a file, and has not seen end: "<pid> <identity>", the identity taken
+# when the pid was put on it: its start time. A pid is signalled only while
+# it still runs with that start time: one that has gone, or that ps gives no
+# answer for, is not, since the system may have given its pid to another
+# process by then (FIX171). The command line is no part of it: a process
+# this check started may exec another program after it was put on the list
+# (scripts/test.sh re-execs under the lock), and it is still this check's to
+# stop; another process in the pid with the same start time would need the
+# pid counter to go round within that second. The same primitive is in
+# tests/check-bench.sh.
+# pid_id <pid>: the identity of a running <pid>, a checksum of its start
+# time as ps prints it; fails when it does not run or ps gives no answer.
+pid_id() {
+	pid_running "$1" || return 1
+	_il=$(ps -o lstart= -p "$1" 2> /dev/null) || return 1
+	[ -n "$_il" ] || return 1
+	id_of "$_il"
+}
+# id_of <start time>: the identity of a process started then, a checksum of
+# the time in its one form: its words with one blank between them and none
+# around them (ps pads it with blanks at the end). Every identity here,
+# stray_stop's too, comes from this function (FIX171).
+id_of() {
+	printf '%s\n' "$1" | awk '{ $1 = $1; print }' | cksum
+}
+# pid_same <pid> <identity>: <pid> runs and is still the process recorded
+# with <identity>; never for an empty <identity>.
+pid_same() {
+	[ -n "${2:-}" ] || return 1
+	_is=$(pid_id "$1") || return 1
+	[ "$_is" = "$2" ]
+}
+# record <pid> [<list>]: puts <pid> on the cleanup list (or on <list>) with
+# its identity now. A pid that has already ended, or that ps gives no answer
+# for, is put on it with no identity: it is never signalled, and it stays on
+# the list until it is forgotten, so the check at the end that the list is
+# empty still sees a test that did not forget it.
+record() {
+	_ri=$(pid_id "$1") || _ri=
+	printf '%s %s\n' "$1" "$_ri" >> "${2:-${tmp:?}/pids}"
+}
+# settle <pid>: waits, at most 1 s, until a child this shell has just
+# started has become its command (until its exec the child has this shell's
+# command line, and env's until env execs the command), so that a signal to
+# it reaches the command and not the forked shell. The identity does not
+# depend on it: an exec keeps the start time.
+self_args=$(ps -o args= -p "$$" 2> /dev/null || true)
+settle() {
+	_sn=0
+	while [ "$_sn" -lt 20 ]; do
+		case $(ps -o args= -p "$1" 2> /dev/null || true) in
+		"$self_args" | 'env '*) ;;
+		*) return 0 ;;
+		esac
+		sleep 0.05
+		_sn=$((_sn + 1))
+	done
+	return 0
+}
+# stop_listed <list>: TERM to each pid on <list> that is still the process
+# recorded there; nothing else.
+stop_listed() {
+	sed 's/ .*//' "$1" | sort -u | while read -r _p; do
+		if listed_same "$_p" "$1"; then kill -TERM "$_p" 2> /dev/null || true; fi
+	done
+}
+# listed_same <pid> [<list>]: <pid> runs, and one of its lines on the cleanup
+# list (or on <list>) holds the identity it has now. stop_listed and reap
+# both judge a pid by it, so the two agree whatever older lines the list
+# holds for that pid.
+listed_same() {
+	_ln=$(pid_id "$1") || return 1
+	grep -qxF -- "$1 $_ln" "${2:-${tmp:?}/pids}"
+}
+
 cleanup() {
+	# A trap that runs this while a case's ps (or kill) stands in for the
+	# system's must not use them (FIX171, round 2), so they go first.
+	unset -f kill ps 2> /dev/null || true
 	# Stop any process this check started that still runs; nothing else.
-	while read -r _p; do
-		if pid_running "$_p"; then kill -TERM "$_p" 2> /dev/null || true; fi
-	done < "${tmp:?}/pids"
+	stop_listed "${tmp:?}/pids"
 	rm -rf "${tmp:?}"
 	[ "${_ok:-}" = 1 ] || exit 1
 }
@@ -124,17 +203,80 @@ wait_gone() {
 	done
 	return 0
 }
-# reap <pid>: ends a process this check started (TERM, which a lock
-# shell's trap turns into a stop of its command; KILL after 30 s).
+# reap <pid> [<seconds>]: ends a process this check started (TERM, which a
+# lock shell's trap turns into a stop of its command; KILL after <seconds>,
+# 30 by default). True once <pid> has gone: only then may the caller wait
+# for it. Each of the two signals goes only while listed_same holds for
+# <pid> (FIX171): the KILL comes 30 s after the TERM, time enough for the
+# system to give the pid to another process. A pid that runs but is not on
+# the list, was listed with no identity, has another identity now, or that
+# ps gives no answer for, gets no signal; that is a failure, said, and reap
+# is false, since nothing would bound a wait for that process. So is a pid
+# that still runs 5 s after its KILL.
 reap() {
+	if ! listed_same "$1"; then
+		reap_skip TERM "$1"
+		return
+	fi
 	kill -TERM "$1" 2> /dev/null || true
-	wait_gone 30 "$1" || kill -KILL "$1" 2> /dev/null || true
+	wait_gone "${2:-30}" "$1" && return 0
+	if ! listed_same "$1"; then
+		reap_skip KILL "$1"
+		return
+	fi
+	kill -KILL "$1" 2> /dev/null || true
+	wait_gone 5 "$1" && return 0
+	bad "reap: pid $1 still runs 5 s after its KILL, so it is not waited for"
+	return 1
+}
+# reap_skip <signal> <pid>: the signal reap did not send; true when <pid>
+# has gone, a failure (said) and false while it still runs.
+reap_skip() {
+	wait_gone 0 "$2" && return 0
+	bad "reap: no $1 to pid $2: it is not the process this check recorded (another identity, none, or no answer from ps), so it is not waited for"
+	return 1
+}
+# reaped <pid> [<seconds>]: reaps <pid>, a child this check started, then
+# waits for it (its status in RS) and forgets it, but waits only when reap
+# ended it; false, with RS 255, when it did not.
+reaped() {
+	RS=0
+	reap "$@" || {
+		RS=255
+		return 1
+	}
+	wait "$1" 2> /dev/null || RS=$?
+	forget "$1"
+}
+# reap_lint <file> <helpers>: prints each line of <file> that holds the word
+# reap (not reaped, reap_skip or t_reap_id: a word ends at a character other
+# than a letter, a digit, _ or -, and a path's /reap is not one), joined
+# with the lines a trailing \ continues, unless it is a whole-line comment or
+# lies in one of the functions <helpers> names (an awk alternation). A
+# function runs from a line that starts with its definition (a name of
+# [A-Za-z_][A-Za-z0-9_]*) to the next line that starts with }; no other line
+# is exempt, the top level included, so no form of a call outside the
+# helpers gets past it (FIX171).
+reap_lint() {
+	awk -v ok="$2" '
+	/\\$/ { b = b substr($0, 1, length($0) - 1); next }
+	{ $0 = b $0; b = "" }
+	/^(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)/ || /^function[ \t]/ {
+		f = $0; sub(/^function[ \t]+/, "", f); sub(/[^A-Za-z0-9_].*/, "", f)
+	}
+	/^}/ { f = ""; next }
+	f ~ ("^(" ok ")$") || /^[ \t]*#/ { next }
+	(" " $0 " ") ~ /[^A-Za-z0-9_\/-]reap[^A-Za-z0-9_-]/ { print FILENAME ":" FNR ": " $0 }
+	' "$1"
 }
 # forget <pid>: takes a pid this check has waited for off the cleanup list,
 # so that cleanup never signals a pid the system may since have given to
 # another process.
 forget() {
-	grep -vx -- "$1" "${tmp:?}/pids" > "${tmp:?}/pids.new" || true
+	case $1 in
+	'' | *[!0-9]*) return 0 ;;
+	esac
+	grep -v -- "^$1 " "${tmp:?}/pids" > "${tmp:?}/pids.new" || true
 	mv "${tmp:?}/pids.new" "${tmp:?}/pids"
 }
 # run <seconds> <command...>: runs it with its output in ${T}/out and its
@@ -144,11 +286,10 @@ run() {
 	shift
 	"$@" > "${T:?}/out" 2>&1 &
 	_rp=$!
-	echo "$_rp" >> "${tmp:?}/pids"
+	settle "$_rp"
+	record "$_rp"
 	if ! wait_gone "$_rs" "$_rp"; then
-		reap "$_rp"
-		wait "$_rp" 2> /dev/null || true
-		forget "$_rp"
+		reaped "$_rp" || true
 		ST=124
 		return 0
 	fi
@@ -455,7 +596,8 @@ EOF
 	: > "${LOG:?}"
 	sh "$_b" lock run other -- sleep 60 > /dev/null 2>&1 &
 	_hp=$!
-	echo "$_hp" >> "${tmp:?}/pids"
+	settle "$_hp"
+	record "$_hp"
 	_n=0
 	until sh "$_b" lock status | grep -q '^lock=held label=other .*child=[0-9]'; do
 		[ "$_n" -lt 100 ] || break
@@ -466,9 +608,7 @@ EOF
 	[ "$ST" -eq 75 ] || bad "nested: a gate that found the lock held exited $ST, not 75; $(say)"
 	grep -q 'held by other' "${T:?}/out" || bad "nested: the gate did not name the holder; $(say)"
 	[ ! -s "${LOG:?}" ] || bad "nested: a gate without the lock ran its checks or makes; $(say)"
-	reap "$_hp"
-	wait "$_hp" 2> /dev/null || true
-	forget "$_hp"
+	reaped "$_hp" || true
 	unset BENCH_STATE BENCH_LOCK_POLL BENCH_LOCK_WAIT
 	[ "$fails" -eq 0 ]
 }
@@ -512,17 +652,24 @@ lock_down() {
 	esac
 	return 1
 }
-# stray_stop <pid> <text> [<group>]: what a failed test left running is
-# ended, so that it does not outlive this check: TERM to <pid> (to the
-# process group <group> when given, which must be <pid>'s and not this
-# check's own), only while <pid> runs and its command line holds <text>;
+# pid_start <pid>: the identity of <pid> (pid_id's); empty when it does not
+# run or ps gives no answer.
+pid_start() {
+	pid_id "$1" || true
+}
+# stray_stop <pid> <start> <text> [<group>]: what a failed test left
+# running is ended, so that it does not outlive this check: TERM to <pid>
+# (to the process group <group> when given, which must be <pid>'s and not
+# this check's own), only while <pid> runs, its identity is still <start>
+# (pid_start's when the pid was read) and its command line holds <text>;
 # then up to 15 s for it to go.
 stray_stop() {
 	pid_running "$1" || return 0
-	case $(ps -o args= -p "$1" 2> /dev/null) in *"$2"*) ;; *) return 0 ;; esac
-	if [ -n "${3:-}" ]; then
-		[ "$(ps -o pgid= -p "$1" | tr -d ' ')" = "$3" ] && [ "$3" != "$(ps -o pgid= -p "$$" | tr -d ' ')" ] || return 0
-		kill -TERM -- "-$3" 2> /dev/null || true
+	pid_same "$1" "$2" || return 0
+	case $(ps -o args= -p "$1" 2> /dev/null) in *"$3"*) ;; *) return 0 ;; esac
+	if [ -n "${4:-}" ]; then
+		[ "$(ps -o pgid= -p "$1" | tr -d ' ')" = "$4" ] && [ "$4" != "$(ps -o pgid= -p "$$" | tr -d ' ')" ] || return 0
+		kill -TERM -- "-$4" 2> /dev/null || true
 	else
 		kill -TERM "$1" 2> /dev/null || true
 	fi
@@ -550,15 +697,17 @@ EOF
 	env GATE_JOBS=1 PATH="$GATEPATH" sh "${T:?}/scripts/test.sh" > "${T:?}/out" 2>&1 &
 	_kp=$!
 	set +m
-	echo "$_kp" >> "${tmp:?}/pids"
+	settle "$_kp"
+	record "$_kp"
 	wait_line 60 '^start ' || bad "kgrp: the check did not start; $(say)"
 	kill -KILL -- "-$_kp" 2> /dev/null || true
 	wait "$_kp" 2> /dev/null || true
 	forget "$_kp"
 	# shellcheck disable=SC2046 # the check's two pids
 	set -- $(sed -n 's/^start //p' "${LOG:?}") 0 0
+	_ks=$(pid_start "$2")
 	if ! wait_gone 12 "$1" || ! wait_gone 3 "$2"; then
-		stray_stop "$2" gate-checks.sh
+		stray_stop "$2" "$_ks" gate-checks.sh
 		bad "kgrp: a check or the scheduler outlived a KILL to the gate's process group under the lock; $(say)"
 	fi
 	_n=0
@@ -577,15 +726,17 @@ EOF
 	env GATE_JOBS=1 PATH="$SLOWPATH" sh "${T:?}/scripts/test.sh" > "${T:?}/out" 2>&1 &
 	_kp=$!
 	set +m
-	echo "$_kp" >> "${tmp:?}/pids"
+	settle "$_kp"
+	record "$_kp"
 	wait_line 60 '^make ' || bad "kgrp: the first make did not start; $(say)"
 	kill -KILL -- "-$_kp" 2> /dev/null || true
 	wait "$_kp" 2> /dev/null || true
 	forget "$_kp"
 	_mp=$(sed -n 's/^make .* pid=\([0-9]*\) pgid=.*/\1/p' "${LOG:?}")
 	_mg=$(sed -n 's/^make .* pgid=\([0-9]*\)$/\1/p' "${LOG:?}")
+	_ms=$(pid_start "${_mp:-0}")
 	if ! wait_gone 12 "${_mp:-0}"; then
-		stray_stop "${_mp:-0}" mk-slow/make "${_mg:-0}"
+		stray_stop "${_mp:-0}" "$_ms" mk-slow/make "${_mg:-0}"
 		bad "kgrp: a make outlived a KILL to the gate's process group under the lock; $(say)"
 	fi
 	_n=0
@@ -618,13 +769,18 @@ EOF
 	export BENCH_STATE
 	env GATE_JOBS=1 BENCH_STOP_GRACE=1 PATH="$GATEPATH" sh "${T:?}/scripts/test.sh" > "${T:?}/out" 2>&1 &
 	_gp=$!
-	echo "$_gp" >> "${tmp:?}/pids"
+	settle "$_gp"
+	record "$_gp"
 	wait_line 60 '^start ' || bad "grace: the check did not start; $(say)"
 	kill -TERM "$_gp" 2> /dev/null || true
-	wait_gone 60 "$_gp" || reap "$_gp"
 	_gs=0
-	wait "$_gp" 2> /dev/null || _gs=$?
-	forget "$_gp"
+	if wait_gone 60 "$_gp"; then
+		wait "$_gp" 2> /dev/null || _gs=$?
+		forget "$_gp"
+	else
+		reaped "$_gp" || true
+		_gs=$RS
+	fi
 	# shellcheck disable=SC2046 # the check's two pids
 	set -- $(sed -n 's/^start \([0-9]*\) \([0-9]*\) .*/\1 \2/p' "${LOG:?}") 0 0
 	_ga=
@@ -705,9 +861,10 @@ EOF
 		_n=$((_n + 1))
 	done
 	_op=$(cat "${T:?}/run.pid" 2> /dev/null) || _op=0
-	echo "${_op:=0}" >> "${tmp:?}/pids"
+	_os=$(pid_start "${_op:=0}")
+	record "$_op"
 	if ! wait_gone 60 "$_op"; then
-		stray_stop "$_op" scripts/test.sh "$_op"
+		stray_stop "$_op" "$_os" scripts/test.sh "$_op"
 		bad "orphan: the run under the lock with its parent gone still runs after 60 s; $(say)"
 	fi
 	forget "$_op"
@@ -725,8 +882,280 @@ EOF
 	[ "$fails" -eq 0 ]
 }
 
+# t_cleanup_id: cleanup's stop (stop_listed) signals a listed pid only while
+# it still runs with the start time recorded there, and stray_stop only a
+# pid whose start time is still the one read. Live processes listed with
+# another's identity (its pid given to a stranger) or with their own command
+# line but another start time (the pid reused by the same command) are left
+# running, as are lines that name no pid, a pid recorded after it ended
+# (listed with no identity) and a stray_stop with another start time. The
+# one listed with its own identity is stopped, and so is one that exec'd
+# another program after it was recorded (scripts/test.sh re-execs under the
+# lock): the same start time with another command line is still the
+# process this check started. The processes are shells that end on TERM
+# (so that no job notice is printed), and by themselves within about 30 s,
+# so no wait here outlives that even when TERM is ignored.
+t_cleanup_id() {
+	_l=${tmp:?}/cleanup-id.list
+	_lo=${tmp:?}/cleanup-id.own
+	_lp=${tmp:?}/cleanup-id.loop
+	: > "${_l:?}"
+	: > "${_lo:?}"
+	printf '%s\n' 'trap "exit 0" TERM' 'n=0' 'while [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${_lp:?}"
+	set --
+	# $1 to $4 the loop; $5 runs its sleep 1 when recorded, then execs it
+	for _q in x y k1 k2 e; do
+		case $_q in
+		e) sh -c 'sleep 1; exec sh "$0" "$1"' "${_lp:?}" cleanup-id-e & ;;
+		*) sh "${_lp:?}" "cleanup-id-$_q" & ;;
+		esac
+		set -- "$@" "$!"
+		settle "$!"
+		record "$!"
+	done
+	record "$5" "${_l:?}"
+	case $(ps -o args= -p "$5" 2> /dev/null) in
+	*'exec sh'*) ;;
+	*) bad "cleanup-id: the exec case had exec'd, or ps gave no answer for it, before it was recorded" ;;
+	esac
+	record "$1" "${_lo:?}"
+	record "$2" "${_lo:?}"
+	true &
+	_d=$!
+	wait "$_d" || true
+	_o=$(pid_id 1) || bad "cleanup-id: ps gave no start time for pid 1"
+	printf '%s %s\n' "$1" "$_o" >> "${_l:?}"
+	printf '%s %s\n' "$2" "$(id_of 'Thu Jan  1 00:00:00 2026')" >> "${_l:?}"
+	printf '%s\n' '' x "0 $(pid_id "$1")" "$1" >> "${_l:?}"
+	record "$_d" "${_l:?}"
+	grep -qx "$_d " "${_l:?}" || bad "cleanup-id: a pid recorded after it ended is not on the list with no identity"
+	record "$3" "${_l:?}"
+	_n=0
+	while [ "$_n" -lt 50 ]; do
+		case $(ps -o args= -p "$5" 2> /dev/null) in
+		*'exec sh'*) ;;
+		*) break ;;
+		esac
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	case $(ps -o args= -p "$5" 2> /dev/null) in
+	*'exec sh'*) bad "cleanup-id: the exec case did not exec within 5 s" ;;
+	*cleanup-id-e*) ;;
+	*) bad "cleanup-id: ps gave no answer for the exec case" ;;
+	esac
+	record "$5" "${_lo:?}"
+	stop_listed "${_l:?}"
+	wait_gone 10 "$3" || bad "cleanup-id: the process listed with its own identity was not stopped"
+	wait_gone 10 "$5" || bad "cleanup-id: a process this check started that exec'd after it was recorded was left running"
+	stray_stop "$4" "$(id_of 'Thu Jan  1 00:00:00 2026')" cleanup-id-k2
+	sleep 0.5
+	pid_running "$1" || bad "cleanup-id: a process listed with another's identity was signalled"
+	pid_running "$2" || bad "cleanup-id: a process listed with another start time was signalled"
+	pid_running "$4" || bad "cleanup-id: stray_stop signalled a process with another start time"
+	stray_stop "$4" "$(pid_start "$4")" cleanup-id-k2
+	pid_running "$4" && bad "cleanup-id: stray_stop did not stop a process with the start time read"
+	stop_listed "${_lo:?}"
+	for _q in "$@"; do
+		wait_gone 40 "$_q" || bad "cleanup-id: pid $_q outlived its own bound"
+		wait "$_q" 2> /dev/null || true
+		forget "$_q"
+	done
+	[ "$fails" -eq 0 ]
+}
+
+# t_reap_id: reap's TERM and its KILL each go only while the pid still has
+# the identity it was recorded with on the cleanup list (FIX171). The
+# check's own processes stand in for a pid the system gave to another
+# process: shells that note a TERM and go on (so that only a KILL ends
+# them), and end by themselves once the stop file is there, or within
+# about 30 s. Listed with another's identity, one gets no TERM (t) and one
+# no KILL (k), and reap says so; listed with no identity (none), not listed
+# (off), or with ps giving no start time (ps), one gets neither; listed
+# with its own identity (own), one gets the TERM and then the KILL.
+t_reap_id() {
+	_rd=${tmp:?}/reap-id
+	rm -rf "${_rd:?}"
+	mkdir -p "${_rd:?}"
+	printf '%s\n' 'trap "echo TERM >> \"\$1\"" TERM' 'n=0' 'while [ ! -e "$2" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${_rd:?}/deaf.sh"
+	set --
+	for _q in t k none off ps; do
+		sh "${_rd:?}/deaf.sh" "${_rd:?}/$_q.sig" "${_rd:?}/stop" &
+		set -- "$@" "$!"
+		settle "$!"
+		record "$!"
+	done
+	_o=$(pid_id 1) || bad "reap-id: ps gave no start time for pid 1"
+	for _q in "$1" "$3" "$4"; do forget "$_q"; done
+	printf '%s %s\n' "$1" "$_o" >> "${tmp:?}/pids"
+	printf '%s \n' "$3" >> "${tmp:?}/pids"
+	# A reap that sends no signal to a pid that still runs is a failure and
+	# false. Each runs in a subshell, so that its failure is checked here
+	# and not counted.
+	_rs=0
+	(reap "$1" 1) > "${_rd:?}/t.out" || _rs=$?
+	[ ! -s "${_rd:?}/t.sig" ] || bad "reap-id: a TERM went to a pid listed with another identity"
+	grep -q "reap: no TERM to pid $1:" "${_rd:?}/t.out" && [ "$_rs" -ne 0 ] || bad "reap-id: the TERM not sent was not a failure (status $_rs): $(cat "${_rd:?}/t.out")"
+	# k: listed with its own identity, with ps giving no start time from the
+	# second time it is asked (after the TERM, for the KILL)
+	_rs=0
+	(
+		ps() {
+			case " $* " in
+			*' lstart= '*)
+				echo x >> "${_rd:?}/k.ps"
+				[ $(($(wc -l < "${_rd:?}/k.ps"))) -le 1 ] || return 1
+				;;
+			esac
+			command ps "$@"
+		}
+		reap "$2" 1
+	) > "${_rd:?}/k.out" || _rs=$?
+	grep -qx TERM "${_rd:?}/k.sig" 2> /dev/null || bad "reap-id: no TERM went to a pid listed with its own identity (k)"
+	pid_running "$2" || bad "reap-id: a KILL went to a pid that ps gave no start time for after its TERM"
+	grep -q "reap: no KILL to pid $2:" "${_rd:?}/k.out" && [ "$_rs" -ne 0 ] || bad "reap-id: the KILL not sent was not a failure (status $_rs): $(cat "${_rd:?}/k.out")"
+	for _q in none off; do
+		if [ "$_q" = none ]; then _p=$3; else _p=$4; fi
+		_rs=0
+		(reap "$_p" 1) > "${_rd:?}/$_q.out" || _rs=$?
+		[ ! -s "${_rd:?}/$_q.sig" ] && pid_running "$_p" || bad "reap-id: a signal went to a pid listed as $_q"
+		grep -q "reap: no TERM to pid $_p:" "${_rd:?}/$_q.out" && [ "$_rs" -ne 0 ] || bad "reap-id: $_q: the TERM not sent was not a failure (status $_rs): $(cat "${_rd:?}/$_q.out")"
+	done
+	_rs=0
+	(
+		ps() {
+			case " $* " in
+			*' lstart= '*) return 1 ;;
+			esac
+			command ps "$@"
+		}
+		reap "$5" 1
+	) > "${_rd:?}/ps.out" || _rs=$?
+	[ ! -s "${_rd:?}/ps.sig" ] && pid_running "$5" || bad "reap-id: a signal went to a pid that ps gave no start time for"
+	grep -q "reap: no TERM to pid $5:" "${_rd:?}/ps.out" && [ "$_rs" -ne 0 ] || bad "reap-id: the signals not sent with no answer from ps were not a failure (status $_rs): $(cat "${_rd:?}/ps.out")"
+	# own: started, reaped and collected in a subshell with no standard
+	# error, so that the shell's job notice for the KILL is not printed
+	_f0=$fails
+	(
+		sh "${_rd:?}/deaf.sh" "${_rd:?}/own.sig" "${_rd:?}/stop" &
+		_op=$!
+		settle "$_op"
+		record "$_op"
+		reap "$_op" 1 > /dev/null
+		grep -qx TERM "${_rd:?}/own.sig" 2> /dev/null || bad "reap-id: no TERM went to a pid listed with its own identity"
+		wait_gone 5 "$_op" || bad "reap-id: no KILL went to a pid listed with its own identity"
+		wait "$_op" || true
+		forget "$_op"
+		[ "$fails" -eq "$_f0" ]
+	) 2> /dev/null || bad "reap-id: the case listed with its own identity failed"
+	: > "${_rd:?}/stop"
+	for _q in "$@"; do
+		wait_gone 40 "$_q" || bad "reap-id: pid $_q outlived its own bound"
+		wait "$_q" 2> /dev/null || true
+		forget "$_q"
+	done
+	[ "$fails" -eq 0 ]
+}
+
+# t_reap_wait: no caller of reap waits for a pid that reap did not end
+# (FIX171). A child of the check's that ends only once the stop file is
+# there (or after about 30 s) is listed with no identity (ps gives no start
+# time the first time it is asked), or with another (ps gives another the
+# first time). Each kind of caller, run, and reaped (which t_nested and
+# t_grace call), must return within 10 s and count the failure. And no line
+# outside reap, reap_skip, reaped and reap's own tests holds the word reap
+# (reap_lint, checked on its own shapes): a caller that did could wait for
+# its pid with nothing to bound the wait.
+t_reap_wait() {
+	_rd=${tmp:?}/reap-wait
+	rm -rf "${_rd:?}"
+	mkdir -p "${_rd:?}"
+	printf '%s\n' 'trap "echo TERM >> \"\$1\"" TERM' 'n=0' 'while [ ! -e "$2" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${_rd:?}/deaf.sh"
+	printf '%s\n' 'echo $$ > "$1"' 'exec sh "$2" "$3" "$4"' > "${_rd:?}/c.sh"
+	for _k in run:none run:other reaped:none reaped:other; do
+		rm -f "${_rd:?}/stop" "${_rd:?}/c.pid" "${_rd:?}/ps.n"
+		(
+			T=${_rd:?}
+			ps() {
+				case " $* " in
+				*' lstart= '*)
+					echo x >> "${_rd:?}/ps.n"
+					if [ $(($(wc -l < "${_rd:?}/ps.n"))) -le 1 ]; then
+						[ "${_k#*:}" = other ] || return 1
+						echo 'Thu Jan  1 00:00:00 2026'
+						return 0
+					fi
+					;;
+				esac
+				command ps "$@"
+			}
+			_f0=$fails
+			case ${_k%:*} in
+			run) run 1 sh "${_rd:?}/c.sh" "${_rd:?}/c.pid" "${_rd:?}/deaf.sh" "${_rd:?}/c.sig" "${_rd:?}/stop" ;;
+			reaped)
+				sh "${_rd:?}/c.sh" "${_rd:?}/c.pid" "${_rd:?}/deaf.sh" "${_rd:?}/c.sig" "${_rd:?}/stop" &
+				settle "$!"
+				record "$!"
+				reaped "$!" 1 || true
+				;;
+			esac
+			[ "$fails" -gt "$_f0" ]
+		) > "${_rd:?}/w.out" 2> /dev/null &
+		_w=$!
+		wait_gone 10 "$_w" || bad "reap-wait: $_k: the caller still waited 10 s after reap sent no signal"
+		: > "${_rd:?}/stop"
+		_ws=0
+		wait "$_w" || _ws=$?
+		[ "$_ws" -eq 0 ] || bad "reap-wait: $_k: the caller counted no failure: $(cat "${_rd:?}/w.out")"
+		grep -q "reap: no TERM to pid " "${_rd:?}/w.out" || bad "reap-wait: $_k: reap did not say it sent no TERM: $(cat "${_rd:?}/w.out")"
+		_c=$(cat "${_rd:?}/c.pid" 2> /dev/null) || _c=
+		wait_gone 5 "$_c" || bad "reap-wait: $_k: pid $_c outlived its stop file"
+		forget "$_c"
+	done
+	_bare=$(reap_lint "$0" 'reap|reap_skip|reaped|reap_lint|t_reap_id|t_reap_wait')
+	[ -z "$_bare" ] || bad "reap-wait: reap is called bare outside reaped, so a wait after it may have no bound: $_bare"
+	# The lint itself (FIX171, round 2): each shape below calls reap in a
+	# function after reaped's, and must be refused; reaped passes.
+	lint_shape() {
+		_ln=$1
+		shift
+		printf '%s\n' 'reaped() {' '	reap "$@"' '}' "$_ln() {" "$@" '}' > "${_rd:?}/lint.sh"
+		[ -n "$(reap_lint "${_rd:?}/lint.sh" reaped)" ] || bad "reap-wait: the lint let through, in $_ln: $*"
+	}
+	while IFS= read -r _s; do
+		lint_shape t_f "	$_s"
+	done << 'SHAPES'
+reap "$x"
+reap "$x"; wait "$x"
+reap "$x" || wait "$x"
+reap "$x" 2>&1
+reap "$_rp" 2>&1; wait "$_rp"
+if :; then reap "$x"; fi
+if :; then :; else reap "$x"; fi
+{ reap "$x"; }
+reap $x
+eval reap "$x"
+eval 'reap "$x"'
+r=reap; $r "$x"
+foo && reap "$x"
+wait_gone 60 "$_gp" || reap "$_gp"
+reap "$x" || true
+SHAPES
+	lint_shape t_f '	reap "$x" || true' '	wait "$x"'
+	lint_shape t_f '	reap \' '		"$x"'
+	lint_shape t_f '	re\' 'ap "$x"'
+	lint_shape t_x2 '	reap "$x"'
+	lint_shape Tx '	reap "$x"'
+	printf '%s\n' 'reaped() {' '	reap "$@"' 't_x2() {' '	reap "$x"' '}' > "${_rd:?}/lint.sh"
+	[ -n "$(reap_lint "${_rd:?}/lint.sh" reaped)" ] || bad "reap-wait: the lint let through a reap in t_x2() with no } before it"
+	printf '%s\n' 't_f() {' '	reaped "$x" || true' '	reaped "$x" 5 || bad "x: $RS"' '	# then reap it' '}' > "${_rd:?}/lint.sh"
+	_l=$(reap_lint "${_rd:?}/lint.sh" reaped)
+	[ -z "$_l" ] || bad "reap-wait: the lint refused a plain reaped: $_l"
+	[ "$fails" -eq 0 ]
+}
+
 # ---- The real entry points. ---------------------------------------------
-all="t_gate t_coverage t_cov_lc t_pins t_off t_nested t_kgrp t_grace t_grace_refused t_orphan"
+all="t_cleanup_id t_reap_id t_reap_wait t_gate t_coverage t_cov_lc t_pins t_off t_nested t_kgrp t_grace t_grace_refused t_orphan"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -740,7 +1169,7 @@ for _t in $all; do
 done
 # Every test waits for what it started: the cleanup list is empty again.
 if [ -s "${tmp:?}/pids" ]; then
-	echo "$me: the cleanup list still holds pids the tests waited for: $(tr '\n' ' ' < "${tmp:?}/pids")"
+	echo "$me: the cleanup list still holds pids the tests waited for: $(cut -d' ' -f1 "${tmp:?}/pids" | tr '\n' ' ')"
 	failed="$failed cleanup-list"
 fi
 if [ -n "$failed" ]; then

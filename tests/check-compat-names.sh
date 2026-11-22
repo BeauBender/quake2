@@ -76,7 +76,8 @@ pin src/backends/unix/system.c 'char cfgdir[MAX_OSPATH] = CFGDIRNAME;'
 
 pin src/common/frame.c 's = va("%s %s %s %s", YQ2VERSION, YQ2ARCH, BUILD_DATE, YQ2OSTYPE);'
 pin src/common/frame.c 'Cvar_Get("version", s, CVAR_SERVERINFO | CVAR_NOSET);'
-pin src/common/frame.c 'Cbuf_AddText("exec yq2.cfg\n");'
+# Queued as the player's text (FIX156).
+pin src/common/frame.c 'Cbuf_AddPlayerText("exec yq2.cfg\n");'
 pin src/client/menu/menu.c 'Cbuf_AddText("exec yq2.cfg\n");'
 pin src/common/cmdparser.c 'if(Cmd_Argc() > 1 && Q_strcasecmp(cmd_argv[0], "exec") == 0 && Q_strcasecmp(cmd_argv[1], "yq2.cfg") == 0)'
 
