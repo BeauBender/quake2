@@ -98,7 +98,8 @@
 # owner's data: DIR is the artifacts folder, never published.
 # --background SECONDS (TASK148): simctl has no Home button, so a start of
 # the app is sent to the background the way a person leaves it: another
-# app (com.apple.Preferences) is launched IOS_SIM_BACKGROUND_AFTER (15)
+# app (com.apple.Preferences; on tvOS com.apple.TVSettings; IOS_SIM_BACKGROUND_APP
+# names another) is launched IOS_SIM_BACKGROUND_AFTER (15)
 # seconds after the start, the script waits SECONDS of wall time, and
 # launches the app again, which brings the running process back to the
 # front. --shot then counts from that return. What the app saw is in its
@@ -840,6 +841,12 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	ST_CMD="run --out @D@/out --no-data" st_case run-no-background extra ok "run ok, 1 start(s)" 30
 	st_has run-no-background nofile state/relaunches
 	ST_CMD="run --out @D@/out --background 3s" st_case run-background-not-digits extra fail "--background must be a number of seconds" 5
+	# the other app is the SDK's: tvOS has no com.apple.Preferences (TASK23 slice 3); IOS_SIM_BACKGROUND_APP overrides
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-tvos tvos ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0 IOS_SIM_SDK=appletvsimulator
+	st_has run-background-tvos line1 state/relaunches "com.apple.TVSettings"
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-app-set extra ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0 IOS_SIM_BACKGROUND_APP=org.example.other
+	st_has run-background-app-set line1 state/relaunches "org.example.other"
+	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-app-bad extra fail "IOS_SIM_BACKGROUND_APP must be a bundle identifier" 5 IOS_SIM_BACKGROUND_AFTER=0 'IOS_SIM_BACKGROUND_APP=x;y'
 	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-after-not-digits extra fail "IOS_SIM_BACKGROUND_AFTER must be" 5 IOS_SIM_BACKGROUND_AFTER=x
 	ST_CMD="run --out @D@/out --shot 3s" st_case run-shot-not-digits extra fail "--shot must be a number of seconds" 5
 	ST_CMD="run --out @D@/out" st_case run-limit-not-digits extra fail "IOS_SIM_RUN_SECONDS must be" 5 IOS_SIM_RUN_SECONDS=1h
@@ -1079,6 +1086,18 @@ case ${IOS_SIM_SDK:-} in
 appletvsimulator) ;;
 xrsimulator) ;;
 *) die "IOS_SIM_SDK must be iphonesimulator (the default), appletvsimulator or xrsimulator" ;;
+esac
+# TASK23 slice 3: the other app --background launches. com.apple.Preferences is the iPhone's and iPad's
+# (and visionOS's); the Apple TV simulator has its own settings app
+bg_app=${IOS_SIM_BACKGROUND_APP-}
+if [ -z "$bg_app" ]; then
+	case ${IOS_SIM_SDK:-} in
+	appletvsimulator) bg_app=com.apple.TVSettings ;;
+	*) bg_app=com.apple.Preferences ;;
+	esac
+fi
+case $bg_app in
+''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*) die "IOS_SIM_BACKGROUND_APP must be a bundle identifier (letters, digits, dots and hyphens), not \"$bg_app\"" ;;
 esac
 
 # the owner's data: checked before anything is built or created
@@ -1408,7 +1427,7 @@ launch_app()
 	while kill -0 "$apid" 2>/dev/null; do
 		if [ -n "$bg" ] && [ "$bgdone" = 0 ] && [ "$t" -ge "$bgafter" ]; then
 			# the app goes to the background as a person's Home does: another app takes the screen
-			bounded 30 "${tmp:?}/bg.out" xcrun simctl launch "$udid" com.apple.Preferences || die "simctl launch of the other app failed"
+			bounded 30 "${tmp:?}/bg.out" xcrun simctl launch "$udid" "$bg_app" || die "simctl launch of the other app ($bg_app) failed"
 			sleep "$bg"
 			t=$((t + bg))
 			bounded 30 "${tmp:?}/fg.out" xcrun simctl launch "$udid" "$bid" || die "simctl launch of the app (the return) failed"
