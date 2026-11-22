@@ -237,18 +237,18 @@ sets_false='-DTARGET_OS_IPHONE=1 -DTARGET_OS_IOS=0 -DTARGET_OS_TV=1 -DTARGET_OS_
 # assert_meaning <file> <start> <anchor>
 assert_meaning()
 {
-	rc=0
-	while read -r s; do
-		[ "$(eval_guard "$1" "$2" "$3" "$s")" = 1 ] || { echo "$1: the guard of \"$3\" is not true under: $s"; rc=1; }
+	am_rc=0
+	while read -r am_set; do
+		[ "$(eval_guard "$1" "$2" "$3" "$am_set")" = 1 ] || { echo "$1: the guard of \"$3\" is not true under: $am_set"; am_rc=1; }
 	done <<SETS
 $sets_true
 SETS
-	while read -r s; do
-		[ "$(eval_guard "$1" "$2" "$3" "$s")" = 0 ] || { echo "$1: the guard of \"$3\" is not false under: $s"; rc=1; }
+	while read -r am_set; do
+		[ "$(eval_guard "$1" "$2" "$3" "$am_set")" = 0 ] || { echo "$1: the guard of \"$3\" is not false under: $am_set"; am_rc=1; }
 	done <<SETS
 $sets_false
 SETS
-	return $rc
+	return $am_rc
 }
 
 m=0
