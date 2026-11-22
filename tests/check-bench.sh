@@ -3967,6 +3967,13 @@ mutant bounded-hold-lock-grace bench.sh 'bench_lock_hold_untold "$BENCH_BOUNDED_
 mutant record-not-written core/lock.sh 'mv -f "$_lk_t" "${BENCH_LOCK_DIR:?}/untold.$1"' 'false' t_core_id || mfail=1
 mutant alive-no-record core/lock.sh '	bench_lock_untold_live && return 0' '	:' t_core_id || mfail=1
 mutant release-no-wait core/lock.sh 'while bench_lock_untold_live; do bench_nap 1; done' ':' t_core_id || mfail=1
+# FIX184, round 1: a record with no start time expires once ps shows a
+# process with its pid that started after the record was written: the
+# reader ignoring written=, and the record written without it. lock status
+# names a record that alone holds a lock with no holder file.
+mutant record-ignores-written core/lock.sh 'if bench_lock_untold_reused "$_lu_p" "$(bench_kv "$_lu_h" written)"; then continue; fi' ':' t_core_id || mfail=1
+mutant record-no-written core/lock.sh '_lk_w=$(bench_lock_now)' '_lk_w=' t_core_id || mfail=1
+mutant status-unwritten-no-record core/lock.sh 'echo "lock=held label=none holder=unwritten$_ls_u"' 'echo "lock=held label=none holder=unwritten"' t_core_id || mfail=1
 mutant forget-before-clear core/common.sh "$(printf '\t\t')bench_spawn_forget \"\$_bb_p\"" "$(printf '\t\t'):" t_core_id \
 	"$(printf '\t\t')BENCH_BOUNDED_PID=" "$(printf '\t\t')bench_spawn_forget \"\$_bb_p\"; BENCH_BOUNDED_PID=" || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
