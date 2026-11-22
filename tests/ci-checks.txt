@@ -38,6 +38,7 @@ check-refrecord.sh
 check-removed-deps.sh
 check-require-guards.sh
 check-rt-variations.sh
+check-runbook-dedupe.sh
 check-runbook-index.sh
 check-savegame-tables.sh
 check-static-modules.sh
