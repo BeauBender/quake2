@@ -903,7 +903,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	st_has tvos-picks-tvos-runtime grep out/build/make.args " IOS_SDK=appletvsimulator "
 	st_case tvos-lists-default-is-iphone tvos ok "(com.apple.CoreSimulator.SimDeviceType.iPhone-17, iOS 27.2)" 30
 	st_has tvos-lists-default-is-iphone grep out/build/make.args " IOS_SDK=iphonesimulator "
-	st_case tvos-without-tvos-runtime tvtypes fail "no available iOS runtime" 30 IOS_SIM_SDK=appletvsimulator
+	st_case tvos-without-tvos-runtime tvtypes fail "no available tvOS runtime" 30 IOS_SIM_SDK=appletvsimulator
 	# the Apple Vision Pro build (TASK175): IOS_SIM_SDK=xrsimulator builds for that SDK and picks
 	# the visionOS (xrOS) runtime and the Apple Vision Pro type; unset, the same lists give the
 	# iPhone on iOS; the tvOS build on them finds no Apple TV type
@@ -913,7 +913,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	st_case xros-lists-default-is-iphone xros ok "(com.apple.CoreSimulator.SimDeviceType.iPhone-17, iOS 27.2)" 30
 	st_has xros-lists-default-is-iphone grep out/build/make.args " IOS_SDK=iphonesimulator "
 	st_case xros-lists-tvos-no-type xros fail "no device type Apple TV 4K (4th generation)" 30 IOS_SIM_SDK=appletvsimulator
-	st_case xros-without-xros-runtime xrtypes fail "no available iOS runtime" 30 IOS_SIM_SDK=xrsimulator
+	st_case xros-without-xros-runtime xrtypes fail "no available visionOS runtime" 30 IOS_SIM_SDK=xrsimulator
 	st_case sdk-iphoneos-refused extra fail "IOS_SIM_SDK must be iphonesimulator (the default), appletvsimulator or xrsimulator" 5 IOS_SIM_SDK=iphoneos
 	st_has sdk-iphoneos-refused line1 run.log "IOS_SIM_SDK must be"
 	st_has sdk-iphoneos-refused nofile out/build/make.args
@@ -1221,16 +1221,16 @@ bounded "$list_s" "${tmp:?}/runtimes.json" -e "${tmp:?}/runtimes.err" xcrun simc
 # the same rule picks within it
 # TASK23: IOS_SIM_SDK=appletvsimulator runs the tvOS build on a tvOS runtime and an Apple TV device type
 case ${IOS_SIM_SDK:-iphonesimulator} in
-appletvsimulator) sim_platform=tvOS; sim_type_default="Apple TV 4K (4th generation)" ;;
+appletvsimulator) sim_platform=tvOS; sim_osname=tvOS; sim_type_default="Apple TV 4K (4th generation)" ;;
 # TASK175: IOS_SIM_SDK=xrsimulator, a visionOS runtime (simctl's platform "xrOS") and the Apple Vision Pro type
-xrsimulator) sim_platform=xrOS; sim_type_default="Apple Vision Pro" ;;
-*) sim_platform=iOS; sim_type_default="iPhone 17" ;;
+xrsimulator) sim_platform=xrOS; sim_osname=visionOS; sim_type_default="Apple Vision Pro" ;;
+*) sim_platform=iOS; sim_osname=iOS; sim_type_default="iPhone 17" ;;
 esac
-pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-$sim_type_default}" "${IOS_SIM_RUNTIME:-}" "$sim_platform" <<'EOF'
+pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-$sim_type_default}" "${IOS_SIM_RUNTIME:-}" "$sim_platform" "$sim_osname" <<'EOF'
 import json, sys
 types = json.load(open(sys.argv[1]))["devicetypes"]
 runtimes = json.load(open(sys.argv[2]))["runtimes"]
-want_type, want_rt, want_platform = sys.argv[3], sys.argv[4], sys.argv[5]
+want_type, want_rt, want_platform, osname = sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
 t = [d for d in types if want_type in (d["name"], d["identifier"])]
 if not t:
     sys.exit("no device type " + want_type)
@@ -1238,7 +1238,7 @@ ios = [r for r in runtimes if r.get("isAvailable") and r.get("platform", "") == 
 if want_rt:
     ios = [r for r in ios if want_rt in (r.get("identifier"), r.get("version"), r.get("name"))]
 if not ios:
-    sys.exit("no available iOS runtime" + (" " + want_rt if want_rt else ""))
+    sys.exit("no available " + osname + " runtime" + (" " + want_rt if want_rt else ""))
 tid = t[0]["identifier"]
 def label(r):
     return str(r.get("name")) + " (" + str(r.get("identifier")) + ")"
@@ -1250,7 +1250,7 @@ def ver(r):
     try:
         return [int(x) for x in r["version"].split(".")]
     except (KeyError, ValueError, AttributeError):
-        sys.exit("the iOS runtime " + label(r) + " has no numeric version")
+        sys.exit("the " + osname + " runtime " + label(r) + " has no numeric version")
 # the same rule for the default and for a version or name given: only a runtime that lists the
 # device type is a candidate (the others are skipped, whatever their version says); newest first;
 # on a version tie the runtime that lists the most device types (the general one)
@@ -1258,7 +1258,7 @@ cand = [r for r in ios if lists(r)]
 if not cand:
     if want_rt:
         sys.exit(t[0]["name"] + " is not supported by " + ", ".join(r["name"] for r in ios))
-    sys.exit(t[0]["name"] + " is not supported by any available iOS runtime; tried " + ", ".join(label(r) for r in ios))
+    sys.exit(t[0]["name"] + " is not supported by any available " + osname + " runtime; tried " + ", ".join(label(r) for r in ios))
 rt = max(cand, key=lambda r: (ver(r), len(r["supportedDeviceTypes"]) if r.get("supportedDeviceTypes") else 1 << 30))
 print(t[0]["identifier"], rt["identifier"], rt["name"])
 EOF
