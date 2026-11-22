@@ -275,10 +275,31 @@ reap "$run" imgdecode_plain
 wait "$run" 2>/dev/null || :
 sleep 0.2
 kill -0 "$run" 2>/dev/null && echo "run: alive" || echo "run: killed"
-ps -o stat= -p "$named" > /dev/null 2>&1 && [ "$(ps -o stat= -p "$named" | cut -c1)" != Z ] && echo "named child: alive" || echo "named child: killed"
-kill -0 "$other" 2>/dev/null && echo "other child: alive" || echo "other child: killed"
+# a child that was never found is its own line, never "killed"
+if [ -z "$named" ]; then
+	echo "named child: not found"
+elif ps -o stat= -p "$named" > /dev/null 2>&1 && [ "$(ps -o stat= -p "$named" | cut -c1)" != Z ]; then
+	echo "named child: alive"
+else
+	echo "named child: killed"
+fi
+if [ -z "$other" ]; then
+	echo "other child: not found"
+elif kill -0 "$other" 2>/dev/null; then
+	echo "other child: alive"
+else
+	echo "other child: killed"
+fi
 [ -z "${FORCE_NOTICE:-}" ] || echo "$0: line 26: 33351 Killed: 9               sh -c" >&2
-kill -KILL "$other" 2>/dev/null || :
+# end what this probe started, whichever reap ran, and only while the PID
+# is still the decoy or the other program (by its program name)
+for _p in "$named" "$other"; do
+	[ -n "$_p" ] || continue
+	_c=$(ps -o comm= -p "$_p" 2>/dev/null || :)
+	case ${_c##*/} in
+	imgdecode_plain | other) kill -KILL "$_p" 2>/dev/null || : ;;
+	esac
+done
 EOF
 	# reapcase <name> <reap file> <force notice: 1 or empty>: runs the probe on
 	# the reap file. Only the probe's stdout, its four result lines, is judged;
@@ -309,6 +330,16 @@ other child: alive" ]; then
 		reapcase reapmut1 "${tmp:?}/reap-kill-other.sh" "" > /dev/null && fail "(f) a reap that also kills the other child passed"
 		reapcase reapmut2 "${tmp:?}/reap-spare-named.sh" "" > /dev/null && fail "(f) a reap that spares the named child passed"
 	fi
+	# the probe ends what it started, whichever reap ran: nothing under
+	# decoy/ may still run (a zombie is gone); allow a short settle
+	_n=0
+	while [ "$_n" -lt 20 ]; do
+		_left=$(ps -A -o stat= -o comm= | awk -v d="${tmp:?}/decoy/" 'substr($1, 1, 1) != "Z" && index($0, d) { print }')
+		[ -z "$_left" ] && break
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	[ -z "$_left" ] || fail "(f) the probe left a process of decoy/ running: $_left"
 fi
 
 # (g) ps(1) that gives no answer: the bound still ends the run
