@@ -324,7 +324,10 @@ rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t *ou
  * 2.2): each effect switch below reads 1 under it, and every other
  * setting (the AO's size, the sun's angles, r_metalfx, ...) stays the
  * user's. Retro (TASK184, PM2) needs no ray tracing and runs on every
- * device; its post-process decides no cvar, so it overlays nothing here.
+ * device; its post-process decides no cvar of its own, but plan call P8
+ * (TASK197) has it read every ray-traced effect and r_metalfx as 0, so no
+ * layer or scaler smears or relights the quantized view. No cvar is
+ * written; the overlay is read-only like Enhanced's.
  * RT-primary is a later slice and decides nothing here.
  */
 typedef struct
@@ -352,6 +355,38 @@ static const pres_row_t pres_enhanced[] = {
 };
 
 #define PRES_NENHANCED ((int)(sizeof(pres_enhanced) / sizeof(pres_enhanced[0])))
+
+/* Retro's table (P8): the effect switches and the scaler, all read as 0 */
+static const pres_row_t pres_retro[] = {
+	{ "r_rt_shadows", 0.0f },
+	{ "r_rt_sun", 0.0f },
+	{ "r_rt_ao", 0.0f },
+	{ "r_rt_water", 0.0f },
+	{ "r_rt_gunshadow", 0.0f },
+	{ "r_metalfx", 0.0f },
+};
+
+#define PRES_NRETRO ((int)(sizeof(pres_retro) / sizeof(pres_retro[0])))
+
+/* the table a mode overlays, NULL when it decides nothing */
+static const pres_row_t *
+pres_table(int mode, int *n)
+{
+	if (mode == RM_PRES_ENHANCED)
+	{
+		*n = PRES_NENHANCED;
+		return pres_enhanced;
+	}
+
+	if (mode == RM_PRES_RETRO)
+	{
+		*n = PRES_NRETRO;
+		return pres_retro;
+	}
+
+	*n = 0;
+	return NULL;
+}
 
 int
 rm_pres_decide(float requested, int path, int *why)
@@ -394,18 +429,19 @@ rm_pres_decide(float requested, int path, int *why)
 float
 rm_pres_value(int mode, const char *name, float user)
 {
-	int i;
+	int i, n;
+	const pres_row_t *t = pres_table(mode, &n);
 
-	if ((mode != RM_PRES_ENHANCED) || !name)
+	if (!t || !name)
 	{
 		return user;
 	}
 
-	for (i = 0; i < PRES_NENHANCED; i++)
+	for (i = 0; i < n; i++)
 	{
-		if (!strcmp(pres_enhanced[i].name, name))
+		if (!strcmp(t[i].name, name))
 		{
-			return pres_enhanced[i].value;
+			return t[i].value;
 		}
 	}
 
@@ -454,7 +490,7 @@ rm_pres_format(float requested, int mode, int why, char *buf, size_t len)
 		if (mode == RM_PRES_RETRO)
 		{
 			return rtg_put(snprintf(buf, len,
-					"ref_metal: presentation: retro (r_presentation %d): the 3D view in RGB565 with the 4 x 4 dither, r_retro_filter and r_retro_gamma read each frame",
+					"ref_metal: presentation: retro (r_presentation %d): the 3D view in RGB565 with the 4 x 4 dither, r_retro_filter and r_retro_gamma read each frame; r_rt_shadows, r_rt_sun, r_rt_ao, r_rt_water, r_rt_gunshadow and r_metalfx read 0",
 					mode), buf, len);
 		}
 
@@ -531,11 +567,13 @@ rm_effect_overlaid(int pres_mode, const char *ab_spec, const char *name)
 		return 0;
 	}
 
-	if (pres_mode == RM_PRES_ENHANCED)
 	{
-		for (int i = 0; i < PRES_NENHANCED; i++)
+		int n;
+		const pres_row_t *t = pres_table(pres_mode, &n);
+
+		for (int i = 0; t && i < n; i++)
 		{
-			if (!strcmp(pres_enhanced[i].name, name))
+			if (!strcmp(t[i].name, name))
 			{
 				return 1;
 			}

@@ -1052,8 +1052,11 @@ marked `(n/a)` and skipped.
   is drawn as if the window were 480 lines tall, at the window's
   aspect (a view smaller than the window, at `viewsize` below 100, is
   drawn at the same fraction of those 480 lines), quantized there, and
-  enlarged to its rectangle with a bilinear blit; no MetalFX scaler
-  runs. The player model of the menu is quantized at the window's size. The pictures
+  enlarged to its rectangle with a bilinear blit. Retro reads
+  `r_rt_shadows`, `r_rt_sun`, `r_rt_ao`, `r_rt_water`, `r_rt_gunshadow`
+  and `r_metalfx` as `0` (no cvar is written, and the Ray tracing and
+  Tuning screens grey those rows "set by the presentation"), so no
+  ray-traced layer and no MetalFX scaler runs. The player model of the menu is quantized at the window's size. The pictures
   of the 2D layer are not changed. It needs no ray tracing and runs on
   every device. `3` (*Ray traced*) is reserved for later work. Retro and Ray traced are greyed in
   the menu "awaiting review" until their look is accepted, and work from

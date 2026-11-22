@@ -28,6 +28,7 @@ check-metal-shim.sh
 check-metalfx-report.sh
 check-mode-size.sh
 check-no-tracked-memory.sh
+check-pin-chars.sh
 check-pins-latch.sh
 check-pins.sh
 check-pre-commit-hook.sh
