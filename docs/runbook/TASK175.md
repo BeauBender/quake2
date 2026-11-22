@@ -448,6 +448,70 @@ Two runs of `scripts/ios-sim.sh run` (`IOS_SIM_SDK=xrsimulator`), each on a devi
 - `tests/check-visionos.sh`
 - `docs/runbook/TASK175.md`
 
+## Slice 2c-2: the window size on visionOS, and a `check-tvos` helper fix
+
+### The resize path, traced
+
+- `GLimp_InitGraphics` (`src/client/vid/glimp_sdl3.c:851`) on an Apple mobile target (the `TARGET_OS_IPHONE` block,
+  which visionOS has) calls `GLimp_OwnScreenOnly("uikit", ...)` (`glimp_sdl3.c:866`; `src/client/vid/glimp_hidpi.c:190`):
+  `*fullscreen` becomes 2 and `*r_mode` -2, and `Cvar_SetValue("r_mode", ...)` writes it back. So `r_mode`,
+  `r_customwidth`, `r_customheight` and `vid_fullscreen` never choose the window there.
+- The window is created from `w`,`h` at `glimp_sdl3.c:447` (`SDL_CreateWindowWithProperties`); the size passed in is a
+  request the uikit driver does not use, the window is the system's scene (1280x720 points at density 2 on the
+  simulator). `glimp_sdl3.c:1104` then takes `viddef` from the renderer's drawable (`re.GetDrawableSize`,
+  `rm_main.c:482`, `RI_GetDrawableSize`) when `GLimp_DrawableInPixels` says so, and `Drawable size:` is logged.
+- A change of the window after that arrives as `SDL_EVENT_WINDOW_SAFE_AREA_CHANGED` or
+  `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` (`src/client/input/sdl3.c:1411`, under `TARGET_OS_IPHONE`, so on visionOS too)
+  and runs `GLimp_ScreenEvent` (`glimp_sdl3.c`, the TASK172 live path, `Drawable size: WxH (live)`). Nothing in the
+  engine calls `SDL_SetWindowSize` or moves the window on this target.
+- `SetMode_impl` (`rm_main.c:449`) logs `Setting mode %d` from the `r_mode` it was given.
+
+### On the simulator
+
+One `scripts/ios-sim.sh run` (`IOS_SIM_SDK=xrsimulator`), a device it made and deleted (`launcher: no crash`, so no
+SurfBoard crash), two starts, `+set r_mode 3 +set vid_fullscreen 0 +vid_restart`, and in start 2 a map, then
+`r_mode 3` again and `r_mode 4`, `r_customwidth 800`, `r_customheight 600` with `vid_restart`:
+
+```
+Setting mode 3: 640x400 (vid_fullscreen 0)        (first init, the cvar as given)
+Real display mode: 1280x720@90.00
+Drawable size: 2560x1440
+Screen: window 1280x720 points, 2560x1440 pixels, density 2.00, insets left 0 top 0 right 0 bottom 0 points, ...
+...after each vid_restart:
+Setting mode -2: 1280x720 (vid_fullscreen 2)
+Real display mode: 1280x720@90.00
+Drawable size: 2560x1440
+Screen: window 1280x720 points, 2560x1440 pixels, density 2.00, ...
+```
+
+Start 2 shows the same three lines after each of its two `vid_restart`s. The drawable is 2560x1440 before and after
+every one; the renderer followed the window (it was never different), and no `(live)` line printed because no window
+event came.
+
+### The finding
+
+No defect, no code change: the window size on visionOS is fixed by the system for the engine. The engine forces the
+screen's own size, the cvars cannot move it, and the renderer takes the window's drawable at each init and at each
+window event. A real resize needs a person to resize the window; the live path for it is the TASK172 one, unexercised
+here.
+
+### The helper
+
+`tests/check-tvos.sh` `assert_meaning` read its sets into `s` and `rc`, the loop variables of its caller, so each mutant
+call passed an empty start to `guard_of`. They are now `am_set` and `am_rc`. Probe: the check's text up to its loop,
+then `s=KEEP_S; assert_meaning ...; echo s=$s`: before the change `s=` (empty), after it `s=KEEP_S`.
+
+### The checks
+
+- `check-tvos: ok (184 objects for the tvOS simulator, platform 8, the iOS simulator's list)`
+- `check-visionos: ok (184 objects for the visionOS simulator, platform 12, the iOS simulator's list)`
+- `check-ios: ok (54 mutants refused; 198 smoke selftest cases; 65 device selftest cases; 184 objects for the simulator; 184 for a device; ios_objects)`
+
+### Files of this slice
+
+- `tests/check-tvos.sh`
+- `docs/runbook/TASK175.md`
+
 ## Left for slice 2c
 
 - In-game pointer behaviour on visionOS is not checked yet: the plist key also turns on SDL's GCMouse
@@ -456,4 +520,6 @@ Two runs of `scripts/ios-sim.sh run` (`IOS_SIM_SDK=xrsimulator`), each on a devi
 - A person's check of a real pinch and of typing on the visionOS keyboard (slice 2c-1's proof stops at the
   engine log and the plist).
 - Look-and-pinch moving the menu cursor: the menu has no pointer hit test, a pinch activates the current item.
-- Resizing beyond the default 1280x720-point window (TASK172's live resize is compiled in, not exercised).
+- A person's resize of the visionOS window (dragging its corner in a simulator or on a device). Slice 2c-2 shows
+  the engine does not set the size and follows whatever the window has; nothing from the command line changes the
+  window itself (`simctl` has no resize command).
