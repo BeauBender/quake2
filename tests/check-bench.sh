@@ -1647,10 +1647,10 @@ t_core_id() {
 		record "$_tp"
 		bench_undefer
 		_look() {
-			_i=0
-			while [ "$_i" -lt 100 ]; do
+			_j=0
+			while [ "$_j" -lt 100 ]; do
 				bench_spawned "$_tp" || nok "table: the long command's entry is gone"
-				_i=$((_i + 1))
+				_j=$((_j + 1))
 			done
 		}
 		_now() { perl -MTime::HiRes=time -e 'printf "%.4f\n", time'; }
