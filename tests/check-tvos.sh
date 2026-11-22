@@ -754,6 +754,12 @@ else
 	fi
 fi
 
+# TASK23 slice 3: the missing-data text. An Apple TV has no Files app: the tvOS
+# system.o holds its own words and not the iPhone's, and the iOS simulator's
+# object (the control) holds the iPhone's and not the tvOS words
+pin lacks system.o src/backends/unix/system.c "On My iPhone (or iPad)" "the iPhone's missing-data text is compiled into the tvOS build"
+pin holds system.o src/backends/unix/system.c "an Apple TV has no Files app" "the tvOS missing-data text is not compiled into the tvOS build"
+
 object_list /r IOS_SDK=appletvsimulator > "${tmp:?}/list_tv"
 object_list /r IOS_SDK=iphonesimulator > "${tmp:?}/list_ios"
 assert_same_list "${tmp:?}/list_ios" "${tmp:?}/list_tv" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(b) the tvOS object list is not the iOS simulator's"; }

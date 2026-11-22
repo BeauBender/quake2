@@ -223,10 +223,12 @@ IOS_BUNDLE_ID ?= org.yquake2.quake2
 ifeq ($(IOS_SDK), iphonesimulator)
 IOS_TARGET := arm64-apple-ios$(IOS_MIN)-simulator
 IOS_PLATFORM := iPhoneSimulator
+IOS_OSNAME := iOS
 IOS_PLIST_IN := stuff/ios/Info.plist.in
 else ifeq ($(IOS_SDK), iphoneos)
 IOS_TARGET := arm64-apple-ios$(IOS_MIN)
 IOS_PLATFORM := iPhoneOS
+IOS_OSNAME := iOS
 IOS_PLIST_IN := stuff/ios/Info.plist.in
 else ifeq ($(IOS_SDK), appletvsimulator)
 # tvOS (TASK23): the same code and bundle as the iOS simulator's, for
@@ -234,6 +236,7 @@ else ifeq ($(IOS_SDK), appletvsimulator)
 # orientation, no touch and no status bar)
 IOS_TARGET := arm64-apple-tvos$(IOS_MIN)-simulator
 IOS_PLATFORM := AppleTVSimulator
+IOS_OSNAME := tvOS
 IOS_PLIST_IN := stuff/ios/Info-tvos.plist.in
 else ifeq ($(IOS_SDK), xrsimulator)
 # visionOS (TASK175): the same code and bundle as the iOS simulator's,
@@ -241,6 +244,7 @@ else ifeq ($(IOS_SDK), xrsimulator)
 # (the Apple Vision family, no orientations and no status bar)
 IOS_TARGET := arm64-apple-xros$(IOS_MIN)-simulator
 IOS_PLATFORM := XRSimulator
+IOS_OSNAME := visionOS
 IOS_PLIST_IN := stuff/ios/Info-visionos.plist.in
 else
 $(error IOS_SDK must be iphonesimulator, iphoneos, appletvsimulator or xrsimulator, not "$(IOS_SDK)")
@@ -253,7 +257,7 @@ $(error IOS_BUNDLE_ID may hold letters, digits, dots and hyphens only, not "$(IO
 endif
 IOS_SDK_PATH := $(shell xcrun --sdk $(IOS_SDK) --show-sdk-path 2>/dev/null)
 ifeq ($(wildcard $(IOS_SDK_PATH)/SDKSettings.plist),)
-$(error the $(IOS_SDK) SDK was not found (xcrun --sdk $(IOS_SDK) --show-sdk-path): Xcode with its iOS platform is needed)
+$(error the $(IOS_SDK) SDK was not found (xcrun --sdk $(IOS_SDK) --show-sdk-path): Xcode with its $(IOS_OSNAME) platform is needed)
 endif
 override YQ2_ARCH := arm64
 override CC := xcrun -sdk $(IOS_SDK) clang
