@@ -133,7 +133,9 @@ bench_host_init() {
 	if [ "$(uname -s 2> /dev/null || true)" = Darwin ]; then
 		_hi_st=0
 		bench_bounded 30 system_profiler SPDisplaysDataType > "${BENCH_TMP:?}/displays" 2> /dev/null || _hi_st=$?
-		[ "$_hi_st" -ne 124 ] || bench_die 2 "system_profiler did not answer within 30 s, so the GPU model is unknown"
+		case $_hi_st in
+		124 | 125) bench_die 2 "system_profiler did not answer within 30 s, so the GPU model is unknown" ;;
+		esac
 	fi
 	BENCH_HOST_FACTS=$(bench_host_facts "${BENCH_TMP:?}/displays" | bench_scrub "${BENCH_TMP:?}/identity")
 	_hi_salt=0
