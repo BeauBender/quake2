@@ -1672,6 +1672,116 @@ t_core_id() {
 		if grep -q 'stopped a command that outlived' "${E:?}/q.out"; then nok "bounded: no group: the bound said it stopped a command it sent nothing"; fi
 		wait_gone 5 "$_qp" || nok "bounded: no group: the command did not end by itself"
 
+		# A TERM to a bench.sh that runs a bounded command which leads no
+		# group, while ps is silent (FIX181): under dash (no job control) the
+		# lock shell and the bench.sh it runs (host, whose bounded
+		# system_profiler is a stand-in here) are not signalled as groups,
+		# and the stop of the bounded command can send nothing. The lock
+		# stays held until the bounded command ends, then is freed. The TERM
+		# goes to the inner bench.sh only, once it is seen to be the lock
+		# shell's child. The hold's line goes where the bound's own lines go,
+		# the standard error host gives the bound (/dev/null), so the lock's
+		# status is what is looked at here; "lock run, no group" checks the
+		# line itself.
+		mkdir -p "${E:?}/bshim"
+		printf '#!/bin/sh\nexit 1\n' > "${E:?}/bshim/ps"
+		printf '#!/bin/sh\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX181_PID.tmp"\nmv "$FIX181_PID.tmp" "$FIX181_PID"\nexec sleep 3\n' > "${E:?}/bshim/system_profiler"
+		chmod +x "${E:?}/bshim/ps" "${E:?}/bshim/system_profiler"
+		start env PATH="$E/bshim:$PATH" FIX181_PID="${E:?}/h.pid" dash "$R/bench.sh" lock run psb -- dash "$R/bench.sh" host > "${E:?}/h.out" 2>&1
+		_hh=$BG
+		wait_file 5 "${E:?}/h.pid" || nok "bounded hold: the bounded command never started"
+		_hp= _hi=
+		read -r _hp _hi < "${E:?}/h.pid" 2> /dev/null || :
+		record "$_hp"
+		record "$_hi"
+		_hpp=$(ps -o ppid= -p "$_hi" 2> /dev/null | tr -d ' ') || _hpp=
+		if [ -n "$_hi" ] && [ "$_hpp" = "$_hh" ]; then
+			command kill -TERM "$_hi"
+		else
+			nok "bounded hold: the bounded command's parent ($_hi) is not the lock shell's command (its parent is ${_hpp:-unknown}, the lock shell $_hh)"
+		fi
+		# At most 1.5 s for the inner bench.sh's trap to run, well inside the
+		# bounded command's 3 s, so the lock is looked at while it runs.
+		_n=0
+		while pid_running "$_hi" && [ "$_n" -lt 15 ]; do
+			sleep 0.1
+			_n=$((_n + 1))
+		done
+		_l=$(B lock status)
+		if pid_running "$_hp"; then
+			case $_l in
+			lock=held*) ;;
+			*) nok "bounded hold: the lock was freed while the bounded command it could not stop still ran: $_l" ;;
+			esac
+		else
+			nok "bounded hold: the bounded command was gone before the check of the lock"
+		fi
+		wait_gone 15 "$_hh" || nok "bounded hold: the lock shell did not exit after the bounded command ended"
+		_st=0
+		collect "$_hh" || _st=$?
+		[ "$_st" -eq 143 ] || nok "bounded hold: wanted 143 from the lock shell (its command's status on TERM), got $_st: $(tr '\n' '|' < "${E:?}/h.out")"
+		outlived "$_hp" "bounded hold: the lock was freed while the bounded command still ran" nok
+		[ "$(B lock status)" = lock=free ] || nok "bounded hold: the lock was not freed once the bounded command ended"
+		wait_gone 2 "$_hi" || :
+		wait_gone 2 "$_hp" || :
+
+		# The same hold, then a TERM to the lock shell once ps answers again
+		# (FIX181, round 1). The lock shell stops its command, the bench.sh
+		# that holds, with the lock's grace (at least BENCH_STOP_GRACE + 5,
+		# 6 s here); the hold renews its stop of the bounded command with
+		# the bounded command's grace (BENCH_STOP_GRACE, 1 s), so its KILL
+		# to the bounded command, which ignores TERM, comes before the lock
+		# shell's KILL to it. Here ps is silent only for the bounded command,
+		# while a flag file is there, and the flag goes 1.5 s after the
+		# TERM to the lock shell: a hold that renewed its stop with the
+		# lock's grace would send its KILL at 7.5 s at the earliest, after
+		# the lock shell's at 7 s at the latest, and the lock shell would
+		# free the lock while the bounded command still ran.
+		mkdir -p "${E:?}/cshim"
+		printf '#!/bin/sh\nif [ -e "$FIX181_FLAG" ] && read -r _p _q < "$FIX181_PID" 2> /dev/null; then for _a; do [ "$_a" != "$_p" ] || exit 1; done; fi\nexec /bin/ps "$@"\n' > "${E:?}/cshim/ps"
+		printf '#!/bin/sh\ntrap "" TERM\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX181_PID.tmp"\nmv "$FIX181_PID.tmp" "$FIX181_PID"\nexec sleep 15\n' > "${E:?}/cshim/system_profiler"
+		chmod +x "${E:?}/cshim/ps" "${E:?}/cshim/system_profiler"
+		start env PATH="$E/cshim:$PATH" BENCH_STOP_GRACE=1 FIX181_PID="${E:?}/c.pid" FIX181_FLAG="${E:?}/c.flag" dash "$R/bench.sh" lock run psc -- dash "$R/bench.sh" host > "${E:?}/c.out" 2>&1
+		_ch=$BG
+		wait_file 5 "${E:?}/c.pid" || nok "bounded hold, lock shell: the bounded command never started"
+		_cp= _ci=
+		read -r _cp _ci < "${E:?}/c.pid" 2> /dev/null || :
+		record "$_cp"
+		record "$_ci"
+		_cpid=$(pid_id "$_cp") || _cpid=
+		: > "${E:?}/c.flag"
+		_cpp=$(ps -o ppid= -p "$_ci" 2> /dev/null | tr -d ' ') || _cpp=
+		if [ -n "$_ci" ] && [ "$_cpp" = "$_ch" ]; then
+			command kill -TERM "$_ci"
+		else
+			nok "bounded hold, lock shell: the bounded command's parent ($_ci) is not the lock shell's command (its parent is ${_cpp:-unknown}, the lock shell $_ch)"
+		fi
+		# The inner bench.sh's trap runs and its stop sends nothing (ps is
+		# silent for the bounded command); it holds.
+		sleep 1.5
+		_l=$(B lock status)
+		case $_l in
+		lock=held*) ;;
+		*) nok "bounded hold, lock shell: the lock was freed before the TERM to the lock shell: $_l" ;;
+		esac
+		command kill -TERM "$_ch"
+		sleep 1.5
+		rm -f "${E:?}/c.flag"
+		wait_gone 15 "$_ch" || nok "bounded hold, lock shell: the lock shell did not exit"
+		_cr=0
+		pid_running "$_cp" || _cr=$?
+		# A command left running is ended here, by its identity, before the
+		# report, which ends a mutant's run.
+		if pid_same "$_cp" "$_cpid"; then command kill -KILL "$_cp" 2> /dev/null || :; fi
+		case $_cr in
+		0) nok "bounded hold, lock shell: the lock shell exited, and so freed the lock, while the bounded command still ran" ;;
+		2) nok "bounded hold, lock shell: cannot tell whether pid $_cp outlived the lock shell, ps gives no answer for it" ;;
+		esac
+		collect "$_ch" || :
+		[ "$(B lock status)" = lock=free ] || nok "bounded hold, lock shell: the lock was not freed once the bounded command ended"
+		wait_gone 2 "$_ci" || :
+		wait_gone 2 "$_cp" || :
+
 		# The identity table (correctness I2): 2000 bounded commands leave
 		# no entry behind, and a lookup costs what it did before them.
 		BENCH_SPAWNED=
@@ -3644,6 +3754,12 @@ mutant bounded-says-stopped core/common.sh 'if [ "$_bb_k" -ne 0 ]; then' 'if fal
 mutant lock-no-hold core/lock.sh 'if [ "$_lc_r" -eq 2 ]; then bench_lock_hold_untold' 'if false; then bench_lock_hold_untold' t_core_id || mfail=1
 mutant hold-ends-early core/lock.sh '		2) ;;' '		2) break ;;' t_core_id || mfail=1
 mutant trap-no-fd8 bench.sh 'if (: >&8) 2> /dev/null; then exec 2>&8; fi' ':' t_core_id || mfail=1
+# FIX181: a TERM while a bounded command that could not be stopped runs
+# keeps the lock until it ends.
+mutant bounded-no-hold bench.sh 'if [ "$_os_r" -eq 2 ]; then bench_lock_hold_untold' 'if false; then bench_lock_hold_untold' t_core_id || mfail=1
+# FIX181, round 1: the hold renews its stop of the bounded command with the
+# bounded command's grace, not the lock's, which the lock shell gives it.
+mutant bounded-hold-lock-grace bench.sh 'bench_lock_hold_untold "$BENCH_BOUNDED_PID" "${BENCH_STOP_GRACE:-10}"' 'bench_lock_hold_untold "$BENCH_BOUNDED_PID" "$(bench_lock_grace)"' t_core_id || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
 mutant queue-no-ticket-check core/lock.sh 'if bench_lock_head "$_la_label"; then _la_head=1; fi' 'bench_lock_head "$_la_label" || true; _la_head=1' t_lock_fifo || mfail=1

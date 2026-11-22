@@ -501,13 +501,18 @@ bench_lock_stop_child() {
 	BENCH_LOCK_CHILD=
 }
 
-# bench_lock_hold_untold <pid>: a stop could not tell whether <pid> is still
-# the command (FIX172, round 1), so the lock is kept, and said, while it may
-# be: every second until kill -0 fails for <pid>, or ps shows another
-# process has it (another start time). When ps answers again and <pid> is
-# still the command, it is stopped once more, and the hold ends when that
-# stop has sent its signals. This is a visible hold with no wall time: it
-# lasts as long as the command, or the process that took its pid, runs.
+# bench_lock_hold_untold <pid> [<grace>]: a stop could not tell whether
+# <pid> is still the command (FIX172, round 1), so the lock is kept, and
+# said, while it may be: every second until kill -0 fails for <pid>, or ps
+# shows another process has it (another start time). When ps answers again
+# and <pid> is still the command, it is stopped once more, with <grace>
+# seconds between TERM and KILL (default bench_lock_grace), and the hold
+# ends when that stop has sent its signals. A bounded command's hold passes
+# the bounded command's grace (BENCH_STOP_GRACE), so that a lock shell
+# stopping this shell with the lock's grace, which is longer, does not end
+# the hold before that KILL (FIX181, round 1). This is a visible hold with
+# no wall time: it lasts as long as the command, or the process that took
+# its pid, runs.
 bench_lock_hold_untold() {
 	bench_spawned "$1" || return 0
 	_lh_s=$BENCH_ID_START
@@ -516,7 +521,7 @@ bench_lock_hold_untold() {
 		_lh_r=0
 		bench_proc_same "$1" "$_lh_s" || _lh_r=$?
 		case $_lh_r in
-		0) if bench_stop_group "$1" "$(bench_lock_grace)"; then break; fi ;;
+		0) if bench_stop_group "$1" "${2:-$(bench_lock_grace)}"; then break; fi ;;
 		2) ;;
 		*) break ;;
 		esac
