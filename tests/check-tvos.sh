@@ -8,8 +8,7 @@
 # otool -l, the code of otool -tV, plutil, the commands of make -n) or from
 # the source text of the guards, never from a line make prints.
 #   (d) the source: each iPhone and iPad only site (the touch overlay's
-#       Touch_Supported, the in_touch default, the on-screen keyboard's
-#       follow-up, the window's orientation and home-indicator hints) is
+#       Touch_Supported, the in_touch default, the window's orientation and home-indicator hints) is
 #       inside an #if that uses TARGET_OS_IOS's value (TARGET_OS_IPHONE is
 #       true on tvOS and visionOS too): not an #ifdef, not defined() alone
 #       and not negated, since the macro is defined, to 0, there too. It
@@ -38,6 +37,12 @@
 #       address book's reason. A menu.c whose address book guard is widened
 #       to "#ifdef TARGET_OS_TV" (true on every Apple target) is compiled
 #       for the iOS simulator as the mutant that control must refuse.
+#   (d2) the two sites that are iPhone, iPad and visionOS (the keyboard's
+#       follow-up in IN_Update, its Enter hint in IN_Init): the guard line is
+#       evaluated with cc -E under the macros of iOS and visionOS (true) and
+#       of tvOS and macOS (false), so a guard widened to TARGET_OS_IPHONE,
+#       or with an "|| TARGET_OS_TV", is refused whatever its spelling. It
+#       runs everywhere, before the skips.
 #   (d) also takes only a bare true test: a chain of && of names, !names
 #       and defined()s with TARGET_OS_IOS alone among them (TASK23 slice 2).
 # It does not compare the iOS build with an earlier one; that comparison is
@@ -68,9 +73,11 @@ bad() { echo "check-tvos: $*"; fail=1; }
 # ---- (d) the iPhone and iPad only sites ----------------------------------
 
 # <file>|<the definition the site is in>|<a line inside the guarded block>
+# (the on-screen keyboard's follow-up in IN_Update and its Enter hint in
+# IN_Init are iPhone, iPad and visionOS, so their guard is an ||: (d2)
+# below evaluates them)
 # (awk EREs; awk -v takes a backslash as an escape, so brackets, not \( )
 sites='src/client/input/touch.c|^Touch_Supported[(]void[)]|return 1;
-src/client/input/sdl3.c|^IN_Update[(]void[)]|The on-screen keyboard only while text is typed
 src/client/input/sdl3.c|^IN_Init[(]void[)]|in_touch = Cvar_Get[(]"in_touch", "1"
 src/client/vid/glimp_sdl3.c|^CreateSDLWindow[(]|SDL_HINT_ORIENTATIONS'
 
@@ -190,7 +197,92 @@ MUT
 done <<EOF
 $sites
 EOF
-[ "$n" = 4 ] || bad "(d) $n sites, not 4"
+[ "$n" = 3 ] || bad "(d) $n sites, not 3"
+
+# ---- (d2) the iPhone, iPad and visionOS sites: the guard's meaning --------
+# The keyboard's follow-up (IN_Update) and its Enter hint (IN_Init) are for
+# iOS and visionOS, not tvOS and not macOS. Their guard is an ||, so (d)'s
+# text rules do not apply; the guard line is evaluated with cc -E under the
+# macro sets of each platform (the macros are defined to 0 where false, as
+# the SDK does) and must be 1 on iOS and visionOS, 0 on tvOS and macOS.
+
+if ! command -v cc >/dev/null 2>&1; then
+	bad "(d2) cc not found: the guards of the keyboard sites cannot be evaluated"
+	exit 1
+fi
+
+# eval_guard <file> <start> <anchor> <macro set>: 1, 0 or "error"
+eval_guard()
+{
+	g=$(guard_of "$1" "$2" "$3")
+	case $g in '' | else:) echo error; return ;; esac
+	gx=$(printf '%s\n' "${g#*:}" | sed -e 's,/\*.*\*/,,g' -e 's,//.*,,')
+	printf '%s\n1\n#else\n0\n#endif\n' "$gx" > "${tmp:?}/g.c"
+	# shellcheck disable=SC2086
+	if ! r=$(cc -E -P -U__APPLE__ -D__APPLE__=1 -UTARGET_OS_IPHONE -UTARGET_OS_IOS -UTARGET_OS_TV -UTARGET_OS_VISION -UTARGET_OS_OSX -UTARGET_OS_SIMULATOR $4 "${tmp:?}/g.c" 2>/dev/null); then
+		echo error
+		return
+	fi
+	echo "$r" | tr -d ' \t\n'
+}
+
+sets_true='-DTARGET_OS_IPHONE=1 -DTARGET_OS_IOS=1 -DTARGET_OS_TV=0 -DTARGET_OS_VISION=0 -DTARGET_OS_SIMULATOR=0
+-DTARGET_OS_IPHONE=1 -DTARGET_OS_IOS=1 -DTARGET_OS_TV=0 -DTARGET_OS_VISION=0 -DTARGET_OS_SIMULATOR=1
+-DTARGET_OS_IPHONE=1 -DTARGET_OS_IOS=0 -DTARGET_OS_TV=0 -DTARGET_OS_VISION=1 -DTARGET_OS_SIMULATOR=0
+-DTARGET_OS_IPHONE=1 -DTARGET_OS_IOS=0 -DTARGET_OS_TV=0 -DTARGET_OS_VISION=1 -DTARGET_OS_SIMULATOR=1'
+sets_false='-DTARGET_OS_IPHONE=1 -DTARGET_OS_IOS=0 -DTARGET_OS_TV=1 -DTARGET_OS_VISION=0 -DTARGET_OS_SIMULATOR=0
+-DTARGET_OS_IPHONE=1 -DTARGET_OS_IOS=0 -DTARGET_OS_TV=1 -DTARGET_OS_VISION=0 -DTARGET_OS_SIMULATOR=1
+-DTARGET_OS_IPHONE=0 -DTARGET_OS_IOS=0 -DTARGET_OS_TV=0 -DTARGET_OS_VISION=0 -DTARGET_OS_OSX=1 -DTARGET_OS_SIMULATOR=0'
+
+# assert_meaning <file> <start> <anchor>
+assert_meaning()
+{
+	rc=0
+	while read -r s; do
+		[ "$(eval_guard "$1" "$2" "$3" "$s")" = 1 ] || { echo "$1: the guard of \"$3\" is not true under: $s"; rc=1; }
+	done <<SETS
+$sets_true
+SETS
+	while read -r s; do
+		[ "$(eval_guard "$1" "$2" "$3" "$s")" = 0 ] || { echo "$1: the guard of \"$3\" is not false under: $s"; rc=1; }
+	done <<SETS
+$sets_false
+SETS
+	return $rc
+}
+
+m=0
+while IFS='|' read -r f s a; do
+	m=$((m + 1))
+	if ! assert_meaning "$f" "$s" "$a" > "${tmp:?}/o" 2>&1; then
+		cat "${tmp:?}/o"
+		bad "(d2) site $m is not iOS and visionOS only"
+		continue
+	fi
+	l=$(guard_of "$f" "$s" "$a")
+	while IFS=@ read -r ex why; do
+		sed "${l%%:*}$ex" "$f" > "${tmp:?}/mut$m.c"
+		if cmp -s "$f" "${tmp:?}/mut$m.c"; then
+			bad "mutant: the guard of (d2) site $m is not changed by $ex ($why)"
+		elif assert_meaning "${tmp:?}/mut$m.c" "$s" "$a" > "${tmp:?}/o" 2>&1; then
+			bad "mutant: (d2) site $m ($f, $a) with its guard changed by $ex ($why) passed"
+		fi
+	done <<MUT
+s/.*/#if defined(__APPLE__) \&\& TARGET_OS_IPHONE/@TARGET_OS_IPHONE
+s/))[ \t]*\$/) || TARGET_OS_TV)/@or TARGET_OS_TV
+s/))[ \t]*\$/) || 1)/@or 1
+s/(TARGET_OS_IOS/(!TARGET_OS_IOS/@negated iOS
+s/TARGET_OS_IOS ||/TARGET_OS_IOS || TARGET_OS_IPHONE ||/@or TARGET_OS_IPHONE
+s/TARGET_OS_IOS || //@no iOS term
+s/ || (defined(TARGET_OS_VISION) \&\& TARGET_OS_VISION)//@no visionOS term
+s/.*/#ifdef TARGET_OS_IOS/@ifdef
+s/(defined(TARGET_OS_VISION) \&\& TARGET_OS_VISION)/defined(TARGET_OS_VISION)/@defined only
+MUT
+done <<EOF
+src/client/input/sdl3.c|^IN_Update[(]void[)]|static int typing = -1
+src/client/input/sdl3.c|^IN_Init[(]void[)]|SDL_HINT_RETURN_KEY_HIDES_IME
+EOF
+[ "$m" = 2 ] || bad "(d2) $m sites, not 2"
 if [ "$fail" != 0 ]; then
 	exit 1
 fi
@@ -661,6 +753,12 @@ else
 		bad "mutant: the address book's guard widened to #ifdef TARGET_OS_TV passed (e)'s control"
 	fi
 fi
+
+# TASK23 slice 3: the missing-data text. An Apple TV has no Files app: the tvOS
+# system.o holds its own words and not the iPhone's, and the iOS simulator's
+# object (the control) holds the iPhone's and not the tvOS words
+pin lacks system.o src/backends/unix/system.c "On My iPhone (or iPad)" "the iPhone's missing-data text is compiled into the tvOS build"
+pin holds system.o src/backends/unix/system.c "an Apple TV has no Files app" "the tvOS missing-data text is not compiled into the tvOS build"
 
 object_list /r IOS_SDK=appletvsimulator > "${tmp:?}/list_tv"
 object_list /r IOS_SDK=iphonesimulator > "${tmp:?}/list_ios"

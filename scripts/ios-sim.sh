@@ -98,7 +98,8 @@
 # owner's data: DIR is the artifacts folder, never published.
 # --background SECONDS (TASK148): simctl has no Home button, so a start of
 # the app is sent to the background the way a person leaves it: another
-# app (com.apple.Preferences) is launched IOS_SIM_BACKGROUND_AFTER (15)
+# app (com.apple.Preferences; on tvOS com.apple.TVSettings; IOS_SIM_BACKGROUND_APP
+# names another) is launched IOS_SIM_BACKGROUND_AFTER (15)
 # seconds after the start, the script waits SECONDS of wall time, and
 # launches the app again, which brings the running process back to the
 # front. --shot then counts from that return. What the app saw is in its
@@ -579,7 +580,7 @@ EOF
 		t0=$(date +%s)
 		cmd=${ST_CMD:-smoke --out @D@/out}; cmd=${cmd//@D@/$d}
 		# ST_CWD: the directory the script runs in; no pathname expansion of the words of the command
-		( set -f; cd "${ST_CWD:-.}" && bounded "${ST_OUTER:-60}" "${d:?}/run.log" env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_LAUNCHER PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
+		( set -f; cd "${ST_CWD:-.}" && bounded "${ST_OUTER:-60}" "${d:?}/run.log" env -u IOS_SIM_SDK -u IOS_SIM_BACKGROUND_APP -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_LAUNCHER PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
 			bash "$self" $cmd ) || rc=$?
 		t0=$(( $(date +%s) - t0 ))
@@ -643,7 +644,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		mkdir -p "${d:?}/state" || die "cannot create $d"
 		printf '%s\n' "11111111-1111-1111-1111-111111111111 Owner iPhone" \
 			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
-		set -- env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO=extra FAKE_LAUNCHER="$launcher" \
+		set -- env -u IOS_SIM_SDK -u IOS_SIM_BACKGROUND_APP -u IOS_SIM_LAUNCHER_CRASH_OK PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO=extra FAKE_LAUNCHER="$launcher" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10
 		if [ "$sig" = INT ]; then
 			"$@" python3 -I -c "$dfl" "${d:?}/intdisp" bash "$self" smoke --out "${d:?}/out" > "${d:?}/run.log" 2>&1 &
@@ -833,13 +834,21 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	# the shot is after the return, not before the background (the app lives 5 s here)
 	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-before-shot bgshot ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=2
 	st_has run-background-before-shot grep state/relaunches "com.apple.Preferences"
-	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-fails bgfail fail "simctl launch of the other app failed" 30 IOS_SIM_BACKGROUND_AFTER=0
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-fails bgfail fail "simctl launch of the other app (com.apple.Preferences) failed" 30 IOS_SIM_BACKGROUND_AFTER=0
 	# the app ends during the background: the return is a restart, the run fails before any shot
 	ST_CMD="run --out @D@/out --no-data --background 2 --shot 0" st_case run-background-app-dies bgdies fail "the app did not survive the background" 30 IOS_SIM_BACKGROUND_AFTER=0
 	st_has run-background-app-dies nofile out/screen.1.png
 	ST_CMD="run --out @D@/out --no-data" st_case run-no-background extra ok "run ok, 1 start(s)" 30
 	st_has run-no-background nofile state/relaunches
 	ST_CMD="run --out @D@/out --background 3s" st_case run-background-not-digits extra fail "--background must be a number of seconds" 5
+	# the other app is the SDK's: tvOS has no com.apple.Preferences (TASK23 slice 3); IOS_SIM_BACKGROUND_APP overrides
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-tvos tvos ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0 IOS_SIM_SDK=appletvsimulator
+	st_has run-background-tvos line1 state/relaunches "com.apple.TVSettings"
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-app-set extra ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0 IOS_SIM_BACKGROUND_APP=org.example.other
+	st_has run-background-app-set line1 state/relaunches "org.example.other"
+	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-app-bad extra fail "IOS_SIM_BACKGROUND_APP must be a bundle identifier" 5 IOS_SIM_BACKGROUND_AFTER=0 'IOS_SIM_BACKGROUND_APP=x;y'
+	# the value is judged only when --background uses it
+	ST_CMD="run --out @D@/out --no-data" st_case run-background-app-bad-unused extra ok "run ok, 1 start(s)" 30 'IOS_SIM_BACKGROUND_APP=x;y'
 	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-after-not-digits extra fail "IOS_SIM_BACKGROUND_AFTER must be" 5 IOS_SIM_BACKGROUND_AFTER=x
 	ST_CMD="run --out @D@/out --shot 3s" st_case run-shot-not-digits extra fail "--shot must be a number of seconds" 5
 	ST_CMD="run --out @D@/out" st_case run-limit-not-digits extra fail "IOS_SIM_RUN_SECONDS must be" 5 IOS_SIM_RUN_SECONDS=1h
@@ -903,7 +912,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	st_has tvos-picks-tvos-runtime grep out/build/make.args " IOS_SDK=appletvsimulator "
 	st_case tvos-lists-default-is-iphone tvos ok "(com.apple.CoreSimulator.SimDeviceType.iPhone-17, iOS 27.2)" 30
 	st_has tvos-lists-default-is-iphone grep out/build/make.args " IOS_SDK=iphonesimulator "
-	st_case tvos-without-tvos-runtime tvtypes fail "no available iOS runtime" 30 IOS_SIM_SDK=appletvsimulator
+	st_case tvos-without-tvos-runtime tvtypes fail "no available tvOS runtime" 30 IOS_SIM_SDK=appletvsimulator
 	# the Apple Vision Pro build (TASK175): IOS_SIM_SDK=xrsimulator builds for that SDK and picks
 	# the visionOS (xrOS) runtime and the Apple Vision Pro type; unset, the same lists give the
 	# iPhone on iOS; the tvOS build on them finds no Apple TV type
@@ -913,7 +922,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	st_case xros-lists-default-is-iphone xros ok "(com.apple.CoreSimulator.SimDeviceType.iPhone-17, iOS 27.2)" 30
 	st_has xros-lists-default-is-iphone grep out/build/make.args " IOS_SDK=iphonesimulator "
 	st_case xros-lists-tvos-no-type xros fail "no device type Apple TV 4K (4th generation)" 30 IOS_SIM_SDK=appletvsimulator
-	st_case xros-without-xros-runtime xrtypes fail "no available iOS runtime" 30 IOS_SIM_SDK=xrsimulator
+	st_case xros-without-xros-runtime xrtypes fail "no available visionOS runtime" 30 IOS_SIM_SDK=xrsimulator
 	st_case sdk-iphoneos-refused extra fail "IOS_SIM_SDK must be iphonesimulator (the default), appletvsimulator or xrsimulator" 5 IOS_SIM_SDK=iphoneos
 	st_has sdk-iphoneos-refused line1 run.log "IOS_SIM_SDK must be"
 	st_has sdk-iphoneos-refused nofile out/build/make.args
@@ -1080,6 +1089,20 @@ appletvsimulator) ;;
 xrsimulator) ;;
 *) die "IOS_SIM_SDK must be iphonesimulator (the default), appletvsimulator or xrsimulator" ;;
 esac
+# TASK23 slice 3: the other app --background launches. com.apple.Preferences is the iPhone's and iPad's
+# (and visionOS's); the Apple TV simulator has its own settings app
+if [ -n "$bg" ]; then
+	bg_app=${IOS_SIM_BACKGROUND_APP-}
+	if [ -z "$bg_app" ]; then
+		case ${IOS_SIM_SDK:-} in
+		appletvsimulator) bg_app=com.apple.TVSettings ;;
+		*) bg_app=com.apple.Preferences ;;
+		esac
+	fi
+	case $bg_app in
+	''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*) die "IOS_SIM_BACKGROUND_APP must be a bundle identifier (letters, digits, dots and hyphens), not \"$bg_app\"" ;;
+	esac
+fi
 
 # the owner's data: checked before anything is built or created
 if [ -n "$data" ]; then
@@ -1221,16 +1244,16 @@ bounded "$list_s" "${tmp:?}/runtimes.json" -e "${tmp:?}/runtimes.err" xcrun simc
 # the same rule picks within it
 # TASK23: IOS_SIM_SDK=appletvsimulator runs the tvOS build on a tvOS runtime and an Apple TV device type
 case ${IOS_SIM_SDK:-iphonesimulator} in
-appletvsimulator) sim_platform=tvOS; sim_type_default="Apple TV 4K (4th generation)" ;;
+appletvsimulator) sim_platform=tvOS; sim_osname=tvOS; sim_type_default="Apple TV 4K (4th generation)" ;;
 # TASK175: IOS_SIM_SDK=xrsimulator, a visionOS runtime (simctl's platform "xrOS") and the Apple Vision Pro type
-xrsimulator) sim_platform=xrOS; sim_type_default="Apple Vision Pro" ;;
-*) sim_platform=iOS; sim_type_default="iPhone 17" ;;
+xrsimulator) sim_platform=xrOS; sim_osname=visionOS; sim_type_default="Apple Vision Pro" ;;
+*) sim_platform=iOS; sim_osname=iOS; sim_type_default="iPhone 17" ;;
 esac
-pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-$sim_type_default}" "${IOS_SIM_RUNTIME:-}" "$sim_platform" <<'EOF'
+pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-$sim_type_default}" "${IOS_SIM_RUNTIME:-}" "$sim_platform" "$sim_osname" <<'EOF'
 import json, sys
 types = json.load(open(sys.argv[1]))["devicetypes"]
 runtimes = json.load(open(sys.argv[2]))["runtimes"]
-want_type, want_rt, want_platform = sys.argv[3], sys.argv[4], sys.argv[5]
+want_type, want_rt, want_platform, osname = sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
 t = [d for d in types if want_type in (d["name"], d["identifier"])]
 if not t:
     sys.exit("no device type " + want_type)
@@ -1238,7 +1261,7 @@ ios = [r for r in runtimes if r.get("isAvailable") and r.get("platform", "") == 
 if want_rt:
     ios = [r for r in ios if want_rt in (r.get("identifier"), r.get("version"), r.get("name"))]
 if not ios:
-    sys.exit("no available iOS runtime" + (" " + want_rt if want_rt else ""))
+    sys.exit("no available " + osname + " runtime" + (" " + want_rt if want_rt else ""))
 tid = t[0]["identifier"]
 def label(r):
     return str(r.get("name")) + " (" + str(r.get("identifier")) + ")"
@@ -1250,7 +1273,7 @@ def ver(r):
     try:
         return [int(x) for x in r["version"].split(".")]
     except (KeyError, ValueError, AttributeError):
-        sys.exit("the iOS runtime " + label(r) + " has no numeric version")
+        sys.exit("the " + osname + " runtime " + label(r) + " has no numeric version")
 # the same rule for the default and for a version or name given: only a runtime that lists the
 # device type is a candidate (the others are skipped, whatever their version says); newest first;
 # on a version tie the runtime that lists the most device types (the general one)
@@ -1258,7 +1281,7 @@ cand = [r for r in ios if lists(r)]
 if not cand:
     if want_rt:
         sys.exit(t[0]["name"] + " is not supported by " + ", ".join(r["name"] for r in ios))
-    sys.exit(t[0]["name"] + " is not supported by any available iOS runtime; tried " + ", ".join(label(r) for r in ios))
+    sys.exit(t[0]["name"] + " is not supported by any available " + osname + " runtime; tried " + ", ".join(label(r) for r in ios))
 rt = max(cand, key=lambda r: (ver(r), len(r["supportedDeviceTypes"]) if r.get("supportedDeviceTypes") else 1 << 30))
 print(t[0]["identifier"], rt["identifier"], rt["name"])
 EOF
@@ -1408,7 +1431,7 @@ launch_app()
 	while kill -0 "$apid" 2>/dev/null; do
 		if [ -n "$bg" ] && [ "$bgdone" = 0 ] && [ "$t" -ge "$bgafter" ]; then
 			# the app goes to the background as a person's Home does: another app takes the screen
-			bounded 30 "${tmp:?}/bg.out" xcrun simctl launch "$udid" com.apple.Preferences || die "simctl launch of the other app failed"
+			bounded 30 "${tmp:?}/bg.out" xcrun simctl launch "$udid" "$bg_app" || die "simctl launch of the other app ($bg_app) failed"
 			sleep "$bg"
 			t=$((t + bg))
 			bounded 30 "${tmp:?}/fg.out" xcrun simctl launch "$udid" "$bid" || die "simctl launch of the app (the return) failed"
