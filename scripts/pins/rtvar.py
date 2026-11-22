@@ -416,10 +416,10 @@ def cmd_check(a):
 # command line. A capture's grey level is 16 + capture x h, h a checksum of the r_rt_* pairs (0 for
 # none), so presets differ from off and more so in later captures.
 STUB = r'''#!/bin/bash
-rt=""; d=""; s=""; r=""
+rt=""; d=""; s=""; r=""; rec=""
 echo "$*" >> "%(log)s"
 m=""
-while [ $# -gt 0 ]; do case $1 in +demomap) m=$2;; pins_dir) d=$2;; pins_scenario) s=$2;; vid_renderer) r=$2;; r_rt_*) rt="$rt $1=$2";; esac; shift; done
+while [ $# -gt 0 ]; do case $1 in +demomap) m=$2;; pins_dir) d=$2;; pins_scenario) s=$2;; pins_record) rec=$2;; vid_renderer) r=$2;; r_rt_*) rt="$rt $1=$2";; esac; shift; done
 [ "${MTL_DEBUG_LAYER:-}" = 1 ] && echo "Metal API Validation Enabled"
 %(extra)s
 h=0; [ -z "$rt" ] || h=$(( $(printf '%%s' "$rt" | cksum | cut -d' ' -f1) %% 50 + 1 ))
@@ -431,6 +431,9 @@ for c in 0 1 2; do
     echo "$f $r 64x48" >> "$d/manifest.txt"
 done
 %(frames)s
+# the trace pins.sh record text-checks (FIX157), written beside the frames as the real engine writes
+# pins_record: the one the selftest made for this demo
+if [ -n "$rec" ]; then cp "%(trace)s/$([ "$m" = demo1.dm2 ] && echo demo1 || echo none).q2r" "$d/$rec"; fi
 exit 0
 '''
 
@@ -561,11 +564,32 @@ def cmd_selftest(a):
         os.makedirs(os.path.join(tmp, "gd", "baseq2"))
         log = os.path.join(tmp, "calls.log")
 
+        # the traces the stub writes: the real charscan (built from the real refrecord.c, copied into the
+        # tree as pins.sh's text check builds it there) makes one that draws exactly what demo1's table
+        # declares, and one that draws no text, for a demo with no table (FIX157)
+        for src in ("tests/refrecord/charscan.c", "src/client/vid/refrecord.c"):
+            os.makedirs(os.path.join(tree, os.path.dirname(src)), exist_ok=True)
+            shutil.copy2(os.path.join(ROOT, src), os.path.join(tree, src))
+        for src in ("src/client/vid/header", "src/common/header"):  # what refrecord.h includes
+            shutil.copytree(os.path.join(ROOT, src), os.path.join(tree, src))
+        shutil.copytree(os.path.join(HERE, "text"), os.path.join(tree, "scripts", "pins", "text"))
+        traces = os.path.join(tmp, "traces")
+        os.makedirs(traces)
+        scan = os.path.join(tmp, "charscan")
+        empty = os.path.join(tmp, "empty.txt")
+        open(empty, "w").close()
+        ok(subprocess.run(["cc", "-std=gnu99", "-O1", "-DYQ2OSTYPE=\"pins\"", "-DYQ2ARCH=\"pins\"", "-o", scan,
+                           os.path.join(tree, "tests/refrecord/charscan.c"),
+                           os.path.join(tree, "src/client/vid/refrecord.c"), "-lm"]).returncode == 0, "charscan must build")
+        for n, tab in (("demo1", os.path.join(HERE, "text", "demo1.dm2-every30.txt")), ("none", empty)):
+            ok(subprocess.run([scan, "--make-table", os.path.join(traces, n + ".q2r"), tab]).returncode == 0,
+               "the %s stub trace must be made" % n)
+
         def stub(name, extra="", frames=None):
             p = os.path.join(tmp, name)
             fr = (STUB_FRAMES if frames is None else frames) % {"scen": os.path.join(tree, "scripts", "pins", "scenarios")}
             with open(p, "w") as f:
-                f.write(STUB % {"log": log, "extra": extra, "frames": fr})
+                f.write(STUB % {"log": log, "extra": extra, "frames": fr, "trace": traces})
             os.chmod(p, 0o755)
             return p
 
@@ -606,7 +630,8 @@ def cmd_selftest(a):
             full = sorted(os.listdir(os.path.join(vd, "full"))) if os.path.isdir(os.path.join(vd, "full")) else []
             ok(full == ["00-off.png", "01-a.png", "02-b.png"], "%s: the full-size frames, off first: %s" % (v, full))
         st = os.path.join(out, "store")
-        ok(sorted(os.listdir(st)) == sorted(SCRATCH + g + "-" + p for g in ("v1", "v3") for p in ("off", "a", "b")),
+        # bin/ holds the scanner pins.sh builds (FIX157)
+        ok(sorted(x for x in os.listdir(st) if x != "bin") == sorted(SCRATCH + g + "-" + p for g in ("v1", "v3") for p in ("off", "a", "b")),
            "the store holds one record per group and preset")
 
         def pin(scen):
@@ -713,6 +738,9 @@ def cmd_selftest(a):
             rc, text = run(["--out", bad])
             ok(rc != 0 and len(calls()) == n and not os.path.exists(os.path.join(repo, "x")),
                "an output path %s is refused before anything runs: %s" % (what, text[-200:]))
+        # a stub that writes no trace is refused by the real record (FIX157)
+        rc, text = run(["--out", os.path.join(tmp, "o-notrace")], dict(env, PINS_BIN=stub("notrace", 'rec=""')))
+        ok(rc != 0 and "wrote no trace.q2r" in text and "incomplete" in text, "a stub with no trace is refused: " + text[-300:])
         # the timedemo line pins.sh checks: a stub that prints none, or a wrong count, is refused
         for name, fr, why in (("nolines", "true", "printed no rendered-frame count"),
                               ("wrongn", "printf '5 frames, 0.3 seconds: 2296.7 fps\\n\\n'", "rendered 5 frames")):
