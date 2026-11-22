@@ -1,6 +1,6 @@
 # Card results index
 
-One line per card file in this directory, in no required order: git merges this file by union (`.gitattributes`), so two cards that each add a line never conflict, and the stamp compares it as a multiset of lines. `tests/check-runbook-index.sh` checks it. See [README](README.md).
+One line per card file in this directory, in no required order: git merges this file by union (`.gitattributes`), so two cards that each add a line never conflict, and the stamp compares it as a multiset of lines. `tests/check-runbook-index.sh` checks it. When main edits a row a branch also carries, a merge of main keeps both versions and the check fails with `indexed twice`: run `scripts/dedupe-runbook-index.sh` (it keeps `origin/main`'s row, refuses a duplicate main has no row for) and commit. See [README](README.md).
 
 - [FIX41](../runbook/FIX41.md): `vid_restart` and the main thread's autorelease pool
 - [FIX42](../runbook/FIX42.md): The `screenshot` command between frames on the shim
@@ -135,5 +135,6 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX155](../runbook/FIX155.md): why frame 12 of the Retro pins took one of two hashes: the Retro report line in the console's notify area for a wall-clock time, the fix that keeps it out of the frames, and the five-run and stock pin tables
 - [FIX173](../runbook/FIX173.md): the `game` cvar refuses a value `FS_GameDirValid` refuses at the one place every write passes (cvar.c), keeps the old value and `userGivenGame`, and the list of read paths that build a path from `game`
 - [FIX157](../runbook/FIX157.md): pin runs launch with `con_notifytime -1` and a record refuses text in a captured frame that the demo does not declare: why -1 and not 0, the trace reader, the demo tables, and the pin hashes against FIX155
+- [FIX180](../runbook/FIX180.md): `scripts/dedupe-runbook-index.sh` keeps main's row for each index row a union merge left twice and refuses a duplicate main has no row for; the check stays strict
 - [FIX177](../runbook/FIX177.md): the check-bench test helpers read liveness from `kill -0` and call a PID that answers it while `ps` is silent "cannot tell", never gone, so `ended`, `finish`, `reaped` and `run` fail within their bound instead of waiting on the child; the `nops` cases and the site mutants
 - [FIX172](../runbook/FIX172.md): the bench lock core records the command it spawns (start time, and the process group it leads) and signals only that command, or that group, while the PID is still it; a reused PID is taken as the command gone, a silent `ps` is "cannot tell" and said, never signalled; the decoy cases and the seven site mutants
