@@ -236,6 +236,23 @@ scenario with it, read the count from `timedemo.txt` in the pin, and add
 
 ### Determinism
 
+`record` starts the engine with `+set con_notifytime -1`, so no console
+notify line is drawn over a frame whatever the engine prints while the
+demo plays (FIX157; a line printed to the console is drawn for
+`con_notifytime` seconds of wall time, so a pin's frames would depend on
+the clock). The setting is not archived and a pin run writes no
+`config.cfg`, so it never reaches a player's configuration. After each
+record that writes a trace (not `PINS_TRACE=0`, which has no trace to read, so
+no text check), the trace is read to its end (`tests/refrecord/charscan.c`);
+a trace that cannot be read, or a scanner that cannot be built, makes the
+record incomplete, never a pass. A frame the run
+captured that holds a character draw must be listed in
+`scripts/pins/text/<demo>-every<PINS_EVERY>.txt`, as `pin <capture
+number> <characters>`, the text the demo itself draws; no such file
+declares none. Any other text makes the record incomplete and writes the
+difference to `text.txt` beside the frames. `pins.sh check-text <trace>
+[demo [every]]` runs the same check over one trace.
+
 A renderer replaying its own trace draws exactly the frames it drew
 live: everything it is handed is in the trace, `refdef_t.time` included
 (bit-exact, `tests/check-refrecord.sh`), and the renderer cvars are
