@@ -18,7 +18,10 @@
 # (f) the check's reap function, called directly: it signals nothing when
 #     the PID it is given is not the caller's child (a PID the caller has
 #     reaped and the system has reused), and of a stopped run's children it
-#     kills only those of the named program;
+#     kills only those of the named program; only the probe's four result lines on
+#     its stdout are judged, so a shell's "Killed: 9" job notice on its stderr
+#     never fails it; a reap that also kills the other child, and one that
+#     spares the named child, still fail it;
 # (g) ps(1) that fails, first on PATH with a hanging stub: the bound still
 #     ends the run, and the check fails at its probe with the cause and a
 #     line saying ps(1) gave no answer; ps(1) that answers for one PID but
@@ -274,15 +277,37 @@ sleep 0.2
 kill -0 "$run" 2>/dev/null && echo "run: alive" || echo "run: killed"
 ps -o stat= -p "$named" > /dev/null 2>&1 && [ "$(ps -o stat= -p "$named" | cut -c1)" != Z ] && echo "named child: alive" || echo "named child: killed"
 kill -0 "$other" 2>/dev/null && echo "other child: alive" || echo "other child: killed"
+[ -z "${FORCE_NOTICE:-}" ] || echo "$0: line 26: 33351 Killed: 9               sh -c" >&2
 kill -KILL "$other" 2>/dev/null || :
 EOF
-	perl -e 'alarm 30; exec @ARGV' sh "${tmp:?}/reap-probe.sh" "${tmp:?}/reap.sh" "${tmp:?}" "${tmp:?}" > "${tmp:?}/reap.out" 2>&1 || :
-	if [ "$(cat "${tmp:?}/reap.out")" != "orphan: alive
+	# reapcase <name> <reap file> <force notice: 1 or empty>: runs the probe on
+	# the reap file. Only the probe's stdout, its four result lines, is judged;
+	# its stderr (a shell's own job notice, "Killed: 9", may land there when
+	# the run it killed is not yet collected) is kept apart and shown on a
+	# failure. Returns 0 when the four lines are the expected ones.
+	reapcase()
+	{
+		FORCE_NOTICE=$3 perl -e 'alarm 30; exec @ARGV' sh "${tmp:?}/reap-probe.sh" "$2" "${tmp:?}" "${tmp:?}" > "${tmp:?}/$1.out" 2> "${tmp:?}/$1.err" || :
+		if [ "$(cat "${tmp:?}/$1.out")" != "orphan: alive
 run: killed
 named child: killed
 other child: alive" ]; then
-		cat "${tmp:?}/reap.out"
-		fail "(f) reap signalled a process that is not the run's, or missed the run's named child"
+			cat "${tmp:?}/$1.out" "${tmp:?}/$1.err"
+			return 1
+		fi
+		return 0
+	}
+	reapcase reap "${tmp:?}/reap.sh" "" || fail "(f) reap signalled a process that is not the run's, or missed the run's named child"
+	# a shell's job notice on the probe's stderr does not fail the case
+	reapcase reapnote "${tmp:?}/reap.sh" 1 || fail "(f) a Killed: 9 job notice on the probe's stderr failed the case"
+	# mutants: a reap that kills the other child too, and one that spares the named child
+	sed 's/"${_comm##\*\/}" = "\$2"/-n "$_comm"/' "${tmp:?}/reap.sh" > "${tmp:?}/reap-kill-other.sh"
+	sed 's/"${_comm##\*\/}" = "\$2"/"${_comm##*\/}" = "$2.none"/' "${tmp:?}/reap.sh" > "${tmp:?}/reap-spare-named.sh"
+	if cmp -s "${tmp:?}/reap.sh" "${tmp:?}/reap-kill-other.sh" || cmp -s "${tmp:?}/reap.sh" "${tmp:?}/reap-spare-named.sh"; then
+		fail "(f) a reap mutant did not apply: the child test in reap has changed"
+	else
+		reapcase reapmut1 "${tmp:?}/reap-kill-other.sh" "" > /dev/null && fail "(f) a reap that also kills the other child passed"
+		reapcase reapmut2 "${tmp:?}/reap-spare-named.sh" "" > /dev/null && fail "(f) a reap that spares the named child passed"
 	fi
 fi
 
