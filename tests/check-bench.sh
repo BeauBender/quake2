@@ -1672,6 +1672,57 @@ t_core_id() {
 		if grep -q 'stopped a command that outlived' "${E:?}/q.out"; then nok "bounded: no group: the bound said it stopped a command it sent nothing"; fi
 		wait_gone 5 "$_qp" || nok "bounded: no group: the command did not end by itself"
 
+		# A TERM to a bench.sh that runs a bounded command which leads no
+		# group, while ps is silent (FIX181): under dash (no job control) the
+		# lock shell and the bench.sh it runs (host, whose bounded
+		# system_profiler is a stand-in here) are not signalled as groups,
+		# and the stop of the bounded command can send nothing. The lock
+		# stays held until the bounded command ends, then is freed. The TERM
+		# goes to the inner bench.sh only, once it is seen to be the lock
+		# shell's child.
+		mkdir -p "${E:?}/bshim"
+		printf '#!/bin/sh\nexit 1\n' > "${E:?}/bshim/ps"
+		printf '#!/bin/sh\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX181_PID.tmp"\nmv "$FIX181_PID.tmp" "$FIX181_PID"\nexec sleep 3\n' > "${E:?}/bshim/system_profiler"
+		chmod +x "${E:?}/bshim/ps" "${E:?}/bshim/system_profiler"
+		start env PATH="$E/bshim:$PATH" FIX181_PID="${E:?}/h.pid" dash "$R/bench.sh" lock run psb -- dash "$R/bench.sh" host > "${E:?}/h.out" 2>&1
+		_hh=$BG
+		wait_file 5 "${E:?}/h.pid" || nok "bounded hold: the bounded command never started"
+		_hp= _hi=
+		read -r _hp _hi < "${E:?}/h.pid" 2> /dev/null || :
+		record "$_hp"
+		record "$_hi"
+		_hpp=$(ps -o ppid= -p "$_hi" 2> /dev/null | tr -d ' ') || _hpp=
+		if [ -n "$_hi" ] && [ "$_hpp" = "$_hh" ]; then
+			command kill -TERM "$_hi"
+		else
+			nok "bounded hold: the bounded command's parent ($_hi) is not the lock shell's command (its parent is ${_hpp:-unknown}, the lock shell $_hh)"
+		fi
+		# At most 1.5 s for the inner bench.sh's trap to run, well inside the
+		# bounded command's 3 s, so the lock is looked at while it runs.
+		_n=0
+		while ! grep -q 'keeping the lock while pid' "${E:?}/h.out" && pid_running "$_hi" && [ "$_n" -lt 15 ]; do
+			sleep 0.1
+			_n=$((_n + 1))
+		done
+		_l=$(B lock status)
+		if pid_running "$_hp"; then
+			case $_l in
+			lock=held*) ;;
+			*) nok "bounded hold: the lock was freed while the bounded command it could not stop still ran: $_l" ;;
+			esac
+		else
+			nok "bounded hold: the bounded command was gone before the check of the lock"
+		fi
+		wait_gone 15 "$_hh" || nok "bounded hold: the lock shell did not exit after the bounded command ended"
+		_st=0
+		collect "$_hh" || _st=$?
+		[ "$_st" -eq 143 ] || nok "bounded hold: wanted 143 from the lock shell (its command's status on TERM), got $_st: $(tr '\n' '|' < "${E:?}/h.out")"
+		outlived "$_hp" "bounded hold: the lock was freed while the bounded command still ran" nok
+		[ "$(B lock status)" = lock=free ] || nok "bounded hold: the lock was not freed once the bounded command ended"
+		grep -q 'keeping the lock while pid' "${E:?}/h.out" || nok "bounded hold: the hold was not said: $(tr '\n' '|' < "${E:?}/h.out")"
+		wait_gone 2 "$_hi" || :
+		wait_gone 2 "$_hp" || :
+
 		# The identity table (correctness I2): 2000 bounded commands leave
 		# no entry behind, and a lookup costs what it did before them.
 		BENCH_SPAWNED=
