@@ -1679,7 +1679,10 @@ t_core_id() {
 		# and the stop of the bounded command can send nothing. The lock
 		# stays held until the bounded command ends, then is freed. The TERM
 		# goes to the inner bench.sh only, once it is seen to be the lock
-		# shell's child.
+		# shell's child. The hold's line goes where the bound's own lines go,
+		# the standard error host gives the bound (/dev/null), so the lock's
+		# status is what is looked at here; "lock run, no group" checks the
+		# line itself.
 		mkdir -p "${E:?}/bshim"
 		printf '#!/bin/sh\nexit 1\n' > "${E:?}/bshim/ps"
 		printf '#!/bin/sh\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX181_PID.tmp"\nmv "$FIX181_PID.tmp" "$FIX181_PID"\nexec sleep 3\n' > "${E:?}/bshim/system_profiler"
@@ -1700,7 +1703,7 @@ t_core_id() {
 		# At most 1.5 s for the inner bench.sh's trap to run, well inside the
 		# bounded command's 3 s, so the lock is looked at while it runs.
 		_n=0
-		while ! grep -q 'keeping the lock while pid' "${E:?}/h.out" && pid_running "$_hi" && [ "$_n" -lt 15 ]; do
+		while pid_running "$_hi" && [ "$_n" -lt 15 ]; do
 			sleep 0.1
 			_n=$((_n + 1))
 		done
@@ -1719,7 +1722,6 @@ t_core_id() {
 		[ "$_st" -eq 143 ] || nok "bounded hold: wanted 143 from the lock shell (its command's status on TERM), got $_st: $(tr '\n' '|' < "${E:?}/h.out")"
 		outlived "$_hp" "bounded hold: the lock was freed while the bounded command still ran" nok
 		[ "$(B lock status)" = lock=free ] || nok "bounded hold: the lock was not freed once the bounded command ended"
-		grep -q 'keeping the lock while pid' "${E:?}/h.out" || nok "bounded hold: the hold was not said: $(tr '\n' '|' < "${E:?}/h.out")"
 		wait_gone 2 "$_hi" || :
 		wait_gone 2 "$_hp" || :
 
@@ -3695,6 +3697,9 @@ mutant bounded-says-stopped core/common.sh 'if [ "$_bb_k" -ne 0 ]; then' 'if fal
 mutant lock-no-hold core/lock.sh 'if [ "$_lc_r" -eq 2 ]; then bench_lock_hold_untold' 'if false; then bench_lock_hold_untold' t_core_id || mfail=1
 mutant hold-ends-early core/lock.sh '		2) ;;' '		2) break ;;' t_core_id || mfail=1
 mutant trap-no-fd8 bench.sh 'if (: >&8) 2> /dev/null; then exec 2>&8; fi' ':' t_core_id || mfail=1
+# FIX181: a TERM while a bounded command that could not be stopped runs
+# keeps the lock until it ends.
+mutant bounded-no-hold bench.sh 'if [ "$_os_r" -eq 2 ]; then bench_lock_hold_untold' 'if false; then bench_lock_hold_untold' t_core_id || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
 mutant queue-no-ticket-check core/lock.sh 'if bench_lock_head "$_la_label"; then _la_head=1; fi' 'bench_lock_head "$_la_label" || true; _la_head=1' t_lock_fifo || mfail=1

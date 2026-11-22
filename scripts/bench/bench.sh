@@ -88,7 +88,15 @@ bench_on_signal() {
 	# a subshell asks, since a failed redirection ends dash.
 	if (: >&8) 2> /dev/null; then exec 2>&8; fi
 	bench_lock_stop_child
-	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group "$BENCH_BOUNDED_PID" "" "${BENCH_BOUNDED_REAPED:-}"; fi
+	# A bounded command the stop could not tell about (status 2: it leads
+	# no group and ps gives no answer, so nothing was sent) may still run:
+	# this shell stays, and so the lock it runs under, while it may
+	# (bench_lock_hold_untold, as bench_lock_stop_child does; FIX181).
+	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then
+		_os_r=0
+		bench_stop_group "$BENCH_BOUNDED_PID" "" "${BENCH_BOUNDED_REAPED:-}" || _os_r=$?
+		if [ "$_os_r" -eq 2 ]; then bench_lock_hold_untold "$BENCH_BOUNDED_PID"; fi
+	fi
 	exit "$1"
 }
 
