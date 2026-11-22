@@ -18,15 +18,18 @@
 #       UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace as true
 #       (TASK175 slice 2a: the game data goes in through the Files app, as
 #       on the iPhone), and none of the iPhone's orientation or status bar
-#       keys;
+#       keys, and UIApplicationSupportsIndirectInputEvents as true (TASK175
+#       slice 2c-1: a pinch reaches the app as an indirect touch or pointer
+#       only with it);
 #   (d) the build's target, preprocessed with the SDK's TargetConditionals.h:
 #       TARGET_OS_VISION 1, TARGET_OS_IPHONE 1, TARGET_OS_IOS 0, so the
 #       iPhone and iPad only sites, whose #if names TARGET_OS_IOS
 #       (tests/check-tvos.sh (d) holds that for each), are compiled out;
 #   (e) the compiled objects of those sites: Touch_Supported in touch.o is
-#       "mov w0, #0x0; ret"; sdl3.o holds no SDL_RETURN_KEY_HIDES_IME
-#       (the in_touch default's keyboard hint) and nm -u lists no
-#       _Touch_TextInput (the on-screen keyboard's follow-up); glimp_sdl3.o
+#       "mov w0, #0x0; ret"; sdl3.o, unlike the touch overlay, holds
+#       SDL_RETURN_KEY_HIDES_IME (the keyboard's Enter hint) and nm -u
+#       lists _Touch_TextInput and _GLimp_TextInput (the on-screen
+#       keyboard's follow-up, TASK175 slice 2c-1); glimp_sdl3.o
 #       holds neither hint name, SDL_ORIENTATIONS nor
 #       SDL_IOS_HIDE_HOME_INDICATOR (the name, whatever the value); vid.o
 #       holds no ios_orientation command (the
@@ -164,6 +167,13 @@ assert_plist() # <Info.plist>
 		t=$(plutil -type "$k" "$1" 2>/dev/null) || t="(none)"
 		[ "$t" = bool ] || { echo "$1: $k is of type $t, not bool (the Files app reads only a boolean)"; rc=1; }
 	done
+	# TASK175 slice 2c-1: a pinch reaches the app as an indirect touch or
+	# pointer only with this key, a boolean true (SDL reads it with boolValue)
+	k=UIApplicationSupportsIndirectInputEvents
+	v=$(plutil -extract "$k" raw -o - "$1" 2>/dev/null) || v="(none)"
+	[ "$v" = true ] || { echo "$1: $k is $v, not true (a pinch reaches the app only with it)"; rc=1; }
+	t=$(plutil -type "$k" "$1" 2>/dev/null) || t="(none)"
+	[ "$t" = bool ] || { echo "$1: $k is of type $t, not bool"; rc=1; }
 	# plutil decides, not the text: a key spelled with a character reference
 	# (<key>UIStatus&#66;arHidden</key>) is the same key. The file passed
 	# -lint above, so a failed -extract is a missing key; xml1, not raw,
@@ -350,7 +360,7 @@ elif ! grep -q "the iPhone's UIStatusBarHidden" "${tmp:?}/o"; then
 	bad "mutant: the character-reference plist was refused without naming the key"
 fi
 # TASK175 slice 2a: each sharing key removed, or false, is refused by name
-for mk in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
+for mk in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace UIApplicationSupportsIndirectInputEvents; do
 	cp "${tmp:?}/good.plist" "${tmp:?}/m.plist"
 	plutil -remove "$mk" "${tmp:?}/m.plist"
 	if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
@@ -533,7 +543,7 @@ ios_object()
 	fi
 }
 
-# pin <lacks|holds|need|no_need> <object name> <source> <text or symbol> <what>:
+# pin <lacks|holds|both|need|no_need> <object name> <source> <text or symbol> <what>:
 # every visionOS object called <name> (one at least) and the iOS
 # simulator's object of <source>, the control: lacks (iOS: holds), holds
 # (iOS: lacks, the text is visionOS's own), no_need (iOS: needs), need
@@ -549,7 +559,7 @@ pin()
 	while read -r obj; do
 		case $1 in
 		lacks) assert_lacks "$obj" "$4" ;;
-		holds) assert_holds "$obj" "$4" ;;
+		holds|both) assert_holds "$obj" "$4" ;;
 		no_need) assert_no_need "$obj" "$4" ;;
 		need) assert_need "$obj" "$4" ;;
 		*) echo "pin: unknown kind $1"; false ;;
@@ -559,11 +569,14 @@ pin()
 	case $1 in
 	lacks) assert_holds "$(cat "${tmp:?}/ios_one")" "$4" ;;
 	holds) assert_lacks "$(cat "${tmp:?}/ios_one")" "$4" ;;
+	both) assert_holds "$(cat "${tmp:?}/ios_one")" "$4" ;;
 	*) assert_need "$(cat "${tmp:?}/ios_one")" "$4" ;;
 	esac > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the control failed: the pin on \"$4\" would pass whatever the visionOS build holds, or the iOS build has it too"; }
 }
-pin lacks sdl3.o src/client/input/sdl3.c SDL_RETURN_KEY_HIDES_IME "the iPhone's in_touch default and keyboard hint are compiled into the visionOS build"
-pin no_need sdl3.o src/client/input/sdl3.c _Touch_TextInput "the on-screen keyboard's follow-up is compiled into the visionOS build"
+# TASK175 slice 2c-1: the on-screen keyboard's follow-up and its Enter hint run on visionOS too
+pin both sdl3.o src/client/input/sdl3.c SDL_RETURN_KEY_HIDES_IME "the visionOS build does not set the keyboard's Enter hint"
+pin need sdl3.o src/client/input/sdl3.c _Touch_TextInput "the visionOS build does not run the on-screen keyboard's follow-up"
+pin need sdl3.o src/client/input/sdl3.c _GLimp_TextInput "the visionOS build never starts or stops text input"
 pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_ORIENTATIONS "the orientation hint is compiled into the visionOS build"
 pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_IOS_HIDE_HOME_INDICATOR "the home indicator hint is compiled into the visionOS build"
 pin lacks vid.o src/client/vid/vid.c ios_orientation "the ios_orientation command is compiled into the visionOS build"
