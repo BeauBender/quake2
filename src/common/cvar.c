@@ -896,6 +896,39 @@ Cvar_Set_f(void)
 }
 
 /*
+ * True if "set <name> "<value>"" read back runs exactly one set
+ * of exactly this name and value.
+ */
+static qboolean
+Cvar_WriteSafe(const char *name, const char *value)
+{
+	const unsigned char *c;
+
+	if (!*name || strstr(name, "//") || strpbrk(value, "\"\n\r"))
+	{
+		return false;
+	}
+
+	/* Cbuf_Execute truncates a line of 1024 bytes or more, so the
+	   read-back would run no set. The line is "set ", the name, a
+	   space, a quote, the value, a quote and the newline. */
+	if (strlen(name) + strlen(value) + 8 >= 1024)
+	{
+		return false;
+	}
+
+	for (c = (const unsigned char *)name; *c; c++)
+	{
+		if (*c <= ' ' || *c >= 0x7f || *c == ';' || *c == '"' || *c == '$')
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/*
  * Appends lines containing "set variable value" for all variables
  * with the archive flag set to true.
  */
@@ -911,7 +944,24 @@ Cvar_WriteVariables(const char *path)
 	{
 		if (var->flags & CVAR_ARCHIVE)
 		{
+			/* A cvar a server wrote is not the player's setting: skip it
+			   silently, before the safety check, so a server-written
+			   value is never named by the line below. */
 			if (Cvar_ServerWrote(var->name)) continue;
+
+			/* The tokenizer has no escape and the name is written
+			   unquoted. A quote in the value would end it early, a
+			   newline always splits, and in the name a ';' or a
+			   space, a control or high byte, a '$' (macro expansion)
+			   or a "//" (comment) would change how the line parses at
+			   the next start. Refuse to write such a cvar. */
+			if (!Cvar_WriteSafe(var->name, var->string))
+			{
+				Com_Printf("Not saving cvar %s: its name or value cannot be written back.\n",
+						var->name);
+				continue;
+			}
+
 			fprintf(f, "set %s \"%s\"\n", var->name, var->string);
 		}
 	}
