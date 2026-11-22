@@ -549,6 +549,31 @@ TEST(cvar_rvsec_server_archive_flag_not_written)
 	cs_teardown();
 }
 
+/* FIX178: a cvar the server wrote with a value that is also unsafe to
+   write back (a quote) is skipped by the server-written guard first, so
+   Cvar_WriteVariables never prints "Not saving cvar <name>" and so never
+   names a server-chosen cvar. Swapping the two guards turns this red. */
+TEST(cvar_fix178_server_unsafe_value_not_named)
+{
+	char path[MAX_OSPATH];
+
+	cs_setup();
+	/* the server creates it archived; the tokenizer has no escape, so
+	   the quote comes from the engine's own write, which keeps the mark */
+	server_line("set t_f178 ok a\n");
+	T_CHECK(Cvar_ServerWrote("t_f178"));
+	Cvar_Set("t_f178", "a\"b");
+	T_CHECK(strchr(Cvar_VariableString("t_f178"), '"') != NULL);
+	T_CHECK(Cvar_ServerWrote("t_f178"));
+
+	Com_sprintf(path, sizeof(path), "%s/config_f178.cfg", FS_Gamedir());
+	t_console_reset();
+	write_cfg(path);
+	T_CHECK(strstr(t_console(), "Not saving cvar t_f178") == NULL);
+	T_CHECK(!file_has(path, "t_f178"));
+	cs_teardown();
+}
+
 /* Puts the suite's cvar table, the preset directory and the scratch
    cvar back, and removes the file the test wrote. The player's write
    first clears the mark the table's cvar may still hold. */
