@@ -1313,6 +1313,197 @@ t_bounded() {
 	[ "$fails" -eq 0 ]
 }
 
+# FIX172: the core signals only the command bench_spawn started, or the
+# process group it led at spawn. core_decoy <name> [deaf] starts a shell of
+# this check's own, as bench_spawn starts a command (the leader of its own
+# process group), with a sleep in that group, from a subshell that exits at
+# once, so it is no child of this shell, as a process that took a reused
+# pid would not be. Both end by themselves within 30 s; "deaf" ones ignore
+# TERM. It sets _dp (the shell), _dm (the sleep) and _ds (the shell's start
+# time, bench_proc_read's form), and records both pids.
+core_decoy() {
+	rm -f "${E:?}/m.$1" "${E:?}/d.$1"
+	_dt=
+	if [ "${2:-}" = deaf ]; then _dt='trap "" TERM; '; fi
+	(
+		bench_spawn sh -c "$_dt"'sleep 30 & printf "%s\n" "$!" > "$1"; wait' x "${E:?}/m.$1"
+		printf '%s\n' "$BENCH_SPAWN_PID" > "${E:?}/d.$1"
+	) < /dev/null > /dev/null 2>&1
+	wait_file 5 "${E:?}/m.$1" && wait_file 5 "${E:?}/d.$1" || return 1
+	_dp=$(cat "${E:?}/d.$1")
+	_dm=$(cat "${E:?}/m.$1")
+	record "$_dp"
+	record "$_dm"
+	bench_proc_read "$_dp" || return 1
+	_ds=$BENCH_PS_START
+}
+# core_decoy_end <pid>...: KILLs each pid that is still the process recorded
+# (listed_same), and waits for it to go.
+core_decoy_end() {
+	for _de in "$@"; do
+		if listed_same "$_de"; then command kill -KILL "$_de" 2> /dev/null || true; fi
+		wait_gone 5 "$_de" || nok "a decoy ($_de) still ran 5 s after its KILL"
+	done
+}
+# t_core_id: a pid whose identity is not the one bench_spawn recorded (a
+# decoy given the slot with another start time, with none, or while ps is
+# silent) gets no signal from bench_watch, bench_stop_group, bench_end_group
+# or bench_lock_stop_child, and the watch and the stop say when they cannot
+# tell; the command's own pid and group are still stopped, as a group when
+# it leads one, and by its pid alone when it leads none. kill only notes
+# what it sends, and sends it: every process here is this check's own.
+t_core_id() {
+	fresh coreid
+	: > "${E:?}/sig"
+	(
+		BENCH_ROOT=$R
+		. "$R/core/common.sh"
+		. "$R/core/lock.sh"
+		BENCH_STOP_GRACE=1
+		_f=0
+		nok() {
+			echo "$me: core-id: $*"
+			_f=$((_f + 1))
+			if [ -n "$MUTANT" ]; then exit 1; fi
+		}
+		# sig_none <case>: no signal went out since the last check.
+		sig_none() {
+			if [ -s "${E:?}/sig" ]; then nok "$1: a signal went out: $(tr '\n' ' ' < "${E:?}/sig")"; fi
+			: > "${E:?}/sig"
+		}
+		_other='Thu Jan 1 00:00:00 1970'
+		if bench_proc_read 1; then _other=$BENCH_PS_START; fi
+		core_decoy d1 || { echo "$me: core-id: the first decoy did not start"; exit 1; }
+		_d=$_dp _dm1=$_dm _ds1=$_ds
+		core_decoy d2 || { echo "$me: core-id: the second decoy did not start"; exit 1; }
+		_d2=$_dp _dm2=$_dm _ds2=$_ds
+		core_decoy d3 deaf || { echo "$me: core-id: the deaf decoy did not start"; exit 1; }
+		_d3=$_dp _dm3=$_dm _ds3=$_ds
+		[ "$_ds1" != "$_other" ] || { echo "$me: core-id: the decoy has PID 1's start time"; exit 1; }
+		kill() {
+			case $1 in
+			-0) ;;
+			*) printf '%s\n' "$*" >> "${E:?}/sig" ;;
+			esac
+			command kill "$@"
+		}
+
+		# The command's own identity at spawn, and the lock's stop of it:
+		# TERM to its group, nothing to its pid alone.
+		bench_spawn sh -c 'sleep 30 & printf "%s\n" "$!" > "$1"; wait' x "${E:?}/m.own" < /dev/null
+		_o=$BENCH_SPAWN_PID
+		record "$_o"
+		wait_file 5 "${E:?}/m.own" || nok "spawn: the command's group member never started"
+		_om=$(cat "${E:?}/m.own" 2> /dev/null) || _om=
+		record "$_om"
+		bench_proc_read "$_o" || nok "spawn: ps gave no start time for the command"
+		[ "$BENCH_SPAWN_START" = "$BENCH_PS_START" ] || nok "spawn: the start time recorded ($BENCH_SPAWN_START) is not the command's ($BENCH_PS_START)"
+		[ "$BENCH_SPAWN_GROUP" = "$_o" ] || nok "spawn: the group recorded ($BENCH_SPAWN_GROUP) is not the one the command leads ($_o)"
+		case $BENCH_SPAWNED in
+		*";$_o|$_o|$BENCH_PS_START") ;;
+		*) nok "spawn: BENCH_SPAWNED does not end with the command's entry: $BENCH_SPAWNED" ;;
+		esac
+		_st=0
+		bench_watch "$_o" "$(($(date +%s) - 1))" 0.05 || _st=$?
+		[ "$_st" -eq 1 ] || nok "watch: own: the running command was not seen running past its end (status $_st)"
+		: > "${E:?}/sig"
+		BENCH_LOCK_CHILD=$_o
+		BENCH_LOCK_REAPED=
+		bench_lock_stop_child
+		wait_gone 5 "$_o" || nok "lock: own: the command was not stopped"
+		wait_gone 5 "$_om" || nok "lock: own: the command's group member outlived the stop"
+		grep -qx -- "-s TERM -- -$_o" "${E:?}/sig" || nok "lock: own: no TERM went to the command's group: $(tr '\n' ' ' < "${E:?}/sig")"
+		if grep -q -- "^-s [A-Z]* $_o\$" "${E:?}/sig"; then nok "lock: own: a signal went to the command's pid alone"; fi
+		: > "${E:?}/sig"
+
+		# A decoy in the slot, with another start time: gone to the watch,
+		# and no signal from any stop, with or without a group, reaped or
+		# not, nor from the lock's stop, nor for a pid never spawned.
+		BENCH_SPAWNED=";$_d|$_d|$_other"
+		_t0=$(date +%s)
+		_st=0
+		bench_watch "$_d" "$((_t0 + 3))" 0.05 || _st=$?
+		[ "$_st" -eq 0 ] || nok "watch: other: a pid with another start time was not taken as gone (status $_st)"
+		bench_stop_group "$_d"
+		sig_none "stop: other"
+		_st=0
+		bench_end_group "$_d" 1 || _st=$?
+		[ "$_st" -eq 0 ] || nok "end-group: other: a group led by a pid with another start time was taken as the command's (status $_st)"
+		sig_none "end-group: other"
+		BENCH_LOCK_CHILD=$_d
+		BENCH_LOCK_REAPED=
+		bench_lock_stop_child
+		sig_none "lock: other"
+		BENCH_SPAWNED=";$_d|-|$_other"
+		bench_stop_group "$_d"
+		sig_none "stop: other, no group"
+		BENCH_SPAWNED=";$_d|-|$_ds1"
+		bench_stop_group "$_d" "" group
+		sig_none "stop: no group, reaped"
+		_st=0
+		bench_end_group "$_d" 1 || _st=$?
+		[ "$_st" -eq 0 ] || nok "end-group: no group: a pid that led no group at spawn had its group stopped (status $_st)"
+		sig_none "end-group: no group"
+		BENCH_SPAWNED=
+		bench_stop_group "$_d"
+		sig_none "stop: never spawned"
+
+		# Cannot tell: no start time read at spawn, or ps silent now. The
+		# watch says so and goes on to its end; the stop says so at once
+		# and sends nothing.
+		for _how in none nops; do
+			if [ "$_how" = none ]; then
+				BENCH_SPAWNED=";$_d|$_d|?"
+			else
+				BENCH_SPAWNED=";$_d|$_d|$_ds1"
+				ps() { return 1; }
+			fi
+			_st=0
+			bench_watch "$_d" "$(($(date +%s) - 1))" 0.05 2> "${E:?}/w.$_how" || _st=$?
+			[ "$_st" -eq 1 ] || nok "watch: $_how: wanted 1 at its end, got $_st"
+			grep -q 'cannot tell whether pid' "${E:?}/w.$_how" || nok "watch: $_how: the watch did not say it cannot tell"
+			_t0=$(date +%s)
+			bench_stop_group "$_d" 5 2> "${E:?}/s.$_how"
+			_t1=$(date +%s)
+			unset -f ps
+			grep -q 'cannot tell whether pid' "${E:?}/s.$_how" || nok "stop: $_how: the stop did not say it cannot tell"
+			[ $((_t1 - _t0)) -lt 3 ] || nok "stop: $_how: the stop took $((_t1 - _t0)) s of its 5 s grace after it could not tell"
+			sig_none "stop: $_how"
+		done
+		pid_running "$_d" || nok "decoy: the first decoy was ended"
+		pid_running "$_dm1" || nok "decoy: the first decoy's group member was ended"
+
+		# A command that led no group, still itself: TERM to its pid alone.
+		BENCH_SPAWNED=";$_d2|-|$_ds2"
+		bench_stop_group "$_d2"
+		grep -qx -- "-s TERM $_d2" "${E:?}/sig" || nok "stop: no group: no TERM went to the pid: $(tr '\n' ' ' < "${E:?}/sig")"
+		if grep -q -- " -$_d2\$" "${E:?}/sig"; then nok "stop: no group: a signal went to a group"; fi
+		wait_gone 5 "$_d2" || nok "stop: no group: the pid was not stopped"
+		pid_running "$_dm2" || nok "stop: no group: a process in the pid's group was ended"
+		: > "${E:?}/sig"
+
+		# ps goes silent once the TERM has gone to a group that ignores it:
+		# no KILL, and it is said.
+		BENCH_SPAWNED=";$_d3|$_d3|$_ds3"
+		ps() {
+			if grep -q TERM "${E:?}/sig"; then return 1; fi
+			command ps "$@"
+		}
+		bench_stop_group "$_d3" 1 2> "${E:?}/k.err"
+		unset -f ps
+		grep -qx -- "-s TERM -- -$_d3" "${E:?}/sig" || nok "stop: deaf: no TERM went to the group: $(tr '\n' ' ' < "${E:?}/sig")"
+		if grep -q KILL "${E:?}/sig"; then nok "stop: deaf: a KILL went out once ps was silent"; fi
+		grep -q 'cannot tell whether pid' "${E:?}/k.err" || nok "stop: deaf: the stop did not say it cannot tell before its KILL"
+		pid_running "$_d3" || nok "stop: deaf: the deaf decoy was ended"
+		: > "${E:?}/sig"
+
+		unset -f kill
+		core_decoy_end "$_d" "$_dm1" "$_dm2" "$_d3" "$_dm3"
+		[ "$_f" -eq 0 ]
+	) || bad "core-id: the core signals a process that is not the command it started, or does not stop the command (above)"
+	[ "$fails" -eq 0 ]
+}
+
 t_lock_reclaim() {
 	fresh reclaim
 	mkdir -p "${E:?}/state"
@@ -3107,7 +3298,7 @@ t_digit_cap() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
+all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_core_id t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -3178,6 +3369,17 @@ mutant defer-off bench.sh 'if [ -n "${BENCH_DEFER:-}" ]; then' 'if false; then' 
 mutant reentry-any-token core/lock.sh '[ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_TOKEN" ]' '[ -n "$BENCH_LOCK_TOKEN" ]' t_lock_tokens || mfail=1
 mutant drift-no-t core/stats.sh 'lo = mn - t; hi = mx + t' 'lo = mn; hi = mx' t_drift || mfail=1
 mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || mfail=1
+# FIX172: each site that reads the command's identity, put back to its
+# form before it (the watch and the signal as on origin/main, the stop and
+# the end of a group taking no notice of what the signal could not send).
+mutant spawn-no-id core/common.sh '	bench_spawn_id "$BENCH_SPAWN_PID"' '	:' t_core_id || mfail=1
+mutant watch-no-id core/common.sh 'bench_proc_same "$_bw_p" "$_bw_s" || _bw_r=$?' 'bench_pid_alive "$_bw_p" || _bw_r=1; BENCH_PS_F=$(ps -o stat= -p "$_bw_p") || :' t_core_id || mfail=1
+mutant signal-no-id core/common.sh '	bench_spawned "$2" || return 1' '	kill -s "$1" -- "-$2" 2> /dev/null && return 0; [ "${3:-}" = group ] || kill -s "$1" "$2" 2> /dev/null || true; return 0' t_core_id || mfail=1
+mutant stop-term-untold core/common.sh '	bench_signal_group TERM "$_sg_p" "$_sg_o" || _sg_r=$?' '	bench_signal_group TERM "$_sg_p" "$_sg_o" || :' t_core_id || mfail=1
+mutant stop-kill-untold core/common.sh '		bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' '		bench_signal_group KILL "$_sg_p" "$_sg_o" || :' t_core_id || mfail=1
+mutant alive-slot-taken core/common.sh '		[ "$_ga_r" -ne 3 ] || return 1' '		:' t_core_id || mfail=1
+mutant end-group-any core/common.sh '	bench_group_alive "$1" group || return 0' '	kill -0 -- "-$1" 2> /dev/null || return 0' t_core_id \
+	'	while bench_group_alive "$1" group; do' '	while kill -0 -- "-$1" 2> /dev/null; do' || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
 mutant queue-no-ticket-check core/lock.sh 'if bench_lock_head "$_la_label"; then _la_head=1; fi' 'bench_lock_head "$_la_label" || true; _la_head=1' t_lock_fifo || mfail=1

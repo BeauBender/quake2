@@ -485,7 +485,9 @@ bench_lock_grace() {
 # bench_lock_stop_child: stops the command this process runs under the lock
 # and its whole process group: TERM, up to bench_lock_grace seconds for the
 # group to go, then KILL; then reaps it (once it is reaped,
-# BENCH_LOCK_REAPED, the group only).
+# BENCH_LOCK_REAPED, the group only). bench_stop_group reads the identity
+# bench_spawn recorded for it, so a pid another process has taken since,
+# and a group another process leads under its id, get no signal (FIX172).
 bench_lock_stop_child() {
 	[ -n "${BENCH_LOCK_CHILD:-}" ] || return 0
 	bench_stop_group "$BENCH_LOCK_CHILD" "$(bench_lock_grace)" "${BENCH_LOCK_REAPED:-}"
