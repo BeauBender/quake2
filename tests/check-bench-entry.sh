@@ -217,10 +217,17 @@ bad() {
 	fails=$((fails + 1))
 	if [ -n "$MUTANT" ]; then exit 1; fi
 }
-# outlived <pid> <text>: a negative assertion, that <pid> has ended;
-# <text> is said while <pid> runs.
+# outlived <pid> <text>: a negative assertion, that <pid> has ended
+# (FIX179). <text> is said while <pid> runs, and with "cannot tell whether
+# pid <pid> outlived it ..." in front of it while pid_running cannot tell
+# (2): a pid ps gives no answer for is never taken as ended.
 outlived() {
-	pid_running "$1" && bad "$2"
+	_ov=0
+	pid_running "$1" || _ov=$?
+	case $_ov in
+	0) bad "$2" ;;
+	2) bad "cannot tell whether pid $1 outlived it, ps gives no answer for it: $2" ;;
+	esac
 	return 0
 }
 # wait_gone <seconds> <pid>: 0 once <pid> is seen gone; past <seconds>, 1
@@ -710,7 +717,17 @@ pid_start() {
 # (pid_start's when the pid was read) and its command line holds <text>;
 # then up to 15 s for it to go.
 stray_stop() {
-	pid_running "$1" || return 0
+	_sv=0
+	pid_running "$1" || _sv=$?
+	case $_sv in
+	1) return 0 ;;
+	2)
+		# ps gives no answer: no signal goes to it, and that is said and
+		# counted, not skipped (FIX179).
+		bad "cannot tell whether pid $1 ($3) still runs, ps gives no answer for it: it was sent no signal"
+		return 0
+		;;
+	esac
 	pid_same "$1" "$2" || return 0
 	case $(ps -o args= -p "$1" 2> /dev/null) in *"$3"*) ;; *) return 0 ;; esac
 	if [ -n "${4:-}" ]; then
@@ -830,10 +847,22 @@ EOF
 	# shellcheck disable=SC2046 # the check's two pids
 	set -- $(sed -n 's/^start \([0-9]*\) \([0-9]*\) .*/\1 \2/p' "${LOG:?}") 0 0
 	_ga=
-	pid_running "$1" && _ga="the check (it ignores TERM)"
-	pid_running "$2" && _ga="${_ga:+$_ga and }the scheduler"
+	_gu=
+	_g1=0
+	pid_running "$1" || _g1=$?
+	_g2=0
+	pid_running "$2" || _g2=$?
+	case $_g1 in
+	0) _ga="the check (it ignores TERM)" ;;
+	2) _gu="the check" ;;
+	esac
+	case $_g2 in
+	0) _ga="${_ga:+$_ga and }the scheduler" ;;
+	2) _gu="${_gu:+$_gu and }the scheduler" ;;
+	esac
 	wait_gone 15 "$1" || true
 	[ -z "$_ga" ] || bad "grace: $_ga outlived the lock shell after a TERM to it, with BENCH_STOP_GRACE=1 (status $_gs); $(say)"
+	[ -z "$_gu" ] || bad "grace: cannot tell whether $_gu outlived the lock shell after a TERM to it, ps gives no answer for it (status $_gs); $(say)"
 	[ "$(sh "${T:?}/scripts/bench/bench.sh" lock status)" = lock=free ] || bad "grace: the lock is not free after the lock shell exited"
 	grep -q '^start .* grace=1$' "${LOG:?}" || bad "grace: the run under the lock did not get the caller's BENCH_STOP_GRACE (1) back; $(say)"
 	[ "$_gs" -ne 0 ] || bad "grace: the gate exited 0 after a TERM; $(say)"

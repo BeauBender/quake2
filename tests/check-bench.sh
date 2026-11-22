@@ -282,14 +282,30 @@ bad() {
 	if [ -n "$MUTANT" ]; then exit 1; fi
 }
 # outlived <pid> <text> [<reporter>]: a negative assertion, that <pid> has
-# ended. <reporter> (default bad) is called with <text> while <pid> runs.
+# ended (FIX179). <reporter> (default bad) is called with <text> while <pid>
+# runs, and with "cannot tell whether pid <pid> outlived it ..." in front of
+# <text> while pid_running cannot tell (2): a pid ps gives no answer for is
+# never taken as ended.
 outlived() {
-	pid_running "$1" && "${3:-bad}" "$2"
+	_ov=0
+	pid_running "$1" || _ov=$?
+	case $_ov in
+	0) "${3:-bad}" "$2" ;;
+	2) "${3:-bad}" "cannot tell whether pid $1 outlived it, ps gives no answer for it: $2" ;;
+	esac
 	return 0
 }
-# forget_ended <pid>: takes <pid> off the cleanup list once it has gone.
+# forget_ended <pid>: takes <pid> off the cleanup list once it has gone (1).
+# While it runs (0) it stays; while pid_running cannot tell (2) it stays too,
+# and that is a failure, since a pid dropped from the list is never stopped
+# by the cleanup (FIX179).
 forget_ended() {
-	pid_running "$1" || forget "$1"
+	_fe=0
+	pid_running "$1" || _fe=$?
+	case $_fe in
+	1) forget "$1" ;;
+	2) bad "cannot tell whether pid $1 ended, ps gives no answer for it: it stays on the cleanup list" ;;
+	esac
 	return 0
 }
 B() {
