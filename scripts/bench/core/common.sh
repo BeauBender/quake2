@@ -250,9 +250,10 @@ bench_nap() {
 # lstart=, which exec does not change) in one form: its words one blank
 # apart (ps pads it, and puts two blanks before a day of one digit). False
 # when ps gives no answer. Every start time the core compares comes from
-# here (FIX172).
+# here (FIX172), in UTC (TZ=UTC0) whatever the caller's TZ, so a time read
+# under one TZ compares with one read under another (FIX184, round 2).
 bench_proc_read() {
-	_pq_o=$(ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null) || return 1
+	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null) || return 1
 	case $- in
 	*f*) _pq_f= ;;
 	*)

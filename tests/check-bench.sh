@@ -4021,6 +4021,11 @@ mutant release-no-wait core/lock.sh 'while bench_lock_untold_live; do bench_nap 
 # names a record that alone holds a lock with no holder file.
 mutant record-ignores-written core/lock.sh 'if bench_lock_untold_reused "$_lu_p" "$(bench_kv "$_lu_h" written)"; then continue; fi' ':' t_core_id || mfail=1
 mutant record-no-written core/lock.sh '_lk_w=$(bench_lock_now)' '_lk_w=' t_core_id || mfail=1
+# FIX184, round 2: every start time and written= is in UTC, whatever the
+# caller's TZ: the start time read in the caller's zone, and written=
+# written in it.
+mutant start-read-local core/common.sh '_pq_o=$(TZ=UTC0 ps ' '_pq_o=$(ps ' t_core_id || mfail=1
+mutant written-local core/lock.sh "$(printf '\t\t')TZ=UTC0" "$(printf '\t\t'):" t_core_id || mfail=1
 mutant status-unwritten-no-record core/lock.sh 'echo "lock=held label=none holder=unwritten$_ls_u"' 'echo "lock=held label=none holder=unwritten"' t_core_id || mfail=1
 mutant forget-before-clear core/common.sh "$(printf '\t\t')bench_spawn_forget \"\$_bb_p\"" "$(printf '\t\t'):" t_core_id \
 	"$(printf '\t\t')BENCH_BOUNDED_PID=" "$(printf '\t\t')bench_spawn_forget \"\$_bb_p\"; BENCH_BOUNDED_PID=" || mfail=1

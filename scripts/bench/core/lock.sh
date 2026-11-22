@@ -562,11 +562,14 @@ bench_lock_record() {
 }
 
 # bench_lock_now: the time now, in bench_proc_read's form of a start time
-# in the C locale: its words one blank apart.
+# in the C locale: its words one blank apart, in UTC (TZ=UTC0) as
+# bench_proc_read reads them, whatever the caller's TZ (FIX184, round 2).
 bench_lock_now() {
 	(
 		LC_ALL=C
 		export LC_ALL
+		TZ=UTC0
+		export TZ
 		set -f
 		# shellcheck disable=SC2046 # split into words; globbing is off
 		set -- $(date '+%a %b %e %H:%M:%S %Y')
@@ -575,8 +578,8 @@ bench_lock_now() {
 }
 
 # bench_lock_later <a> <b>: start time <a> is later than <b>, both in
-# bench_proc_read's form in the C locale ("Sun Nov 22 09:45:08 2026", local
-# time, to the second). False when either is not in that form.
+# bench_proc_read's form in the C locale ("Sun Nov 22 09:45:08 2026", UTC,
+# to the second). False when either is not in that form.
 bench_lock_later() {
 	awk -v a="$1" -v b="$2" '
 		function key(s,  f, m) {
