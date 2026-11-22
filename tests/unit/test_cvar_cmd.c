@@ -545,3 +545,152 @@ TEST(cbuf_overflow_and_long_lines)
 	run("echo $t_long $t_long\n");
 	T_CONSOLE_HAS("Expanded line exceeded");
 }
+
+/* FIX165: every line Cvar_WriteVariables writes, run again through the
+   command buffer, sets exactly one cvar, with the same name and value.
+   The tokenizer has no escape, the name is written unquoted, and the
+   buffer splits at ';' and newlines, expands '$' and skips "//". */
+static char fix165_buf[8192];
+
+static void
+fix165_write(void)
+{
+	char path[512];
+	FILE *f;
+	size_t n;
+
+	snprintf(path, sizeof(path), "%s/cvarwrite.cfg", t_tmpdir());
+	unlink(path);
+	t_console_reset();
+	Cvar_WriteVariables(path);
+
+	f = fopen(path, "r");
+	T_REQUIRE(f != NULL);
+	n = fread(fix165_buf, 1, sizeof(fix165_buf) - 1, f);
+	fix165_buf[n] = '\0';
+	fclose(f);
+	unlink(path);
+}
+
+/* The line is 8 bytes more than name and value: 1023 for t_w_len,
+   1024 for t_w_lenx. */
+#define V100 "0123456789012345678901234567890123456789" \
+	"0123456789012345678901234567890123456789" \
+	"01234567890123456789"
+#define V1000 V100 V100 V100 V100 V100 V100 V100 V100 V100 V100
+#define LONGV V1000 "01234567"
+
+static int
+fix165_count(void)
+{
+	const cvar_t *v;
+	int n = 0;
+
+	for (v = cvar_vars; v; v = v->next)
+	{
+		n++;
+	}
+
+	return n;
+}
+
+TEST(cvar_write_refuses_unsafe_values)
+{
+	static const struct
+	{
+		const char *name;
+		const char *value;
+		qboolean ok;
+	} cases[] = {
+		{"t_w_ok", "fine", true},
+		{"t_w_semi", "a;b", true},
+		{"t_w_dollar_v", "$t_w_ok", true},
+		{"t_w_slash_v", "a//b", true},
+		{"t_w_quote", "a\"b;t_w_inj\"c", false},
+		{"t_w_nl", "x\nquit", false},
+		{"t_w_cr", "x\rquit", false},
+		{"t_n;set t_n_inj pwned;set t_n_end", "1", false},
+		{"t_w_sp ace", "1", false},
+		{"t_w_tab\tx", "1", false},
+		{"t_w_nlname\nset t_n_inj2 1", "1", false},
+		{"t_w_crname\rx", "1", false},
+		{"t_w_qname\"x", "1", false},
+		{"t_w_$t_w_ok", "1", false},
+		{"t_w_//x", "1", false},
+		{"//t_w_comment", "1", false},
+		{"t_w_hi\xc3\xa9", "1", false},
+		{"t_w_del\x7f", "1", false},
+		{"t_w_semi;set_t_n_inj3", "1", false},
+		{"t_w_len", LONGV, true},
+		{"t_w_lenx", LONGV, false},
+	};
+	char *line;
+	char *next;
+	int i, nlines, before, after;
+
+	/* The hostile unquoted word is reachable through the buffer. */
+	run("set t_w_word a\"b;t_w_inj\"c a\n");
+	T_EQ_STR(Cvar_VariableString("t_w_word"), "a\"b;t_w_inj\"c");
+
+	/* A lone quote is not: the buffer discards the line. */
+	run("set t_w_lone a\"b;t_w_inj a\n");
+	T_CONSOLE_HAS("unmatched quote");
+	T_EQ_STR(Cvar_VariableString("t_w_lone"), "");
+
+	for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++)
+	{
+		Cvar_FullSet(cases[i].name, cases[i].value, CVAR_ARCHIVE);
+	}
+
+	fix165_write();
+	T_CONSOLE_HAS("t_n;set t_n_inj");
+	T_CHECK(strstr(fix165_buf, "t_w_word") == NULL);
+	T_CHECK(strstr(fix165_buf, "t_w_semi;") == NULL);
+	T_CHECK(strstr(fix165_buf, "t_w_lenx") == NULL);
+
+	/* Overwrite every safe cvar, run each written line back, and
+	   count: one set per line, the original value restored. */
+	for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++)
+	{
+		if (cases[i].ok)
+		{
+			Cvar_FullSet(cases[i].name, "CHANGED", CVAR_ARCHIVE);
+		}
+	}
+
+	nlines = 0;
+	before = fix165_count();
+
+	for (line = fix165_buf; *line; line = next)
+	{
+		char *nl = strchr(line, '\n');
+
+		T_REQUIRE(nl != NULL);
+		*nl = '\0';
+		next = nl + 1;
+
+		/* Every written line is run, none skipped. */
+		nlines++;
+		Cbuf_AddText(line);
+		Cbuf_AddText("\n");
+		Cbuf_Execute();
+	}
+
+	for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++)
+	{
+		if (cases[i].ok)
+		{
+			T_EQ_STR(Cvar_VariableString(cases[i].name), cases[i].value);
+		}
+	}
+
+	/* No line created a cvar. */
+	after = fix165_count();
+	T_EQ_INT(after, before);
+	T_CHECK(nlines >= 5);
+	T_EQ_STR(Cvar_VariableString("t_n_inj"), "");
+	T_EQ_STR(Cvar_VariableString("t_n_end"), "");
+	T_EQ_STR(Cvar_VariableString("t_n_inj2"), "");
+	T_EQ_STR(Cvar_VariableString("t_w_inj"), "");
+	T_EQ_STR(Cvar_VariableString("t_w_ok"), "fine");
+}
