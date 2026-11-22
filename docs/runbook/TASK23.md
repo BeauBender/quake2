@@ -456,3 +456,72 @@ The default objects (no `YQ2_INPUT_PROBE`) of the two touched C files, built at 
 `origin/main`'s text (`6c150812`) and from `76405549`, are byte-identical: macOS `sdl3.o` 56872 bytes and
 `menu.o` 164656 bytes, iOS simulator `sdl3.o` 58824 bytes and `menu.o` 164640 bytes. The gamepad preference
 is inside `TARGET_OS_TV`, and the probe's changes are inside `YQ2_INPUT_PROBE`.
+
+## Slice 3: the leftovers from slice 1's review
+
+Files: `src/backends/unix/system.c`, `Makefile`, `scripts/ios-sim.sh`, `tests/check-tvos.sh`, this runbook. State of
+the four items of "Also left to slice 2, found in review round 1", checked against `origin/main` (`7f61dd33`)
+first:
+
+| Item | Before | State |
+|---|---|---|
+| the missing-data text | `Sys_MissingDataMessage` had the visionOS branch and the `#else` iPhone text, which tvOS took ("Files > On My iPhone (or iPad)") | done |
+| `Touch_DefaultBind` and `VID_PLATFORM` | `Key_DefaultPadBinds` guard `TARGET_OS_IPHONE` (`cl_keyboard.c`), `VID_PLATFORM` guard `TARGET_OS_IPHONE` (`videomenu.c`), both on tvOS | not changed, on purpose, below |
+| `ios-sim.sh` messages | the runtime-pick errors said "iOS" for every SDK; the SDK-not-found error is the Makefile's ("Xcode with its iOS platform") | done |
+| `run --background` | launched `com.apple.Preferences` on every SDK | done: the tvOS simulator's own app |
+| text input on tvOS | out of scope (TASK175 slice 2c-1 decided: iPhone, iPad and visionOS) | still open, by decision |
+
+### The missing-data text
+
+On tvOS `Sys_MissingDataMessage` says that an Apple TV has no Files app and that the way to put the game data on an
+Apple TV is not settled yet; on the tvOS simulator pak0.pak goes into the app's `Documents/baseq2` with `simctl`.
+No data path was decided for a device (the options above stay the owner's call); the text says only what is true
+today (a device has no `Documents` a person can reach, so it names no device tool). The iPhone
+and visionOS texts are as they were: the new branch is `#elif defined(__APPLE__) && defined(TARGET_OS_TV) &&
+TARGET_OS_TV` between them. `tests/check-tvos.sh` (e) pins it in the object: the tvOS `system.o` holds `an Apple TV
+has no Files app` and not `On My iPhone (or iPad)`, and the iOS simulator's `system.o` the other way round (the
+controls). `check-tvos: ok (184 objects ...)` was the last line with the pins in. A mutant of the branch back to
+the iPhone text was not built (the slice's second and last hold went to the simulator runs).
+
+### Not changed: the pad default binds and the iOS video menu on tvOS
+
+Both are right on tvOS, so guarding them by `TARGET_OS_IOS` would break the Apple TV:
+
+- `Key_DefaultPadBinds` binds gamepad keys (`TRIG_RIGHT` is `+attack`) on a fresh start. They are for a physical
+  controller as much as for the touch overlay, and a controller is how tvOS is played (slice 2, "The bindings"):
+  with `TARGET_OS_IOS` there would be no fire button on a fresh Apple TV start. The same holds for visionOS.
+- `VID_PLATFORM` is `VIDPLAT_IOS` there: the rules of `VidRules_Screen` are "always the whole screen", "one screen",
+  "always on", "metal is linked in" and "the screen's own size". All are true of an Apple TV, and `VIDPLAT_DESKTOP`
+  would give it a mode list and a fullscreen toggle it cannot use. The one-row "display" list is the greyed
+  "this screen".
+
+So no new (d) site, and `tests/check-tvos.sh`'s (d) list and count are untouched. If the owner wants the tvOS menu
+different, that is a new `vidplat_t`, not a guard.
+
+### `ios-sim.sh`
+
+- The runtime-pick errors name the platform run (`no available tvOS runtime`, `the visionOS runtime ... has no
+  numeric version`, `... is not supported by any available tvOS runtime`); the selftest cases for tvOS and visionOS
+  expect the new words. The SDK-not-found error is the Makefile's: `$(IOS_OSNAME)` (iOS, tvOS, visionOS) is in the
+  text.
+- `run --background` launches the SDK's other app: `com.apple.Preferences` (iOS and visionOS), `com.apple.TVSettings`
+  (tvOS), or the bundle id in `IOS_SIM_BACKGROUND_APP` (letters, digits, dots, hyphens, else refused). Chosen over
+  refusing `--background` on tvOS because it works, shown below. Selftest cases: tvOS default, the variable, a bad
+  value.
+
+### The simulator runs
+
+Host: Xcode 27.2, tvOS 27.2 simulator, Apple TV 4K (4th generation) (device type `Apple-TV-4K-4th-generation-4K`).
+Every device was made by the run and deleted by it. Each run printed `launcher: no crash`: PineBoard did not crash.
+
+- Probe, on a throwaway device: `simctl launch <udid> com.apple.Preferences` fails (`FBSOpenApplicationServiceErrorDomain,
+  code=4`, "failed to launch"), `com.apple.TVSettings` launches (`com.apple.TVSettings: 35552`), `com.apple.TVHomeScreen`
+  and `com.apple.TVMusic` fail.
+- No data: the engine log holds `Quake II needs its game data, and an Apple TV has no Files app. The way to put
+  the game data on an Apple TV is not settled yet. On the tvOS simulator, copy pak0.pak from the baseq2 folder of
+  Quake II into the Documents/baseq2 folder of this app with simctl, then start the game again.`
+- Paks in `Documents/baseq2`, `+set vid_renderer metal +map base1`: `Metal device: Apple tvOS simulator GPU`, then
+  `Map: base1` (the start ended at the 40 s screenshot).
+- `--background 3 --shot 0` with the new default: `run ok, 1 start(s)`.
+- The same with `IOS_SIM_BACKGROUND_APP=com.apple.Preferences` (the old default): `simctl launch of the other app
+  (com.apple.Preferences) failed`.
