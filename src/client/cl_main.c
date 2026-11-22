@@ -236,6 +236,12 @@ CL_Record_f(void)
 		return;
 	}
 
+	if (!FS_SafeRelativeName(Cmd_Argv(1)))
+	{
+		Com_Printf("record: refusing the demo name, it must not contain '..', ':' or '\\', or start with '/' or '.'.\n");
+		return;
+	}
+
 	Com_sprintf(name, sizeof(name), "%s/demos/%s.dm2", FS_Gamedir(), Cmd_Argv(1));
 
 	Com_Printf("recording to %s.\n", name);
