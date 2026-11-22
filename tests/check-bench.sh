@@ -1654,6 +1654,8 @@ t_core_id() {
 		[ ! -e "$BENCH_LOCK_DIR" ] || nok "record: release: a stale record kept this shell's lock"
 		[ $((_t1 - _t0)) -lt 2 ] || nok "record: release: the release took $((_t1 - _t0)) s over a stale record"
 		if [ -s "${E:?}/rel.err" ]; then nok "record: release: the release said it held for a stale record: $(cat "${E:?}/rel.err")"; fi
+		# What a failed case above left, so the cases below start free.
+		rm -rf "${BENCH_LOCK_DIR:?}"
 
 		# The window (FIX184): bench_bounded clears its pid before it forgets
 		# the command, so a signal between the two finds no bounded command,

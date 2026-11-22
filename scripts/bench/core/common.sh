@@ -640,9 +640,11 @@ BENCH_BOUNDED_REAPED=
 # it is stopped (bench_watch). Returns its status; 124 past the wall time,
 # 74 when it was stopped; 125 when either holds and the stop could not
 # tell whether the pid is still the command (bench_stop_group returned 2),
-# so it may still run. Once the command has exited, what it left running
-# in its group is stopped too (bench_end_group, with the same
-# BENCH_STOP_GRACE) before the bound returns.
+# so it may still run: it is then recorded in the lock state
+# (bench_record_untold), and the lock it runs under is kept while it may,
+# whatever this shell does next (FIX184). Once the command has exited,
+# what it left running in its group is stopped too (bench_end_group, with
+# the same BENCH_STOP_GRACE) before the bound returns.
 # For adapters. The poll settles at every 0.5 s.
 bench_bounded() {
 	_bb_s=$1
