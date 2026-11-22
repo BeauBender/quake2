@@ -1539,7 +1539,8 @@ t_core_id() {
 		grep -qx -- "-s TERM -- -$_bp" "${E:?}/sig" || nok "bounded: ps silent: no TERM went to the command's group: $(tr '\n' ' ' < "${E:?}/sig")"
 		wait_gone 2 "$_bp" || nok "bounded: ps silent: the command outlived its bound"
 		grep -q 'stopped a command that outlived its wall time' "${E:?}/b.err" || nok "bounded: ps silent: the bound did not say it stopped the command"
-		if grep -q 'could not be stopped\|sends it no more signals' "${E:?}/b.err"; then nok "bounded: ps silent: the bound said it could not stop a command it stopped"; fi
+		if grep -q 'could not be stopped\|sends it no more signals\|it is not signalled while that lasts' "${E:?}/b.err"; then nok "bounded: ps silent: the bound said it could not stop, or would not signal, a command it stopped"; fi
+		grep -q 'a stop goes to its process group while that has a member' "${E:?}/b.err" || nok "bounded: ps silent: the watch did not say the stop still goes to the group"
 		: > "${E:?}/sig"
 
 		# A command that exits before the spawn's first ps reads it
@@ -1601,7 +1602,7 @@ t_core_id() {
 		done
 		command kill -TERM "$_nh"
 		_n=0
-		while ! grep -q 'keeping the lock while pid' "${E:?}/n.out" && [ "$_n" -lt 50 ]; do
+		while ! grep -q 'keeping the lock while pid' "${E:?}/n.out" && pid_running "$_nh" && [ "$_n" -lt 50 ]; do
 			sleep 0.1
 			_n=$((_n + 1))
 		done
@@ -3564,6 +3565,18 @@ mutant stop-kill-untold core/common.sh '		bench_signal_group KILL "$_sg_p" "$_sg
 mutant alive-slot-taken core/common.sh '		[ "$_ga_r" -ne 3 ] || return 1' '		:' t_core_id || mfail=1
 mutant end-group-any core/common.sh '	bench_group_alive "$1" group || return 0' '	kill -0 -- "-$1" 2> /dev/null || return 0' t_core_id \
 	'	while bench_group_alive "$1" group; do' '	while kill -0 -- "-$1" 2> /dev/null; do' || mfail=1
+# FIX172, round 1: a leader's group still stopped while ps is silent, the
+# group of a command gone before the first ps, the table's entries leaving,
+# and a command that leads no group kept under the lock, said, and not
+# reported stopped.
+mutant spawn-gone-group core/common.sh 'if kill -0 -- "-$1" 2> /dev/null; then BENCH_SPAWN_GROUP=$1; else BENCH_SPAWN_GROUP=-; fi' 'BENCH_SPAWN_GROUP=-' t_core_id || mfail=1
+mutant signal-leader-untold core/common.sh '		[ "$_sg2_r" -ne 3 ] || return 1' '		case $_sg2_r in 2 | 3) return "$_sg2_r" ;; esac' t_core_id || mfail=1
+mutant watch-leader-note core/common.sh 'if [ "$BENCH_ID_GROUP" = "$_bw_p" ]; then' 'if false; then' t_core_id || mfail=1
+mutant forget-none core/common.sh '	BENCH_SPAWNED=$_sf_h$_sf_t' '	:' t_core_id || mfail=1
+mutant bounded-says-stopped core/common.sh 'if [ "$_bb_k" -ne 0 ]; then' 'if false; then' t_core_id || mfail=1
+mutant lock-no-hold core/lock.sh 'if [ "$_lc_r" -eq 2 ]; then bench_lock_hold_untold' 'if false; then bench_lock_hold_untold' t_core_id || mfail=1
+mutant hold-ends-early core/lock.sh '		2) ;;' '		2) break ;;' t_core_id || mfail=1
+mutant trap-no-fd8 bench.sh 'if (: >&8) 2> /dev/null; then exec 2>&8; fi' ':' t_core_id || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
 mutant queue-no-ticket-check core/lock.sh 'if bench_lock_head "$_la_label"; then _la_head=1; fi' 'bench_lock_head "$_la_label" || true; _la_head=1' t_lock_fifo || mfail=1
