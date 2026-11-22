@@ -268,7 +268,7 @@ elif mv "$d/docs/runbook" "$d/rb" && ln -s ../rb "$d/docs/runbook"; then
 	dd "$d" main > "${tmp:?}/o7b" 2>&1 || _rc=$?
 	[ "$_rc" -ne 0 ] || bad "case 7: a symlinked INDEX.md was accepted"
 else
-	echo "$me: case 7 skipped: cannot create a symbolic link here"
+	bad "case 7: cannot create a symbolic link here"
 fi
 
 cd "$real"
