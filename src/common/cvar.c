@@ -284,13 +284,25 @@ Cvar_AddToList(const char *var_name, const char *var_value, int flags)
 static qboolean
 Cvar_RefusedGameValue(const char *var_name, const char *value)
 {
+	char shown[41];
+	size_t i;
+
 	if (strcmp(var_name, "game") != 0 || FS_GameDirValid(value))
 	{
 		return false;
 	}
 
-	Com_Printf("game: refused \"%.40s\", not a single directory name.\n",
-			value);
+	/* The value is a server's text: control bytes and 0x7f or above
+	   are shown as '?'. */
+	for (i = 0; i < sizeof(shown) - 1 && value[i]; i++)
+	{
+		unsigned char c = (unsigned char)value[i];
+
+		shown[i] = (c < 0x20 || c >= 0x7f) ? '?' : (char)c;
+	}
+
+	shown[i] = '\0';
+	Com_Printf("game: refused \"%s\", not a single directory name.\n", shown);
 	return true;
 }
 

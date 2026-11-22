@@ -34,6 +34,28 @@ static const char *gd_bad[] = {
 	"x\ny", T_LONG_NAME, NULL
 };
 
+/* The state a test found, put back at its end so later tests see it. */
+static char gd_saved_game[MAX_QPATH];
+static char gd_saved_given[MAX_QPATH];
+
+static void
+gd_save(void)
+{
+	Q_strlcpy(gd_saved_game, Cvar_VariableString("game"), sizeof(gd_saved_game));
+	Q_strlcpy(gd_saved_given, userGivenGame, sizeof(gd_saved_given));
+}
+
+static void
+gd_restore(void)
+{
+	Com_SetServerState(0);
+	SZ_Clear(&cmd_text);
+	Cvar_Get("game", "", CVAR_LATCH | CVAR_SERVERINFO)->latched_string = NULL;
+	/* resets game and rebuilds the search paths for that directory */
+	FS_BuildGameSpecificSearchPath(gd_saved_game);
+	Q_strlcpy(userGivenGame, gd_saved_given, sizeof(userGivenGame));
+}
+
 static void
 gd_check_unchanged(const char *what, const char *bad)
 {
@@ -63,6 +85,7 @@ TEST(gamedir_api_refuses)
 	char line[256];
 
 	(void)fs_gamedirvar;
+	gd_save();
 
 	for (i = 0; gd_bad[i]; i++)
 	{
@@ -109,12 +132,15 @@ TEST(gamedir_api_refuses)
 		gd_check_unchanged("latched apply", gd_bad[i]);
 		Com_SetServerState(0);
 	}
+
+	gd_restore();
 }
 
 TEST(gamedir_valid_accepted)
 {
 	cvar_t *g;
 
+	gd_save();
 	gd_setup();
 	g = Cvar_Get("game", "", CVAR_LATCH | CVAR_SERVERINFO);
 
@@ -136,5 +162,37 @@ TEST(gamedir_valid_accepted)
 	Cvar_Set("game", "xatrix");
 	T_EQ_STR(g->latched_string, "xatrix");
 	Com_SetServerState(0);
-	gd_setup();
+	gd_restore();
+}
+
+/* Qcommon_Init with `+set game ../x`, run by the runner before
+   FS_InitFilesystem (tests/unit/main.c): the cvar does not exist yet, so
+   the value goes through Cvar_GetNew. */
+TEST(gamedir_startup_refused)
+{
+	T_EQ_STR(Cvar_VariableString("game"), "");
+	T_CHECK(strcmp(userGivenGame, "../x") != 0);
+	T_EQ_STR(userGivenGame, "");
+	T_CHECK(strstr(t_startup_console(),
+			"game: refused \"../x\", not a single directory name.") != NULL);
+}
+
+/* A default that is refused becomes "", whatever the cvar holds. */
+TEST(gamedir_default_refused)
+{
+	t_console_reset();
+	T_EQ_STR(Cvar_Get("game", "../x", 0)->default_string, "");
+	T_CONSOLE_HAS("game: refused");
+	Cvar_Get("game", "", 0);
+}
+
+/* The refusal line shows the value, control bytes and 0x7f or above as
+   '?', and never uses it as a format. */
+TEST(gamedir_refusal_line_sanitized)
+{
+	gd_save();
+	t_console_reset();
+	Cvar_Set("game", "a\x01" "b\x1b" "c\x7f" "d\xff" "e%s%n/");
+	T_CONSOLE_HAS("game: refused \"a?b?c?d?e%s%n/\", not a single");
+	gd_restore();
 }
