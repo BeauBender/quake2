@@ -12,6 +12,15 @@ every Nth rendered frame. `record` holds you to the pairing: `cinematic`
 needs a `.cin` and any other scenario refuses one. Nothing here is
 derived from game data, so the files are committed (INFORM9).
 
+The format has one reader, `scenario_sets` in `scripts/pins.sh` (FIX122):
+it holds every refusal (any line that is not `set <cvar> <value>`, the
+cvars the driver sets itself, the ones that choose a directory or the game
+module, `..` in a value, a value starting with `-` that is not a number).
+`scripts/pins.sh scenario-args <file>` prints what it accepts, and the bench
+harness's quake2 adapter and the MetalFX report generator read every
+scenario through it. The cases each of them is held to are in
+`scripts/pins/scenario-cases.txt` (`tests/check-scenario-parsers.sh`).
+
 | Scenario | Drawn |
 |---|---|
 | `world` | world surfaces, lightmaps, sky, water |
