@@ -753,7 +753,7 @@ t_reap_wait() {
 	printf '%s\n' 'trap "echo TERM >> \"\$1\"" TERM' 'n=0' 'while [ ! -e "$2" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/deaf.sh"
 	_o=$(pid_id 1) || bad "reap-wait: ps gave no start time for pid 1"
 	for _k in finish:none finish:other finish:nops ended:none ended:other ended:nops; do
-		rm -f "${E:?}/stop" "${E:?}/c.pid" "${E:?}/c.sig"
+		rm -f "${E:?}/stop" "${E:?}/c.pid" "${E:?}/c.sig" "${E:?}/c.rv"
 		(
 			start sh "${E:?}/deaf.sh" "${E:?}/c.sig" "${E:?}/stop"
 			echo "$BG" > "${E:?}/c.pid"
@@ -766,7 +766,7 @@ t_reap_wait() {
 			esac
 			_f0=$fails
 			case ${_k%:*} in
-			finish) finish reap-wait "$BG" 0 1 ;;
+			finish) finish reap-wait "$BG" 0 1 || echo false > "${E:?}/c.rv" ;;
 			ended) if ended 1 "$BG"; then collect "$BG" || true; fi ;;
 			esac
 			[ "$fails" -gt "$_f0" ]
@@ -778,6 +778,7 @@ t_reap_wait() {
 		wait "$_w" || _ws=$?
 		[ "$_ws" -eq 0 ] || bad "reap-wait: $_k: the caller counted no failure: $(cat "${E:?}/w.out")"
 		grep -q "reap: no TERM to pid " "${E:?}/w.out" || bad "reap-wait: $_k: reap did not say it sent no TERM: $(cat "${E:?}/w.out")"
+		[ "${_k%:*}" != finish ] || [ -s "${E:?}/c.rv" ] || bad "reap-wait: $_k: finish was true for a pid reap did not end"
 		if [ "${_k#*:}" = nops ]; then
 			grep -q "so the check cannot tell whether it still runs" "${E:?}/w.out" || bad "reap-wait: $_k: reap did not say it cannot tell: $(cat "${E:?}/w.out")"
 			[ ! -s "${E:?}/c.sig" ] || bad "reap-wait: $_k: a signal went to a pid that ps gave no answer for"
