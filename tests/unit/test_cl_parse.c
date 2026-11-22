@@ -446,6 +446,12 @@ TEST(fs_gamedirvalid_table)
 	T_CHECK(!FS_GameDirValid(".."));
 	T_CHECK(!FS_GameDirValid("a/b"));
 	T_CHECK(!FS_GameDirValid("x\ny"));
+
+	/* the MAX_QPATH cap: 63 bytes are accepted, 64 refused */
+	T_CHECK(FS_GameDirValid(
+		"012345678901234567890123456789012345678901234567890123456789012"));
+	T_CHECK(!FS_GameDirValid(
+		"0123456789012345678901234567890123456789012345678901234567890123"));
 }
 
 TEST(cl_gamedir_plain_accepted)
