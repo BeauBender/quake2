@@ -217,6 +217,12 @@ bad() {
 	fails=$((fails + 1))
 	if [ -n "$MUTANT" ]; then exit 1; fi
 }
+# outlived <pid> <text>: a negative assertion, that <pid> has ended;
+# <text> is said while <pid> runs.
+outlived() {
+	pid_running "$1" && bad "$2"
+	return 0
+}
 # wait_gone <seconds> <pid>: 0 once <pid> is seen gone; past <seconds>, 1
 # while it still runs and 2 while the check cannot tell (pid_running): a pid
 # that ps gives no answer for is never taken as gone (FIX177).
@@ -612,7 +618,7 @@ EOF
 		*":${1#*:}:"*) bad "nested: the watcher shares a process group with a check or the scheduler; $(say)" ;;
 		esac
 		[ "${1#*:}" = "$_wp" ] || bad "nested: the watcher does not lead a process group of its own; $(say)"
-		! pid_running "$_wp" || bad "nested: the watcher (pid $_wp) outlived the gate"
+		outlived "$_wp" "nested: the watcher (pid $_wp) outlived the gate"
 	fi
 	grep -qx 'pins status=1' "${LOG:?}" && grep -q '^pins: cannot build framediff' "${LOG:?}" ||
 		bad "nested: the pin selftest under the gate did not pass straight through to its command; $(say)"
@@ -994,7 +1000,7 @@ t_cleanup_id() {
 	pid_running "$2" || bad "cleanup-id: a process listed with another start time was signalled"
 	pid_running "$4" || bad "cleanup-id: stray_stop signalled a process with another start time"
 	stray_stop "$4" "$(pid_start "$4")" cleanup-id-k2
-	pid_running "$4" && bad "cleanup-id: stray_stop did not stop a process with the start time read"
+	outlived "$4" "cleanup-id: stray_stop did not stop a process with the start time read"
 	stop_listed "${_lo:?}"
 	for _q in "$@"; do
 		wait_gone 40 "$_q" || bad "cleanup-id: pid $_q outlived its own bound"
@@ -1230,8 +1236,47 @@ SHAPES
 	[ "$fails" -eq 0 ]
 }
 
+# t_cant_tell (FIX179): a negative assertion (outlived) and stray_stop, over
+# a live process this case started, with ps failing for every call, so
+# pid_running says 2: the check cannot tell. Each counts a failure that says
+# so and sends no signal.
+t_cant_tell() {
+	_rd=${tmp:?}/cant-tell
+	rm -rf "${_rd:?}"
+	mkdir -p "${_rd:?}"
+	for _k in outlived stray_stop; do
+		rm -f "${_rd:?}/c.sig" "${_rd:?}/c.pid" "${_rd:?}/w.out"
+		_r=0
+		(
+			sleep 30 &
+			_p=$!
+			settle "$_p"
+			record "$_p"
+			echo "$_p" > "${_rd:?}/c.pid"
+			_s=$(pid_start "$_p")
+			kill() { echo "$*" >> "${_rd:?}/c.sig"; }
+			ps() { return 1; }
+			_f0=$fails
+			case $_k in
+			outlived) outlived "$_p" "cant-tell: the sleeper outlived" ;;
+			stray_stop) stray_stop "$_p" "$_s" "sleep 30" ;;
+			esac
+			[ "$fails" -gt "$_f0" ]
+		) > "${_rd:?}/w.out" 2>&1 || _r=$?
+		_c=$(cat "${_rd:?}/c.pid" 2> /dev/null) || _c=
+		[ "$_r" -eq 0 ] || bad "cant-tell: $_k: no failure was counted for a live pid ps gave no answer for: $(cat "${_rd:?}/w.out")"
+		grep -q "cannot tell whether pid $_c " "${_rd:?}/w.out" || bad "cant-tell: $_k: the failure did not say it cannot tell: $(cat "${_rd:?}/w.out")"
+		[ ! -s "${_rd:?}/c.sig" ] || bad "cant-tell: $_k: a signal was sent: $(cat "${_rd:?}/c.sig")"
+		command kill -0 "$_c" 2> /dev/null || bad "cant-tell: $_k: the sleeper was ended"
+		command kill -TERM "$_c" 2> /dev/null || true
+		wait_gone 5 "$_c" || bad "cant-tell: $_k: pid $_c outlived its TERM"
+		forget "$_c"
+	done
+	[ "$fails" -eq 0 ]
+}
+
 # ---- The real entry points. ---------------------------------------------
-all="t_cleanup_id t_reap_id t_reap_wait t_gate t_coverage t_cov_lc t_pins t_off t_nested t_kgrp t_grace t_grace_refused t_orphan"
+all="t_cleanup_id t_reap_id t_reap_wait t_gate t_coverage t_cov_lc t_pins t_off t_nested t_kgrp t_grace t_grace_refused t_orphan t_cant_tell"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
