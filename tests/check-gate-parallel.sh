@@ -43,7 +43,16 @@
 #             SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU as one started directly does (as
 #             origin/main's test.sh ran each check), SIGINT delivered
 #             (not asked when SIGINT is ignored here);
-#   leave     what a passing check leaves running is gone after the run;
+#   ttyfork   what the shell writes between fork and exec when test.sh
+#             starts the scheduler, or the scheduler a check, reaches no
+#             terminal: on a tostop one it would stop that child (forced
+#             here with xtrace; under load bash's "child setpgid" line);
+#   nostderr  test.sh started with its standard error closed, outside the
+#             lock and at its re-entry, runs the scheduler and gives its
+#             status;
+#   watchfork the same for test.sh's start of the lock watcher, under the
+#             lock, and the scheduler's own standard error reaches test.sh's;
+#   leave    what a passing check leaves running is gone after the run;
 #   intskip   interrupt, testsh and sigs, run by this self-test started
 #             with SIGINT ignored, each say what they skip and pass.
 # Then each case is shown failing against at least one mutant of the
@@ -84,7 +93,7 @@ gp_exit() {
 }
 trap gp_exit EXIT
 trap 'exit 1' HUP INT TERM
-unset GATE_JOBS GATE_PARENT GP_PATH GP_TD GP_NCPU GP_BOUND GP_FIRST GP_ONLY WIRING SELF TTY_BOUND TTY_HOLD TTY_MODE
+unset GATE_JOBS GATE_PARENT GP_PATH GP_TD GP_NCPU GP_BOUND GP_FIRST GP_ONLY WIRING SELF TTY_BOUND TTY_HOLD TTY_MODE TTY_X
 export LC_ALL=C
 # INT_OK: SIGINT reaches a command started here (see the top of this file)
 INT_OK=
@@ -506,10 +515,12 @@ c_guard() {
 # once; testsh shows they do), and the next lines record its pid, turn job
 # control off again and wait for it, nothing more ("|| ..." would ignore its
 # status); all of that before the first make, and the script stops on a
-# failure (set -e). Job control on for the start: sigs shows it.
+# failure (set -e). Job control on for the start: sigs shows it. (The
+# start's own standard error is /dev/null for the fork, the scheduler's is
+# test.sh's on fd 3: ttyfork shows why.)
 c_wiring() {
 	_wf=${WIRING:-$top/scripts/test.sh}
-	_wl=$(grep -n '^GATE_PARENT=\$\$ scripts/gate-checks\.sh "\$gate_serial" "\$gate_first" tests/check-\*\.sh &$' "$_wf" | cut -d: -f1)
+	_wl=$(grep -n '^{ 2>&3 3>&- GATE_PARENT=\$\$ scripts/gate-checks\.sh "\$gate_serial" "\$gate_first" tests/check-\*\.sh & } 3>&2 2> /dev/null$' "$_wf" | cut -d: -f1)
 	_wm=$(grep -n '^make -B' "$_wf" | head -n 1 | cut -d: -f1)
 	[ -n "$_wl" ] && [ "$(printf '%s\n' "$_wl" | wc -l)" -eq 1 ] || { say "wiring: test.sh does not start the scheduler on tests/check-*.sh exactly once"; return 1; }
 	[ "$(sed -n "$((_wl + 1))p" "$_wf")" = 'gate_sched=$!' ] && [ "$(sed -n "$((_wl + 2))p" "$_wf")" = 'set +m' ] &&
@@ -834,14 +845,15 @@ tstopped() {
 # and ended by pid. A stop is named on one line, each stopped process with
 # tdesc; the others' pid=stat go on one state: line, whole entries within
 # 200 characters. A slow run prints one timed-out line and no state: line.
-# TTY_BOUND, TTY_HOLD and TTY_MODE change the bound and check-a.sh's mode
+# TTY_BOUND, TTY_HOLD and TTY_MODE change the bound and check-a.sh's mode;
+# TTY_X=1 runs test.sh with sh -x (ttyfork)
 c_tty() {
 	_tf=${WIRING:-$top/scripts/test.sh}
 	_tb=${TTY_BOUND:-90}
 	d=$(newcase)
 	if [ -n "${TTY_HOLD:-}" ]; then gtree "$d" "$_tf" 1 0 0 "${TTY_MODE:-hold}" "$TTY_HOLD"; else gtree "$d" "$_tf" 1 0 0; fi
 	launch "$d" script -q /dev/null sh -c 'printf "%s\n" "$$" > "$1/shpid"; stty tostop; shift; exec "$@"' sh "$d" \
-		env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PATH="$tmp/make:$PATH" sh "$d/tree/scripts/test.sh"
+		env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PATH="$tmp/make:$PATH" PS4='+ ' sh ${TTY_X:+-x} "$d/tree/scripts/test.sh"
 	rc=0
 	# the wait also ends, as at the bound, once a process of the run is
 	# stopped: nothing sends it SIGCONT, so a stop never resumes
@@ -959,8 +971,93 @@ c_ttylate() {
 	*"stopped on a terminal with tostop"*"stopped: [pid="*" stat=T"*) ;;
 	*) say "ttylate: a stop after a hold was not reported as a stop: $_lo"; return 1 ;;
 	esac
-	[ "$_ltw" -ge 3 ] || { say "ttylate: the run ended in $_ltw s, inside check-a.sh's 3 s hold"; return 1; }
+	[ "$_ltw" -ge 3 ] || { say "ttylate: the run ended in $_ltw s, inside check-a.sh's 3 s hold: $_lo"; return 1; }
 	[ "$_ltw" -lt 30 ] || { say "ttylate: the stop ended the wait only at its 30 s bound ($_ltw s)"; return 1; }
+}
+
+# ttyfork: a line the shell writes in a child it has forked for a job, before
+# that child's redirections and exec, goes to the shell's own standard
+# error. The child is already in a process group of its own, so on a
+# terminal set to tostop such a write stops it (SIGTTOU), and the run hangs.
+# bash writes one under load when the child's setpgid loses its race with
+# the parent's ("child setpgid (<pid> to <pid>): Operation not permitted",
+# FIX176 slice 2); xtrace writes one every time (the child traces the
+# command it runs), so it stands in for that race here:
+# - test.sh run with sh -x (TTY_X) on the tty case's terminal passes: the
+#   child that becomes the scheduler is not stopped by its own trace line;
+# - the scheduler run with sh -x on one check writes no trace of the
+#   check's command (the child's line) to its own output, while it writes
+#   its other traces there (+ set -m)
+# Every sh -x run here has PS4='+ ' in its own environment, so a PS4 this
+# self-test is started with changes no trace line it looks for.
+c_ttyfork() {
+	_fo=$(TTY_X=1 quiet=0 c_tty) || { say "ttyfork: test.sh's start of the scheduler stopped on a tostop terminal: $_fo"; return 1; }
+	d=$(newcase)
+	spec "$d" a 1 0 0
+	rc=0
+	bounded 90 "$d/out" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PS4='+ ' \
+		sh -x "$SCHED" "" "" "$d/check-a.sh" || rc=$?
+	[ "$rc" -eq 0 ] && grep -qx 'a line 1' "$d/out" || { say "ttyfork: the scheduler with sh -x gave status $rc"; return 1; }
+	grep -qx '+ set -m' "$d/out" || { say "ttyfork: the scheduler with sh -x wrote no trace"; return 1; }
+	if grep -qxF "+ $d/check-a.sh" "$d/out"; then
+		say "ttyfork: the scheduler's child wrote to its standard error before its exec (+ $d/check-a.sh)"
+		return 1
+	fi
+}
+
+# nostderr: scripts/test.sh (or $WIRING) started with its standard error
+# closed runs the scheduler, and the gate's status is the scheduler's, as
+# with it open: outside the lock (BENCH_LOCK=0) and at the lock's re-entry
+# (BENCH_LOCK_ENTRY=gate and a token; lock.sh's exec keeps a closed one).
+# The scheduler is a fake that notes it ran and exits with GP_SCHED_STATUS,
+# 0 (the makes follow) or 3 (they do not). Without test.sh's guard a write
+# to that standard error ends test.sh (set -e), and the start's 3>&2 fails:
+# $! is then unset (outside the lock) or the watcher's (under it, and
+# test.sh waits on the watcher until the bound)
+c_nostderr() {
+	_tf=${WIRING:-$top/scripts/test.sh}
+	for _ne in BENCH_LOCK=0 BENCH_LOCK_ENTRY=gate; do
+		for _ns in 0 3; do
+			d=$(newcase)
+			gtree "$d" "$_tf" 1 0 0
+			printf '%s\n' '#!/bin/sh' 'printf "sched %s\n" "$GATE_PARENT" >> "$GP_EVENTS"' 'exit "$GP_SCHED_STATUS"' > "$d/tree/scripts/gate-checks.sh"
+			rc=0
+			bounded 20 "$d/out" env "$_ne" BENCH_LOCK_TOKEN=t GP_SCHED_STATUS="$_ns" GP_EVENTS="$d/events" TMPDIR="$d/td" \
+				PATH="$tmp/make:$PATH" sh -c 'exec 2>&-; exec sh "$1"' sh "$d/tree/scripts/test.sh" || rc=$?
+			_nm=$(grep -c '^make ' "$d/events" || :)
+			grep -q '^sched [0-9][0-9]*$' "$d/events" ||
+				{ say "nostderr: $_ne: test.sh with its standard error closed did not run the scheduler (status $rc): $(tr '\n' ' ' < "$d/out")"; return 1; }
+			[ "$rc" -eq "$_ns" ] || { say "nostderr: $_ne: the scheduler gave $_ns, test.sh $rc"; return 1; }
+			if [ "$_ns" -eq 0 ]; then
+				[ "$_nm" -eq 2 ] || { say "nostderr: $_ne: $_nm makes after the scheduler passed, not 2"; return 1; }
+			else
+				[ "$_nm" -eq 0 ] || { say "nostderr: $_ne: $_nm makes after the scheduler failed"; return 1; }
+			fi
+		done
+	done
+}
+
+# watchfork: under the lock (BENCH_LOCK_ENTRY=gate and a token) test.sh, run
+# with sh -x (PS4='+ '), writes no trace of the watcher's start: the child
+# forked for it traces its command before its redirections and exec, and
+# with test.sh's standard error there a tostop terminal would stop it, as
+# in ttyfork. GATE_JOBS=x makes the scheduler fail at once, and its own line
+# saying so reaches test.sh's standard error (the start's 2>&3)
+c_watchfork() {
+	_tf=${WIRING:-$top/scripts/test.sh}
+	d=$(newcase)
+	gtree "$d" "$_tf" 1 0 0
+	rc=0
+	bounded 60 "$d/out" env BENCH_LOCK_ENTRY=gate BENCH_LOCK_TOKEN=t GATE_JOBS=x GP_EVENTS="$d/events" GP_SPEC="$d/spec" \
+		TMPDIR="$d/td" PATH="$tmp/make:$PATH" PS4='+ ' sh -x "$d/tree/scripts/test.sh" || rc=$?
+	[ "$rc" -ne 0 ] && [ "$rc" -ne 124 ] || { say "watchfork: test.sh with GATE_JOBS=x gave status $rc"; return 1; }
+	grep -qx '+ set -o monitor' "$d/out" || { say "watchfork: test.sh did not start the watcher, or wrote no trace"; return 1; }
+	grep -qxF "gate: GATE_JOBS must be a positive whole number, not 'x'" "$d/out" ||
+		{ say "watchfork: the scheduler's own standard error did not reach test.sh's"; return 1; }
+	if grep -qF 'gate-watch' "$d/out"; then
+		say "watchfork: the watcher's child wrote to test.sh's standard error before its exec: $(grep -F 'gate-watch' "$d/out" | head -n 1)"
+		return 1
+	fi
 }
 
 # tdesc: how c_tty prints a process. A /bin/sh started here and stopped,
@@ -1127,7 +1224,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate leave intskip ttyself"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
@@ -1223,6 +1320,16 @@ mutant ttou-to-checks sigs '	trap - TTOU' '	:'
 # (the two re-ignores: the one in gate_start is told apart by its comment)
 mutant ttou-after-start tty "trap '' TTOU # the scheduler again" ':'
 mutant ttou-scheduler tty "trap '' TTOU" ':' "	trap '' TTOU #"
+# (the shell's standard error left on the terminal for the fork of a check,
+# and of the scheduler; the scheduler's own standard error lost with it)
+mutant start-stderr-on-tty ttyfork '{ "$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 & } 2> /dev/null' '"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &'
+wmut sched-stderr-on-tty ttyfork '{ 2>&3 3>&- GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh & } 3>&2 2> /dev/null' 'GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &'
+wmut sched-stderr-lost wiring '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
+wmut sched-stderr-lost-run watchfork '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
+# (the watcher's fork with test.sh's standard error; a closed standard error
+# left closed, so the scheduler's start fails and $! is not its pid)
+wmut watch-stderr-on-tty watchfork '{ sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 & } 2> /dev/null' 'sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 &'
+wmut stderr-closed-unguarded nostderr '{ :; } 3>&2 2> /dev/null || exec 2> /dev/null' ':'
 # (without its own group the scheduler, and every check, ignore SIGINT and
 # SIGQUIT; when this self-test already ignores both, nothing differs)
 intmut wmut no-own-group sigs 'set -m' ':'

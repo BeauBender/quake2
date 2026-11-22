@@ -22,6 +22,13 @@
 # two targets takes a few seconds; the suite builds and runs in a few more.
 set -eu
 
+# A closed standard error becomes /dev/null, as bench_spawn does (FIX83):
+# a write to it would end this script (set -e) with no word, and the
+# scheduler's start below (3>&2) would fail and leave $! the watcher's, so
+# the gate would wait on that (FIX176). The lock's re-entry (an exec) keeps
+# a closed one.
+{ :; } 3>&2 2> /dev/null || exec 2> /dev/null
+
 # MAKEFLAGS=-i or -n from the environment would turn a failing or empty run
 # into success; the command-line overrides below are kept.
 unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
@@ -135,7 +142,8 @@ if [ "$lock_entry" = gate ] && [ -n "${BENCH_LOCK_TOKEN:-}" ]; then
 	# job control, in its long spelling: the scheduler's short one below
 	# must stay the one line that tests/check-gate-parallel.sh mutates
 	set -o monitor
-	sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 &
+	# (its standard error is /dev/null before its fork too: see gate_sched)
+	{ sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 & } 2> /dev/null
 	gate_watch=$!
 	set +o monitor
 fi
@@ -192,6 +200,15 @@ gate_first="check-metalfx-report.sh check-gate-parallel.sh check-pins.sh check-b
 # check, as on SIGTERM. Under the lock a SIGKILL to the caller's process
 # group kills the lock shell, not this script: the watcher above sees that
 # and sends this script the SIGTERM, so the same holds there.
+#
+# The child forked for each background start here (the watcher above, the
+# scheduler below) is in a process group of its own with SIGTTOU at its
+# default before its exec, and a line the shell writes there (under load
+# bash's "child setpgid (<pid> to <pid>): Operation not permitted", the
+# side of that race the parent's call already won) goes to this script's
+# standard error: on a terminal set to tostop it would stop that child and
+# hang the gate (FIX176). So that standard error is /dev/null for the fork
+# alone; the scheduler gets this script's back on fd 3.
 gate_sched=
 gate_stop() {
 	gate_unwatch
@@ -213,7 +230,7 @@ trap 'gate_stop 129' HUP
 trap 'gate_stop 130' INT
 trap 'gate_stop 143' TERM
 set -m
-GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &
+{ 2>&3 3>&- GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh & } 3>&2 2> /dev/null
 gate_sched=$!
 set +m
 wait "$gate_sched"
