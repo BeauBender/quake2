@@ -16,8 +16,13 @@
 #   3. case 1 again with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE naming a
 #      decoy repository: same result, decoy untouched.
 #   4. no duplicate: the dedupe exits 0 and changes nothing.
+#   5. main only mentions "- [FIX10](" in a header and has no FIX10 row while
+#      the branch has two: refused, index unchanged.
+#   6. a revision that is a git option (--output=x): refused, nothing written.
+#   7. docs/runbook or INDEX.md a symbolic link: refused.
 #
-# The scratch git calls (sg) unset every inherited GIT_* variable, point HOME
+# The dedupe runs (dd) use the same scratch HOME and configuration. The
+# scratch git calls (sg) unset every inherited GIT_* variable, point HOME
 # and XDG_CONFIG_HOME at scratch, read no global or system configuration, and
 # git init takes no template.
 #
@@ -48,6 +53,19 @@ sg()
 		GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
 		GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t \
 		git "$@"
+}
+
+# dd DIR ARG...: the dedupe script in DIR under the same scratch HOME and
+# configuration as sg. Extra variables go in a subshell around dd.
+dd()
+{
+	_d=$1
+	shift
+	(CDPATH='' cd "$_d" &&
+		HOME=$tmp/home XDG_CONFIG_HOME=$tmp/home/.config \
+		GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1 \
+		GIT_CEILING_DIRECTORIES=$tmp \
+		sh scripts/dedupe-runbook-index.sh "$@")
 }
 
 fail=0
@@ -110,7 +128,7 @@ else
 		bad "case 1: the index check did not fail with 'indexed twice: FIX9' on the duplicate"
 	fi
 	rc=0
-	(CDPATH='' cd "$d" && sh scripts/dedupe-runbook-index.sh main) > "${tmp:?}/o1d" 2>&1 || rc=$?
+	dd "$d" main > "${tmp:?}/o1d" 2>&1 || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		bad "case 1: the dedupe exited $rc: $(cat "${tmp:?}/o1d")"
 	fi
@@ -137,7 +155,7 @@ else
 	printf '%s\n' "$row10" >> "$d/$index"
 	cp "$d/$index" "${tmp:?}/c2.before"
 	rc=0
-	(CDPATH='' cd "$d" && sh scripts/dedupe-runbook-index.sh main) > "${tmp:?}/o2d" 2>&1 || rc=$?
+	dd "$d" main > "${tmp:?}/o2d" 2>&1 || rc=$?
 	if [ "$rc" -eq 0 ] || ! grep -q 'FIX10' "${tmp:?}/o2d"; then
 		bad "case 2: the dedupe did not refuse a duplicate main has no row for (exit $rc): $(cat "${tmp:?}/o2d")"
 	fi
@@ -161,9 +179,12 @@ if ! fixture "$d"; then
 	bad "case 3: fixture setup failed"
 else
 	rc=0
-	(CDPATH='' cd "$d" &&
-		GIT_DIR=$decoy/.git GIT_WORK_TREE=$decoy GIT_INDEX_FILE=$decoy/.git/index \
-		sh scripts/dedupe-runbook-index.sh main) > "${tmp:?}/o3d" 2>&1 || rc=$?
+	(GIT_DIR=$decoy/.git GIT_WORK_TREE=$decoy GIT_INDEX_FILE=$decoy/.git/index
+		GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bare GIT_CONFIG_VALUE_0=true
+		GIT_OBJECT_DIRECTORY=$decoy/.git/objects
+		export GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 \
+			GIT_CONFIG_VALUE_0 GIT_OBJECT_DIRECTORY
+		dd "$d" main) > "${tmp:?}/o3d" 2>&1 || rc=$?
 	if [ "$rc" -ne 0 ] || [ "$(count "$d" '- [FIX9](')" -ne 1 ] ||
 		! grep -Fqx -- "$row9_new" "$d/$index"; then
 		bad "case 3: with a decoy GIT_DIR the dedupe exited $rc or kept the wrong row: $(cat "${tmp:?}/o3d")"
@@ -179,13 +200,75 @@ d=$tmp/c4
 if ! fixture "$d"; then
 	bad "case 4: fixture setup failed"
 else
-	(CDPATH='' cd "$d" && sh scripts/dedupe-runbook-index.sh main) > /dev/null 2>&1 || true
+	dd "$d" main > /dev/null 2>&1 || true
 	cp "$d/$index" "${tmp:?}/c4.before"
 	rc=0
-	(CDPATH='' cd "$d" && sh scripts/dedupe-runbook-index.sh main) > "${tmp:?}/o4" 2>&1 || rc=$?
+	dd "$d" main > "${tmp:?}/o4" 2>&1 || rc=$?
 	if [ "$rc" -ne 0 ] || ! cmp -s "$d/$index" "${tmp:?}/c4.before"; then
 		bad "case 4: the dedupe on an index with no duplicate exited $rc or changed it"
 	fi
+fi
+
+# refused DIR NAME ARG...: the dedupe must exit non-zero and leave the index
+# byte for byte as it was.
+refused()
+{
+	_d=$1
+	_n=$2
+	shift 2
+	cp "$_d/$index" "${tmp:?}/$_n.before"
+	_rc=0
+	dd "$_d" "$@" > "${tmp:?}/$_n.out" 2>&1 || _rc=$?
+	if [ "$_rc" -eq 0 ]; then
+		bad "$_n: the dedupe did not refuse (exit 0): $(cat "${tmp:?}/$_n.out")"
+	fi
+	if ! cmp -s "$_d/$index" "${tmp:?}/$_n.before"; then
+		bad "$_n: the refused dedupe changed the index"
+	fi
+}
+
+# Case 5: main mentions "- [FIX10](" in a header line but has no FIX10 row,
+# and the branch has two FIX10 rows: refused, nothing changed.
+d=$tmp/c5
+if ! fixture "$d"; then
+	bad "case 5: fixture setup failed"
+else
+	printf '# Index\n\nA row looks like: `- [FIX10](../runbook/FIX10.md): title`\n\n%s\n' "$row9_new" > "$d/$index"
+	sg -C "$d" commit -q -a -m prose
+	printf '%s\n%s\n' "$row10" "$row10" >> "$d/$index"
+	refused "$d" case5 HEAD
+	if ! grep -q 'FIX10' "${tmp:?}/case5.out"; then
+		bad "case 5: the refusal does not name FIX10: $(cat "${tmp:?}/case5.out")"
+	fi
+fi
+
+# Case 6: a revision that is a git option is refused, nothing is written.
+d=$tmp/c6
+if ! fixture "$d"; then
+	bad "case 6: fixture setup failed"
+else
+	mkdir -p "$d/outx:docs/runbook"
+	refused "$d" case6 --output=outx
+	if [ -n "$(ls -A "$d/outx:docs/runbook")" ]; then
+		bad "case 6: the option revision wrote a file"
+	fi
+fi
+
+# Case 7: a symbolic link for docs/runbook or INDEX.md is refused.
+d=$tmp/c7
+if ! fixture "$d"; then
+	bad "case 7: fixture setup failed"
+elif mv "$d/docs/runbook" "$d/rb" && ln -s ../rb "$d/docs/runbook"; then
+	_rc=0
+	dd "$d" main > "${tmp:?}/o7" 2>&1 || _rc=$?
+	[ "$_rc" -ne 0 ] || bad "case 7: a symlinked docs/runbook was accepted"
+	rm "$d/docs/runbook" && mv "$d/rb" "$d/docs/runbook"
+	mv "$d/$index" "$d/real-index" && ln -s ../../real-index "$d/$index"
+	_rc=0
+	dd "$d" main > "${tmp:?}/o7b" 2>&1 || _rc=$?
+	[ "$_rc" -ne 0 ] || bad "case 7: a symlinked INDEX.md was accepted"
+else
+	echo "$me: case 7 skipped: cannot create a symbolic link here"
 fi
 
 cd "$real"

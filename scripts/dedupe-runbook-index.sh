@@ -26,6 +26,10 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
 	GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX GIT_CONFIG \
 	GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
 
+if [ -L docs/runbook ] || [ -L "$index" ]; then
+	echo "$me: docs/runbook or $index is a symbolic link; refusing"
+	exit 1
+fi
 [ -f "$index" ] || { echo "$me: $index is missing"; exit 1; }
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/dedupeindex.XXXXXX")
@@ -33,7 +37,15 @@ tmp=$(CDPATH='' cd "${tmp:?}" && pwd -P)
 new=
 trap 'rm -rf "${tmp:?}"; [ -z "$new" ] || rm -f "$new"' EXIT
 
-if ! git show "$ref:$index" > "${tmp:?}/ref" 2> "${tmp:?}/err"; then
+sha=$(git rev-parse --verify -q --end-of-options "$ref^{commit}" 2> /dev/null) || sha=
+case $sha in
+*[!0-9a-f]* | '') sha= ;;
+esac
+if [ -z "$sha" ]; then
+	echo "$me: $ref is not a revision"
+	exit 1
+fi
+if ! git cat-file blob "$sha:$index" > "${tmp:?}/ref" 2> "${tmp:?}/err"; then
 	echo "$me: cannot read $index at $ref:"
 	cat "${tmp:?}/err"
 	exit 1
@@ -47,10 +59,12 @@ if [ ! -s "${tmp:?}/dups" ]; then
 	exit 0
 fi
 
-sed -n -E "$ids" "${tmp:?}/ref" | sort | uniq -d > "${tmp:?}/refdups"
+# The same parse as the awk below: only a row that starts a line counts.
+sed -n -E "$ids" "${tmp:?}/ref" | sort > "${tmp:?}/refids"
+uniq -d "${tmp:?}/refids" > "${tmp:?}/refdups"
 bad=0
 while read -r id; do
-	if ! grep -q -F -- "- [$id](" "${tmp:?}/ref"; then
+	if ! grep -Fqx -- "$id" "${tmp:?}/refids"; then
 		echo "$me: [$id] is indexed twice and $ref has no row for it; fix it by hand"
 		bad=1
 	fi
@@ -75,6 +89,10 @@ awk -v dups="${tmp:?}/dups" '
 		if (match($0, /^- \[[A-Za-z0-9_-]+\]\(/)) {
 			id = substr($0, 4, RLENGTH - 5)
 			if (id in dup) {
+				if (!(id in refrow)) {
+					print "'"$me"': [" id "] has no row in the reference" > "/dev/stderr"
+					exit 1
+				}
 				if (id in done) next
 				done[id] = 1
 				print refrow[id]
