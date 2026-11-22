@@ -72,7 +72,14 @@ gate_start() {
 	_gs0=$(date +%s)
 	trap - TTOU
 	set -m
-	"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &
+	# The child that runs the check is in a process group of its own, with
+	# SIGTTOU at its default, before its redirections: a line the shell
+	# writes there (under load bash's "child setpgid (<pid> to <pid>):
+	# Operation not permitted", from the side of that race the parent's call
+	# already won) would stop it on a terminal set to tostop. So the
+	# shell's own standard error is /dev/null for the fork alone; the check
+	# writes into its log as before.
+	{ "$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 & } 2> /dev/null
 	_gsp=$!
 	set +m
 	trap '' TTOU # the scheduler again, once the check has started
