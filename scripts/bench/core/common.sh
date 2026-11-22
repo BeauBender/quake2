@@ -462,10 +462,10 @@ bench_signal_group() {
 	return 1
 }
 
-# bench_untold <pid>: says that a stop of <pid> sent no signal because this
-# shell cannot tell whether <pid> is still the command it started.
+# bench_untold <pid>: says that a stop of <pid> sends no more signals because
+# this shell cannot tell whether <pid> is still the command it started.
 bench_untold() {
-	bench_note "cannot tell whether pid $1 is still the command this shell started (ps gives no answer for it, or none was read at its start), so it was sent no signal"
+	bench_note "cannot tell whether pid $1 is still the command this shell started (ps gives no answer for it, or none was read at its start), so the stop sends it no more signals"
 }
 
 # bench_stop_group <pid> [<grace>] [group]: stops the command bench_spawn
