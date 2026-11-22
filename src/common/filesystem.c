@@ -181,6 +181,24 @@ FS_FileLength(FILE *f)
 }
 
 /*
+ * Returns true if a console argument may be used as a name below the
+ * game directory: not empty, no "..", no leading '/' or '.', no ':' and
+ * no backslash. FS_CreatePath refuses "..", but Q_fopen does not, so
+ * commands that write a file named by an argument check it here first.
+ */
+qboolean
+FS_SafeRelativeName(const char *name)
+{
+	if (!name || !*name || *name == '/' || *name == '.' ||
+			strchr(name, ':') || strchr(name, '\\') || strstr(name, ".."))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+/*
  * Creates any directories needed to store the given filename.
  */
 void

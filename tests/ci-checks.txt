@@ -40,6 +40,7 @@ check-require-guards.sh
 check-rt-variations.sh
 check-runbook-dedupe.sh
 check-runbook-index.sh
+check-safe-names.sh
 check-savegame-tables.sh
 check-static-modules.sh
 check-stop-invariants.sh
