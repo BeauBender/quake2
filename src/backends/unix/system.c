@@ -803,10 +803,18 @@ Sys_MissingDataMessage(const char *dir, char *out, size_t len)
 {
 	char wrong[MAX_OSPATH];
 
+#if defined(__APPLE__) && defined(TARGET_OS_VISION) && TARGET_OS_VISION
+	/* The Files app of visionOS names the place after the device. */
+	Com_sprintf(out, len,
+		"Quake II needs its game data. Copy pak0.pak from the baseq2 "
+		"folder of Quake II into Files > On My Apple Vision Pro > "
+		"Quake II > baseq2, then start the game again.");
+#else
 	Com_sprintf(out, len,
 		"Quake II needs its game data. Copy pak0.pak from the baseq2 "
 		"folder of Quake II into Files > On My iPhone (or iPad) > "
 		"Quake II > baseq2, then start the game again.");
+#endif
 
 	if (Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)))
 	{
