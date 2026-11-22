@@ -35,12 +35,16 @@ how fast the traversal runs, not whether it runs.
    a rate or a budget a card records is information. A final, optional
    performance round may come later; it optimizes and never gates.
 4. No card needs an M1-class Mac.
-5. A built-in, non-agentic settings optimizer is filed as a feature, as
-   cards. The player ranks priorities and sets a target frame rate; a
-   fixed in-engine benchmark adjusts the settings over bounded rounds,
-   saves the result as a named preset and never removes a choice. It
-   replaces "what the device can handle" as a default-setting mechanism.
-   This record does not design it.
+
+## Filed with this decision
+
+The owner asked for a built-in, non-agentic settings optimizer, filed as
+a feature, as cards. The player ranks priorities and sets a target frame
+rate; a fixed in-engine benchmark adjusts the settings over bounded
+rounds and saves the result as a named preset. It is a tool the player
+runs: its result is a starting point, and it never removes a choice. This
+record does not design it. How shipped defaults are chosen, including
+whether they may differ by device class, is the open question below.
 
 ## Supersedes
 
@@ -91,8 +95,7 @@ as replaced by this record, and every measured number in it is kept.
   surveyed separately and changed by their own cards, not here.
 - Defaults chosen from measured cost (the design's default policy, option
   A's per-family heights) are not gates: they never remove or grey a
-  choice. Whether a default may still differ by device class is the open
-  question below.
+  choice. How shipped defaults are chosen is the open question below.
 
 ## Reversal
 

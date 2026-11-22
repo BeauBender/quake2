@@ -485,10 +485,8 @@ Record 0014 (2026-11-22): the budgets, targets and "holds a cell" of
 this subsection are information and a basis for choosing defaults, never
 a card's acceptance criterion and never a reason to grey, hide or remove
 a setting; a feature is unavailable only where the device lacks the
-capability (section 4). A settings optimizer, filed as its own cards,
-replaces "what the device can handle" as the mechanism that sets
-defaults. Whether a default may still differ by device class is open in
-record 0014.
+capability (section 4). Whether defaults may differ by device class is
+open in record 0014.
 
 RT9's single criterion, every effect on at the native output at the
 display's refresh, is replaced by a matrix. A cell is a GPU family, a
@@ -783,7 +781,7 @@ there and the traced pixels with it.
 | RT7's accumulation and the 5x5 and 3x3 blurs, at the internal or effect size | A, C, E, H | RT10's per-pass table |
 | The temporal scaler at outputs other than 5120 x 2880 | A, H | RT11 (the T1 and T2 outputs), TASK111 (#265, the scaler's GPU time per mode and scale) |
 | The interpolator | D | TASK111 (#265), as a development option |
-| Every cost on apple7 | all | TASK106 (#249), then RT10 on the T1 host |
+| Every cost on apple7 | all | optional since record 0014: ~~TASK106 (#249), then RT10 on the T1 host~~ (superseded by record 0014) |
 | Every cost on apple8 | all | none |
 | apple9 at the 120 Hz classes: the presented rate at 120 Hz (the default policy's `timedemo` condition, item 1) | all | none (no apple9 host with a 120 Hz display; a finding for the orchestrator, as apple8's row is). The GPU time at those two sizes is RT10's, as windows on T2, judged against the cell's own 7.5 ms target (policy item 4) |
 | The render-stage path | all | RT9 |

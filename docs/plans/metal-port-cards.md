@@ -151,7 +151,7 @@ RT13 belong to TASK25 and carry TASK24. Design:
 
 [Record 0014](../decisions/0014-no-performance-gating.md) (2026-11-22): no
 acceptance below is a performance target, and no card needs an M1-class
-Mac. A time or rate a row asks for is information; a T1 (apple7) column,
+Mac. A time or rate a row asks for is information; an apple7 column (an M1-class Mac),
 as in RT11 and RT13, is taken when such a host is available and its
 absence fails nothing. The superseded criteria are struck through in
 their rows.

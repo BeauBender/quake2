@@ -410,7 +410,7 @@ cvars when the mode changes (and show "custom" after any edit); overlay
 effective values. The call: the overlay. Reverse: a menu action that copies
 a mode's values into the user's cvars, added beside it.
 
-**P3. RT-primary needs hardware ray tracing until measured.**
+**~~P3. RT-primary needs hardware ray tracing until measured.~~** (superseded by record 0014)
 Superseded by record 0014 (2026-11-22), which takes the first option:
 RT-primary is allowed wherever ray queries exist (`supportsRaytracing`)
 and the temporal scaler is present, with no family limit and no
