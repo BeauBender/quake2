@@ -1830,15 +1830,18 @@ void CL_WriteConfiguration(void);
 
 /*
  * Returns true if name can be a game directory: a single file
- * name, without path separators, ':', '..' or control bytes. The
- * empty string is valid and means baseq2.
+ * name, without path separators, ':', '..' or control bytes, and
+ * shorter than MAX_QPATH, the size of the buffers it is kept in
+ * (userGivenGame, cl.gamedir). The empty string is valid and means
+ * baseq2.
  */
 qboolean
 FS_GameDirValid(const char *name)
 {
 	const unsigned char *c;
 
-	if (!strcmp(name, ".") || strstr(name, ".."))
+	if (!strcmp(name, ".") || strstr(name, "..") ||
+		strlen(name) >= MAX_QPATH)
 	{
 		return false;
 	}
