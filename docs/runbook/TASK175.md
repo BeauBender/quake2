@@ -362,9 +362,82 @@ On `a69c1016`, in the second run's hold:
   check fails on that pin.
 - `pin` refuses a kind it does not know (`pin: unknown kind <kind>`) instead of skipping the visionOS half.
 
+## Slice 2c-1: the on-screen keyboard and indirect (pinch) input
+
+### The guards, traced
+
+Every `TARGET_OS_IOS` site in `src` (`grep -rn TARGET_OS_IOS src`), and what it does:
+
+- `src/client/input/sdl3.c` `IN_Update`'s tail: the follow-up that starts and stops text input
+  (`Touch_WantText`, `Touch_TextInput`, `GLimp_TextInput`). Widened to `TARGET_OS_IOS || TARGET_OS_VISION`.
+- `src/client/input/sdl3.c` `IN_Init`: `in_touch`'s default and `SDL_SetHint(SDL_HINT_RETURN_KEY_HIDES_IME, "0")`
+  (the keyboard stays up across Enter in the console). Split: the `in_touch` default stays iPhone and iPad only,
+  the hint is widened with the follow-up.
+- `src/client/input/touch.c` `Touch_Supported`: the touch overlay. Left (a pinch is not a touch screen).
+- `src/client/vid/glimp_sdl3.c` (two sites): the orientation request and the orientation/home-indicator hints.
+  Left (not keyboard).
+- `src/client/vid/vid.c` (two sites): the `ios_orientation` command. Left.
+
+`glimp_sdl3.c`'s own text-input code (`StartTextInput`, `GLimp_TextInput`, `GLimp_TextInputActive`, and the
+window-creation start) is guarded by `TARGET_OS_IPHONE`, which visionOS has, so it already compiled there; only
+the caller was missing.
+
+### Indirect input
+
+The visionOS Info.plist (`stuff/ios/Info-visionos.plist.in`) gains `UIApplicationSupportsIndirectInputEvents`
+(true). From the vendored SDL3 (read, not edited):
+
+- `SDL_uikitevents.m` `SDL_InitGCMouse` reads the key and only then watches `GCMouse` devices (otherwise it logs
+  that the key is needed for mouse support); `SDL_uikitview.m` `touchesBegan` sends a `UITouchTypeIndirectPointer`
+  touch to `indirectPointerPressed`, which sends `SDL_SendMouseButton` (left, right, middle by `buttonMask`) only
+  when `SDL_HasMouse()` is false; `UITouchTypeIndirect` is a relative touch device, and any other touch
+  (`UITouchTypeDirect`) is `SDL_SendTouch`.
+- `SDL_touch.c` turns a touch into a synthetic left mouse press (`SDL_TOUCH_MOUSEID`) while
+  `SDL_HINT_TOUCH_MOUSE_EVENTS` is on (the default). The engine sets it to 0 only in `IN_TouchAttach`, after the
+  `Touch_Supported()` return, which is 0 on visionOS, so the hint stays at its default.
+- In the engine (`sdl3.c`): `SDL_EVENT_MOUSE_BUTTON_DOWN/UP` become `K_MOUSE1`/`K_MOUSE2`/`K_MOUSE3`;
+  `SDL_EVENT_FINGER_*` go to `IN_TouchEvent`, which returns with no touch overlay. `src/client/menu/menu.c`
+  maps `K_MOUSE1` to `K_ENTER`.
+
+So, from the code, a pinch on a menu item becomes a mouse button (`K_MOUSE1`, either as the indirect pointer's
+button or as the synthetic press of a touch), which the menu reads as Enter. The menu has no pointer hit test, so
+it activates the item the cursor is on, not the one looked at; motion in the menu is not read (`SDL_EVENT_MOUSE_MOTION`
+counts only in `key_game`). Moving the cursor by look is therefore not there; the pad or the keyboard moves it.
+Nothing in the simulator can send a pinch from the command line (`simctl` has no touch, pointer or text command),
+so the check of a real pinch is left for a person.
+
+### Proof on the simulator
+
+Two runs of `scripts/ios-sim.sh run` (`IOS_SIM_SDK=xrsimulator`), each on a device it made, shut down and deleted
+(`launcher: no crash`, so no SurfBoard crash):
+
+- start 1, `+toggleconsole` at the command line: the console is not opened (the attract loop takes the key
+  destination), but the follow-up now runs: `Text input off, the keyboard is hidden.` is the first line it
+  prints on visionOS (it never printed before);
+- start 2, `+map base1`, some `+wait`, `+toggleconsole`, some `+wait`, `+toggleconsole`: in the engine log,
+  after `Outer Base`, `Text input on, the keyboard is shown.` and then `Text input off, the keyboard is hidden.`.
+  So text input starts with the console and stops when it closes. The message prints when the engine asks, not
+  when the system shows a keyboard.
+- Typing a string: `simctl` has no text, key or pointer command, so nothing from the command line reaches the
+  console line. What would show it is a person typing on the visionOS keyboard (or a connected hardware one) with
+  the console open, and the typed line on the console; left for a person, with the pinch.
+- The built app's Info.plist (`plutil -p`) holds `"UIApplicationSupportsIndirectInputEvents" => true`.
+
+### The checks
+
+- `check-visionos: ok (184 objects for the visionOS simulator, platform 12, the iOS simulator's list)`; it pins the
+  plist key (also in the mutant loop: key missing, false, a string), `SDL_RETURN_KEY_HIDES_IME` held by both
+  `sdl3.o` (`pin both`, new), and `_Touch_TextInput` and `_GLimp_TextInput` needed by the visionOS `sdl3.o`
+  (`pin need`). Reverting the sdl3.c widening makes the three pins fail.
+- `check-ios: ok (54 mutants refused; 192 smoke selftest cases; 65 device selftest cases; 184 objects for the
+  simulator; 184 for a device; ios_objects)`.
+- `check-tvos: ok (184 objects for the tvOS simulator, platform 8, the iOS simulator's list)`. Its (d) source
+  list lost the keyboard site (its guard is now an `||`, and (d) accepts only a chain of `&&`); the object pins
+  of (e) still keep `_Touch_TextInput` and `SDL_RETURN_KEY_HIDES_IME` out of tvOS.
+
 ## Left for slice 2c
 
-- Look-and-pinch menu navigation (a pinch reaches a UIKit app as an indirect touch or a pointer; SDL asks for
-  `UIApplicationSupportsIndirectInputEvents`).
+- A person's check of a real pinch and of typing on the visionOS keyboard (slice 2c-1's proof stops at the
+  engine log and the plist).
+- Look-and-pinch moving the menu cursor: the menu has no pointer hit test, a pinch activates the current item.
 - Resizing beyond the default 1280x720-point window (TASK172's live resize is compiled in, not exercised).
-- The on-screen keyboard (text input never starts: the keyboard follow-up is `TARGET_OS_IOS`).

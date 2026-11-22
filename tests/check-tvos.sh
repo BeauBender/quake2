@@ -8,8 +8,7 @@
 # otool -l, the code of otool -tV, plutil, the commands of make -n) or from
 # the source text of the guards, never from a line make prints.
 #   (d) the source: each iPhone and iPad only site (the touch overlay's
-#       Touch_Supported, the in_touch default, the on-screen keyboard's
-#       follow-up, the window's orientation and home-indicator hints) is
+#       Touch_Supported, the in_touch default, the window's orientation and home-indicator hints) is
 #       inside an #if that uses TARGET_OS_IOS's value (TARGET_OS_IPHONE is
 #       true on tvOS and visionOS too): not an #ifdef, not defined() alone
 #       and not negated, since the macro is defined, to 0, there too. It
@@ -68,9 +67,12 @@ bad() { echo "check-tvos: $*"; fail=1; }
 # ---- (d) the iPhone and iPad only sites ----------------------------------
 
 # <file>|<the definition the site is in>|<a line inside the guarded block>
+# (the on-screen keyboard's follow-up in IN_Update is not here since TASK175
+# slice 2c-1: it is iPhone, iPad and visionOS, so its guard is an ||; the
+# object pins of (e) below keep it out of tvOS: no _Touch_TextInput, no
+# SDL_RETURN_KEY_HIDES_IME)
 # (awk EREs; awk -v takes a backslash as an escape, so brackets, not \( )
 sites='src/client/input/touch.c|^Touch_Supported[(]void[)]|return 1;
-src/client/input/sdl3.c|^IN_Update[(]void[)]|The on-screen keyboard only while text is typed
 src/client/input/sdl3.c|^IN_Init[(]void[)]|in_touch = Cvar_Get[(]"in_touch", "1"
 src/client/vid/glimp_sdl3.c|^CreateSDLWindow[(]|SDL_HINT_ORIENTATIONS'
 
@@ -190,7 +192,7 @@ MUT
 done <<EOF
 $sites
 EOF
-[ "$n" = 4 ] || bad "(d) $n sites, not 4"
+[ "$n" = 3 ] || bad "(d) $n sites, not 3"
 if [ "$fail" != 0 ]; then
 	exit 1
 fi
