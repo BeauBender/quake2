@@ -138,7 +138,9 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TEMPLATE_DIR="${tmp
 
 # pid_running <pid>: 0 while <pid> runs; 1 when it has gone or is a zombie;
 # 2 when the check cannot tell: <pid> answers kill -0 but ps gives no answer
-# for it, so it may be a zombie or still run (FIX177). kill -0 needs no ps
+# for it, so it may be a zombie or still run (FIX177); when ps gives no
+# answer, kill -0 is asked once more, since the pid may have ended and been
+# reaped between the two probes, and then it has gone (1). kill -0 needs no ps
 # and sends no signal; it is the shell's own (command kill), never a case's
 # stand-in. It fails for a pid that has gone and for one another user runs,
 # and every pid this check waits for is its own user's: so when it fails, ps
@@ -155,9 +157,14 @@ pid_running() {
 		esac
 		return 0
 	fi
-	_s=$(ps -o stat= -p "$1" 2> /dev/null) || return 2
+	_s=$(ps -o stat= -p "$1" 2> /dev/null) || _s=
 	case $_s in
-	'') return 2 ;;
+	'')
+		# ps gave no answer: the pid may have ended since the first probe
+		# (and been reaped), so ask kill -0 once more (FIX177, round 1).
+		command kill -0 "$1" 2> /dev/null || return 1
+		return 2
+		;;
 	Z*) return 1 ;;
 	esac
 	return 0
@@ -786,6 +793,28 @@ t_reap_wait() {
 		_c=$(cat "${E:?}/c.pid" 2> /dev/null) || _c=
 		wait_gone 5 "$_c" || bad "reap-wait: $_k: pid $_c outlived its stop file"
 		forget "$_c"
+	done
+	# A pid that ends between the two probes (FIX177, round 1): kill -0
+	# answers, the pid ends and is reaped while ps is slow, and ps then
+	# gives no answer. The second kill -0 fails, so it has gone (1), not
+	# "cannot tell" (2). A child of this shell, and one that is not.
+	for _k in child other; do
+		_r=$(
+			ps() {
+				sleep 0.5
+				command ps "$@"
+			}
+			if [ "$_k" = child ]; then
+				sleep 0.2 &
+				_p=$!
+			else
+				_p=$(sh -c 'sleep 0.2 > /dev/null 2>&1 & echo $!')
+			fi
+			_rv=0
+			pid_running "$_p" || _rv=$?
+			echo "$_rv"
+		)
+		[ "$_r" = 1 ] || bad "reap-wait: a $_k pid that ended between the two probes read as $_r, not 1 (gone)"
 	done
 	_bare=$(reap_lint "$0" 'reap|reap_skip|ended|reap_lint|t_reap_id|t_reap_wait')
 	[ -z "$_bare" ] || bad "reap-wait: reap is called outside ended, so a wait after it may have no bound: $_bare"
