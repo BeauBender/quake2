@@ -74,29 +74,37 @@ TEST(gamedir_api_refuses)
 		Cvar_FullSet("game", gd_bad[i], CVAR_LATCH | CVAR_SERVERINFO);
 		gd_check_unchanged("Cvar_FullSet", gd_bad[i]);
 
-		/* a console line, as the player's text and as the server's */
-		Com_sprintf(line, sizeof(line), "set game \"%s\"\n", gd_bad[i]);
-		Cbuf_AddText(line);
-		Cbuf_Execute();
-		gd_check_unchanged("player set", gd_bad[i]);
-		Cbuf_AddServerText(line);
-		Cbuf_Execute();
-		gd_check_unchanged("server set", gd_bad[i]);
-		Com_sprintf(line, sizeof(line), "game \"%s\"\n", gd_bad[i]);
-		Cbuf_AddText(line);
-		Cbuf_Execute();
-		gd_check_unchanged("player game", gd_bad[i]);
-		Cbuf_AddServerText(line);
-		Cbuf_Execute();
-		gd_check_unchanged("server game", gd_bad[i]);
+		/* a console line, as the player's text and as the server's. A
+		   newline ends the line, so that name cannot be typed. */
+		if (!strchr(gd_bad[i], '\n'))
+		{
+			Com_sprintf(line, sizeof(line), "set game \"%s\"\n", gd_bad[i]);
+			Cbuf_AddText(line);
+			Cbuf_Execute();
+			gd_check_unchanged("player set", gd_bad[i]);
+			Cbuf_AddServerText(line);
+			Cbuf_Execute();
+			gd_check_unchanged("server set", gd_bad[i]);
+			Com_sprintf(line, sizeof(line), "game \"%s\"\n", gd_bad[i]);
+			Cbuf_AddText(line);
+			Cbuf_Execute();
+			gd_check_unchanged("player game", gd_bad[i]);
+			Cbuf_AddServerText(line);
+			Cbuf_Execute();
+			gd_check_unchanged("server game", gd_bad[i]);
+		}
 
 		/* a latched write: a server is running */
 		Com_SetServerState(ss_game);
 		Cvar_Set("game", gd_bad[i]);
 		gd_check_unchanged("latched Cvar_Set", gd_bad[i]);
-		Cbuf_AddServerText(line);
-		Cbuf_Execute();
-		gd_check_unchanged("latched server game", gd_bad[i]);
+		if (!strchr(gd_bad[i], '\n'))
+		{
+			Com_sprintf(line, sizeof(line), "game \"%s\"\n", gd_bad[i]);
+			Cbuf_AddServerText(line);
+			Cbuf_Execute();
+			gd_check_unchanged("latched server game", gd_bad[i]);
+		}
 		Cvar_GetLatchedVars();
 		gd_check_unchanged("latched apply", gd_bad[i]);
 		Com_SetServerState(0);

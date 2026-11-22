@@ -272,12 +272,39 @@ Cvar_AddToList(const char *var_name, const char *var_value, int flags)
 	return var;
 }
 
+/*
+ * The game cvar never holds a value FS_GameDirValid refuses (FIX173):
+ * the filesystem and the music lister build paths from it, and
+ * userGivenGame, which a disconnect restores, is copied from it. Every
+ * write of a value goes through Cvar_GetNew, Cvar_Get, Cvar_SetVar
+ * (Cvar_Set, Cvar_ForceSet, the console, a latched write) or
+ * Cvar_FullSet, which ask this first; the latched value Cvar_GetLatchedVars
+ * applies was asked when it was written.
+ */
+static qboolean
+Cvar_RefusedGameValue(const char *var_name, const char *value)
+{
+	if (strcmp(var_name, "game") != 0 || FS_GameDirValid(value))
+	{
+		return false;
+	}
+
+	Com_Printf("game: refused \"%.40s\", not a single directory name.\n",
+			value);
+	return true;
+}
+
 static cvar_t *
 Cvar_GetNew(const char *var_name, const char *var_value, int flags)
 {
 	if (!var_value)
 	{
 		return NULL;
+	}
+
+	if (Cvar_RefusedGameValue(var_name, var_value))
+	{
+		var_value = "";
 	}
 
 	if (flags & (CVAR_USERINFO | CVAR_SERVERINFO))
@@ -331,6 +358,11 @@ Cvar_Get(const char *var_name, const char *var_value, int flags)
 	}
 
 	var_name = Cvar_CheckReplacement(var_name, true);
+
+	if (Cvar_RefusedGameValue(var_name, var_value))
+	{
+		var_value = "";
+	}
 
 	// if $game is the default one ("baseq2"), then use "" instead because
 	// other code assumes this behavior (e.g. FS_BuildGameSpecificSearchPath())
@@ -564,7 +596,8 @@ Cvar_ServerWrote(const char *var_name)
 static cvar_t *
 Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 {
-	if (Cvar_RefusedFromServer(var->name))
+	if (Cvar_RefusedFromServer(var->name) ||
+		Cvar_RefusedGameValue(var->name, value))
 	{
 		return var;
 	}
@@ -721,6 +754,11 @@ Cvar_FullSet(const char *var_name, const char *value, int flags)
 		return var ? var : Cvar_GetNew(var_name, "", 0);
 	}
 
+	if (var && Cvar_RefusedGameValue(var_name, value))
+	{
+		return var;
+	}
+
 	if (!var)
 	{
 		var = Cvar_GetNew(var_name, value, flags);
@@ -825,7 +863,7 @@ Cvar_Command(void)
 	/* Another evil hack: The user has just changed 'game' trough
 	   the console. We reset userGivenGame to that value, otherwise
 	   we would revert to the initialy given game at disconnect. */
-	if (strcmp(v->name, "game") == 0)
+	if (strcmp(v->name, "game") == 0 && FS_GameDirValid(Cmd_Argv(1)))
 	{
 		Q_strlcpy(userGivenGame, Cmd_Argv(1), sizeof(userGivenGame));
 	}

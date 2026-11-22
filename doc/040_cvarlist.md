@@ -68,8 +68,11 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   load. Latched, and advertised in the server info.
 
 * **game**: The game (mod) directory to load, for example `rogue`. The
-  empty string (the default) is `baseq2`. Latched, and advertised in the
-  server info.
+  empty string (the default) is `baseq2`. It must be a single directory
+  name: a value with a path separator (`/` or `\`), `:`, `..`, a control
+  byte, or 64 or more characters is refused with a message and the old
+  value stays, whoever writes it (console, `config.cfg`, `+set`, a server).
+  Latched, and advertised in the server info.
 
 * **maxclients**: The number of player slots of the server. `1` (the
   default of the engine) is a single-player game. Latched, and advertised
