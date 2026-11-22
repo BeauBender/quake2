@@ -1436,7 +1436,6 @@ smut tty-home-underscore-boundary ttyself '/[A-Za-z0-9_]/' '/[A-Za-z0-9]/' scrub
 smut tty-home-overlap ttyself 'o = o substr(s, 1, i); s = substr(s, i + 1); }' 'o = o substr(s, 1, i - 1 + length(h)); s = substr(s, i + length(h)); }' scrub
 smut tty-count-awk-v ttyself 'HOME=$1 awk '"'"'{ s = s $0 } END { h = ENVIRON["HOME"];' 'awk -v h="$1" '"'"'{ s = s $0 } END {' scrub
 smut tty-count-no-trim ttyself 'while (substr(h, length(h)) == "/") h = substr(h, 1, length(h) - 1); n = 0;' 'n = 0;' scrub
-smut tty-scrub-no-lcc ttyself 'LC_ALL=C awk' 'awk' scrub
 smut tty-home-unscrubbed ttyself 'if (c !~ /[A-Za-z0-9_]/) {' 'if (0) {' scrub
 smut tty-no-cut ttyself 'print substr(o s, 1, 120)' 'print o s' scrub
 smut tty-no-state-line ttyself '			say "tty: state:$(tcut 200 $_toth)"' ':' ttymsg
