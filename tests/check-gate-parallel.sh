@@ -1171,7 +1171,7 @@ _scrow() {
 # scrubbers read it: from ENVIRON (awk -v would decode backslashes), trailing
 # slashes dropped
 _scount() {
-	HOME=$1 awk '{ s = s $0 } END { h = ENVIRON["HOME"]; while (substr(h, length(h)) == "/") h = substr(h, 1, length(h) - 1); n = 0; while (h != "" && (i = index(s, h)) > 0) { n++; s = substr(s, i + length(h)) } print n }'
+	HOME=$1 awk '{ s = s $0 } END { h = ENVIRON["HOME"]; sub("/+$", "", h); n = 0; while (h != "" && (i = index(s, h)) > 0) { n++; s = substr(s, i + length(h)) } print n }'
 }
 c_scrub() {
 	_tb=$(printf '\t')
@@ -1435,9 +1435,9 @@ smut tty-home-dash-name ttyself '/[A-Za-z0-9_]/' '/[A-Za-z0-9_-]/' scrub
 smut tty-home-underscore-boundary ttyself '/[A-Za-z0-9_]/' '/[A-Za-z0-9]/' scrub
 smut tty-home-overlap ttyself 'o = o substr(s, 1, i); s = substr(s, i + 1); }' 'o = o substr(s, 1, i - 1 + length(h)); s = substr(s, i + length(h)); }' scrub
 smut tty-count-awk-v ttyself 'HOME=$1 awk '"'"'{ s = s $0 } END { h = ENVIRON["HOME"];' 'awk -v h="$1" '"'"'{ s = s $0 } END {' scrub
-smut tty-count-no-trim ttyself 'while (substr(h, length(h)) == "/") h = substr(h, 1, length(h) - 1); n = 0;' 'n = 0;' scrub
+smut tty-count-no-trim ttyself 'sub("/+$", "", h); n = 0;' 'n = 0;' scrub
 smut tty-tscrub-locale-unpinned ttyself 'LC_ALL=C awk' 'awk' scrub
-smut tty-home-unscrubbedttyself 'if (c !~ /[A-Za-z0-9_]/) {' 'if (0) {' scrub
+smut tty-home-unscrubbed ttyself 'if (c !~ /[A-Za-z0-9_]/) {' 'if (0) {' scrub
 smut tty-no-cut ttyself 'print substr(o s, 1, 120)' 'print o s' scrub
 smut tty-no-state-line ttyself '			say "tty: state:$(tcut 200 $_toth)"' ':' ttymsg
 smut tty-state-empty ttyself 'say "tty: state:$(tcut 200 $_toth)"' 'say "tty: state:"' ttymsg
