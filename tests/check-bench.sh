@@ -1601,8 +1601,10 @@ t_core_id() {
 			_n=$((_n + 1))
 		done
 		command kill -TERM "$_nh"
+		# At most 1.5 s for the hold's line, well inside the command's 3 s,
+		# so the lock is still looked at while the command runs.
 		_n=0
-		while ! grep -q 'keeping the lock while pid' "${E:?}/n.out" && pid_running "$_nh" && [ "$_n" -lt 50 ]; do
+		while ! grep -q 'keeping the lock while pid' "${E:?}/n.out" && pid_running "$_nh" && [ "$_n" -lt 15 ]; do
 			sleep 0.1
 			_n=$((_n + 1))
 		done
