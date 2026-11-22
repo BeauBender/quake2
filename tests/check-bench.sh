@@ -1964,6 +1964,12 @@ t_core_id() {
 			lock=held*" untold=$_vp") ;;
 			*) nok "125: the lock was not held for the bounded command that could not be stopped: $_l" ;;
 			esac
+			# The record says when it was written (FIX184, round 1), in the
+			# form a later process's start is compared with, and not before
+			# the command started.
+			_w=$(bench_kv "$(cat "${BENCH_LOCK_DIR:?}/untold.$_vp" 2> /dev/null)" written)
+			bench_lock_later "$_w" 'Sat Jan 1 00:00:00 2000' || nok "125: the record holds no written time in the form of a start time: '$_w'"
+			if bench_lock_untold_reused "$_vp" "$_w"; then nok "125: the record's written time ($_w) is before the start of the command it records"; fi
 		else
 			nok "125: the bounded command was gone before the check of the lock"
 		fi

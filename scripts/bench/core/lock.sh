@@ -242,16 +242,23 @@ bench_lock_mine() {
 # when there is a holder file already; else by a rename, which replaces
 # this process's own.
 bench_lock_write() {
-	_lw_t=${BENCH_LOCK_DIR:?}/holder.tmp.$$
-	printf 'label=%s\npid=%s\nchild=%s\nstart=%s\ntoken=%s\n' \
-		"$1" "$$" "$2" "$BENCH_LOCK_SINCE" "$BENCH_LOCK_MINE" > "$_lw_t" 2> /dev/null || return 1
+	# A temporary file mktemp makes (a name no other process knows ahead, so
+	# none can plant a link there; FIX184, round 1).
+	_lw_t=$(mktemp "${BENCH_LOCK_DIR:?}/holder.tmp.XXXXXX" 2> /dev/null) || return 1
+	if ! printf 'label=%s\npid=%s\nchild=%s\nstart=%s\ntoken=%s\n' \
+		"$1" "$$" "$2" "$BENCH_LOCK_SINCE" "$BENCH_LOCK_MINE" > "$_lw_t" 2> /dev/null; then
+		rm -f "$_lw_t"
+		return 1
+	fi
 	if [ "${3:-}" = new ]; then
 		_lw_st=0
 		ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder" 2> /dev/null || _lw_st=1
 		rm -f "$_lw_t"
 		return "$_lw_st"
 	fi
-	mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder" 2> /dev/null
+	mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder" 2> /dev/null && return 0
+	rm -f "$_lw_t"
+	return 1
 }
 
 # bench_dir_id <dir>: the inode of <dir>, empty when it is gone.
@@ -375,6 +382,8 @@ bench_lock_acquire() {
 		_la_miss=0
 		if [ -n "$_la_h" ]; then
 			_la_who="held by $(bench_kv "$_la_h" label) (pid $(bench_kv "$_la_h" pid), since $(bench_kv "$_la_h" start))"
+		elif [ -d "${BENCH_LOCK_DIR:?}" ] && bench_lock_untold_live; then
+			_la_who="held by a command under it that could not be stopped (recorded pid $BENCH_LOCK_UNTOLD)"
 		elif [ -d "${BENCH_LOCK_DIR:?}" ]; then
 			_la_who="held by a holder that has not written its holder file yet"
 		else
@@ -460,13 +469,14 @@ bench_quiet_mark() {
 	fi
 }
 
-# bench_quiet_release: removes the marker when it is the one this process
-# wrote, or, in the lock shell, one that names this process's hold.
+# bench_quiet_release [owned]: removes the marker when it is the one this
+# process wrote, or, in the lock shell, one that names this process's hold
+# ("owned": the lock shell's release, which has cleared BENCH_LOCK_OWNED).
 bench_quiet_release() {
 	[ -n "${BENCH_STATE_DIR:-}" ] || return 0
 	_qx_h=$(cat "${BENCH_STATE_DIR:?}/quiet" 2> /dev/null) || return 0
 	if { [ -n "$BENCH_QUIET_MINE" ] && [ "$(bench_kv "$_qx_h" token)" = "$BENCH_QUIET_MINE" ]; } ||
-		{ [ "${BENCH_LOCK_OWNED:-}" = 1 ] && [ "$(bench_kv "$_qx_h" hold)" = "$BENCH_LOCK_MINE" ]; }; then
+		{ { [ "${BENCH_LOCK_OWNED:-}" = 1 ] || [ "${1:-}" = owned ]; } && [ "$(bench_kv "$_qx_h" hold)" = "$BENCH_LOCK_MINE" ]; }; then
 		rm -f "${BENCH_STATE_DIR:?}/quiet"
 	fi
 	BENCH_QUIET_MINE=
@@ -477,21 +487,28 @@ bench_quiet_release() {
 # marker this process wrote, then the lock if this process holds it.
 bench_lock_release() {
 	if [ -n "${BENCH_LOCK_TICKET:-}${BENCH_LOCK_TICKET_TMP:-}" ]; then bench_lock_unqueue; fi
-	bench_quiet_release
-	[ "${BENCH_LOCK_OWNED:-}" = 1 ] || return 0
+	if [ "${BENCH_LOCK_OWNED:-}" != 1 ]; then
+		bench_quiet_release
+		return 0
+	fi
 	BENCH_LOCK_OWNED=
-	if [ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_MINE" ]; then
-		# A command under the lock that could not be stopped may still run
-		# (FIX184): the lock stays held, and said, until no record is live.
-		# No signal ends this wait: a KILL leaves the lock to the waiters,
-		# which take it as alive (bench_lock_alive) while a record is.
-		if bench_lock_untold_live; then
-			trap '' INT TERM HUP
-			bench_note "keeping the lock while recorded pid $BENCH_LOCK_UNTOLD may run: a command under it that could not be stopped"
-			while bench_lock_untold_live; do bench_nap 1; done
-			bench_note "the recorded commands have ended, or their pids are no longer theirs; freeing the lock"
-		fi
-		rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}/holder.tmp.$$" "${BENCH_LOCK_DIR:?}"/untold.*
+	_rl_m=
+	if [ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_MINE" ]; then _rl_m=1; fi
+	# A command under the lock that could not be stopped may still run
+	# (FIX184): the lock stays held, and said, until no record is live.
+	# No signal ends this wait: a KILL leaves the lock to the waiters,
+	# which take it as alive (bench_lock_alive) while a record is.
+	if [ -n "$_rl_m" ] && bench_lock_untold_live; then
+		trap '' INT TERM HUP
+		bench_note "keeping the lock while recorded pid $BENCH_LOCK_UNTOLD may run: a command under it that could not be stopped"
+		while bench_lock_untold_live; do bench_nap 1; done
+		bench_note "the recorded commands have ended, or their pids are no longer theirs; freeing the lock"
+	fi
+	# The quiet marker goes after that wait, with the lock (FIX184, round
+	# 1): other sessions hold their work while the command may still run.
+	bench_quiet_release owned
+	if [ -n "$_rl_m" ]; then
+		rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}"/holder.tmp.* "${BENCH_LOCK_DIR:?}"/untold.*
 		rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null || true
 	fi
 	return 0
@@ -509,7 +526,10 @@ bench_lock_record() {
 	if [ -z "${BENCH_LOCK_DIR:-}" ]; then
 		[ -n "${BENCH_LOCK_TOKEN:-}" ] || return 0
 		# A subshell asks first: bench_lock_init dies on a bad setting.
-		(bench_lock_init) > /dev/null 2>&1 || return 0
+		if ! (bench_lock_init) > /dev/null 2>&1; then
+			bench_note "cannot record pid $1 in the lock state: the lock state directory cannot be resolved; the lock may be freed while it still runs"
+			return 0
+		fi
 		bench_lock_init
 	fi
 	if [ "${BENCH_LOCK_OWNED:-}" = 1 ]; then
@@ -517,16 +537,68 @@ bench_lock_record() {
 	elif bench_lock_mine; then
 		_lk_k=$BENCH_LOCK_TOKEN
 	else
+		if [ -n "${BENCH_LOCK_TOKEN:-}" ]; then
+			bench_note "cannot record pid $1 in the lock state: the lock BENCH_LOCK_TOKEN names is not held here; the lock may be freed while it still runs"
+		fi
 		return 0
 	fi
-	_lk_t=${BENCH_LOCK_DIR:?}/untold.tmp.$$
-	if printf 'pid=%s\nstart=%s\ntoken=%s\n' "$1" "$_lk_s" "$_lk_k" > "$_lk_t" 2> /dev/null &&
+	# When it is written, in bench_proc_read's form (C locale): a process
+	# ps shows started later is not the recorded command (FIX184, round 1).
+	_lk_w=$(bench_lock_now)
+	# A temporary file mktemp makes (a name no other process knows ahead, so
+	# none can plant a link there), renamed into place.
+	_lk_t=$(mktemp "${BENCH_LOCK_DIR:?}/untold.tmp.XXXXXX" 2> /dev/null) || _lk_t=
+	if [ -n "$_lk_t" ] && printf 'pid=%s\nstart=%s\nwritten=%s\ntoken=%s\n' "$1" "$_lk_s" "$_lk_w" "$_lk_k" > "$_lk_t" 2> /dev/null &&
 		mv -f "$_lk_t" "${BENCH_LOCK_DIR:?}/untold.$1" 2> /dev/null; then
 		bench_note "recorded pid $1 in the lock state: the lock is kept while it may still run"
 		return 0
 	fi
-	rm -f "$_lk_t"
+	if [ -n "$_lk_t" ]; then rm -f "$_lk_t"; fi
 	bench_note "cannot record pid $1 in the lock state"
+}
+
+# bench_lock_now: the time now, in bench_proc_read's form of a start time
+# in the C locale: its words one blank apart.
+bench_lock_now() {
+	(
+		LC_ALL=C
+		export LC_ALL
+		set -f
+		# shellcheck disable=SC2046 # split into words; globbing is off
+		set -- $(date '+%a %b %e %H:%M:%S %Y')
+		printf '%s' "$*"
+	)
+}
+
+# bench_lock_later <a> <b>: start time <a> is later than <b>, both in
+# bench_proc_read's form in the C locale ("Sun Nov 22 09:45:08 2026", local
+# time, to the second). False when either is not in that form.
+bench_lock_later() {
+	awk -v a="$1" -v b="$2" '
+		function key(s,  f, m) {
+			if (split(s, f, " ") != 5) return ""
+			m = index("JanFebMarAprMayJunJulAugSepOctNovDec", f[2])
+			if (length(f[2]) != 3 || m == 0 || (m - 1) % 3 != 0) return ""
+			if (f[3] !~ /^[0-9]+$/ || f[4] !~ /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/ || f[5] !~ /^[0-9][0-9][0-9][0-9]$/) return ""
+			gsub(":", "", f[4])
+			return sprintf("%s%02d%02d%s", f[5], (m + 2) / 3, f[3], f[4])
+		}
+		BEGIN { x = key(a); y = key(b); exit !(x != "" && y != "" && x > y) }'
+}
+
+# bench_lock_untold_reused <pid> <written>: a record with no start time,
+# written at <written> (bench_lock_now), whose <pid> ps shows started later
+# than that: the process is not the recorded command, which started before
+# its record was written, and has taken its pid. False when ps gives no
+# answer, or either time is not known.
+bench_lock_untold_reused() {
+	[ -n "$2" ] || return 1
+	_ur_n=$(
+		LC_ALL=C
+		export LC_ALL
+		bench_proc_read "$1" && printf '%s' "$BENCH_PS_START"
+	) || return 1
+	bench_lock_later "$_ur_n" "$2"
 }
 
 BENCH_LOCK_UNTOLD=
@@ -546,15 +618,25 @@ bench_lock_untold_live() {
 		case $_lu_p in
 		'' | 0 | 1 | *[!0-9]*) continue ;;
 		esac
+		_lu_s=$(bench_kv "$_lu_h" start)
 		_lu_r=0
-		bench_proc_same "$_lu_p" "$(bench_kv "$_lu_h" start)" || _lu_r=$?
+		bench_proc_same "$_lu_p" "$_lu_s" || _lu_r=$?
 		case $_lu_r in
 		0)
 			case $BENCH_PS_F in
 			Z*) continue ;;
 			esac
 			;;
-		2) : ;;
+		2)
+			# No start time was read for the command (FIX184, round 1): once
+			# ps shows a process with its pid that started after the record
+			# was written, that process is not the command.
+			case $_lu_s in
+			'' | '?')
+				if bench_lock_untold_reused "$_lu_p" "$(bench_kv "$_lu_h" written)"; then continue; fi
+				;;
+			esac
+			;;
 		*) continue ;;
 		esac
 		BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"
@@ -710,7 +792,11 @@ bench_lock_status() {
 	else
 		_ls_h=$(bench_lock_holder)
 		if [ -z "$_ls_h" ]; then
-			echo "lock=held label=none holder=unwritten"
+			# Held only by a recorded command that may still run (FIX184,
+			# round 1), when any.
+			_ls_u=
+			if bench_lock_untold_live; then _ls_u=" untold=$(printf '%s' "$BENCH_LOCK_UNTOLD" | tr ' ' ,)"; fi
+			echo "lock=held label=none holder=unwritten$_ls_u"
 		else
 			_ls_p=$(bench_kv "$_ls_h" pid)
 			_ls_c=$(bench_kv "$_ls_h" child)
