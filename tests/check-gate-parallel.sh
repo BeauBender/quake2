@@ -848,7 +848,7 @@ c_tty() {
 	d=$(newcase)
 	if [ -n "${TTY_HOLD:-}" ]; then gtree "$d" "$_tf" 1 0 0 "${TTY_MODE:-hold}" "$TTY_HOLD"; else gtree "$d" "$_tf" 1 0 0; fi
 	launch "$d" script -q /dev/null sh -c 'printf "%s\n" "$$" > "$1/shpid"; stty tostop; shift; exec "$@"' sh "$d" \
-		env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PATH="$tmp/make:$PATH" sh ${TTY_X:+-x} "$d/tree/scripts/test.sh"
+		env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PATH="$tmp/make:$PATH" PS4='+ ' sh ${TTY_X:+-x} "$d/tree/scripts/test.sh"
 	rc=0
 	# the wait also ends, as at the bound, once a process of the run is
 	# stopped: nothing sends it SIGCONT, so a stop never resumes
@@ -983,17 +983,74 @@ c_ttylate() {
 # - the scheduler run with sh -x on one check writes no trace of the
 #   check's command (the child's line) to its own output, while it writes
 #   its other traces there (+ set -m)
+# Every sh -x run here has PS4='+ ' in its own environment, so a PS4 this
+# self-test is started with changes no trace line it looks for.
 c_ttyfork() {
 	_fo=$(TTY_X=1 quiet=0 c_tty) || { say "ttyfork: test.sh's start of the scheduler stopped on a tostop terminal: $_fo"; return 1; }
 	d=$(newcase)
 	spec "$d" a 1 0 0
 	rc=0
-	bounded 90 "$d/out" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
+	bounded 90 "$d/out" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PS4='+ ' \
 		sh -x "$SCHED" "" "" "$d/check-a.sh" || rc=$?
 	[ "$rc" -eq 0 ] && grep -qx 'a line 1' "$d/out" || { say "ttyfork: the scheduler with sh -x gave status $rc"; return 1; }
 	grep -qx '+ set -m' "$d/out" || { say "ttyfork: the scheduler with sh -x wrote no trace"; return 1; }
 	if grep -qxF "+ $d/check-a.sh" "$d/out"; then
 		say "ttyfork: the scheduler's child wrote to its standard error before its exec (+ $d/check-a.sh)"
+		return 1
+	fi
+}
+
+# nostderr: scripts/test.sh (or $WIRING) started with its standard error
+# closed runs the scheduler, and the gate's status is the scheduler's, as
+# with it open: outside the lock (BENCH_LOCK=0) and at the lock's re-entry
+# (BENCH_LOCK_ENTRY=gate and a token; lock.sh's exec keeps a closed one).
+# The scheduler is a fake that notes it ran and exits with GP_SCHED_STATUS,
+# 0 (the makes follow) or 3 (they do not). Without test.sh's guard a write
+# to that standard error ends test.sh (set -e), and the start's 3>&2 fails:
+# $! is then unset (outside the lock) or the watcher's (under it, and
+# test.sh waits on the watcher until the bound)
+c_nostderr() {
+	_tf=${WIRING:-$top/scripts/test.sh}
+	for _ne in BENCH_LOCK=0 BENCH_LOCK_ENTRY=gate; do
+		for _ns in 0 3; do
+			d=$(newcase)
+			gtree "$d" "$_tf" 1 0 0
+			printf '%s\n' '#!/bin/sh' 'printf "sched %s\n" "$GATE_PARENT" >> "$GP_EVENTS"' 'exit "$GP_SCHED_STATUS"' > "$d/tree/scripts/gate-checks.sh"
+			rc=0
+			bounded 20 "$d/out" env "$_ne" BENCH_LOCK_TOKEN=t GP_SCHED_STATUS="$_ns" GP_EVENTS="$d/events" TMPDIR="$d/td" \
+				PATH="$tmp/make:$PATH" sh -c 'exec 2>&-; exec sh "$1"' sh "$d/tree/scripts/test.sh" || rc=$?
+			_nm=$(grep -c '^make ' "$d/events" || :)
+			grep -q '^sched [0-9][0-9]*$' "$d/events" ||
+				{ say "nostderr: $_ne: test.sh with its standard error closed did not run the scheduler (status $rc): $(tr '\n' ' ' < "$d/out")"; return 1; }
+			[ "$rc" -eq "$_ns" ] || { say "nostderr: $_ne: the scheduler gave $_ns, test.sh $rc"; return 1; }
+			if [ "$_ns" -eq 0 ]; then
+				[ "$_nm" -eq 2 ] || { say "nostderr: $_ne: $_nm makes after the scheduler passed, not 2"; return 1; }
+			else
+				[ "$_nm" -eq 0 ] || { say "nostderr: $_ne: $_nm makes after the scheduler failed"; return 1; }
+			fi
+		done
+	done
+}
+
+# watchfork: under the lock (BENCH_LOCK_ENTRY=gate and a token) test.sh, run
+# with sh -x (PS4='+ '), writes no trace of the watcher's start: the child
+# forked for it traces its command before its redirections and exec, and
+# with test.sh's standard error there a tostop terminal would stop it, as
+# in ttyfork. GATE_JOBS=x makes the scheduler fail at once, and its own line
+# saying so reaches test.sh's standard error (the start's 2>&3)
+c_watchfork() {
+	_tf=${WIRING:-$top/scripts/test.sh}
+	d=$(newcase)
+	gtree "$d" "$_tf" 1 0 0
+	rc=0
+	bounded 60 "$d/out" env BENCH_LOCK_ENTRY=gate BENCH_LOCK_TOKEN=t GATE_JOBS=x GP_EVENTS="$d/events" GP_SPEC="$d/spec" \
+		TMPDIR="$d/td" PATH="$tmp/make:$PATH" PS4='+ ' sh -x "$d/tree/scripts/test.sh" || rc=$?
+	[ "$rc" -ne 0 ] && [ "$rc" -ne 124 ] || { say "watchfork: test.sh with GATE_JOBS=x gave status $rc"; return 1; }
+	grep -qx '+ set -o monitor' "$d/out" || { say "watchfork: test.sh did not start the watcher, or wrote no trace"; return 1; }
+	grep -qxF "gate: GATE_JOBS must be a positive whole number, not 'x'" "$d/out" ||
+		{ say "watchfork: the scheduler's own standard error did not reach test.sh's"; return 1; }
+	if grep -qF 'gate-watch' "$d/out"; then
+		say "watchfork: the watcher's child wrote to test.sh's standard error before its exec: $(grep -F 'gate-watch' "$d/out" | head -n 1)"
 		return 1
 	fi
 }
@@ -1162,7 +1219,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork leave intskip ttyself"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi

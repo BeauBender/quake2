@@ -22,6 +22,13 @@
 # two targets takes a few seconds; the suite builds and runs in a few more.
 set -eu
 
+# A closed standard error becomes /dev/null, as bench_spawn does (FIX83):
+# a write to it would end this script (set -e) with no word, and the
+# scheduler's start below (3>&2) would fail and leave $! the watcher's, so
+# the gate would wait on that (FIX176). The lock's re-entry (an exec) keeps
+# a closed one.
+{ :; } 3>&2 2> /dev/null || exec 2> /dev/null
+
 # MAKEFLAGS=-i or -n from the environment would turn a failing or empty run
 # into success; the command-line overrides below are kept.
 unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
