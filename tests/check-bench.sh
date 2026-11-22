@@ -136,13 +136,29 @@ mkdir "${tmp:?}/tpl"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TEMPLATE_DIR="${tmp:?}/tpl"
 : > "${tmp:?}/pids"
 
+# pid_running <pid>: 0 while <pid> runs; 1 when it has gone or is a zombie;
+# 2 when the check cannot tell: <pid> answers kill -0 but ps gives no answer
+# for it, so it may be a zombie or still run (FIX177). kill -0 needs no ps
+# and sends no signal; it is the shell's own (command kill), never a case's
+# stand-in. It fails for a pid that has gone and for one another user runs,
+# and every pid this check waits for is its own user's: so when it fails, ps
+# decides when it answers, and a pid ps gives no answer for has gone. A
+# zombie answers kill -0, so it is told from a running pid by ps alone.
 pid_running() {
 	case $1 in
 	'' | 0 | *[!0-9]*) return 1 ;;
 	esac
-	_s=$(ps -o stat= -p "$1" 2> /dev/null) || return 1
+	if ! command kill -0 "$1" 2> /dev/null; then
+		_s=$(ps -o stat= -p "$1" 2> /dev/null) || return 1
+		case $_s in
+		'' | Z*) return 1 ;;
+		esac
+		return 0
+	fi
+	_s=$(ps -o stat= -p "$1" 2> /dev/null) || return 2
 	case $_s in
-	'' | Z*) return 1 ;;
+	'') return 2 ;;
+	Z*) return 1 ;;
 	esac
 	return 0
 }
@@ -268,11 +284,20 @@ start() {
 	settle "$BG"
 	record "$BG"
 }
-# wait_gone <seconds> <pid>: once <pid> is seen gone, it is forgotten.
+# wait_gone <seconds> <pid>: 0 once <pid> is seen gone, and then it is
+# forgotten; past <seconds>, 1 while it still runs and 2 while the check
+# cannot tell (pid_running): a pid that ps gives no answer for is never
+# taken as gone (FIX177).
 wait_gone() {
 	_n=0
-	while pid_running "$2"; do
-		[ "$_n" -lt $(($1 * 10)) ] || return 1
+	while :; do
+		_wg=0
+		pid_running "$2" || _wg=$?
+		case $_wg in
+		0) _wg=1 ;;
+		1) break ;;
+		esac
+		[ "$_n" -lt $(($1 * 10)) ] || return "$_wg"
 		sleep 0.1
 		_n=$((_n + 1))
 	done
@@ -286,9 +311,11 @@ wait_gone() {
 # holds for <pid> (FIX171): the KILL comes 30 s after the TERM, time enough
 # for the system to give the pid to another process. A pid that runs but is
 # not on the list, was listed with no identity, has another identity now,
-# or that ps gives no answer for, gets no signal; that is a failure, said,
-# and reap is false, since nothing would bound a wait for that process. So
-# is a pid that still runs 5 s after its KILL.
+# or that ps gives no start time for, gets no signal; that is a failure,
+# said, and reap is false, since nothing would bound a wait for that
+# process. So is a pid that ps gives no answer for at all while it answers
+# kill -0 (the check cannot tell whether it runs, FIX177), and a pid that
+# still runs 5 s after its KILL.
 reap() {
 	if ! listed_same "$1"; then
 		reap_skip TERM "$1"
@@ -306,10 +333,16 @@ reap() {
 	return 1
 }
 # reap_skip <signal> <pid>: the signal reap did not send; true when <pid>
-# has gone, a failure (said) and false while it still runs.
+# has gone, a failure (said) and false while it still runs or the check
+# cannot tell (FIX177).
 reap_skip() {
-	wait_gone 0 "$2" && return 0
-	bad "reap: no $1 to pid $2: it is not the process this check recorded (another identity, none, or no answer from ps), so it is not waited for"
+	_rk=0
+	wait_gone 0 "$2" || _rk=$?
+	case $_rk in
+	0) return 0 ;;
+	2) bad "reap: no $1 to pid $2: it answers kill -0 and ps gives no answer for it, so the check cannot tell whether it still runs, and it is not waited for" ;;
+	*) bad "reap: no $1 to pid $2: it is not the process this check recorded (another identity, none, or no answer from ps), so it is not waited for" ;;
+	esac
 	return 1
 }
 # decoy <how> <identity>: sets _id, the identity one run of a signal site
@@ -707,9 +740,11 @@ t_reap_id() {
 
 # t_reap_wait: no caller of reap waits for a pid that reap did not end
 # (FIX171). A child of the check's that ends only once the stop file is
-# there (or after about 30 s) is listed with no identity, or with another's.
-# Each kind of caller, finish and ended (then collect, as each caller of
-# ended does), must return within 10 s and count the failure. And no line
+# there (or after about 30 s) is listed with no identity, or with another's,
+# or with its own while ps fails for every call (nops, FIX177: the check
+# cannot tell, and reap must say so and send nothing). Each kind of caller,
+# finish and ended (then collect, as each caller of ended does), must return
+# within 10 s and count the failure. And no line
 # outside reap, reap_skip, ended and reap's own tests holds the word reap
 # (reap_lint, checked on its own shapes): a caller that did would wait for
 # its pid with nothing to bound the wait.
@@ -717,13 +752,18 @@ t_reap_wait() {
 	fresh reap-wait
 	printf '%s\n' 'trap "echo TERM >> \"\$1\"" TERM' 'n=0' 'while [ ! -e "$2" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/deaf.sh"
 	_o=$(pid_id 1) || bad "reap-wait: ps gave no start time for pid 1"
-	for _k in finish:none finish:other ended:none ended:other; do
-		rm -f "${E:?}/stop" "${E:?}/c.pid"
+	for _k in finish:none finish:other finish:nops ended:none ended:other ended:nops; do
+		rm -f "${E:?}/stop" "${E:?}/c.pid" "${E:?}/c.sig"
 		(
 			start sh "${E:?}/deaf.sh" "${E:?}/c.sig" "${E:?}/stop"
 			echo "$BG" > "${E:?}/c.pid"
-			forget "$BG"
-			if [ "${_k#*:}" = none ]; then printf '%s \n' "$BG"; else printf '%s %s\n' "$BG" "$_o"; fi >> "${tmp:?}/pids"
+			case ${_k#*:} in
+			none) forget "$BG" && printf '%s \n' "$BG" >> "${tmp:?}/pids" ;;
+			other) forget "$BG" && printf '%s %s\n' "$BG" "$_o" >> "${tmp:?}/pids" ;;
+			# Listed with its own identity, then ps fails for every call
+			# (FIX177): the check cannot tell whether the child runs.
+			nops) ps() { return 1; } ;;
+			esac
 			_f0=$fails
 			case ${_k%:*} in
 			finish) finish reap-wait "$BG" 0 1 ;;
@@ -738,6 +778,10 @@ t_reap_wait() {
 		wait "$_w" || _ws=$?
 		[ "$_ws" -eq 0 ] || bad "reap-wait: $_k: the caller counted no failure: $(cat "${E:?}/w.out")"
 		grep -q "reap: no TERM to pid " "${E:?}/w.out" || bad "reap-wait: $_k: reap did not say it sent no TERM: $(cat "${E:?}/w.out")"
+		if [ "${_k#*:}" = nops ]; then
+			grep -q "so the check cannot tell whether it still runs" "${E:?}/w.out" || bad "reap-wait: $_k: reap did not say it cannot tell: $(cat "${E:?}/w.out")"
+			[ ! -s "${E:?}/c.sig" ] || bad "reap-wait: $_k: a signal went to a pid that ps gave no answer for"
+		fi
 		_c=$(cat "${E:?}/c.pid" 2> /dev/null) || _c=
 		wait_gone 5 "$_c" || bad "reap-wait: $_k: pid $_c outlived its stop file"
 		forget "$_c"
@@ -1481,10 +1525,12 @@ holder() {
 	wait_held 5 "$1" || bad "queue: the holder $1 never held the lock"
 }
 # finish <test> <pid> <status> [<seconds>]: waits for <pid> (at most
-# <seconds>, 30 by default, then reaps it), wants <status>.
+# <seconds>, 30 by default, then reaps it), wants <status>. False, the
+# failure counted by ended, when reap did not end <pid> (FIX177).
 finish() {
 	_st=0
-	if ended "${4:-30}" "$2" "$1: pid $2 did not finish"; then collect "$2" || _st=$?; fi
+	ended "${4:-30}" "$2" "$1: pid $2 did not finish" || return 1
+	collect "$2" || _st=$?
 	[ "$_st" -eq "$3" ] || bad "$1: pid $2 exited $_st, not $3"
 }
 
