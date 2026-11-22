@@ -621,7 +621,7 @@ static void IN_Controller_Shutdown(qboolean notify_user);
 static void IN_Probe_Frame(void);
 #endif
 
-#if defined(__APPLE__) && TARGET_OS_TV
+#if defined(__APPLE__) && (TARGET_OS_TV || (defined(TARGET_OS_VISION) && TARGET_OS_VISION && TARGET_OS_SIMULATOR))
 /*
  * The tvOS simulator adds a gamepad of its own about a second after the
  * start (TASK182): a GCController named 'Gamepad' that SDL's MFi driver
@@ -631,7 +631,15 @@ static void IN_Probe_Frame(void);
  * controller that is really there. It is passed over while another
  * gamepad is present, as the touch controls are, and a gamepad added
  * while it is in use is looked at again. Alone it is still opened.
+ * The visionOS simulator adds the same gamepad (TASK175 slice 2b: the
+ * name, vendor, product, version and GUID of the tvOS one).
  */
+#if defined(TARGET_OS_VISION) && TARGET_OS_VISION
+#define IN_SIMULATOR_OS "visionOS"
+#else
+#define IN_SIMULATOR_OS "tvOS"
+#endif
+
 static bool
 IN_IsTVSimulatorPad(SDL_JoystickID id)
 {
@@ -1585,7 +1593,7 @@ IN_Update(void)
 				}
 				// a physical device is preferred over the touch controls: look again
 				if (!controller || (touch_in_use && event.jdevice.which != touch_joy_id)
-#if defined(__APPLE__) && TARGET_OS_TV
+#if defined(__APPLE__) && (TARGET_OS_TV || (defined(TARGET_OS_VISION) && TARGET_OS_VISION && TARGET_OS_SIMULATOR))
 					/* and a gamepad over the tvOS simulator's own */
 					|| (IN_IsTVSimulatorPad(SDL_GetJoystickID(SDL_GetGamepadJoystick(controller)))
 						&& !IN_IsTVSimulatorPad(event.jdevice.which))
@@ -3134,7 +3142,7 @@ IN_Controller_Init(qboolean notify_user)
 		}
 	}
 
-#if defined(__APPLE__) && TARGET_OS_TV
+#if defined(__APPLE__) && (TARGET_OS_TV || (defined(TARGET_OS_VISION) && TARGET_OS_VISION && TARGET_OS_SIMULATOR))
 	// and a gamepad over the tvOS simulator's own
 	bool other_pad = false;
 
@@ -3175,10 +3183,10 @@ IN_Controller_Init(qboolean notify_user)
 			goto next_joy;
 		}
 
-#if defined(__APPLE__) && TARGET_OS_TV
+#if defined(__APPLE__) && (TARGET_OS_TV || (defined(TARGET_OS_VISION) && TARGET_OS_VISION && TARGET_OS_SIMULATOR))
 		if (other_pad && IN_IsTVSimulatorPad(joysticks[i]))
 		{
-			Com_Printf ("Skipping joystick %d, the tvOS simulator's own gamepad: another gamepad is connected.\n", i+1);
+			Com_Printf ("Skipping joystick %d, the " IN_SIMULATOR_OS " simulator's own gamepad: another gamepad is connected.\n", i+1);
 			goto next_joy;
 		}
 #endif
