@@ -510,10 +510,12 @@ c_guard() {
 # once; testsh shows they do), and the next lines record its pid, turn job
 # control off again and wait for it, nothing more ("|| ..." would ignore its
 # status); all of that before the first make, and the script stops on a
-# failure (set -e). Job control on for the start: sigs shows it.
+# failure (set -e). Job control on for the start: sigs shows it. (The
+# start's own standard error is /dev/null for the fork, the scheduler's is
+# test.sh's on fd 3: ttyfork shows why.)
 c_wiring() {
 	_wf=${WIRING:-$top/scripts/test.sh}
-	_wl=$(grep -n '^GATE_PARENT=\$\$ scripts/gate-checks\.sh "\$gate_serial" "\$gate_first" tests/check-\*\.sh &$' "$_wf" | cut -d: -f1)
+	_wl=$(grep -n '^{ 2>&3 3>&- GATE_PARENT=\$\$ scripts/gate-checks\.sh "\$gate_serial" "\$gate_first" tests/check-\*\.sh & } 3>&2 2> /dev/null$' "$_wf" | cut -d: -f1)
 	_wm=$(grep -n '^make -B' "$_wf" | head -n 1 | cut -d: -f1)
 	[ -n "$_wl" ] && [ "$(printf '%s\n' "$_wl" | wc -l)" -eq 1 ] || { say "wiring: test.sh does not start the scheduler on tests/check-*.sh exactly once"; return 1; }
 	[ "$(sed -n "$((_wl + 1))p" "$_wf")" = 'gate_sched=$!' ] && [ "$(sed -n "$((_wl + 2))p" "$_wf")" = 'set +m' ] &&
@@ -1256,6 +1258,11 @@ mutant ttou-to-checks sigs '	trap - TTOU' '	:'
 # (the two re-ignores: the one in gate_start is told apart by its comment)
 mutant ttou-after-start tty "trap '' TTOU # the scheduler again" ':'
 mutant ttou-scheduler tty "trap '' TTOU" ':' "	trap '' TTOU #"
+# (the shell's standard error left on the terminal for the fork of a check,
+# and of the scheduler; the scheduler's own standard error lost with it)
+mutant start-stderr-on-tty ttyfork '{ "$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 & } 2> /dev/null' '"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &'
+wmut sched-stderr-on-tty ttyfork '{ 2>&3 3>&- GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh & } 3>&2 2> /dev/null' 'GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &'
+wmut sched-stderr-lost wiring '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
 # (without its own group the scheduler, and every check, ignore SIGINT and
 # SIGQUIT; when this self-test already ignores both, nothing differs)
 intmut wmut no-own-group sigs 'set -m' ':'
