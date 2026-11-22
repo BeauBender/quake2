@@ -766,6 +766,7 @@ typedef enum
 void FS_DPrintf(const char *format, ...);
 int FS_FOpenFile(const char *name, fileHandle_t *f, qboolean gamedir_only);
 void FS_FCloseFile(fileHandle_t f);
+qboolean FS_TrackNameValid(const char *track);
 int FS_Read(void *buffer, int size, fileHandle_t f);
 int FS_FRead(void *buffer, int size, int count, fileHandle_t f);
 
@@ -780,6 +781,7 @@ strlist_t FS_ListFiles2(const char *findname,
 
 void FS_InitFilesystem(void);
 void FS_ShutdownFilesystem(void);
+qboolean FS_GameDirValid(const char *name);
 void FS_BuildGameSpecificSearchPath(const char *dir);
 const char *FS_Gamedir(void);
 const char *FS_NextPath(const char *prevpath);

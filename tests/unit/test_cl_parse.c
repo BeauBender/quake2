@@ -355,6 +355,113 @@ build_serverdata(int playernum)
 	MSG_BeginReading(&net_message);
 }
 
+/* ---- FIX169: the game directory in svc_serverdata ---- */
+
+static void
+build_serverdata_game(const char *game)
+{
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_serverdata);
+	MSG_WriteLong(&net_message, PROTOCOL_VERSION);
+	MSG_WriteLong(&net_message, 1);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteString(&net_message, game);
+	MSG_WriteShort(&net_message, 0);
+	MSG_WriteString(&net_message, "level");
+	MSG_BeginReading(&net_message);
+}
+
+static void
+refused_game(const char *game)
+{
+	extern cvar_t *fs_gamedirvar;
+	char old[MAX_QPATH];
+
+	reset_client();
+	Q_strlcpy(old, fs_gamedirvar->string, sizeof(old));
+	build_serverdata_game(game);
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("invalid game directory");
+	T_EQ_STR(fs_gamedirvar->string, old);
+	T_EQ_STR(cl.gamedir, "");
+}
+
+TEST(cl_gamedir_control_byte_refused)
+{
+	refused_game("x\ny");
+}
+
+TEST(cl_gamedir_slash_refused)
+{
+	refused_game("a/b");
+}
+
+TEST(cl_gamedir_dotdot_refused)
+{
+	refused_game("..");
+}
+
+TEST(cl_gamedir_colon_refused)
+{
+	refused_game("a:b");
+}
+
+TEST(cl_gamedir_backslash_refused)
+{
+	refused_game("a\\b");
+}
+
+TEST(cl_gamedir_del_refused)
+{
+	refused_game("a\x7f" "b");
+}
+
+TEST(cl_gamedir_lone_dot_refused)
+{
+	refused_game(".");
+}
+
+TEST(cl_gamedir_empty_accepted)
+{
+	extern cvar_t *fs_gamedirvar;
+	char old[MAX_QPATH];
+
+	reset_client();
+	Q_strlcpy(old, fs_gamedirvar->string, sizeof(old));
+	build_serverdata_game("");
+	CL_ParseServerMessage();
+	T_EQ_STR(fs_gamedirvar->string, "");
+	T_EQ_STR(cl.gamedir, "");
+	Cvar_Set("game", old);
+}
+
+TEST(fs_gamedirvalid_table)
+{
+	T_CHECK(FS_GameDirValid(""));
+	T_CHECK(FS_GameDirValid("ctf"));
+	T_CHECK(!FS_GameDirValid("a:b"));
+	T_CHECK(!FS_GameDirValid("a\\b"));
+	T_CHECK(!FS_GameDirValid("a\x7f" "b"));
+	T_CHECK(!FS_GameDirValid("."));
+	T_CHECK(!FS_GameDirValid(".."));
+	T_CHECK(!FS_GameDirValid("a/b"));
+	T_CHECK(!FS_GameDirValid("x\ny"));
+}
+
+TEST(cl_gamedir_plain_accepted)
+{
+	extern cvar_t *fs_gamedirvar;
+	char old[MAX_QPATH];
+
+	reset_client();
+	Q_strlcpy(old, fs_gamedirvar->string, sizeof(old));
+	build_serverdata_game("ctf");
+	CL_ParseServerMessage();
+	T_EQ_STR(fs_gamedirvar->string, "ctf");
+	T_EQ_STR(cl.gamedir, "ctf");
+	Cvar_Set("game", old);
+}
+
 TEST(cl_playernum_minus_two_refused)
 {
 	reset_client();
