@@ -1608,17 +1608,23 @@ t_core_id() {
 		sh -c 'exit 0' &
 		_gp=$!
 		wait "$_gp" 2> /dev/null || :
-		# srec <token> <pid> <start>: a lock held by <token>, with one record.
+		# srec <token> <pid> <start> [<written>]: a lock held by <token>, with
+		# one record, written at <written> (bench_proc_read's form; the
+		# recorded command's own start when not given, empty when empty).
 		srec() {
 			mkdir -p "${BENCH_LOCK_DIR:?}"
 			rm -f "${BENCH_LOCK_DIR:?}"/untold.*
 			printf 'label=stale\npid=%s\nchild=%s\nstart=x\ntoken=%s\n' "$_gp" "$_gp" "$1" > "${BENCH_LOCK_DIR:?}/holder"
-			printf 'pid=%s\nstart=%s\ntoken=%s\n' "$2" "$3" "$1" > "${BENCH_LOCK_DIR:?}/untold.$2"
+			printf 'pid=%s\nstart=%s\nwritten=%s\ntoken=%s\n' "$2" "$3" "${4-$_ds1}" "$1" > "${BENCH_LOCK_DIR:?}/untold.$2"
 		}
-		for _how in same unknown nops; do
+		# unknown: a record with no start time, written when its pid's
+		# process had started (not later than that), holds; so does one with
+		# no written time (FIX184, round 1).
+		for _how in same unknown unwritten nops; do
 			case $_how in
 			same) srec t-stale "$_d" "$_ds1" ;;
 			unknown) srec t-stale "$_d" '?' ;;
+			unwritten) srec t-stale "$_d" '?' '' ;;
 			nops)
 				srec t-stale "$_d" "$_ds1"
 				ps() { return 1; }
@@ -1637,8 +1643,25 @@ t_core_id() {
 		"lock=held label=stale pid=$_gp child=$_gp alive=yes since=x untold=$_d") ;;
 		*) nok "record: lock status does not show the live recorded pid: $_l" ;;
 		esac
-		for _how in other gone; do
-			if [ "$_how" = other ]; then srec t-stale "$_d" "$_other"; else srec t-stale "$_gp" "$_ds1"; fi
+		# Only a live record holds a lock with no holder file: lock status
+		# names it (FIX184, round 1).
+		srec t-stale "$_d" '?'
+		rm -f "${BENCH_LOCK_DIR:?}/holder"
+		_l=$(bench_lock_status)
+		case $_l in
+		"lock=held label=none holder=unwritten untold=$_d") ;;
+		*) nok "record: lock status does not name the record that holds a lock with no holder file: $_l" ;;
+		esac
+		# reused (FIX184, round 1): a record with no start time, written
+		# before its pid's process started, while ps answers: that process
+		# is not the recorded command (the lock shell was KILLed, and the
+		# pid taken again), and the record holds nothing.
+		for _how in other gone reused; do
+			case $_how in
+			other) srec t-stale "$_d" "$_other" ;;
+			gone) srec t-stale "$_gp" "$_ds1" ;;
+			reused) srec t-stale "$_d" '?' 'Sat Jan 1 00:00:00 2000' ;;
+			esac
 			if bench_lock_alive "$(bench_lock_holder)"; then nok "record: $_how: a stale record kept the lock alive"; fi
 			bench_lock_reclaim t-stale 2> /dev/null || nok "record: $_how: a lock kept only by a stale record was not reclaimed"
 			[ ! -e "$BENCH_LOCK_DIR" ] || nok "record: $_how: the reclaim left the lock directory: $(ls "$BENCH_LOCK_DIR" | tr '\n' ' ')"
