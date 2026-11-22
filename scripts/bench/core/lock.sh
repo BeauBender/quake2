@@ -94,18 +94,22 @@
 # that command (bench_stop_group returned 2: it leads no group and ps gives
 # no answer for it) records it in the lock directory, as
 # <state>/lock/untold.<pid>, before it forgets the command:
-#   pid=<pid> start=<its start time, or ? when ps gave none> token=<the hold>
-# one per line (bench_lock_record), written to untold.tmp.<writer> and
-# renamed into place. Such a command may still run, so the lock is held
-# while it may: bench_lock_alive, for waiters and lock status, takes the
-# lock as alive while a record's pid answers kill -0 and ps shows it with
-# the recorded start time or cannot tell (bench_proc_same), the rule the
-# core keeps for its own commands; and the lock shell's release waits for
-# every such record, saying so, with INT, TERM and HUP ignored, before it
-# frees the lock. A record whose pid has gone, or that ps shows another
-# process has (another start time), holds nothing: the release, or a
-# reclaim, removes it with the lock. Nothing signals a recorded pid but the
-# shell that started it.
+#   pid=<pid> start=<its start time, or ? when ps gave none>
+#   written=<when the record is written> token=<the hold>
+# one per line (bench_lock_record; written= is in bench_proc_read's form of
+# a start time, in the C locale), written to a temporary file mktemp makes
+# (untold.tmp.XXXXXX) and renamed into place. Such a command may still
+# run, so the lock is held while it may: bench_lock_alive, for waiters and
+# lock status, takes the lock as alive while a record's pid answers kill
+# -0 and ps shows it with the recorded start time or cannot tell
+# (bench_proc_same), the rule the core keeps for its own commands; and the
+# lock shell's release waits for every such record, saying so, with INT,
+# TERM and HUP ignored, before it frees the lock and its quiet marker. A
+# record whose pid has gone, or that ps shows another process has (another
+# start time; for a record with start ?, a start later than written=, so a
+# process that took the pid after the record was written), holds nothing:
+# the release, or a reclaim, removes it with the lock. Nothing signals a
+# recorded pid but the shell that started it.
 
 BENCH_STATE_DIR=
 BENCH_LOCK_DIR=
