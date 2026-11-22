@@ -91,11 +91,14 @@ bench_on_signal() {
 	# A bounded command the stop could not tell about (status 2: it leads
 	# no group and ps gives no answer, so nothing was sent) may still run:
 	# this shell stays, and so the lock it runs under, while it may
-	# (bench_lock_hold_untold, as bench_lock_stop_child does; FIX181).
+	# (bench_lock_hold_untold, as bench_lock_stop_child does; FIX181). Its
+	# renewed stop takes the bounded command's grace, as the stop above
+	# does, not the lock's: a lock shell stopping this shell gives it the
+	# lock's grace, which is longer (FIX181, round 1).
 	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then
 		_os_r=0
 		bench_stop_group "$BENCH_BOUNDED_PID" "" "${BENCH_BOUNDED_REAPED:-}" || _os_r=$?
-		if [ "$_os_r" -eq 2 ]; then bench_lock_hold_untold "$BENCH_BOUNDED_PID"; fi
+		if [ "$_os_r" -eq 2 ]; then bench_lock_hold_untold "$BENCH_BOUNDED_PID" "${BENCH_STOP_GRACE:-10}"; fi
 	fi
 	exit "$1"
 }

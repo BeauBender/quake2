@@ -3757,6 +3757,9 @@ mutant trap-no-fd8 bench.sh 'if (: >&8) 2> /dev/null; then exec 2>&8; fi' ':' t_
 # FIX181: a TERM while a bounded command that could not be stopped runs
 # keeps the lock until it ends.
 mutant bounded-no-hold bench.sh 'if [ "$_os_r" -eq 2 ]; then bench_lock_hold_untold' 'if false; then bench_lock_hold_untold' t_core_id || mfail=1
+# FIX181, round 1: the hold renews its stop of the bounded command with the
+# bounded command's grace, not the lock's, which the lock shell gives it.
+mutant bounded-hold-lock-grace bench.sh 'bench_lock_hold_untold "$BENCH_BOUNDED_PID" "${BENCH_STOP_GRACE:-10}"' 'bench_lock_hold_untold "$BENCH_BOUNDED_PID" "$(bench_lock_grace)"' t_core_id || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
 mutant queue-no-ticket-check core/lock.sh 'if bench_lock_head "$_la_label"; then _la_head=1; fi' 'bench_lock_head "$_la_label" || true; _la_head=1' t_lock_fifo || mfail=1
