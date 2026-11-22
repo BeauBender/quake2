@@ -658,8 +658,15 @@ bench_bounded() {
 	if [ "$_bb_w" -ne 0 ]; then
 		_bb_k=0
 		bench_stop_group "$BENCH_BOUNDED_PID" || _bb_k=$?
-		bench_spawn_forget "$BENCH_BOUNDED_PID"
+		# A command the stop could not tell about is recorded in the lock
+		# state before it is forgotten, so the lock is not freed while it may
+		# run, whatever ends this shell (FIX184). The pid is cleared before it
+		# is forgotten: a signal in between finds no bounded command, rather
+		# than one the table no longer knows.
+		if [ "$_bb_k" -eq 2 ]; then bench_record_untold "$BENCH_BOUNDED_PID"; fi
+		_bb_p=$BENCH_BOUNDED_PID
 		BENCH_BOUNDED_PID=
+		bench_spawn_forget "$_bb_p"
 		if [ "$_bb_k" -ne 0 ]; then
 			if [ "$_bb_w" -eq 2 ]; then
 				bench_note "the command stopped (a stop signal, or the terminal), and it could not be stopped: it may still run"
@@ -679,10 +686,20 @@ bench_bounded() {
 	wait "$BENCH_BOUNDED_PID" 2> /dev/null || _bb_st=$?
 	BENCH_BOUNDED_REAPED=group
 	bench_end_group "$BENCH_BOUNDED_PID" "${BENCH_STOP_GRACE:-10}" || bench_note "stopped what the command left running in its process group"
-	bench_spawn_forget "$BENCH_BOUNDED_PID"
+	_bb_p=$BENCH_BOUNDED_PID
 	BENCH_BOUNDED_PID=
 	BENCH_BOUNDED_REAPED=
+	bench_spawn_forget "$_bb_p"
 	return "$_bb_st"
+}
+
+# bench_record_untold <pid>: records a command the stop of <pid> could not
+# tell about in the lock state (bench_lock_record, in core/lock.sh), when
+# this shell has the lock's code; a caller of bench_bounded without it runs
+# under no lock of this core's.
+bench_record_untold() {
+	if command -v bench_lock_record > /dev/null 2>&1; then bench_lock_record "$1"; fi
+	return 0
 }
 
 # bench_load: the one-minute load average, or "unknown".

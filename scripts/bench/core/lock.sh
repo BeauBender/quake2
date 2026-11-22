@@ -88,6 +88,24 @@
 # and is then stopped the same way, with the same grace (bench_end_group),
 # before the lock is released. So nothing left in the command's process
 # group outlives the lock.
+#
+# Commands that could not be stopped (FIX184): a bench.sh under the lock
+# whose stop of a bounded command could not tell whether its pid is still
+# that command (bench_stop_group returned 2: it leads no group and ps gives
+# no answer for it) records it in the lock directory, as
+# <state>/lock/untold.<pid>, before it forgets the command:
+#   pid=<pid> start=<its start time, or ? when ps gave none> token=<the hold>
+# one per line (bench_lock_record), written to untold.tmp.<writer> and
+# renamed into place. Such a command may still run, so the lock is held
+# while it may: bench_lock_alive, for waiters and lock status, takes the
+# lock as alive while a record's pid answers kill -0 and ps shows it with
+# the recorded start time or cannot tell (bench_proc_same), the rule the
+# core keeps for its own commands; and the lock shell's release waits for
+# every such record, saying so, with INT, TERM and HUP ignored, before it
+# frees the lock. A record whose pid has gone, or that ps shows another
+# process has (another start time), holds nothing: the release, or a
+# reclaim, removes it with the lock. Nothing signals a recorded pid but the
+# shell that started it.
 
 BENCH_STATE_DIR=
 BENCH_LOCK_DIR=
@@ -258,11 +276,11 @@ bench_lock_reclaim() {
 	_lr_tok=$(bench_kv "$_lr_h" token)
 	if [ -n "$1" ]; then
 		if [ "$_lr_tok" = "$1" ] && ! bench_lock_alive "$_lr_h"; then
-			rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}"/holder.tmp.*
+			rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}"/holder.tmp.* "${BENCH_LOCK_DIR:?}"/untold.*
 			if rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then _lr_st=0; fi
 		fi
-	elif [ -d "${BENCH_LOCK_DIR:?}" ] && [ ! -e "${BENCH_LOCK_DIR:?}/holder" ]; then
-		rm -f "${BENCH_LOCK_DIR:?}"/holder.tmp.*
+	elif [ -d "${BENCH_LOCK_DIR:?}" ] && [ ! -e "${BENCH_LOCK_DIR:?}/holder" ] && ! bench_lock_untold_live; then
+		rm -f "${BENCH_LOCK_DIR:?}"/holder.tmp.* "${BENCH_LOCK_DIR:?}"/untold.*
 		if rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then _lr_st=0; fi
 	fi
 	rmdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null || true
@@ -463,10 +481,85 @@ bench_lock_release() {
 	[ "${BENCH_LOCK_OWNED:-}" = 1 ] || return 0
 	BENCH_LOCK_OWNED=
 	if [ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_MINE" ]; then
-		rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}/holder.tmp.$$"
+		# A command under the lock that could not be stopped may still run
+		# (FIX184): the lock stays held, and said, until no record is live.
+		# No signal ends this wait: a KILL leaves the lock to the waiters,
+		# which take it as alive (bench_lock_alive) while a record is.
+		if bench_lock_untold_live; then
+			trap '' INT TERM HUP
+			bench_note "keeping the lock while recorded pid $BENCH_LOCK_UNTOLD may run: a command under it that could not be stopped"
+			while bench_lock_untold_live; do bench_nap 1; done
+			bench_note "the recorded commands have ended, or their pids are no longer theirs; freeing the lock"
+		fi
+		rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}/holder.tmp.$$" "${BENCH_LOCK_DIR:?}"/untold.*
 		rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null || true
 	fi
 	return 0
+}
+
+# bench_lock_record <pid>: records in the lock state (see the top) the
+# command bench_spawn started as <pid>, whose stop could not tell whether
+# <pid> is still it, with the start time bench_spawn read for it. Only under
+# a lock: the one this process holds, or the one its BENCH_LOCK_TOKEN names
+# (the lock directory is resolved here when this process has not done so).
+# Call it before the command is forgotten (bench_spawn_forget).
+bench_lock_record() {
+	bench_spawned "$1" || return 0
+	_lk_s=${BENCH_ID_START:-?}
+	if [ -z "${BENCH_LOCK_DIR:-}" ]; then
+		[ -n "${BENCH_LOCK_TOKEN:-}" ] || return 0
+		# A subshell asks first: bench_lock_init dies on a bad setting.
+		(bench_lock_init) > /dev/null 2>&1 || return 0
+		bench_lock_init
+	fi
+	if [ "${BENCH_LOCK_OWNED:-}" = 1 ]; then
+		_lk_k=$BENCH_LOCK_MINE
+	elif bench_lock_mine; then
+		_lk_k=$BENCH_LOCK_TOKEN
+	else
+		return 0
+	fi
+	_lk_t=${BENCH_LOCK_DIR:?}/untold.tmp.$$
+	if printf 'pid=%s\nstart=%s\ntoken=%s\n' "$1" "$_lk_s" "$_lk_k" > "$_lk_t" 2> /dev/null &&
+		mv -f "$_lk_t" "${BENCH_LOCK_DIR:?}/untold.$1" 2> /dev/null; then
+		bench_note "recorded pid $1 in the lock state: the lock is kept while it may still run"
+		return 0
+	fi
+	rm -f "$_lk_t"
+	bench_note "cannot record pid $1 in the lock state"
+}
+
+BENCH_LOCK_UNTOLD=
+
+# bench_lock_untold_live: a command recorded in the lock directory
+# (bench_lock_record) may still run: its pid answers kill -0, and ps shows
+# it with the recorded start time, not a zombie, or cannot tell
+# (bench_proc_same 0 or 2). Sets BENCH_LOCK_UNTOLD to those pids, one blank
+# apart. Only regular files are read, never a link.
+bench_lock_untold_live() {
+	BENCH_LOCK_UNTOLD=
+	[ -n "${BENCH_LOCK_DIR:-}" ] || return 1
+	for _lu_f in "${BENCH_LOCK_DIR:?}"/untold.[0-9]*; do
+		if [ ! -f "$_lu_f" ] || [ -h "$_lu_f" ]; then continue; fi
+		_lu_h=$(cat "$_lu_f" 2> /dev/null) || continue
+		_lu_p=$(bench_kv "$_lu_h" pid)
+		case $_lu_p in
+		'' | 0 | 1 | *[!0-9]*) continue ;;
+		esac
+		_lu_r=0
+		bench_proc_same "$_lu_p" "$(bench_kv "$_lu_h" start)" || _lu_r=$?
+		case $_lu_r in
+		0)
+			case $BENCH_PS_F in
+			Z*) continue ;;
+			esac
+			;;
+		2) : ;;
+		*) continue ;;
+		esac
+		BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"
+	done
+	[ -n "$BENCH_LOCK_UNTOLD" ]
 }
 
 # bench_lock_grace: prints the seconds the lock gives the command's process
@@ -531,12 +624,15 @@ bench_lock_hold_untold() {
 }
 
 # bench_lock_alive <holder text>: the holder's lock shell or its command is
-# alive, or the command's process group still has a member (the lock
-# shell was killed and the command exited, but what it started runs on).
+# alive, a command recorded as one that could not be stopped may still run
+# (bench_lock_untold_live, FIX184), or the command's process group still
+# has a member (the lock shell was killed and the command exited, but what
+# it started runs on).
 bench_lock_alive() {
 	_lv_c=$(bench_kv "$1" child)
 	bench_pid_alive "$(bench_kv "$1" pid)" && return 0
 	bench_pid_alive "$_lv_c" && return 0
+	bench_lock_untold_live && return 0
 	case $_lv_c in
 	'' | 0 | 1 | *[!0-9]*) return 1 ;;
 	esac
@@ -620,8 +716,11 @@ bench_lock_status() {
 			_ls_c=$(bench_kv "$_ls_h" child)
 			_ls_a=no
 			if bench_lock_alive "$_ls_h"; then _ls_a=yes; fi
-			printf 'lock=held label=%s pid=%s child=%s alive=%s since=%s\n' \
-				"$(bench_kv "$_ls_h" label)" "$_ls_p" "${_ls_c:-none}" "$_ls_a" "$(bench_kv "$_ls_h" start)"
+			# The recorded commands that may still run (FIX184), when any.
+			_ls_u=
+			if bench_lock_untold_live; then _ls_u=" untold=$(printf '%s' "$BENCH_LOCK_UNTOLD" | tr ' ' ,)"; fi
+			printf 'lock=held label=%s pid=%s child=%s alive=%s since=%s%s\n' \
+				"$(bench_kv "$_ls_h" label)" "$_ls_p" "${_ls_c:-none}" "$_ls_a" "$(bench_kv "$_ls_h" start)" "$_ls_u"
 		fi
 	fi
 	_ls_i=0
