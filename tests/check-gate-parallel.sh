@@ -760,11 +760,12 @@ c_sigs() {
 }
 
 # tscrub: its standard input on one line (lines joined by a space), with the
-# home directory printed as ~ where it starts the text or follows a space, =,
-# :, ", ' , ( or , (never a /: not inside a longer path), and is followed by
-# the end, a /, a space, :, ;, ", ' , , or ) (not inside a longer name), cut
-# to 120 characters. HOME is read from the environment (awk -v would decode
-# its backslashes) and matched literally (index, not a pattern), its trailing
+# home directory printed as ~ wherever it occurs, unless the next character
+# continues a name (a letter, a digit or _: another account's directory), cut
+# to 120 characters. Nothing is required before the match: a scrubber fails
+# toward over-scrubbing, and a home path inside a longer path hides nothing
+# worth keeping. HOME is read from the environment (awk -v would decode its
+# backslashes) and matched literally (index, not a pattern), its trailing
 # slashes dropped: HOME empty or / replaces nothing.
 tscrub() {
 	awk '
@@ -772,13 +773,29 @@ tscrub() {
 		END {
 			h = ENVIRON["HOME"]
 			while (substr(h, length(h)) == "/") h = substr(h, 1, length(h) - 1)
-			bset = " =:\042\047(,"; aset = "/ :;\042\047,)"
-			o = ""; pb = ""
+			o = ""
 			while (h != "" && (i = index(s, h)) > 0) {
-				b = (i > 1) ? substr(s, i - 1, 1) : pb
 				c = substr(s, i + length(h), 1)
-				if ((b == "" || index(bset, b) > 0) && (c == "" || index(aset, c) > 0)) { o = o substr(s, 1, i - 1) "~"; pb = substr(h, length(h)); s = substr(s, i + length(h)) }
-				else { o = o substr(s, 1, i); pb = substr(s, i, 1); s = substr(s, i + 1) }
+				if (c !~ /[A-Za-z0-9_]/) { o = o substr(s, 1, i - 1) "~"; s = substr(s, i + length(h)) }
+				else { o = o substr(s, 1, i); s = substr(s, i + 1); }
+			}
+			print substr(o s, 1, 120)
+		}'
+}
+# tscrub_main: the reference, a fixed copy of origin/main's tscrub, which
+# replaced HOME before a /, a space or the end. The scrub case holds tscrub to
+# leave no HOME that this one replaced.
+tscrub_main() {
+	awk '
+		{ s = s (NR > 1 ? " " : "") $0 }
+		END {
+			h = ENVIRON["HOME"]
+			while (substr(h, length(h)) == "/") h = substr(h, 1, length(h) - 1)
+			o = ""
+			while (h != "" && (i = index(s, h)) > 0) {
+				c = substr(s, i + length(h), 1)
+				if (c == "/" || c == " " || c == "") { o = o substr(s, 1, i - 1) "~"; s = substr(s, i + length(h)) }
+				else { o = o substr(s, 1, i); s = substr(s, i + 1) }
 			}
 			print substr(o s, 1, 120)
 		}'
@@ -1133,15 +1150,28 @@ c_tdesc() {
 	[ -z "$_dw" ] || { say "tdesc: $_dw"; return 1; }
 }
 
-# scrub: tscrub on fixed text, for each kind of HOME (home|text|want): the
-# home path becomes ~ where it starts the text or follows a space, =, :, ",
-# ' , ( or , and is followed by the end, /, a space, :, ;, ", ' , , or ); not
-# after a / or a name character, never inside a longer name; a HOME with
-# regex characters is matched literally; trailing slashes in HOME are dropped; HOME / or empty or
-# unset replaces nothing; a backslash in HOME is taken as it is; a match
-# that overlaps a longer name does not hide the next one; lines are joined
-# with a space; the result is cut to 120 characters
+# scrub: tscrub on fixed text, for each kind of HOME: the home path becomes ~
+# wherever it occurs (after any character) unless a letter, a digit or _
+# follows it; a HOME with regex characters is matched literally; trailing
+# slashes in HOME are dropped; HOME / or empty or unset replaces nothing; a
+# backslash in HOME is taken as it is; a match that overlaps a longer name does
+# not hide the next one; lines are joined with a space; the result is cut to
+# 120 characters; and no HOME survives that origin/main's tscrub replaced
+# _scrow <home> <text> <want>: one row, also run through tscrub_main
+_scrow() {
+	_sg=$(HOME=$1; export HOME; printf '%s\n' "$2" | tscrub)
+	[ "$_sg" = "$3" ] || { say "scrub: HOME='$1' on '$2' gave '$_sg', want '$3'"; return 1; }
+	_so=$(HOME=$1; export HOME; printf '%s\n' "$2" | tscrub_main)
+	_sn=$(printf '%s\n' "$_sg" | _scount "$1")
+	_sc=$(printf '%s\n' "$_so" | _scount "$1")
+	[ "$_sn" -le "$_sc" ] || { say "scrub: HOME='$1' on '$2': tscrub leaves $_sn, origin/main's $_sc"; return 1; }
+}
+# _scount <home>: the occurrences of that text on standard input
+_scount() {
+	awk -v h="$1" '{ s = s $0 } END { n = 0; while (h != "" && (i = index(s, h)) > 0) { n++; s = substr(s, i + length(h)) } print n }'
+}
 c_scrub() {
+	_tb=$(printf '\t')
 	for _st in \
 		'/u/qq|/u/qq/a.sh cd /u/qq x=/u/qq/b /u/qqzz/c /u/qq|~/a.sh cd ~ x=~/b /u/qqzz/c ~' \
 		'/u/qq/|/u/qq/a.sh cd /u/qq /u/qqzz|~/a.sh cd ~ /u/qqzz' \
@@ -1149,14 +1179,21 @@ c_scrub() {
 		'/|/bin/sh / //x/ /|/bin/sh / //x/ /' \
 		'|/u/qq/a cd /u/qq|/u/qq/a cd /u/qq' \
 		'/u/a\tb|/u/a\tb/x /u/a	b/y|~/x /u/a	b/y' \
-		'/ab/a|/ab/ab/a/x|/ab/ab/a/x' \
-		'/a /a|x/a /a /a/x|x/a ~/x' \
-		'/u/qq|/x/u/qq/a|/x/u/qq/a' \
-		'/u/qq|//u/qq/a x//u/qq/b|//u/qq/a x//u/qq/b' \
+		'/ab/a|/ab/ab/a/x|/ab~/x' \
+		'/a /a|x/a /a /a/x|x~ /a/x' \
+		'/u/qq|/x/u/qq/a|/x~/a' \
+		'/u/qq|//u/qq/a x//u/qq/b|/~/a x/~/b' \
 		'/u/qq|a /u/qq/ a=/u/qq/ a:/u/qq/ "/u/qq/ '"'"'/u/qq/ (/u/qq/ ,/u/qq/|a ~/ a=~/ a:~/ "~/ '"'"'~/ (~/ ,~/' \
 		'/u/qq|/u/qq/ /u/qq /u/qq: /u/qq; /u/qq" /u/qq'"'"' /u/qq, /u/qq)|~/ ~ ~: ~; ~" ~'"'"' ~, ~)' \
 		'/u/qq|PATH=/u/qq:/usr/bin|PATH=~:/usr/bin' \
-		'/u/qq|-/u/qq/a x/u/qq/a _/u/qq/a /u/qq-a /u/qq_a /u/qq.a /u/qq=a|-/u/qq/a x/u/qq/a _/u/qq/a /u/qq-a /u/qq_a /u/qq.a /u/qq=a' \
+		'/u/qq|-/u/qq/a x/u/qq/a _/u/qq/a /u/qq-a /u/qq_a /u/qq.a /u/qq=a|-~/a x~/a _~/a ~-a /u/qq_a ~.a ~=a' \
+		'/u/qq|/u/qqx /u/qq2 /u/qq_y /u/qqX|/u/qqx /u/qq2 /u/qq_y /u/qqX' \
+		'/u/qq|-I/u/qq/inc -L/u/qq|-I~/inc -L~' \
+		'/u/qq|a;/u/qq a>/u/qq a</u/qq a&&/u/qq|a;~ a>~ a<~ a&&~' \
+		'/u/qq|a`/u/qq a$/u/qq file:///u/qq x@/u/qq [/u/qq {/u/qq|a`~ a$~ file://~ x@~ [~ {~' \
+		'/u/qq|a'"$_tb"'/u/qq/b|a'"$_tb"'~/b' \
+		'/u/qq|/System/Volumes/Data/u/qq/a|/System/Volumes/Data~/a' \
+		'/u/qq|/u/qq] /u/qq} /u/qq> /u/qq& /u/qq. /u/qq- /u/qq= /u/qq? /u/qq'"$_tb"'z|~] ~} ~> ~& ~. ~- ~= ~? ~'"$_tb"'z' \
 		'/u/q.q|/u/qxq/a /u/q.q/a|/u/qxq/a ~/a' \
 		'/u/q*|/u/qqq/a /u/q*/a|/u/qqq/a ~/a' \
 		'/u/q[a]|/u/qa/a /u/q[a]/a|/u/qa/a ~/a' \
@@ -1165,9 +1202,11 @@ c_scrub() {
 		_si=${_st#*|}
 		_si=${_si%|*}
 		_sw=${_st##*|}
-		_sg=$(HOME=$_sh; export HOME; printf '%s\n' "$_si" | tscrub)
-		[ "$_sg" = "$_sw" ] || { say "scrub: HOME='$_sh' on '$_si' gave '$_sg', want '$_sw'"; return 1; }
+		_scrow "$_sh" "$_si" "$_sw" || return 1
 	done
+	# rows with a | in them cannot go through the table's separator
+	_scrow /u/qq 'a|/u/qq a&&/u/qq /u/qq|' 'a|~ a&&~ ~|' || return 1
+	_scrow /u/qq '/u/qq|x' '~|x' || return 1
 	_sg=$(unset HOME; printf '%s\n' /u/qq/a | tscrub)
 	[ "$_sg" = /u/qq/a ] || { say "scrub: HOME unset gave '$_sg'"; return 1; }
 	_sg=$(HOME=/u/qq; export HOME; printf '%s\n' a /u/qq/b | tscrub)
@@ -1175,6 +1214,7 @@ c_scrub() {
 	_sg=$(printf '%0200d\n' 0 | tscrub)
 	[ "${#_sg}" -eq 120 ] || { say "scrub: 200 characters were cut to ${#_sg}, not 120"; return 1; }
 }
+
 
 # leave: a check that leaves a sleep running in the background (its output
 # elsewhere) and exits 0 passes, and the sleep is gone once the run has
@@ -1378,14 +1418,12 @@ smut tty-others-in-stop ttyself 'stopped:$_tdesc"' 'stopped:$_tdesc$_toth"' ttym
 smut tty-args-home ttyself '_tda=$(ps -o args= -p "$_tdp" 2> /dev/null | tscrub)' '_tda=$(ps -o args= -p "$_tdp" 2> /dev/null)' ttymsg
 smut tty-comm-home ttyself '_tdc=$(ps -o comm= -p "$_tdp" 2> /dev/null | tscrub)' '_tdc=$(ps -o comm= -p "$_tdp" 2> /dev/null)' ttymsg
 smut tty-home-trailing ttyself 'while (substr(h, length(h)) == "/")' 'while (0)' scrub
-smut tty-home-boundary ttyself '(c == "" || index(aset, c) > 0)' '1' scrub
-smut tty-home-after-colon ttyself 'aset = "/ :;' 'aset = "/ ;' scrub
-smut tty-home-after-paren ttyself ',)"' ',"' scrub
-smut tty-home-no-before ttyself '(b == "" || index(bset, b) > 0) && ' '' scrub
-smut tty-home-before-slash ttyself 'bset = "' 'bset = "/' scrub
-smut tty-home-before-eq ttyself 'bset = " =:' 'bset = " :' scrub
-smut tty-home-before-paren ttyself '047(,"' '047,"' scrub
-smut tty-home-overlap ttyself 'o = o substr(s, 1, i); pb = substr(s, i, 1); s = substr(s, i + 1)' 'o = o substr(s, 1, i - 1 + length(h)); pb = substr(s, i, 1); s = substr(s, i + length(h))' scrub
+smut tty-home-boundary ttyself 'if (c !~ /[A-Za-z0-9_]/) {' 'if (1) {' scrub
+smut tty-home-before-cond ttyself 'if (c !~ /[A-Za-z0-9_]/) {' 'if (c !~ /[A-Za-z0-9_]/ && (i == 1 || substr(s, i - 1, 1) != "/")) {' scrub
+smut tty-home-dot-name ttyself '/[A-Za-z0-9_]/' '/[A-Za-z0-9_.]/' scrub
+smut tty-home-dash-name ttyself '/[A-Za-z0-9_]/' '/[A-Za-z0-9_-]/' scrub
+smut tty-home-underscore-boundary ttyself '/[A-Za-z0-9_]/' '/[A-Za-z0-9]/' scrub
+smut tty-home-overlap ttyself 'o = o substr(s, 1, i); s = substr(s, i + 1); }' 'o = o substr(s, 1, i - 1 + length(h)); s = substr(s, i + length(h)); }' scrub
 smut tty-no-cut ttyself 'print substr(o s, 1, 120)' 'print o s' scrub
 smut tty-no-state-line ttyself '			say "tty: state:$(tcut 200 $_toth)"' ':' ttymsg
 smut tty-state-empty ttyself 'say "tty: state:$(tcut 200 $_toth)"' 'say "tty: state:"' ttymsg
