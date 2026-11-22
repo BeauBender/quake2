@@ -88,6 +88,9 @@ void t_abort_test(void) __attribute__((noreturn));
 void t_console_reset(void);
 const char *t_console(void);
 
+/* What the engine printed while the early command line ran at start-up. */
+const char *t_startup_console(void);
+
 /* Re-installs the capture after engine code ran its own redirect
    (rcon does; its Com_EndRedirect switches redirection off). */
 void t_console_rearm(void);
