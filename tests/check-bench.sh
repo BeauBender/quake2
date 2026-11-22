@@ -281,6 +281,33 @@ bad() {
 	fails=$((fails + 1))
 	if [ -n "$MUTANT" ]; then exit 1; fi
 }
+# outlived <pid> <text> [<reporter>]: a negative assertion, that <pid> has
+# ended (FIX179). <reporter> (default bad) is called with <text> while <pid>
+# runs, and with "cannot tell whether pid <pid> outlived it ..." in front of
+# <text> while pid_running cannot tell (2): a pid ps gives no answer for is
+# never taken as ended.
+outlived() {
+	_ov=0
+	pid_running "$1" || _ov=$?
+	case $_ov in
+	0) "${3:-bad}" "$2" ;;
+	2) "${3:-bad}" "cannot tell whether pid $1 outlived it, ps gives no answer for it: $2" ;;
+	esac
+	return 0
+}
+# forget_ended <pid>: takes <pid> off the cleanup list once it has gone (1).
+# While it runs (0) it stays; while pid_running cannot tell (2) it stays too,
+# and that is a failure, since a pid dropped from the list is never stopped
+# by the cleanup (FIX179).
+forget_ended() {
+	_fe=0
+	pid_running "$1" || _fe=$?
+	case $_fe in
+	1) forget "$1" ;;
+	2) bad "cannot tell whether pid $1 ended, ps gives no answer for it: it stays on the cleanup list" ;;
+	esac
+	return 0
+}
 B() {
 	sh "$R/bench.sh" "$@"
 }
@@ -1055,7 +1082,7 @@ t_lock_stop() {
 	collect "$_h" || _st=$?
 	[ "$_st" -eq 143 ] || bad "stop: wanted exit 143 on TERM, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "stop: TERM did not release the lock"
-	if pid_running "$(cat "${E:?}/gc.term")"; then bad "stop: a grandchild of the command outlived the lock (TERM)"; fi
+	outlived "$(cat "${E:?}/gc.term")" "stop: a grandchild of the command outlived the lock (TERM)"
 	# A command that catches TERM and goes on is killed after the grace,
 	# which is at least BENCH_STOP_GRACE + 5 s even when that is 0, so a
 	# nested bench.sh stopping a group of its own finishes first. It runs
@@ -1092,7 +1119,7 @@ t_lock_stop() {
 		collect "$_h" 2> /dev/null || _st=$?
 		[ "$_st" -eq 130 ] || bad "stop: wanted exit 130 on INT, got $_st"
 		[ "$(B lock status)" = lock=free ] || bad "stop: INT did not release the lock"
-		if pid_running "$(cat "${E:?}/gc.int")"; then bad "stop: a grandchild of the command outlived the lock (INT)"; fi
+		outlived "$(cat "${E:?}/gc.int")" "stop: a grandchild of the command outlived the lock (INT)"
 		# The command's own INT trap runs: INT is not ignored under the lock.
 		_st=0
 		_out=$(B lock run trapper -- sh -c 'trap "echo handled; exit 5" INT; kill -INT $$; echo unhandled') || _st=$?
@@ -1122,7 +1149,7 @@ t_lock_stop() {
 	[ "$_st" -eq 74 ] || bad "stop: wanted exit 74 from a stopped command, got $_st"
 	grep -q '^bench: the command stopped' "${E:?}/stopped.out" || bad "stop: a stopped command was not said"
 	[ "$(B lock status)" = lock=free ] || bad "stop: a stopped command's lock was not released"
-	if pid_running "$(cat "${E:?}/gc.stop")"; then bad "stop: the stopped command's grandchild outlived the lock"; fi
+	outlived "$(cat "${E:?}/gc.stop")" "stop: the stopped command's grandchild outlived the lock"
 	# A command that exits and leaves work running in its group (its line
 	# due after 3 s, past the 1 to 2 s it is given): the work is stopped
 	# before the lock is free. Checked below, once it would have written.
@@ -1159,14 +1186,14 @@ t_lock_stop() {
 	fi
 	# The command that catches TERM, started above: killed after the floor.
 	wait_file 15 "${E:?}/s2/end" || bad "stop: the lock shell did not exit after TERM to a command that ignores it"
-	pid_running "$_sl" || forget "$_sl"
+	forget_ended "$_sl"
 	_t1=$(cat "${E:?}/s2/end" 2> /dev/null || echo 0)
 	[ "$(cat "${E:?}/s2/st" 2> /dev/null)" = 143 ] || bad "stop: wanted exit 143 from the stubborn command's lock shell, got $(cat "${E:?}/s2/st" 2> /dev/null)"
 	[ $((_t1 - _t0)) -ge 4 ] || bad "stop: with BENCH_STOP_GRACE=0 the lock shell killed its command after $((_t1 - _t0)) s, under its floor of 5 s"
 	[ $((_t1 - _t0)) -le 9 ] || bad "stop: a command that ignores TERM was stopped after $((_t1 - _t0)) s, not within the grace floor of 5 s and a margin"
 	[ "$(env BENCH_STATE="${E:?}/s2/state" sh "$R/bench.sh" lock status)" = lock=free ] || bad "stop: the stubborn command's lock was not released"
 	grep -q got-term "${E:?}/s2/log" || bad "stop: the stubborn command never got TERM"
-	if pid_running "$(cat "${E:?}/s2/pid")"; then bad "stop: the stubborn command outlived the lock"; fi
+	outlived "$(cat "${E:?}/s2/pid")" "stop: the stubborn command outlived the lock"
 	# The command that left one that catches TERM running, started above.
 	wait_file 20 "${E:?}/l2/end" || bad "stop: lock run did not return after a command left one that ignores TERM running"
 	_t3=$(cat "${E:?}/l2/end" 2> /dev/null || echo 0)
@@ -1174,7 +1201,7 @@ t_lock_stop() {
 	[ $((_t3 - _t2)) -ge 6 ] || bad "stop: with BENCH_STOP_GRACE=0 the work a command left running was killed after $((_t3 - _t2)) s, under the 1 s it is given and the floor of 5 s"
 	[ "$(env BENCH_STATE="${E:?}/l2/state" sh "$R/bench.sh" lock status)" = lock=free ] || bad "stop: the lock was not released after a command left one that ignores TERM running"
 	grep -q got-term "${E:?}/l2/log" || bad "stop: the work a command left running never got TERM"
-	if pid_running "$(cat "${E:?}/l2/pid" 2> /dev/null)"; then bad "stop: the work a command left running, which ignores TERM, outlived the lock"; fi
+	outlived "$(cat "${E:?}/l2/pid" 2> /dev/null)" "stop: the work a command left running, which ignores TERM, outlived the lock"
 	# Commands that print nothing themselves: no job notice either.
 	if foreign "${E:?}/stopped.out" "${E:?}/term.out" "${E:?}/left.err" > "${E:?}/foreign"; then
 		cat "${E:?}/foreign"
@@ -1183,7 +1210,7 @@ t_lock_stop() {
 	# By now each grandchild would have written its line.
 	while [ "$(date +%s)" -le $((_tl + 3)) ]; do sleep 0.2; done
 	if grep -q 'late$' "${E:?}/log"; then bad "stop: something wrote after the lock was free: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; fi
-	if pid_running "$(cat "${E:?}/gc.left" 2> /dev/null)"; then bad "stop: the work a command left running outlived the lock"; fi
+	outlived "$(cat "${E:?}/gc.left" 2> /dev/null)" "stop: the work a command left running outlived the lock"
 	[ "$fails" -eq 0 ]
 }
 
@@ -1251,7 +1278,7 @@ t_lock_defer() {
 	if ended 15 "$_h" "defer: the lock shell did not exit on a TERM in the window"; then collect "$_h" || _st=$?; fi
 	[ "$_st" -eq 143 ] || bad "defer: wanted exit 143 on a TERM in the window, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "defer: the lock was not released"
-	if pid_running "$(cat "${E:?}/d.gc")"; then bad "defer: a TERM in the window left the command's grandchild running"; fi
+	outlived "$(cat "${E:?}/d.gc")" "defer: a TERM in the window left the command's grandchild running"
 	if grep -q 'defer-late$' "${E:?}/log"; then bad "defer: the command ran on after a TERM in the window"; fi
 	[ "$fails" -eq 0 ]
 }
@@ -1264,6 +1291,10 @@ t_bounded() {
 		BENCH_ROOT=$R
 		. "$R/core/common.sh"
 		BENCH_STOP_GRACE=1
+		bfail() {
+			echo "$me: $*"
+			exit 1
+		}
 		# A command that exits and leaves work running in its group (its
 		# line due after 2.5 s, past the 1 to 2 s it is given): the work is
 		# stopped before the bound returns. Checked at the end, once it
@@ -1278,7 +1309,7 @@ t_bounded() {
 		_st=0
 		bench_bounded 1 sh "${E:?}/gc.sh" "${E:?}/b.gc" "${E:?}/log" wall 3.5 2> /dev/null || _st=$?
 		[ "$_st" -eq 124 ] || { echo "$me: bounded: wanted 124 from a command over its wall time, got $_st"; exit 1; }
-		if pid_running "$(cat "${E:?}/b.gc" 2> /dev/null)"; then echo "$me: bounded: a grandchild outlived the wall bound"; exit 1; fi
+		outlived "$(cat "${E:?}/b.gc" 2> /dev/null)" "bounded: a grandchild outlived the wall bound" bfail
 		# A command killed by a signal gives its status, and no job notice
 		# (it names an internal path) reaches standard error.
 		_st=0
@@ -1303,12 +1334,12 @@ t_bounded() {
 		bench_bounded 20 sh -c 'echo $$ > "$4"; sh "$1" "$2" "$3" bstop 30 & while [ ! -s "$2" ]; do sleep 0.05; done; kill -s STOP -- "-$$"; echo bstop-went-on >> "$3"' x "${E:?}/gc.sh" "${E:?}/b.stop" "${E:?}/log" "${E:?}/b.leader" 2> "${E:?}/bstop.err" || _st=$?
 		[ "$_st" -eq 74 ] || { echo "$me: bounded: wanted 74 from a stopped command, got $_st"; exit 1; }
 		grep -q '^bench: the command stopped' "${E:?}/bstop.err" || { echo "$me: bounded: a stopped command was not said"; exit 1; }
-		if pid_running "$(cat "${E:?}/b.leader" 2> /dev/null)"; then echo "$me: bounded: a stopped command outlived the bound"; exit 1; fi
-		if pid_running "$(cat "${E:?}/b.stop" 2> /dev/null)"; then echo "$me: bounded: a stopped command's grandchild outlived the bound"; exit 1; fi
+		outlived "$(cat "${E:?}/b.leader" 2> /dev/null)" "bounded: a stopped command outlived the bound" bfail
+		outlived "$(cat "${E:?}/b.stop" 2> /dev/null)" "bounded: a stopped command's grandchild outlived the bound" bfail
 		if grep -q bstop-went-on "${E:?}/log"; then echo "$me: bounded: a stopped command went on after the bound stopped it"; exit 1; fi
 		while [ "$(date +%s)" -le $((_tl + 3)) ]; do sleep 0.2; done
 		if grep -q 'late$' "${E:?}/log"; then echo "$me: bounded: something wrote after the bound returned: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; exit 1; fi
-		if pid_running "$(cat "${E:?}/b.left" 2> /dev/null)"; then echo "$me: bounded: the work a command left running outlived the bound"; exit 1; fi
+		outlived "$(cat "${E:?}/b.left" 2> /dev/null)" "bounded: the work a command left running outlived the bound" bfail
 	) || bad "bounded: the wall-time bound does not stop the whole command"
 	[ "$fails" -eq 0 ]
 }
@@ -1581,7 +1612,7 @@ t_core_id() {
 		_st=0
 		collect "$_lh" || _st=$?
 		[ "$_st" -eq 143 ] || nok "lock: ps silent: wanted 143 on TERM, got $_st"
-		if pid_running "$_lp"; then nok "lock: ps silent: the command outlived the lock"; fi
+		outlived "$_lp" "lock: ps silent: the command outlived the lock" nok
 		[ "$(B lock status)" = lock=free ] || nok "lock: ps silent: TERM did not release the lock"
 		wait_gone 2 "$_lp" || :
 
@@ -1621,7 +1652,7 @@ t_core_id() {
 		_st=0
 		collect "$_nh" || _st=$?
 		[ "$_st" -eq 143 ] || nok "lock: no group: wanted 143 on TERM, got $_st"
-		if pid_running "$_np"; then nok "lock: no group: the lock was freed while the command still ran"; fi
+		outlived "$_np" "lock: no group: the lock was freed while the command still ran" nok
 		[ "$(B lock status)" = lock=free ] || nok "lock: no group: the lock was not freed once the command ended"
 		grep -q 'cannot tell whether pid.*so the stop sends it no more signals' "${E:?}/n.out" || nok "lock: no group: the stop's line did not reach the lock shell's standard error: $(tr '\n' '|' < "${E:?}/n.out")"
 		grep -q 'keeping the lock while pid' "${E:?}/n.out" || nok "lock: no group: the hold was not said"
@@ -3484,8 +3515,42 @@ t_digit_cap() {
 	[ "$fails" -eq 0 ]
 }
 
+# t_cant_tell (FIX179): a negative assertion (outlived) and forget_ended, over
+# a live process this case started, with ps failing for every call, so
+# pid_running says 2: the check cannot tell. Each counts a failure that says
+# so, sends no signal and (forget_ended) keeps the pid on the cleanup list.
+t_cant_tell() {
+	fresh cant-tell
+	for _k in outlived forget; do
+		rm -f "${E:?}/c.sig" "${E:?}/c.pid" "${E:?}/w.out"
+		_r=0
+		(
+			start sleep 30
+			echo "$BG" > "${E:?}/c.pid"
+			kill() { echo "$*" >> "${E:?}/c.sig"; }
+			ps() { return 1; }
+			_f0=$fails
+			case $_k in
+			outlived) outlived "$BG" "cant-tell: the sleeper outlived" ;;
+			forget) forget_ended "$BG" ;;
+			esac
+			[ "$fails" -gt "$_f0" ]
+		) > "${E:?}/w.out" 2>&1 || _r=$?
+		_c=$(cat "${E:?}/c.pid" 2> /dev/null) || _c=
+		[ "$_r" -eq 0 ] || bad "cant-tell: $_k: no failure was counted for a live pid ps gave no answer for: $(cat "${E:?}/w.out")"
+		grep -q "cannot tell whether pid $_c " "${E:?}/w.out" || bad "cant-tell: $_k: the failure did not say it cannot tell: $(cat "${E:?}/w.out")"
+		[ ! -s "${E:?}/c.sig" ] || bad "cant-tell: $_k: a signal was sent: $(cat "${E:?}/c.sig")"
+		[ "$_k" != forget ] || grep -q "^$_c " "${tmp:?}/pids" || bad "cant-tell: $_k: the pid was taken off the cleanup list"
+		command kill -0 "$_c" 2> /dev/null || bad "cant-tell: $_k: the sleeper was ended"
+		command kill -TERM "$_c" 2> /dev/null || true
+		wait_gone 5 "$_c" || bad "cant-tell: $_k: pid $_c outlived its TERM"
+		forget "$_c"
+	done
+	[ "$fails" -eq 0 ]
+}
+
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_core_id t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
+all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_core_id t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle t_cant_tell"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
