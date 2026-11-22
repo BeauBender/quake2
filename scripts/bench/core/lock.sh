@@ -488,10 +488,41 @@ bench_lock_grace() {
 # BENCH_LOCK_REAPED, the group only). bench_stop_group reads the identity
 # bench_spawn recorded for it, so a pid another process has taken since,
 # and a group another process leads under its id, get no signal (FIX172).
+# When the stop cannot tell whether the pid is still the command (one that
+# leads no group, while ps gives no answer for it), the lock is held for it
+# (bench_lock_hold_untold) before this returns, so the lock is not freed
+# while the command may still run.
 bench_lock_stop_child() {
 	[ -n "${BENCH_LOCK_CHILD:-}" ] || return 0
-	bench_stop_group "$BENCH_LOCK_CHILD" "$(bench_lock_grace)" "${BENCH_LOCK_REAPED:-}"
+	_lc_r=0
+	bench_stop_group "$BENCH_LOCK_CHILD" "$(bench_lock_grace)" "${BENCH_LOCK_REAPED:-}" || _lc_r=$?
+	if [ "$_lc_r" -eq 2 ]; then bench_lock_hold_untold "$BENCH_LOCK_CHILD"; fi
+	bench_spawn_forget "$BENCH_LOCK_CHILD"
 	BENCH_LOCK_CHILD=
+}
+
+# bench_lock_hold_untold <pid>: a stop could not tell whether <pid> is still
+# the command (FIX172, round 1), so the lock is kept, and said, while it may
+# be: every second until kill -0 fails for <pid>, or ps shows another
+# process has it (another start time). When ps answers again and <pid> is
+# still the command, it is stopped once more, and the hold ends when that
+# stop has sent its signals. This is a visible hold with no wall time: it
+# lasts as long as the command, or the process that took its pid, runs.
+bench_lock_hold_untold() {
+	bench_spawned "$1" || return 0
+	_lh_s=$BENCH_ID_START
+	bench_note "keeping the lock while pid $1 runs: it may still be the command, which could not be stopped"
+	while :; do
+		_lh_r=0
+		bench_proc_same "$1" "$_lh_s" || _lh_r=$?
+		case $_lh_r in
+		0) if bench_stop_group "$1" "$(bench_lock_grace)"; then break; fi ;;
+		2) ;;
+		*) break ;;
+		esac
+		bench_nap 1
+	done
+	bench_note "pid $1 has ended, was stopped, or is no longer the command; freeing the lock"
 }
 
 # bench_lock_alive <holder text>: the holder's lock shell or its command is
@@ -563,6 +594,7 @@ bench_lock_run() {
 	wait "$BENCH_LOCK_CHILD" 2> /dev/null || _ru_st=$?
 	BENCH_LOCK_REAPED=group
 	bench_end_group "$BENCH_LOCK_CHILD" "$(bench_lock_grace)" || bench_note "stopped what the command left running in its process group"
+	bench_spawn_forget "$BENCH_LOCK_CHILD"
 	BENCH_LOCK_CHILD=
 	exit "$_ru_st"
 }

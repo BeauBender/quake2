@@ -295,20 +295,27 @@ BENCH_SPAWN_PID=
 BENCH_SPAWN_SAID=
 BENCH_SPAWN_START=
 BENCH_SPAWN_GROUP=
-# What bench_spawn started, one entry per command: ";<pid>|<group>|<start>"
-# (bench_spawn_id). The watch and the stops read a pid's identity here and
-# nowhere else, so a pid this shell did not start is never signalled.
+# What bench_spawn started and the core may still be asked about, one
+# entry per command: ";<pid>|<group>|<start>" (bench_spawn_id). The watch
+# and the stops read a pid's identity here and nowhere else, so a pid this
+# shell did not start is never signalled. An entry leaves when its command
+# is collected (bench_spawn_forget), so the table holds the command under
+# the lock and the bounded one, and a lookup costs the same in a long run.
 BENCH_SPAWNED=
 
 # bench_spawn_id <pid>: records the command bench_spawn has just started as
 # <pid> (FIX172): BENCH_SPAWN_START, its start time (bench_proc_read's form;
 # "-" when it has gone already, "?" when ps gives no answer for it while it
 # runs, after three tries 0.1 s apart), and BENCH_SPAWN_GROUP, <pid> when
-# it leads its own process group ("-" when it does not or has gone, "?"
-# when ps gave no answer). Both are appended to BENCH_SPAWNED.
+# it leads its own process group, "-" when it does not. When ps gives no
+# answer, or <pid> has gone already, the group is <pid> while kill -0 --
+# -<pid> answers: <pid> was this shell's child an instant ago, so a group
+# with its id was made by it, and the system gives no new process the id of
+# a process group that still has a member. Both replace any entry for <pid>
+# in BENCH_SPAWNED.
 bench_spawn_id() {
 	BENCH_SPAWN_START='?'
-	BENCH_SPAWN_GROUP='?'
+	BENCH_SPAWN_GROUP=
 	_si_n=0
 	while :; do
 		if bench_proc_read "$1" pgid; then
@@ -318,19 +325,39 @@ bench_spawn_id() {
 		fi
 		if ! bench_pid_alive "$1"; then
 			BENCH_SPAWN_START=-
-			BENCH_SPAWN_GROUP=-
 			break
 		fi
 		_si_n=$((_si_n + 1))
 		[ "$_si_n" -lt 3 ] || break
 		bench_nap 0.1
 	done
+	if [ -z "$BENCH_SPAWN_GROUP" ]; then
+		if kill -0 -- "-$1" 2> /dev/null; then BENCH_SPAWN_GROUP=$1; else BENCH_SPAWN_GROUP=-; fi
+	fi
+	bench_spawn_forget "$1"
 	BENCH_SPAWNED="$BENCH_SPAWNED;$1|$BENCH_SPAWN_GROUP|$BENCH_SPAWN_START"
 }
 
-# bench_spawned <pid>: the identity bench_spawn recorded for <pid>, its
-# latest entry: BENCH_ID_GROUP and BENCH_ID_START. False for a pid it did
-# not start.
+# bench_spawn_forget <pid>: takes <pid>'s entry out of BENCH_SPAWNED, once
+# its command is collected: the core is asked about it no more, and a later
+# stop of <pid> sends nothing.
+bench_spawn_forget() {
+	case $BENCH_SPAWNED in
+	*";$1|"*) ;;
+	*) return 0 ;;
+	esac
+	_sf_h=${BENCH_SPAWNED%%";$1|"*}
+	_sf_t=${BENCH_SPAWNED#*";$1|"}
+	case $_sf_t in
+	*';'*) _sf_t=";${_sf_t#*;}" ;;
+	*) _sf_t= ;;
+	esac
+	BENCH_SPAWNED=$_sf_h$_sf_t
+}
+
+# bench_spawned <pid>: the identity bench_spawn recorded for <pid>:
+# BENCH_ID_GROUP and BENCH_ID_START. False for a pid it did not start, or
+# whose command is collected.
 bench_spawned() {
 	case $BENCH_SPAWNED in
 	*";$1|"*) ;;
@@ -428,28 +455,25 @@ bench_group_alive() {
 
 # bench_signal_group <signal> <pid> [group]: the signal to the command
 # bench_spawn started as <pid> (FIX172). When it led its own process group
-# at spawn: to that group only, never to the pid alone, and only while
-# <pid> is still that command or no process has <pid> (its leader was
-# reaped; the system gives no new process the id of a process group that
-# still has a member). When it led none (a shell without job control): to
-# <pid> alone, only while it is still that command, and never with "group"
-# (it is reaped). Returns 0 once sent; 1 when nothing of the command is left
-# to signal (it is gone, another process has <pid>, or bench_spawn did not
-# start <pid>); 2 when this shell cannot tell (bench_proc_same), and then
-# nothing is sent.
+# at spawn: to that group only, never to the pid alone, while the group
+# has a member, unless another process has <pid> (another start time): the
+# system gives no new process the id of a process group that still has a
+# member, so while no other process is seen to have <pid>, that group is
+# the command's, also while ps gives no answer (FIX172, round 1). When it
+# led none (a shell without job control): to <pid> alone, only while it is
+# still that command, and never with "group" (it is reaped). Returns 0 once
+# sent; 1 when nothing of the command is left to signal (it is gone,
+# another process has <pid>, or bench_spawn did not start <pid>); 2 when
+# this shell cannot tell (bench_proc_same) whether the pid of a command
+# that led no group is still that command, and then nothing is sent.
 bench_signal_group() {
 	bench_spawned "$2" || return 1
 	_sg2_r=0
 	bench_proc_same "$2" "$BENCH_ID_START" || _sg2_r=$?
 	if [ "$BENCH_ID_GROUP" = "$2" ]; then
-		case $_sg2_r in
-		0 | 1)
-			kill -s "$1" -- "-$2" 2> /dev/null || return 1
-			return 0
-			;;
-		3) return 1 ;;
-		esac
-		return 2
+		[ "$_sg2_r" -ne 3 ] || return 1
+		kill -s "$1" -- "-$2" 2> /dev/null || return 1
+		return 0
 	fi
 	[ "${3:-}" != group ] || return 1
 	case $_sg2_r in
@@ -480,8 +504,11 @@ bench_untold() {
 # left, the stop sends nothing more and reaps nothing; when this shell
 # cannot tell, it says so (bench_untold) and sends nothing more, and does
 # not reap, since a wait for a command that still runs, stopped, would not
-# return. Its standard error is /dev/null (the shell's notice of a job
-# killed by a signal names an internal path), all but that line.
+# return. Returns 0 when the command is stopped or nothing of it was left,
+# 2 when it could not tell and so may have left the command running (only
+# a command that led no group: bench_signal_group). Its standard error is
+# /dev/null (the shell's notice of a job killed by a signal names an
+# internal path), all but that line.
 bench_stop_group() {
 	_sg_p=$1
 	_sg_g=${2:-${BENCH_STOP_GRACE:-10}}
@@ -495,7 +522,7 @@ bench_stop_group() {
 	1) return 0 ;;
 	2)
 		bench_untold "$_sg_p" 2>&8
-		return 0
+		return 2
 		;;
 	esac
 	bench_signal_group CONT "$_sg_p" "$_sg_o" || true
@@ -508,7 +535,7 @@ bench_stop_group() {
 		bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?
 		if [ "$_sg_r" -eq 2 ]; then
 			bench_untold "$_sg_p" 2>&8
-			return 0
+			return 2
 		fi
 		_sg_n=0
 		while bench_group_alive "$_sg_p" "$_sg_o" && [ "$_sg_n" -lt 20 ]; do
@@ -556,7 +583,11 @@ bench_watch() {
 		2)
 			if [ -z "$_bw_told" ]; then
 				_bw_told=1
-				bench_note "cannot tell whether pid $_bw_p is still the command this shell started (ps gives no answer for it, or none was read at its start); it is not signalled while that lasts" 2>&8
+				if [ "$BENCH_ID_GROUP" = "$_bw_p" ]; then
+					bench_note "cannot tell whether pid $_bw_p is still the command this shell started (ps gives no answer for it, or none was read at its start); a stop goes to its process group while that has a member" 2>&8
+				else
+					bench_note "cannot tell whether pid $_bw_p is still the command this shell started (ps gives no answer for it, or none was read at its start); it is not signalled while that lasts" 2>&8
+				fi
 			fi
 			;;
 		*) return 0 ;;
@@ -607,7 +638,9 @@ BENCH_BOUNDED_REAPED=
 # group (bench_stop_group) once the command has run more than <seconds>
 # (whole seconds by the clock, so between <seconds> and one more), or when
 # it is stopped (bench_watch). Returns its status; 124 past the wall time,
-# 74 when it was stopped. Once the command has exited, what it left running
+# 74 when it was stopped; 125 when either holds and the stop could not
+# tell whether the pid is still the command (bench_stop_group returned 2),
+# so it may still run. Once the command has exited, what it left running
 # in its group is stopped too (bench_end_group, with the same
 # BENCH_STOP_GRACE) before the bound returns.
 # For adapters. The poll settles at every 0.5 s.
@@ -623,8 +656,18 @@ bench_bounded() {
 	_bb_w=0
 	bench_watch "$BENCH_BOUNDED_PID" "$_bb_end" 0.5 || _bb_w=$?
 	if [ "$_bb_w" -ne 0 ]; then
-		bench_stop_group "$BENCH_BOUNDED_PID"
+		_bb_k=0
+		bench_stop_group "$BENCH_BOUNDED_PID" || _bb_k=$?
+		bench_spawn_forget "$BENCH_BOUNDED_PID"
 		BENCH_BOUNDED_PID=
+		if [ "$_bb_k" -ne 0 ]; then
+			if [ "$_bb_w" -eq 2 ]; then
+				bench_note "the command stopped (a stop signal, or the terminal), and it could not be stopped: it may still run"
+			else
+				bench_note "a command outlived its wall time of $_bb_s s, and it could not be stopped: it may still run"
+			fi
+			return 125
+		fi
 		if [ "$_bb_w" -eq 2 ]; then
 			bench_note "the command stopped (a stop signal, or the terminal); stopped it"
 			return 74
@@ -636,6 +679,7 @@ bench_bounded() {
 	wait "$BENCH_BOUNDED_PID" 2> /dev/null || _bb_st=$?
 	BENCH_BOUNDED_REAPED=group
 	bench_end_group "$BENCH_BOUNDED_PID" "${BENCH_STOP_GRACE:-10}" || bench_note "stopped what the command left running in its process group"
+	bench_spawn_forget "$BENCH_BOUNDED_PID"
 	BENCH_BOUNDED_PID=
 	BENCH_BOUNDED_REAPED=
 	return "$_bb_st"

@@ -81,11 +81,17 @@ bench_on_signal() {
 		return 0
 	fi
 	trap '' INT TERM HUP
+	# A signal that comes while bench_watch or bench_stop_group runs lands
+	# here with standard error on /dev/null, and fd 8 the caller's standard
+	# error (FIX172, round 1): the stop's lines and the lock's hold go there.
+	# fd 8 is open only inside those two (an inherited one is closed below).
+	if { : >&8; } 2> /dev/null; then exec 2>&8; fi
 	bench_lock_stop_child
 	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group "$BENCH_BOUNDED_PID" "" "${BENCH_BOUNDED_REAPED:-}"; fi
 	exit "$1"
 }
 
+exec 8>&-
 trap bench_on_exit EXIT
 trap 'bench_on_signal 129' HUP
 trap 'bench_on_signal 130' INT
