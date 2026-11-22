@@ -612,31 +612,41 @@ st=0
 wait "$p" || st=$?
 exit "$st"'
 
-# q2_scenario_args <file>: appends the "set <cvar> <value>" lines of a pin
-# scenario to the global Q2_ARGS list file, one argument a line; refuses
-# any other line, as scripts/pins.sh does.
+# q2_scenario_args <file>: appends the cvars of a pin scenario to the global
+# Q2_ARGS list file ("+set", the cvar, the value: one argument a line).
+# The scenario is read by "scripts/pins.sh scenario-args", the one reader
+# of the format (FIX122; this adapter keeps no list of its own): a scenario
+# it refuses, or one it cannot read because it cannot be run, is refused
+# here with its reason, and so is a line of its output that is not
+# "<cvar> <value>". The adapter adds one restriction: a value holds only
+# A-Z a-z 0-9 _ . - (pins.sh also takes "/").
 q2_scenario_args() {
-	_qa_n=0
+	_qa_out=${BENCH_TMP:?}/quake2-scenario-sets
+	_qa_err=${BENCH_TMP:?}/quake2-scenario-refusal
+	if ! /bin/bash "${BENCH_ROOT:?}/../pins.sh" scenario-args "$1" > "$_qa_out" 2> "$_qa_err"; then
+		q2_say "the scenario is refused by scripts/pins.sh scenario-args: $(sed -n '$p' "$_qa_err" 2> /dev/null)"
+		return 1
+	fi
 	while IFS= read -r _qa_l || [ -n "$_qa_l" ]; do
-		_qa_n=$((_qa_n + 1))
-		case $_qa_l in '' | //*) continue ;; esac
-		printf '%s\n' "$_qa_l" | grep -E -q '^set [^ ]+ [^ ]+$' || {
-			q2_say "scenario line $_qa_n is not 'set <cvar> <value>'"
+		case $_qa_l in
+		*' '*' '* | ' '* | *' ') _qa_k= ;;
+		*' '*) _qa_k=${_qa_l%% *} _qa_v=${_qa_l#* } ;;
+		*) _qa_k= ;;
+		esac
+		case $_qa_k in
+		'' | *[!a-z0-9_]*)
+			q2_say "scripts/pins.sh scenario-args gave a line that is not '<cvar> <value>': $_qa_l"
 			return 1
-		}
-		_qa_k=${_qa_l#set }
-		_qa_v=${_qa_k#* }
-		_qa_k=${_qa_k%% *}
-		if ! q2_cvar_ok "$_qa_k" && [ "$_qa_k" != timedemo ] && [ "$_qa_k" != r_vsync ] && [ "$_qa_k" != vid_maxfps ]; then
-			q2_say "scenario line $_qa_n sets $_qa_k, which a scenario may not set"
+			;;
+		esac
+		case $_qa_v in
+		'' | *[!A-Za-z0-9_.-]*)
+			q2_say "the scenario sets $_qa_k to a value the engine cannot take: $_qa_v"
 			return 1
-		fi
-		q2_value_ok "$_qa_v" || {
-			q2_say "scenario line $_qa_n has a value the engine cannot take: $_qa_v"
-			return 1
-		}
+			;;
+		esac
 		printf '+set\n%s\n%s\n' "$_qa_k" "$_qa_v" >> "${Q2_ARGS:?}"
-	done < "$1"
+	done < "$_qa_out"
 }
 
 # q2_check_log <log>: the run used the case's renderer, and the engine
