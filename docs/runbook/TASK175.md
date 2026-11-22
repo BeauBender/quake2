@@ -252,16 +252,119 @@ case the visionOS simulator has a `Gamepad` of its own as the tvOS simulator doe
 is `TARGET_OS_TV` only); then `menu_probe walk`. No source was changed for the controller: no run has shown a
 change is needed.
 
-## Left for slice 2b
+## Slice 2b: the app starts, a controller walks it, the paks come from Documents
+
+Same host, Xcode, runtime and device type as slice 1 and 2a (visionOS 27.2 simulator, Apple Vision Pro). Three
+runs, each on devices it made, shut down and deleted itself; each printed `launcher: no crash` or kept the same
+SurfBoard PID from start to end, so SurfBoard did not crash. Measured on `a69c1016` (the controller runs) and
+`6879f6d1` (the diagnosis; the commit after it changes only the missing-data text and the simulator-pad guard).
+
+### The launch: it starts, and the locked screen was not the cause
+
+The screen read unlocked when the slice began, but the lock key was set (`CGSSessionScreenIsLocked` in `ioreg`)
+at the start of every run. The app started all the same:
+
+- the diagnosis, on a device of its own: `simctl launch` without `--console-pty` printed `org.yquake2.quake2:
+  80158`, and the device's `launchctl list` showed `80158 0 UIKitApplication:org.yquake2.quake2[825e][rb-legacy]`
+  at each of four reads 10 s apart; the engine log (`qconsole.log` in the container) had `Metal device: Apple xrOS
+  simulator GPU`, `Real display mode: 1280x720@90.00` and `Drawable size: 2560x1440`; `simctl terminate` ended it;
+- every start of `scripts/ios-sim.sh run`, which launches with `--console-pty`, relayed the app's output
+  (`Metal API Validation Enabled`) and ended through `quit` (`----------- shutting down ----------`, then
+  `metal_stats: ... 0 failed command buffers`).
+
+So a locked screen does not stall a visionOS launch, and neither does `--console-pty`. What stalled slice 2a's
+four starts is not found: those devices are gone.
+
+### The data path
+
+The paks went into the container's `Documents/baseq2`, as a person puts them there through the Files app, and
+the engine found them with no option. `+path` in the first start printed the search path:
+
+```
+Current search path:
+<container>/Documents/baseq2/pak9.pak (1 files)
+<container>/Documents/baseq2/pak2.pak (2 files)
+<container>/Documents/baseq2/pak1.pak (279 files)
+<container>/Documents/baseq2/pak0.pak (3307 files)
+<container>/Documents/baseq2
+```
+
+with `Raw search paths:` the bundle and `<container>/Documents` (`<container>` is the device's
+`data/Containers/Data/Application/<id>`; `pak9.pak` holds the probe's script, below).
+
+### The controller
+
+The probe build (`-DYQ2_INPUT_PROBE`) and the tvOS lane's script (TASK182, slice 2a's above), three starts: the
+probe's pad with `in_initjoy 1`, the same with `in_initjoy 2`, then `menu_probe walk`.
+
+- **The visionOS simulator has its own `Gamepad`.** About a second after the start it adds the device the tvOS
+  simulator adds, with the same facts: `joystick 1, id 3, 'Gamepad', gamepad 1, virtual 0`, `vendor 0x05ac,
+  product 0x0004, version 0x25fa, guid 0500a5d0ac05000004000000fa256d04, type 1, gamepad type 'standard', path
+  '', buttons 15, axes 19, hats 0`. So the tvOS preference applies: `IN_IsTVSimulatorPad` and its three uses
+  (src/client/input/sdl3.c) are now `TARGET_OS_TV || TARGET_OS_VISION`, and the skip line names the OS
+  (`IN_SIMULATOR_OS`: "visionOS" there, "tvOS" on tvOS, the same text as before). The Siri Remote hint stays
+  `TARGET_OS_TV`. As on tvOS, only the name `Gamepad` marks the simulator's pad.
+- **The first run's script attached the pad too early.** `wait 60` was not past the start's controller
+  countdown: the simulator's pad restarts it at 100 updates (`SDL_EVENT_JOYSTICK_ADDED` with no controller open),
+  and `in_probe pad` refused (`pad not attached: the start's controller countdown is not over`), so nothing
+  after it moved. The script now waits 250 updates first.
+- **Green** (`in_initjoy 1`): `in_probe: pad attached`, `2 joysticks were found.`, `Skipping joystick 1, the
+  visionOS simulator's own gamepad: another gamepad is connected.`, `Trying joystick 2, 'in_probe pad'`, and the
+  pad list marks `joystick 2, id 4, 'in_probe pad', gamepad 1, virtual 1, the engine's gamepad, the probe's
+  pad`. The pad's d-pad walks the main menu (`cursor 2 'm_main_game'`, down to `3 'm_main_multiplayer'` and `4
+  'm_main_options'`, up to `2 'm_main_game'`), A opens the game screen (`depth 2, screen 'm_banner_game', cursor
+  0 'easy'`), down moves in it (`1 'medium'`), B goes back (`depth 1`), A on a difficulty starts `base1` (` Outer
+  Base`), Y fires `weapnext` (`expect gun weapnext: ok, 36 -> 64`), and start opens the game menu during play
+  (`depth 1, screen 'm_main_plaque'`), down moves in it and B closes it (`key_dest 0, depth 0`).
+- **`in_initjoy 2`**: the same lines, except that the skip line is not printed (the engine tries the second
+  joystick first) and the pad is again the engine's gamepad.
+- **The walk**: `menu_probe: walk ok: 22 screens, 1079 key presses, 0 failures`.
+- **`+attack`**: in the second run the press reached the engine (`trigger axis 32767, TRIG_RIGHT down`) but
+  `expect ammo attack: FAIL, unchanged at 100`, in both starts. The state line at the press read `gunframe 3`
+  and `gunframe 2`: the shotgun Y had just selected was still being raised, which ignores the attack, and the
+  script held the trigger 20 updates, a fifth of a second at 90 Hz. The third run, start 1 alone, waits 200
+  updates after Y (`gunframe 22`, the shotgun up) and holds the trigger 60: `trigger axis 32767, TRIG_RIGHT down`,
+  `expect ammo attack: ok, 100 -> 99`, then at the release (-32768) `trigger axis 0, TRIG_RIGHT up`. The
+  probe's scripts are in a scratch `pak9.pak`, never committed.
+
+### The missing-data text
+
+`Sys_MissingDataMessage` (src/backends/unix/system.c) says `Files > On My Apple Vision Pro > Quake II >
+baseq2` under `TARGET_OS_VISION`, the name the visionOS Files app gives the place (slice 2a's strings); the
+iOS text is byte for byte as it was, and `tests/unit/test_filesystem.c` still pins it (the host build cannot
+reach the visionOS branch, so no unit check is added). `tests/check-visionos.sh` (e) pins it in the compiled
+object: every visionOS `system.o` holds `On My Apple Vision Pro` and not `On My iPhone (or iPad)`, and the iOS
+simulator's `system.o` the other way round (`pin holds` is new: its control is that the iOS object lacks the
+text). Both strings are in the mutant loop (an object holding each is refused by name, one without it fails the
+control). Before the text it failed with `system.o holds "On My iPhone (or iPad)"` and `system.o does not hold
+"On My Apple Vision Pro"`.
+
+### The checks
+
+On `a69c1016`, in the second run's hold:
+
+- `check-visionos: ok (181 objects for the visionOS simulator, platform 12, the iOS simulator's list)`;
+- `check-ios: ok (54 mutants refused; 188 smoke selftest cases; 65 device selftest cases; 181 objects for the
+  simulator; 181 for a device; ios_objects)`;
+- `check-tvos: ok (181 objects for the tvOS simulator, platform 8, the iOS simulator's list)`;
+- `make test`: `yq2test: 444 tests, 0 failed`.
+
+`tests/check-ios.sh` and `tests/check-tvos.sh` are unchanged. The guards add `TARGET_OS_VISION` beside
+`TARGET_OS_TV` and nothing else, so the iOS and macOS objects of sdl3.c and system.c compile the same code.
+
+### Round 2: the pad skip is pinned, and it is simulator-only
+
+- The visionOS skip applies to the simulator only: its half of the guard in src/client/input/sdl3.c is now
+  `(defined(TARGET_OS_VISION) && TARGET_OS_VISION && TARGET_OS_SIMULATOR)`, and tvOS keeps its existing behaviour
+  on a device (`TARGET_OS_TV`, unchanged).
+- `tests/check-visionos.sh` (e) pins it: `sdl3.o` holds `the visionOS simulator` (the skip line), with the iOS
+  simulator's `sdl3.o` as the control, and the text is in the mutant loop. With the sdl3.c hunk reverted, the
+  check fails on that pin.
+- `pin` refuses a kind it does not know (`pin: unknown kind <kind>`) instead of skipping the visionOS half.
+
+## Left for slice 2c
 
 - Look-and-pinch menu navigation (a pinch reaches a UIKit app as an indirect touch or a pointer; SDL asks for
   `UIApplicationSupportsIndirectInputEvents`).
 - Resizing beyond the default 1280x720-point window (TASK172's live resize is compiled in, not exercised).
 - The on-screen keyboard (text input never starts: the keyboard follow-up is `TARGET_OS_IOS`).
-- The controller run above, and the paks read from `Documents/baseq2` with the keys, once the app starts on the
-  simulator again; if the visionOS simulator has its own `Gamepad`, the tvOS preference may need
-  `TARGET_OS_VISION` too.
-- The launch-stall diagnosis (the "next run" step above): an unlocked screen, `simctl launch` without
-  `--console-pty`, and `launchctl list`.
-- The missing-data text, `Sys_MissingDataMessage` (src/backends/unix/system.c), names "On My iPhone (or iPad)";
-  on visionOS the Files app calls the place "On My Apple Vision Pro".
