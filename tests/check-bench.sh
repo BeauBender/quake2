@@ -1379,6 +1379,8 @@ t_core_id() {
 		_d2=$_dp _dm2=$_dm _ds2=$_ds
 		core_decoy d3 deaf || { echo "$me: core-id: the deaf decoy did not start"; exit 1; }
 		_d3=$_dp _dm3=$_dm _ds3=$_ds
+		core_decoy d4 deaf || { echo "$me: core-id: the second deaf decoy did not start"; exit 1; }
+		_d4=$_dp _dm4=$_dm _ds4=$_ds
 		[ "$_ds1" != "$_other" ] || { echo "$me: core-id: the decoy has PID 1's start time"; exit 1; }
 		kill() {
 			case $1 in
@@ -1448,24 +1450,26 @@ t_core_id() {
 		bench_stop_group "$_d"
 		sig_none "stop: never spawned"
 
-		# Cannot tell: no start time read at spawn, or ps silent now. The
-		# watch says so and goes on to its end; the stop says so at once
-		# and sends nothing.
+		# Cannot tell, for a command that led no group: no start time read
+		# at spawn, or ps silent now. The watch says so and goes on to its
+		# end; the stop says so at once, sends nothing and returns 2.
 		for _how in none nops; do
 			if [ "$_how" = none ]; then
-				BENCH_SPAWNED=";$_d|$_d|?"
+				BENCH_SPAWNED=";$_d|-|?"
 			else
-				BENCH_SPAWNED=";$_d|$_d|$_ds1"
+				BENCH_SPAWNED=";$_d|-|$_ds1"
 				ps() { return 1; }
 			fi
 			_st=0
 			bench_watch "$_d" "$(($(date +%s) - 1))" 0.05 2> "${E:?}/w.$_how" || _st=$?
 			[ "$_st" -eq 1 ] || nok "watch: $_how: wanted 1 at its end, got $_st"
-			grep -q 'cannot tell whether pid' "${E:?}/w.$_how" || nok "watch: $_how: the watch did not say it cannot tell"
+			grep -q 'cannot tell whether pid.*it is not signalled while that lasts' "${E:?}/w.$_how" || nok "watch: $_how: the watch did not say it cannot tell, and sends nothing"
 			_t0=$(date +%s)
-			bench_stop_group "$_d" 5 2> "${E:?}/s.$_how"
+			_st=0
+			bench_stop_group "$_d" 5 2> "${E:?}/s.$_how" || _st=$?
 			_t1=$(date +%s)
 			unset -f ps
+			[ "$_st" -eq 2 ] || nok "stop: $_how: wanted 2 (could not tell), got $_st"
 			grep -q 'cannot tell whether pid' "${E:?}/s.$_how" || nok "stop: $_how: the stop did not say it cannot tell"
 			[ $((_t1 - _t0)) -lt 3 ] || nok "stop: $_how: the stop took $((_t1 - _t0)) s of its 5 s grace after it could not tell"
 			sig_none "stop: $_how"
@@ -1482,23 +1486,203 @@ t_core_id() {
 		pid_running "$_dm2" || nok "stop: no group: a process in the pid's group was ended"
 		: > "${E:?}/sig"
 
-		# ps goes silent once the TERM has gone to a group that ignores it:
-		# no KILL, and it is said.
-		BENCH_SPAWNED=";$_d3|$_d3|$_ds3"
+		# ps goes silent once the TERM has gone to the pid of a command
+		# that led no group and ignores it: no KILL, it is said, and the
+		# stop returns 2.
+		BENCH_SPAWNED=";$_d3|-|$_ds3"
 		ps() {
 			if grep -q TERM "${E:?}/sig"; then return 1; fi
 			command ps "$@"
 		}
-		bench_stop_group "$_d3" 1 2> "${E:?}/k.err"
+		_st=0
+		bench_stop_group "$_d3" 1 2> "${E:?}/k.err" || _st=$?
 		unset -f ps
-		grep -qx -- "-s TERM -- -$_d3" "${E:?}/sig" || nok "stop: deaf: no TERM went to the group: $(tr '\n' ' ' < "${E:?}/sig")"
+		[ "$_st" -eq 2 ] || nok "stop: deaf: wanted 2 (could not tell), got $_st"
+		grep -qx -- "-s TERM $_d3" "${E:?}/sig" || nok "stop: deaf: no TERM went to the pid: $(tr '\n' ' ' < "${E:?}/sig")"
 		if grep -q KILL "${E:?}/sig"; then nok "stop: deaf: a KILL went out once ps was silent"; fi
 		grep -q 'cannot tell whether pid' "${E:?}/k.err" || nok "stop: deaf: the stop did not say it cannot tell before its KILL"
 		pid_running "$_d3" || nok "stop: deaf: the deaf decoy was ended"
 		: > "${E:?}/sig"
 
+		# The same with a command that leads its own group (FIX172, round
+		# 1): the group is the command's while it has a member, so the
+		# KILL still goes to it once ps is silent, and the group is gone.
+		BENCH_SPAWNED=";$_d4|$_d4|$_ds4"
+		ps() {
+			if grep -q TERM "${E:?}/sig"; then return 1; fi
+			command ps "$@"
+		}
+		_st=0
+		bench_stop_group "$_d4" 1 2> "${E:?}/k4.err" || _st=$?
+		unset -f ps
+		[ "$_st" -eq 0 ] || nok "stop: deaf group: wanted 0 (stopped), got $_st"
+		grep -qx -- "-s KILL -- -$_d4" "${E:?}/sig" || nok "stop: deaf group: no KILL went to the group once ps was silent: $(tr '\n' ' ' < "${E:?}/sig")"
+		if grep -q -- "^-s [A-Z]* $_d4\$" "${E:?}/sig"; then nok "stop: deaf group: a signal went to the pid alone"; fi
+		if grep -q 'cannot tell whether pid' "${E:?}/k4.err"; then nok "stop: deaf group: the stop said it sends nothing more, and it went on"; fi
+		wait_gone 5 "$_d4" || nok "stop: deaf group: the leader outlived the KILL"
+		wait_gone 5 "$_dm4" || nok "stop: deaf group: the group member outlived the KILL"
+		: > "${E:?}/sig"
+
+		# ps gives no answer at all (FIX172, round 1, security I1): a
+		# command that leads its own group is still stopped past its wall
+		# time, as a group, and the bound says so truly.
+		ps() { return 1; }
+		_t0=$(date +%s)
+		_st=0
+		bench_bounded 1 sh -c 'printf "%s\n" "$$" > "$1"; exec sleep 8' x "${E:?}/b.pid" 2> "${E:?}/b.err" || _st=$?
+		_t1=$(date +%s)
+		unset -f ps
+		_bp=$(cat "${E:?}/b.pid" 2> /dev/null) || _bp=
+		record "$_bp"
+		[ "$_st" -eq 124 ] || nok "bounded: ps silent: wanted 124 past the wall time, got $_st"
+		[ $((_t1 - _t0)) -lt 6 ] || nok "bounded: ps silent: the bound took $((_t1 - _t0)) s for a wall time of 1 s"
+		grep -qx -- "-s TERM -- -$_bp" "${E:?}/sig" || nok "bounded: ps silent: no TERM went to the command's group: $(tr '\n' ' ' < "${E:?}/sig")"
+		wait_gone 2 "$_bp" || nok "bounded: ps silent: the command outlived its bound"
+		grep -q 'stopped a command that outlived its wall time' "${E:?}/b.err" || nok "bounded: ps silent: the bound did not say it stopped the command"
+		if grep -q 'could not be stopped\|sends it no more signals' "${E:?}/b.err"; then nok "bounded: ps silent: the bound said it could not stop a command it stopped"; fi
+		: > "${E:?}/sig"
+
+		# A command that exits before the spawn's first ps reads it
+		# (correctness I1; a slow ps under load): its group is recorded
+		# while it has a member, and bench_end_group stops what it left.
+		ps() {
+			sleep 0.3
+			command ps "$@"
+		}
+		bench_spawn sh -c 'sleep 20 & printf "%s\n" "$!" > "$1"; exit 0' x "${E:?}/e.pid" < /dev/null
+		_ep=$BENCH_SPAWN_PID
+		unset -f ps
+		bench_undefer
+		wait "$_ep" 2> /dev/null || :
+		wait_file 5 "${E:?}/e.pid" || nok "end-group: gone: the command's group member never started"
+		_em=$(cat "${E:?}/e.pid" 2> /dev/null) || _em=
+		record "$_em"
+		[ "$BENCH_SPAWN_GROUP" = "$_ep" ] || nok "spawn: gone: the group of a command that exited before ps read it was not recorded ($BENCH_SPAWN_GROUP|$BENCH_SPAWN_START)"
+		_st=0
+		bench_end_group "$_ep" 1 || _st=$?
+		[ "$_st" -eq 1 ] || nok "end-group: gone: wanted 1 (it stopped what was left), got $_st"
+		wait_gone 5 "$_em" || nok "end-group: gone: the group member outlived bench_end_group"
+		: > "${E:?}/sig"
+
 		unset -f kill
-		core_decoy_end "$_d" "$_dm1" "$_dm2" "$_d3" "$_dm3"
+
+		# lock run, ps silent (FIX172, round 1, security I1): the command
+		# leads its own group, so a TERM to the lock shell stops it before
+		# the lock is free.
+		psshim 1
+		start env PATH="$E/shim:$PATH" sh "$R/bench.sh" lock run psg -- sh -c 'printf "%s\n" "$$" > "$1"; exec sleep 23' x "${E:?}/l.pid" > "${E:?}/l.out" 2>&1
+		_lh=$BG
+		wait_file 5 "${E:?}/l.pid" || nok "lock: ps silent: the command never started"
+		_lp=$(cat "${E:?}/l.pid" 2> /dev/null) || _lp=
+		record "$_lp"
+		command kill -TERM "$_lh"
+		wait_gone 15 "$_lh" || nok "lock: ps silent: the lock shell did not exit on TERM"
+		_st=0
+		collect "$_lh" || _st=$?
+		[ "$_st" -eq 143 ] || nok "lock: ps silent: wanted 143 on TERM, got $_st"
+		if pid_running "$_lp"; then nok "lock: ps silent: the command outlived the lock"; fi
+		[ "$(B lock status)" = lock=free ] || nok "lock: ps silent: TERM did not release the lock"
+		wait_gone 2 "$_lp" || :
+
+		# lock run, ps silent, and the command leads no group (dash with no
+		# terminal): it is never signalled, the stop says so on the signal
+		# path too (security N1), and the lock is kept until it ends.
+		start env PATH="$E/shim:$PATH" dash "$R/bench.sh" lock run psn -- sh -c 'printf "%s\n" "$$" > "$1"; exec sleep 3' x "${E:?}/n.pid" > "${E:?}/n.out" 2>&1
+		_nh=$BG
+		wait_file 5 "${E:?}/n.pid" || nok "lock: no group: the command never started"
+		_np=$(cat "${E:?}/n.pid" 2> /dev/null) || _np=
+		record "$_np"
+		# The TERM comes while the lock shell watches the command, so its
+		# trap runs with the watch's standard error on /dev/null.
+		_n=0
+		while ! grep -q 'it is not signalled while that lasts' "${E:?}/n.out" && [ "$_n" -lt 50 ]; do
+			sleep 0.1
+			_n=$((_n + 1))
+		done
+		command kill -TERM "$_nh"
+		_n=0
+		while ! grep -q 'keeping the lock while pid' "${E:?}/n.out" && [ "$_n" -lt 50 ]; do
+			sleep 0.1
+			_n=$((_n + 1))
+		done
+		_l=$(B lock status)
+		if pid_running "$_np"; then
+			case $_l in
+			lock=held*) ;;
+			*) nok "lock: no group: the lock was freed while the command it could not stop still ran: $_l" ;;
+			esac
+		else
+			nok "lock: no group: the command was gone before the check of the lock"
+		fi
+		wait_gone 15 "$_nh" || nok "lock: no group: the lock shell did not exit after the command ended"
+		_st=0
+		collect "$_nh" || _st=$?
+		[ "$_st" -eq 143 ] || nok "lock: no group: wanted 143 on TERM, got $_st"
+		if pid_running "$_np"; then nok "lock: no group: the lock was freed while the command still ran"; fi
+		[ "$(B lock status)" = lock=free ] || nok "lock: no group: the lock was not freed once the command ended"
+		grep -q 'cannot tell whether pid.*so the stop sends it no more signals' "${E:?}/n.out" || nok "lock: no group: the stop's line did not reach the lock shell's standard error: $(tr '\n' '|' < "${E:?}/n.out")"
+		grep -q 'keeping the lock while pid' "${E:?}/n.out" || nok "lock: no group: the hold was not said"
+		wait_gone 2 "$_np" || :
+
+		# bench_bounded, ps silent, a command that leads no group: not
+		# signalled, never said to be stopped, and 125 within its bound.
+		_t0=$(date +%s)
+		_st=0
+		env PATH="$E/shim:$PATH" dash -c 'BENCH_ROOT=$1; . "$1/core/common.sh"; BENCH_STOP_GRACE=1; st=0; bench_bounded 1 sh -c "printf \"%s\\n\" \"\$\$\" > \"\$1\"; exec sleep 3" x "$2" || st=$?; exit "$st"' x "$R" "${E:?}/q.pid" > "${E:?}/q.out" 2>&1 || _st=$?
+		_t1=$(date +%s)
+		_qp=$(cat "${E:?}/q.pid" 2> /dev/null) || _qp=
+		record "$_qp"
+		[ "$_st" -eq 125 ] || nok "bounded: no group: wanted 125 (it could not stop it), got $_st: $(tr '\n' '|' < "${E:?}/q.out")"
+		[ $((_t1 - _t0)) -lt 3 ] || nok "bounded: no group: the bound took $((_t1 - _t0)) s for a wall time of 1 s"
+		grep -q 'could not be stopped' "${E:?}/q.out" || nok "bounded: no group: the bound did not say it could not stop the command"
+		if grep -q 'stopped a command that outlived' "${E:?}/q.out"; then nok "bounded: no group: the bound said it stopped a command it sent nothing"; fi
+		wait_gone 5 "$_qp" || nok "bounded: no group: the command did not end by itself"
+
+		# The identity table (correctness I2): 2000 bounded commands leave
+		# no entry behind, and a lookup costs what it did before them.
+		BENCH_SPAWNED=
+		bench_spawn sh -c 'exec sleep 30' < /dev/null
+		_tp=$BENCH_SPAWN_PID
+		record "$_tp"
+		bench_undefer
+		_look() {
+			_i=0
+			while [ "$_i" -lt 100 ]; do
+				bench_spawned "$_tp" || nok "table: the long command's entry is gone"
+				_i=$((_i + 1))
+			done
+		}
+		_now() { perl -MTime::HiRes=time -e 'printf "%.4f\n", time'; }
+		_a0=$(_now)
+		_look
+		_a1=$(_now)
+		_i=0
+		while [ "$_i" -lt 2000 ]; do
+			bench_bounded 5 true || nok "table: a bounded true failed"
+			_i=$((_i + 1))
+			case $_i in
+			*00)
+				_c=$(printf '%s' "$BENCH_SPAWNED" | tr -cd ';' | wc -c | tr -d ' ')
+				if [ "$_c" -gt 1 ]; then
+					nok "table: $_c entries after $_i bounded commands"
+					break
+				fi
+				;;
+			esac
+		done
+		_b0=$(_now)
+		_look
+		_b1=$(_now)
+		awk -v a0="$_a0" -v a1="$_a1" -v b0="$_b0" -v b1="$_b1" 'BEGIN { exit !((b1 - b0) <= 3 * (a1 - a0) + 0.05) }' ||
+			nok "table: 100 lookups took $_a0..$_a1 before 2000 bounded commands and $_b0..$_b1 after"
+		BENCH_LOCK_CHILD=$_tp
+		BENCH_LOCK_REAPED=
+		bench_lock_stop_child
+		wait_gone 5 "$_tp" || nok "table: the long command was not stopped"
+		case $BENCH_SPAWNED in
+		*";$_tp|"*) nok "table: the stopped command's entry was left: $BENCH_SPAWNED" ;;
+		esac
+		core_decoy_end "$_d" "$_dm1" "$_dm2" "$_d3" "$_dm3" "$_d4" "$_dm4"
 		[ "$_f" -eq 0 ]
 	) || bad "core-id: the core signals a process that is not the command it started, or does not stop the command (above)"
 	[ "$fails" -eq 0 ]
