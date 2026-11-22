@@ -272,12 +272,51 @@ Cvar_AddToList(const char *var_name, const char *var_value, int flags)
 	return var;
 }
 
+/*
+ * The game cvar never holds a value FS_GameDirValid refuses (FIX173):
+ * the filesystem and the music lister build paths from it, and
+ * userGivenGame, which a disconnect restores, is copied from it. Every
+ * write of a value goes through Cvar_GetNew, Cvar_Get, Cvar_SetVar
+ * (Cvar_Set, Cvar_ForceSet, the console, a latched write) or
+ * Cvar_FullSet, which ask this first; the latched value Cvar_GetLatchedVars
+ * applies was asked when it was written.
+ */
+static qboolean
+Cvar_RefusedGameValue(const char *var_name, const char *value)
+{
+	char shown[41];
+	size_t i;
+
+	if (strcmp(var_name, "game") != 0 || FS_GameDirValid(value))
+	{
+		return false;
+	}
+
+	/* The value is a server's text: control bytes and 0x7f or above
+	   are shown as '?'. */
+	for (i = 0; i < sizeof(shown) - 1 && value[i]; i++)
+	{
+		unsigned char c = (unsigned char)value[i];
+
+		shown[i] = (c < 0x20 || c >= 0x7f) ? '?' : (char)c;
+	}
+
+	shown[i] = '\0';
+	Com_Printf("game: refused \"%s\", not a single directory name.\n", shown);
+	return true;
+}
+
 static cvar_t *
 Cvar_GetNew(const char *var_name, const char *var_value, int flags)
 {
 	if (!var_value)
 	{
 		return NULL;
+	}
+
+	if (Cvar_RefusedGameValue(var_name, var_value))
+	{
+		var_value = "";
 	}
 
 	if (flags & (CVAR_USERINFO | CVAR_SERVERINFO))
@@ -332,6 +371,11 @@ Cvar_Get(const char *var_name, const char *var_value, int flags)
 
 	var_name = Cvar_CheckReplacement(var_name, true);
 
+	if (Cvar_RefusedGameValue(var_name, var_value))
+	{
+		var_value = "";
+	}
+
 	// if $game is the default one ("baseq2"), then use "" instead because
 	// other code assumes this behavior (e.g. FS_BuildGameSpecificSearchPath())
 	if (strcmp(var_name, "game") == 0 && strcmp(var_value, BASEDIRNAME) == 0)
@@ -352,9 +396,224 @@ Cvar_Get(const char *var_name, const char *var_value, int flags)
 	return Cvar_AddToList(var_name, var_value, flags);
 }
 
+/*
+ * nextserver and nextdemo hold console text: SV_Map copies nextdemo
+ * into nextserver, and SV_Nextserver queues nextserver from SV_Frame,
+ * so it runs as the player's when a demo or cinematic ends. A line the
+ * server sent may not set either (FIX153), or its text would come back
+ * as the player's and pass the commands that refuse a server's use.
+ * Every write of a value goes through Cvar_SetVar, Cvar_Set2 or
+ * Cvar_FullSet, which ask this first. A server line that dropped server
+ * text before the write (SV_Map's demo drop, CL_Drop in SV_InitGame) is
+ * still the server's: Cbuf_DropServerText leaves the running line's
+ * source alone.
+ */
+static qboolean
+Cvar_RefusedFromServer(const char *var_name)
+{
+	if (!Cbuf_ExecutingServerText())
+	{
+		return false;
+	}
+
+	if (strcmp(var_name, "nextserver") && strcmp(var_name, "nextdemo"))
+	{
+		return false;
+	}
+
+	Com_Printf("%s may not be set by the server.\n", var_name);
+	return true;
+}
+
+/*
+ * The cvars whose value a server line wrote (FIX158), by name: cvar_t
+ * crosses the game API and takes no new field. vstr of such a cvar
+ * queues its value as server text, and a line that expands it with $
+ * runs as the server's (src/common/cmdparser.c), so a server that sets
+ * `x "<gated command>"` cannot have it run as the player's text. It is
+ * FIX156's rule for aliases and binds.
+ */
+typedef struct cvar_servermark_s
+{
+	struct cvar_servermark_s *next;
+	char *name;
+} cvar_servermark_t;
+
+/*
+ * The names of the cvars a server line created (FIX168): their
+ * default_string is the server's value, so the player's reset or
+ * resetall to it is not the player choosing a value. A name is added
+ * once, and a cvar is never removed, so the list is bounded by the
+ * cvar count.
+ */
+typedef struct cvar_serverdefault_s
+{
+	struct cvar_serverdefault_s *next;
+	char *name;
+	char *value; /* the value that created the cvar */
+} cvar_serverdefault_t;
+
+static cvar_serverdefault_t *cvar_serverdefaults;
+
+static cvar_servermark_t *cvar_servermarks;
+
+static cvar_servermark_t **
+Cvar_FindServerMark(const char *var_name)
+{
+	cvar_servermark_t **m;
+
+	for (m = &cvar_servermarks; *m; m = &(*m)->next)
+	{
+		if (!strcmp((*m)->name, var_name))
+		{
+			return m;
+		}
+	}
+
+	return NULL;
+}
+
+static void
+Cvar_FreeServerMark(cvar_servermark_t *m)
+{
+	Z_Free(m->name);
+	Z_Free(m);
+}
+
+static void
+Cvar_AddServerMark(const char *var_name)
+{
+	cvar_servermark_t *m;
+
+	m = Z_Malloc(sizeof(*m));
+	m->name = CopyString(var_name);
+	m->next = cvar_servermarks;
+	cvar_servermarks = m;
+}
+
+static void
+Cvar_FreeServerMarks(void)
+{
+	cvar_servermark_t *m;
+
+	while (cvar_servermarks)
+	{
+		m = cvar_servermarks;
+		cvar_servermarks = m->next;
+		Cvar_FreeServerMark(m);
+	}
+
+	while (cvar_serverdefaults)
+	{
+		cvar_serverdefault_t *d = cvar_serverdefaults;
+
+		cvar_serverdefaults = d->next;
+		Z_Free(d->name);
+		Z_Free(d->value);
+		Z_Free(d);
+	}
+}
+
+static const cvar_serverdefault_t *
+Cvar_FindServerDefault(const char *var_name)
+{
+	const cvar_serverdefault_t *d;
+
+	for (d = cvar_serverdefaults; d; d = d->next)
+	{
+		if (!strcmp(d->name, var_name))
+		{
+			return d;
+		}
+	}
+
+	return NULL;
+}
+
+/* A cvar a server line just created: its default is the server's. */
+static void
+Cvar_NoteCreated(const cvar_t *var)
+{
+	cvar_serverdefault_t *d;
+
+	if (!var || !Cmd_ExecutingLine() || !Cbuf_ExecutingServerText() ||
+			Cvar_FindServerDefault(var->name))
+	{
+		return;
+	}
+
+	d = Z_Malloc(sizeof(*d));
+	d->name = CopyString(var->name);
+	d->value = CopyString(var->default_string);
+	d->next = cvar_serverdefaults;
+	cvar_serverdefaults = d;
+}
+
+/*
+ * Records who wrote a cvar's value. Every write that was not refused
+ * calls it, changed or not. A write that leaves the value as it is
+ * never changes the owner, whichever source wrote it:
+ * - the player's line makes the value the player's if it changed it,
+ *   so the player takes a value back by writing another one, and the
+ *   server's own config.cfg round trip (a game directory change writes
+ *   config.cfg and runs it as the player's text) cannot clear a mark;
+ * - a server line makes it the server's if it changed the value, so a
+ *   server that runs the player's config.cfg again does not take over
+ *   the player's values;
+ * - the engine's own write, outside any line, leaves the owner as it
+ *   was: no text chose the value, so nothing makes it the player's.
+ */
+static void
+Cvar_NoteWriter(const cvar_t *var, qboolean changed)
+{
+	cvar_servermark_t **found, *m;
+
+	if (!var || !Cmd_ExecutingLine())
+	{
+		return;
+	}
+
+	found = Cvar_FindServerMark(var->name);
+
+	if (!Cbuf_ExecutingServerText())
+	{
+		/* a write that leaves the value as it is changes no owner,
+		   whoever wrote it */
+		if (found && changed)
+		{
+			m = *found;
+			*found = m->next;
+			Cvar_FreeServerMark(m);
+		}
+
+		return;
+	}
+
+	if (changed && !found)
+	{
+		Cvar_AddServerMark(var->name);
+	}
+}
+
+/*
+ * True if a server line wrote the value var_name holds now, and the
+ * player's text has not written it since.
+ */
+qboolean
+Cvar_ServerWrote(const char *var_name)
+{
+	return Cvar_FindServerMark(Cvar_CheckReplacement(var_name, false)) != NULL;
+}
+
 static cvar_t *
 Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 {
+	if (Cvar_RefusedFromServer(var->name) ||
+		Cvar_RefusedGameValue(var->name, value))
+	{
+		return var;
+	}
+
 	if (var->flags & (CVAR_USERINFO | CVAR_SERVERINFO))
 	{
 		if (!Cvar_InfoValidate(value))
@@ -385,6 +644,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 			{
 				if (strcmp(value, var->latched_string) == 0)
 				{
+					Cvar_NoteWriter(var, false);
 					return var;
 				}
 
@@ -395,9 +655,15 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 			{
 				if (strcmp(value, var->string) == 0)
 				{
+					Cvar_NoteWriter(var, false);
 					return var;
 				}
 			}
+
+			/* the latched value is the one the cvar takes next: its
+			   writer owns the cvar from now (Cvar_GetLatchedVars,
+			   the engine's, keeps the owner) */
+			Cvar_NoteWriter(var, true);
 
 			if (Com_ServerState())
 			{
@@ -429,6 +695,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 
 	if (!strcmp(value, var->string))
 	{
+		Cvar_NoteWriter(var, false);
 		return var;
 	}
 
@@ -441,6 +708,7 @@ Cvar_SetVar(cvar_t *var, const char *value, qboolean force)
 
 	var->string = Cvar_CopyString(var->string, value);
 	var->value = strtod(var->string, (char **)NULL);
+	Cvar_NoteWriter(var, true);
 
 	return var;
 }
@@ -453,9 +721,22 @@ Cvar_Set2(const char *var_name, const char *value, qboolean force)
 	var_name = Cvar_CheckReplacement(var_name, true);
 	var = Cvar_FindVar(var_name);
 
-	return (!var) ?
-		Cvar_GetNew(var_name, value, 0) :
-		Cvar_SetVar(var, value, force);
+	if (var)
+	{
+		return Cvar_SetVar(var, value, force);
+	}
+
+	/* a refused write still returns a cvar, created empty */
+	if (Cvar_RefusedFromServer(var_name))
+	{
+		return Cvar_GetNew(var_name, "", 0);
+	}
+
+	var = Cvar_GetNew(var_name, value, 0);
+	Cvar_NoteWriter(var, true);
+	Cvar_NoteCreated(var);
+
+	return var;
 }
 
 cvar_t *
@@ -474,13 +755,29 @@ cvar_t *
 Cvar_FullSet(const char *var_name, const char *value, int flags)
 {
 	cvar_t *var;
+	qboolean changed;
 
 	var_name = Cvar_CheckReplacement(var_name, true);
 	var = Cvar_FindVar(var_name);
 
+	/* neither the value nor the flags, so not the archive flag */
+	if (Cvar_RefusedFromServer(var_name))
+	{
+		return var ? var : Cvar_GetNew(var_name, "", 0);
+	}
+
+	if (var && Cvar_RefusedGameValue(var_name, value))
+	{
+		return var;
+	}
+
 	if (!var)
 	{
-		return Cvar_GetNew(var_name, value, flags);
+		var = Cvar_GetNew(var_name, value, flags);
+		Cvar_NoteWriter(var, true);
+		Cvar_NoteCreated(var);
+
+		return var;
 	}
 
 	var->modified = true;
@@ -497,10 +794,13 @@ Cvar_FullSet(const char *var_name, const char *value, int flags)
 		value = "";
 	}
 
+	changed = strcmp(var->string, value) != 0;
+
 	var->string = Cvar_CopyString(var->string, value);
 	var->value = (float)strtod(var->string, (char **)NULL);
 
 	var->flags = flags;
+	Cvar_NoteWriter(var, changed);
 
 	return var;
 }
@@ -575,7 +875,7 @@ Cvar_Command(void)
 	/* Another evil hack: The user has just changed 'game' trough
 	   the console. We reset userGivenGame to that value, otherwise
 	   we would revert to the initialy given game at disconnect. */
-	if (strcmp(v->name, "game") == 0)
+	if (strcmp(v->name, "game") == 0 && FS_GameDirValid(Cmd_Argv(1)))
 	{
 		Q_strlcpy(userGivenGame, Cmd_Argv(1), sizeof(userGivenGame));
 	}
@@ -646,6 +946,39 @@ Cvar_Set_f(void)
 }
 
 /*
+ * True if "set <name> "<value>"" read back runs exactly one set
+ * of exactly this name and value.
+ */
+static qboolean
+Cvar_WriteSafe(const char *name, const char *value)
+{
+	const unsigned char *c;
+
+	if (!*name || strstr(name, "//") || strpbrk(value, "\"\n\r"))
+	{
+		return false;
+	}
+
+	/* Cbuf_Execute truncates a line of 1024 bytes or more, so the
+	   read-back would run no set. The line is "set ", the name, a
+	   space, a quote, the value, a quote and the newline. */
+	if (strlen(name) + strlen(value) + 8 >= 1024)
+	{
+		return false;
+	}
+
+	for (c = (const unsigned char *)name; *c; c++)
+	{
+		if (*c <= ' ' || *c >= 0x7f || *c == ';' || *c == '"' || *c == '$')
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/*
  * Appends lines containing "set variable value" for all variables
  * with the archive flag set to true.
  */
@@ -661,6 +994,24 @@ Cvar_WriteVariables(const char *path)
 	{
 		if (var->flags & CVAR_ARCHIVE)
 		{
+			/* A cvar a server wrote is not the player's setting: skip it
+			   silently, before the safety check, so a server-written
+			   value is never named by the line below. */
+			if (Cvar_ServerWrote(var->name)) continue;
+
+			/* The tokenizer has no escape and the name is written
+			   unquoted. A quote in the value would end it early, a
+			   newline always splits, and in the name a ';' or a
+			   space, a control or high byte, a '$' (macro expansion)
+			   or a "//" (comment) would change how the line parses at
+			   the next start. Refuse to write such a cvar. */
+			if (!Cvar_WriteSafe(var->name, var->string))
+			{
+				Com_Printf("Not saving cvar %s: its name or value cannot be written back.\n",
+						var->name);
+				continue;
+			}
+
 			fprintf(f, "set %s \"%s\"\n", var->name, var->string);
 		}
 	}
@@ -818,6 +1169,34 @@ Cvar_Inc_f(void)
  * Resets a cvar to its default value.
  */
 static void
+Cvar_ResetVar(cvar_t *var)
+{
+	const cvar_serverdefault_t *d;
+	const char *was = var->latched_string ? var->latched_string : var->string;
+	qboolean changed = strcmp(was, var->default_string) != 0;
+
+	Cvar_SetVar(var, var->default_string, false);
+
+	/* a default a server line created is the server's value: the
+	   reset leaves the cvar the server's (FIX168). A reset that
+	   changed nothing changed no owner. */
+	d = Cvar_FindServerDefault(var->name);
+
+	/* only while the default is still the one the server's line created:
+	   Cvar_Get replaces it when the engine registers the cvar later */
+	if (changed && d && !strcmp(d->value, var->default_string) &&
+			!Cvar_FindServerMark(var->name))
+	{
+		was = var->latched_string ? var->latched_string : var->string;
+
+		if (!strcmp(was, var->default_string))
+		{
+			Cvar_AddServerMark(var->name);
+		}
+	}
+}
+
+static void
 Cvar_Reset_f(void)
 {
 	const char *var_name;
@@ -839,7 +1218,7 @@ Cvar_Reset_f(void)
 	}
 
 	Com_Printf("%s: %s\n", var->name, var->default_string);
-	Cvar_SetVar(var, var->default_string, false);
+	Cvar_ResetVar(var);
 }
 
 /*
@@ -862,7 +1241,7 @@ Cvar_ResetAll_f(void)
 			continue;
 		}
 
-		Cvar_SetVar(var, var->default_string, false);
+		Cvar_ResetVar(var);
 	}
 }
 
@@ -963,6 +1342,7 @@ Cvar_FreeList(void)
 	}
 
 	cvar_vars = NULL;
+	Cvar_FreeServerMarks();
 }
 
 void

@@ -144,6 +144,12 @@ static cvar_t *r_retro_gamma;
 /* TASK195: the tuning harness's B side, "" for A (the client's rt_ab writes it) */
 static cvar_t *r_rt_ab;
 
+int
+RM_PresentationMode(void)
+{
+	return rm_presentation;
+}
+
 const char *
 RM_EffectString(const cvar_t *cv)
 {
@@ -260,6 +266,16 @@ R_HdrProbeFrame(void)
 		rmb_hdr_probe_ask(-1, -1);
 		R_Printf(PRINT_ALL, "ref_metal: hdr: probe: no drawable was presented in %d frames "
 				"(the display may be off or asleep, or the window hidden); nothing read\n", RM_HDR_PROBE_FRAMES);
+	}
+}
+
+/* the renderer's shutdown: a probe still waiting for its drawable is cancelled, with one line, not timed out later */
+void
+RM_HdrProbeCancel(void)
+{
+	if (rm_hdr_probe_cancel(&rm_hdr_probe_wait))
+	{
+		R_Printf(PRINT_ALL, "ref_metal: hdr: probe cancelled (the renderer was shut down)\n");
 	}
 }
 
@@ -652,6 +668,9 @@ RI_Init(void)
 		rm_presentation = rm_pres_decide(r_presentation->value, rm_rtg.path, &why);
 		rm_pres_format(r_presentation->value, rm_presentation, why, line, sizeof(line));
 		R_Printf(PRINT_ALL, "%s\n", line);
+
+		/* TASK185: no Retro view pass left from before a vid_restart (the image stays mapped); RI_RenderFrame sets it per frame */
+		rmb_gbuf_set_retro(0, 0, 0);
 	}
 
 	if (!rm_caps_floor_ok(caps.families))
@@ -1292,6 +1311,12 @@ R_RetroFinish(const refdef_t *fd)
 	rm_viewport_t vp;
 	int tw = 0, th = 0;
 
+	/* TASK185: a view drawn at 480 lines ran the pass at its own size, before its blit; the frame's copy would quantize it twice */
+	if (rmb_gbuf_retro_done())
+	{
+		return;
+	}
+
 	rmb_target_size(&tw, &th);
 	rm_view_rect(fd->x, fd->y, fd->width, fd->height, vid.width, vid.height, th, &vp);
 	rmb_retro_pass((int)vp.x, (int)vp.y, (int)vp.w, (int)vp.h, r_retro_filter->value != 0,
@@ -1309,7 +1334,11 @@ R_RetroFinish(const refdef_t *fd)
  * r_view.vp, which is this rectangle), so what the world's map wrote
  * there is gone before the second map runs. The shoulder is not
  * idempotent above white; a view that did not repaint its rectangle
- * would need its own scheme (the host test walks the order).
+ * would need its own scheme (the host test walks the order; tests/
+ * check-ref-metal.sh holds the source order). timerefresh (cl_screen.c)
+ * renders up to 128 world views in one frame: a pixel no surface covers
+ * (noclip into the void) is mapped once per view there. It is a
+ * benchmark, not a frame to look at.
  */
 static void
 R_HdrToneMap(const refdef_t *fd)
@@ -1343,6 +1372,19 @@ RI_RenderFrame(refdef_t *fd)
 	 * reflections
 	 */
 	rm_rtfx_frame(fd, RM_RT_SceneReady());
+
+	/*
+	 * Retro's pass is made at the view's own lines when it has them
+	 * (TASK185), with this frame's settings. Set on every frame, off in
+	 * every other mode: the renderer stays mapped across vid_restart, so
+	 * a Retro session's setting would otherwise outlive it.
+	 */
+	{
+		const float rc = r_retro_gamma->value;
+
+		rmb_gbuf_set_retro(rm_presentation == RM_PRES_RETRO, r_retro_filter->value != 0,
+				((rc >= 0.0f) && (rc < (float)MTL_RETRO_CURVES)) ? (int)rc : 0);
+	}
 
 	/*
 	 * Colour loaded, so 2D drawn before a view (the player-config menu)

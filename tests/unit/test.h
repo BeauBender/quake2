@@ -88,6 +88,9 @@ void t_abort_test(void) __attribute__((noreturn));
 void t_console_reset(void);
 const char *t_console(void);
 
+/* What the engine printed while the early command line ran at start-up. */
+const char *t_startup_console(void);
+
 /* Re-installs the capture after engine code ran its own redirect
    (rcon does; its Com_EndRedirect switches redirection off). */
 void t_console_rearm(void);
@@ -99,8 +102,10 @@ void t_console_rearm(void);
 /*
  * Expects STMT to raise Com_Error(ERR_DROP or ERR_DISCONNECT): the real
  * Com_Error in src/common/clientserver.c longjmps to the global abortframe,
- * which this macro arms exactly as Qcommon_Frame does. Fails the test when
- * STMT returns normally. The ERR_DROP message is in t_console() afterwards.
+ * which this macro arms exactly as Qcommon_Frame does. Like Qcommon_Frame
+ * it leaves the command buffer's source alone: Com_Error resets it
+ * itself (FIX153). Fails the test when STMT returns normally.
+ * The ERR_DROP message is in t_console() afterwards.
  */
 extern jmp_buf abortframe;
 void t_rearm_abortframe(void);

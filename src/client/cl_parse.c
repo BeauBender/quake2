@@ -959,6 +959,13 @@ CL_ParseServerData(void)
 
 	/* game directory */
 	str = MSG_ReadString(&net_message);
+
+	if (!FS_GameDirValid(str))
+	{
+		Com_Error(ERR_DROP, "Server sent an invalid game directory");
+		return;
+	}
+
 	Q_strlcpy(cl.gamedir, str, sizeof(cl.gamedir));
 
 	/* set gamedir */
@@ -1430,6 +1437,9 @@ CL_ParseServerMessage(void)
 					cls.download = NULL;
 				}
 
+				/* the connection ends here without CL_Disconnect:
+				   the server's text must not outlive it (FIX113) */
+				Cbuf_DropServerText();
 				cls.state = ca_connecting;
 				cls.connect_time = -99999; /* CL_CheckForResend() will fire immediately */
 				break;
@@ -1459,7 +1469,15 @@ CL_ParseServerMessage(void)
 			case svc_stufftext:
 				s = MSG_ReadString(&net_message);
 				Com_DPrintf("stufftext: %s\n", s);
-				Cbuf_AddText(s);
+
+				/* below ca_connected only after an svc_reconnect
+				   earlier in this message: the connection the text
+				   came from has ended (FIX113) */
+				if (cls.state >= ca_connected)
+				{
+					Cbuf_AddServerText(s);
+				}
+
 				break;
 
 			case svc_serverdata:

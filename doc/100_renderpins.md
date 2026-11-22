@@ -96,7 +96,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `world-metalfx-interp` | `world` with `r_metalfx_interp 1`; frame generation is not built yet, so it draws `world`'s frames on every GPU |
 | `rt-sun` | `world` with `r_rt_sun 1`: the Metal renderer's ray-traced sun and sky shadow, new light on the world's dim surfaces where a ray toward the sun reaches the sky (the others draw it as `world`, and so does the Metal renderer on a map whose sky is under 2 % of its face area or on a GPU without ray tracing); its pin is recorded once the owner accepts the look (TASK56) |
 | `particles-cap` | `particles` with `metal_particle_cap 1`: the particle size limit of the Metal renderer scaled by `height / 480` (the others draw it as `particles`); recorded with `PINS_SEED` like `particles` |
-| `retro` | `world` with `r_presentation 2`: the Metal renderer's Retro post-process, the 3D view in RGB565 with the 4 x 4 ordered dither, no filter and no curve (the others draw it as `world`); judged against the Metal renderer itself once the owner accepts the look (TASK184) |
+| `retro` | `world` with `r_presentation 2`: the Metal renderer's Retro post-process, the 3D view in RGB565 with the 4 x 4 ordered dither, no filter and no curve, and since TASK185 the 16-bit textures, the 256 cap and, above 480 lines, the 480-line view (the others draw it as `world`); judged against the Metal renderer itself once the owner accepts the look (TASK184) |
 | `retro-filter` | `retro` with `r_retro_filter 1`: the 2 x 2 box output filter over the dithered pixels (TASK184) |
 | `hdr` | `world` with `r_hdr 1`: the Metal renderer's float16 frame, read back as its SDR fallback (clamped to white, in 8 bits); its own reference, not compared with `world` (the others draw it as `world`) (TASK196) |
 | `hdr-metalfx2` | `hdr` with `r_metalfx 2` at `r_metalfx_scale 0.5`: the Metal renderer's float16 view upscaled by `MTLFXTemporalScaler`, before the tone map; its own reference, not compared with `hdr` or `world-metalfx2` (the others draw it as `world`) (TASK196, HD4) |
@@ -235,6 +235,23 @@ scenario with it, read the count from `timedemo.txt` in the pin, and add
 `// frames <demo> <count>` to each scenario that plays it.
 
 ### Determinism
+
+`record` starts the engine with `+set con_notifytime -1`, so no console
+notify line is drawn over a frame whatever the engine prints while the
+demo plays (FIX157; a line printed to the console is drawn for
+`con_notifytime` seconds of wall time, so a pin's frames would depend on
+the clock). The setting is not archived and a pin run writes no
+`config.cfg`, so it never reaches a player's configuration. After each
+record that writes a trace (not `PINS_TRACE=0`, which has no trace to read, so
+no text check), the trace is read to its end (`tests/refrecord/charscan.c`);
+a trace that cannot be read, or a scanner that cannot be built, makes the
+record incomplete, never a pass. A frame the run
+captured that holds a character draw must be listed in
+`scripts/pins/text/<demo>-every<PINS_EVERY>.txt`, as `pin <capture
+number> <characters>`, the text the demo itself draws; no such file
+declares none. Any other text makes the record incomplete and writes the
+difference to `text.txt` beside the frames. `pins.sh check-text <trace>
+[demo [every]]` runs the same check over one trace.
 
 A renderer replaying its own trace draws exactly the frames it drew
 live: everything it is handed is in the trace, `refdef_t.time` included

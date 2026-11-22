@@ -263,12 +263,23 @@ printf '%s\n' "$*" >> "$st/calls"
 [ "${1:-}" = simctl ] || { echo "fake xcrun: simctl only" >&2; exit 1; }
 shift
 drop() { awk -v u="$1" '$1 != u' "$st/devices" > "$st/devices.new" && mv "$st/devices.new" "$st/devices"; }
+# hang <seconds>: this call hangs: it becomes a sleep whose command line, unique to its pid, is in
+# hang.cmd, written before hang.pid, so that the selftest signals that pid only while it still runs it
+hang() { echo "sleep $1.$$" > "$st/hang.cmd"; echo $$ > "$st/hang.pid"; exec sleep "$1.$$"; }
+# decoy <seconds>: a sleep the selftest starts that is not the hung call, in a process group of its own;
+# its command line, unique to this call's pid, is in decoy.cmd and its pid in decoy.pid, and hang.pid
+# names it next, so that the selftest's check of the hung call must leave it running (FIX171)
+decoy() {
+	python3 -I -c 'import os, sys; os.setpgid(0, 0); os.execvp(sys.argv[1], sys.argv[1:])' sleep "$1.$$" < /dev/null > /dev/null 2>&1 &
+	echo "sleep $1.$$" > "$st/decoy.cmd"; echo $! > "$st/decoy.pid"
+}
 case ${1:-} in
 list)
 	case ${2:-} in
 	devices)
 		case $sc in
-		hang) echo $$ > "$st/hang.pid"; exec sleep 30 ;;
+		hang) hang 30 ;;
+		hangdecoy) [ -e "$st/decoy.pid" ] || { decoy 40; echo "sleep 30.$$" > "$st/hang.cmd"; cat "$st/decoy.pid" > "$st/hang.pid"; } ;;
 		samename) grep -q '^55555555-' "$st/devices" || printf '%s\n' "55555555-5555-5555-5555-555555555555 yq2-ios-sim-$PPID" >> "$st/devices" ;;
 		empty) exit 0 ;;
 		listfail) echo "fake xcrun: CoreSimulatorService is not running" >&2; exit 1 ;;
@@ -332,8 +343,7 @@ create)
 			"44444444-4444-4444-4444-444444444444 Previews gone" >> "$st/devices"
 	fi
 	if [ "$sc" = createhang ] || [ "$sc" = samename ]; then
-		echo $$ > "$st/hang.pid"
-		exec sleep 30
+		hang 30
 	fi
 	echo "$u" ;;
 terminate)
@@ -366,8 +376,9 @@ spawn)
 		crashstatus) [ "$n" -gt 1 ] && ls=-11 ;;
 		restart) [ "$n" -gt 1 ] && lp=200 ;;
 		bootcrash) lp=200; ls=-11 ;;
-		hang1) [ "$n" -eq 1 ] && { echo $$ > "$st/hang.pid"; exec sleep 180; } ;;
-		hang2) [ "$n" -gt 1 ] && { echo $$ > "$st/hang.pid"; exec sleep 180; } ;;
+		hang1) [ "$n" -eq 1 ] && { hang 180; } ;;
+		hang1decoy) [ "$n" -eq 1 ] && { decoy 40; echo "sleep 180.$$" > "$st/hang.cmd"; cat "$st/decoy.pid" > "$st/hang.pid"; exec sleep "180.$$"; } ;;
+		hang2) [ "$n" -gt 1 ] && { hang 180; } ;;
 		qfail) [ "$n" -gt 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		qfailbase) [ "$n" -eq 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		nolabel) lab=com.apple.other ;;
@@ -450,15 +461,14 @@ launch)
 	echo "Metal API Validation Enabled"
 	wait "$p"
 	# a launch client that ignores TERM and outlives the app
-	[ "$sc" = launchterm ] && { echo $$ > "$st/hang.pid"; exec sleep 60; }
+	[ "$sc" = launchterm ] && { hang 60; }
 	exit 0 ;;
 get_app_container)
 	[ "$sc" = nocontainer ] && { echo "fake xcrun: no such container" >&2; exit 1; }
 	# containerhang: the first call hangs
 	if [ "$sc" = containerhang ] && [ ! -f "$st/hung" ]; then
 		: > "$st/hung"
-		echo $$ > "$st/hang.pid"
-		exec sleep 30
+		hang 30
 	fi
 	mkdir -p "$st/container"; echo "$st/container" ;;
 delete)
@@ -559,7 +569,7 @@ EOF
 	# <name> <scenario> <ok|fail> <text the output must hold> <max seconds> [VAR=value]...
 	st_case()
 	{
-		local name=$1 sc=$2 want=$3 text=$4 max=$5 d rc=0 t0 why= other=
+		local name=$1 sc=$2 want=$3 text=$4 max=$5 d rc=0 t0 why= other= hpid hcmd
 		shift 5
 		ncase=$((ncase + 1))
 		d=$sroot/$name
@@ -594,9 +604,17 @@ EOF
 		if [ "$sc" = samename ] && ! grep '^55555555-' "${d:?}/state/devices" >/dev/null; then
 			why="${why:+$why; }a device named like this run's, listed before it, was deleted"
 		fi
-		if [ -f "${d:?}/state/hang.pid" ] && kill -0 "$(cat "${d:?}/state/hang.pid")" 2>/dev/null; then
-			kill -9 "$(cat "${d:?}/state/hang.pid")" 2>/dev/null
-			why="${why:+$why; }the hung simctl call was left running"
+		# only the fake's hung call: the PID in hang.pid still runs the command in hang.cmd (FIX171); a PID
+		# that runs but that ps gives no command line for is a failure of its own
+		if [ -f "${d:?}/state/hang.pid" ] && [ -s "${d:?}/state/hang.cmd" ]; then
+			hpid=$(cat "${d:?}/state/hang.pid")
+			hcmd=$(ps -o command= -p "$hpid" 2>/dev/null)
+			if [ "$hcmd" = "$(cat "${d:?}/state/hang.cmd")" ]; then
+				kill -9 "$hpid" 2>/dev/null
+				why="${why:+$why; }the hung simctl call was left running"
+			elif [ -z "$hcmd" ] && kill -0 "$hpid" 2>/dev/null; then
+				why="${why:+$why; }ps gave no command line for the pid in hang.pid ($hpid), which runs"
+			fi
 		fi
 		if [ -n "$why" ]; then
 			echo "ios-sim: selftest: FAIL $name: $why"
@@ -611,10 +629,11 @@ EOF
 	# read's child must be gone 3 s after it exited. A non-interactive bash starts its async children with
 	# SIGINT ignored (docs/runbook/FIX131.md), so for INT the script is started through python3 with SIGINT
 	# reset to the default first, as a terminal's foreground job has it; the case is skipped, with its
-	# reason, only when that reset did not take, and fails when INT was deliverable but never sent.
+	# reason, only when that reset did not take, and fails when INT was deliverable but never sent. A third
+	# argument is the FAKE_LAUNCHER (hang1 when not given).
 	st_signal()
 	{
-		local name=$1 sig=$2 d spid hp w rc=0 why= sent= intdisp=default
+		local name=$1 sig=$2 launcher=${3:-hang1} d spid hp hcmd w rc=0 why= sent= intdisp=default
 		local dfl='import os, signal, sys
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 open(sys.argv[1], "w").write("default\n" if signal.getsignal(signal.SIGINT) == signal.SIG_DFL else "ignored\n")
@@ -624,7 +643,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		mkdir -p "${d:?}/state" || die "cannot create $d"
 		printf '%s\n' "11111111-1111-1111-1111-111111111111 Owner iPhone" \
 			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
-		set -- env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO=extra FAKE_LAUNCHER=hang1 \
+		set -- env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO=extra FAKE_LAUNCHER="$launcher" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10
 		if [ "$sig" = INT ]; then
 			"$@" python3 -I -c "$dfl" "${d:?}/intdisp" bash "$self" smoke --out "${d:?}/out" > "${d:?}/run.log" 2>&1 &
@@ -649,9 +668,16 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		fi
 		wait "$spid" 2>/dev/null || rc=$?
 		sleep 3
-		if [ -n "$hp" ] && kill -0 "$hp" 2>/dev/null; then
-			kill -9 "$hp" 2>/dev/null
-			[ "$intdisp" != default ] || why="${why:+$why; }the bounded launcher read (pid $hp) still ran 3 s after the script exited on $sig"
+		# only the fake's hung call: the PID in hang.pid still runs the command in hang.cmd (FIX171); a PID
+		# that runs but that ps gives no command line for is a failure of its own
+		if [ -n "$hp" ] && [ -s "${d:?}/state/hang.cmd" ]; then
+			hcmd=$(ps -o command= -p "$hp" 2>/dev/null)
+			if [ "$hcmd" = "$(cat "${d:?}/state/hang.cmd")" ]; then
+				kill -9 "$hp" 2>/dev/null
+				[ "$intdisp" != default ] || why="${why:+$why; }the bounded launcher read (pid $hp) still ran 3 s after the script exited on $sig"
+			elif [ -z "$hcmd" ] && kill -0 "$hp" 2>/dev/null; then
+				why="${why:+$why; }ps gave no command line for the pid in hang.pid ($hp), which runs"
+			fi
 		fi
 		if [ -z "$why" ] && [ "$intdisp" = default ]; then
 			if [ -z "$sent" ]; then
@@ -670,6 +696,34 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 			echo "ios-sim: selftest: skip $name: SIGINT could not be reset to the default for the script (${intdisp:-no reading}), so INT cannot reach it"
 		else
 			echo "ios-sim: selftest: ok $name"
+		fi
+	}
+	# st_decoy <case dir name> (FIX171): the decoy the fake started in that case, a sleep that is not the
+	# hung call although hang.pid names it, still runs its own command, so the check of the hung call left
+	# it alone; it is then stopped, only while it still runs that command
+	st_decoy()
+	{
+		local name=$1 d=$sroot/$1 dp dc pc why=
+		ncase=$((ncase + 1))
+		dp=$(cat "${d:?}/state/decoy.pid" 2>/dev/null)
+		dc=$(cat "${d:?}/state/decoy.cmd" 2>/dev/null)
+		if [ -z "$dp" ] || [ -z "$dc" ]; then
+			why="the fake started no decoy"
+		else
+			pc=$(ps -o command= -p "$dp" 2>/dev/null)
+			if [ "$pc" = "$dc" ]; then
+				kill -TERM "$dp" 2>/dev/null
+			elif [ -z "$pc" ] && kill -0 "$dp" 2>/dev/null; then
+				why="ps gave no command line for the decoy (pid $dp), which runs"
+			else
+				why="the decoy (pid $dp), which is not the hung call, was killed"
+			fi
+		fi
+		if [ -n "$why" ]; then
+			echo "ios-sim: selftest: FAIL $name decoy: $why"
+			nfail=$((nfail + 1))
+		else
+			echo "ios-sim: selftest: ok $name decoy"
 		fi
 	}
 	# st_has <case dir name> <file|nofile|grep|nogrep> <path under the case dir> <text> <why>:
@@ -920,6 +974,12 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	st_signal launcher-term-stops-read TERM
 	st_signal launcher-hup-stops-read HUP
 	st_signal launcher-int-stops-read INT
+	# each check of the hung call KILLs the pid in hang.pid only while it runs hang.cmd: a decoy the fake
+	# started, named in hang.pid but running another command, is left running (FIX171)
+	st_case hung-call-decoy hangdecoy ok "launcher: no crash" 30
+	st_decoy hung-call-decoy
+	st_signal launcher-term-decoy TERM hang1decoy
+	st_decoy launcher-term-decoy
 	# only this run's device is asked
 	st_has launcher-no-crash-iphone nogrep state/calls "spawn 11111111-"
 	st_has launcher-no-crash-iphone grep state/calls "simctl spawn AAAAAAAA-"

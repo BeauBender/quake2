@@ -8913,6 +8913,15 @@ test_hdr_tonemap(void)
 		CHECK(!rm_hdr_probe_args(NULL, "5", &x, &y) && x == -7 && y == -7);
 	}
 	{
+		/* a renderer restart (RI_ShutdownContext) cancels a pending probe: no timeout line 60 frames later */
+		int wait = 1;
+
+		CHECK(rm_hdr_probe_cancel(&wait) == 1 && wait == 0);
+		wait = 37;
+		CHECK(rm_hdr_probe_cancel(&wait) == 1 && wait == 0);
+		CHECK(rm_hdr_probe_cancel(&wait) == 0 && wait == 0);
+	}
+	{
 		/*
 		 * the probe's generation and state in one word: a re-ask and a new
 		 * copy between a copy and its completion leave a word the stale

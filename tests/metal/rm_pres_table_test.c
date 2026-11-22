@@ -3,7 +3,7 @@
  * the rows the script printed for tests/fixtures/rt-preset/good.cfg, included as a header that
  * defines RM_PRES_ENHANCED_ROWS (tests/check-ref-metal.sh). Under the enhanced mode
  * rm_pres_value must return the preset's own values, and every other mode and name must stay the
- * user's. The preset's values are given on the command line as name=value pairs, so the test
+ * user's, except that Retro reads its effects as 0. The preset's values are given on the command line as name=value pairs, so the test
  * compares the table with the fixture and not with itself.
  */
 
@@ -12,6 +12,23 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/header/rm_rtgate.h"
+
+/* the names Retro reads as 0 (TASK197, plan call P8) */
+static int
+retro_off(const char *name)
+{
+	static const char *const off[] = { "r_rt_shadows", "r_rt_sun", "r_rt_ao", "r_rt_water", "r_rt_gunshadow", "r_metalfx" };
+
+	for (size_t i = 0; i < sizeof(off) / sizeof(off[0]); i++)
+	{
+		if (!strcmp(name, off[i]))
+		{
+			return 1;
+		}
+	}
+
+	return 0;
+}
 
 int
 main(int argc, char **argv)
@@ -38,12 +55,12 @@ main(int argc, char **argv)
 			failures++;
 		}
 
-		/* the other modes decide nothing */
+		/* stock decides nothing; Retro reads its effects as 0 (TASK197) and the rest as the user's */
 		checks++;
 		if (rm_pres_value(RM_PRES_STOCK, argv[i], 99.0f) != 99.0f
-			|| rm_pres_value(RM_PRES_RETRO, argv[i], 99.0f) != 99.0f)
+			|| rm_pres_value(RM_PRES_RETRO, argv[i], 99.0f) != (retro_off(argv[i]) ? 0.0f : 99.0f))
 		{
-			printf("FAIL: %s is decided outside enhanced\n", argv[i]);
+			printf("FAIL: %s is not the user's under stock, or not Retro's off-or-user value\n", argv[i]);
 			failures++;
 		}
 	}
