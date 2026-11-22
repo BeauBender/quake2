@@ -14,8 +14,11 @@
 #       simulator build (make -n ios_objects, the "-o <path>" of each
 #       compile, the build root removed): the target adds and drops no file;
 #   (c) the Info.plist passes plutil -lint, names XRSimulator and 1.0,
-#       UIDeviceFamily 7 (Apple Vision) alone, no template key, and none of
-#       the iPhone's UIFileSharingEnabled, orientation or status bar keys;
+#       UIDeviceFamily 7 (Apple Vision) alone, no template key, holds
+#       UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace as true
+#       (TASK175 slice 2a: the game data goes in through the Files app, as
+#       on the iPhone), and none of the iPhone's orientation or status bar
+#       keys;
 #   (d) the build's target, preprocessed with the SDK's TargetConditionals.h:
 #       TARGET_OS_VISION 1, TARGET_OS_IPHONE 1, TARGET_OS_IOS 0, so the
 #       iPhone and iPad only sites, whose #if names TARGET_OS_IOS
@@ -40,7 +43,7 @@
 # Each assertion first runs on a mutant it must refuse (an object built for
 # the iOS or the tvOS simulator, a different object list, an iPhone or an
 # Apple TV plist, a plist with a forbidden key, also spelled with an XML
-# character reference, two device families or another minimum OS, the iOS
+# character reference, one without a sharing key or with it false, two device families or another minimum OS, the iOS
 # simulator's target, a Touch_Supported that returns 1 or a variable, an
 # object that holds a pinned string or needs a pinned symbol, one that lacks
 # the symbol it must need, an unreadable object), so an assertion that
@@ -145,11 +148,21 @@ assert_plist() # <Info.plist>
 		echo "$1 holds a template key"
 		rc=1
 	fi
+	# TASK175 slice 2a: the game data goes in through the Files app, as on the
+	# iPhone (Documents shows in Files only with both keys true)
+	for k in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
+		v=$(plutil -extract "$k" raw -o - "$1" 2>/dev/null) || v="(none)"
+		[ "$v" = true ] || { echo "$1: $k is $v, not true (the Files app shows Documents only with it)"; rc=1; }
+		# a <string>true</string> prints true too; the type must be a boolean,
+		# and a plutil error refuses
+		t=$(plutil -type "$k" "$1" 2>/dev/null) || t="(none)"
+		[ "$t" = bool ] || { echo "$1: $k is of type $t, not bool (the Files app reads only a boolean)"; rc=1; }
+	done
 	# plutil decides, not the text: a key spelled with a character reference
-	# (<key>UIFile&#83;haringEnabled</key>) is the same key. The file passed
+	# (<key>UIStatus&#66;arHidden</key>) is the same key. The file passed
 	# -lint above, so a failed -extract is a missing key; xml1, not raw,
 	# extracts a value of any type
-	for k in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidden; do
+	for k in UISupportedInterfaceOrientations UIStatusBarHidden; do
 		if plutil -extract "$k" xml1 -o - "$1" >/dev/null 2>&1; then
 			echo "$1 holds the iPhone's $k"
 			rc=1
@@ -303,7 +316,8 @@ if assert_plist "${tmp:?}/iphone.plist" > "${tmp:?}/o" 2>&1; then
 elif ! grep -q 'XRSimulator' "${tmp:?}/o"; then
 	bad "mutant: the iPhone plist was refused without naming the platform"
 fi
-# the Apple TV's template with the visionOS platform and version: only its device family is wrong
+# the Apple TV's template with the visionOS platform and version: its device family is wrong (and it has
+# no sharing keys)
 sed -e 's/@BUNDLE_ID@/x.y/' -e 's/@VERSION@/1/' -e 's/@PLATFORM@/XRSimulator/' -e 's/@MIN_OS@/1.0/' stuff/ios/Info-tvos.plist.in > "${tmp:?}/tv.plist"
 if assert_plist "${tmp:?}/tv.plist" > "${tmp:?}/o" 2>&1; then
 	bad "mutant: the Apple TV's Info.plist passed the visionOS plist check"
@@ -312,7 +326,7 @@ elif ! grep -q 'UIDeviceFamily is not 7' "${tmp:?}/o"; then
 fi
 # one change each to the good plist: an iPhone key, a second device family, another minimum OS
 # (mk, not k: assert_plist's own loop sets k, sh has no local)
-for mk in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidden; do
+for mk in UISupportedInterfaceOrientations UIStatusBarHidden; do
 	sed "s,<key>CFBundleExecutable</key>,<key>$mk</key><true/>&," "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
 	if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
 		bad "mutant: a plist with $mk passed"
@@ -320,15 +334,39 @@ for mk in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidde
 		bad "mutant: the plist with $mk was refused without naming it"
 	fi
 done
-# the same key with an XML character reference (&#83; is S): plutil reads UIFileSharingEnabled
-sed 's,<key>CFBundleExecutable</key>,<key>UIFile\&#83;haringEnabled</key><true/>&,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
-if ! grep -q 'UIFile&#83;haringEnabled' "${tmp:?}/m.plist" || ! plutil -lint -s "${tmp:?}/m.plist" >/dev/null 2>&1; then
+# the same key with an XML character reference (&#66; is B): plutil reads UIStatusBarHidden
+sed 's,<key>CFBundleExecutable</key>,<key>UIStatus\&#66;arHidden</key><true/>&,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+if ! grep -q 'UIStatus&#66;arHidden' "${tmp:?}/m.plist" || ! plutil -lint -s "${tmp:?}/m.plist" >/dev/null 2>&1; then
 	bad "mutant: the character-reference plist was not made or does not lint"
 elif assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
-	bad "mutant: a plist with UIFile&#83;haringEnabled passed"
-elif ! grep -q "the iPhone's UIFileSharingEnabled" "${tmp:?}/o"; then
+	bad "mutant: a plist with UIStatus&#66;arHidden passed"
+elif ! grep -q "the iPhone's UIStatusBarHidden" "${tmp:?}/o"; then
 	bad "mutant: the character-reference plist was refused without naming the key"
 fi
+# TASK175 slice 2a: each sharing key removed, or false, is refused by name
+for mk in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
+	cp "${tmp:?}/good.plist" "${tmp:?}/m.plist"
+	plutil -remove "$mk" "${tmp:?}/m.plist"
+	if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: a plist without $mk passed"
+	elif ! grep -q "$mk is (none), not true" "${tmp:?}/o"; then
+		bad "mutant: the plist without $mk was refused without naming it"
+	fi
+	cp "${tmp:?}/good.plist" "${tmp:?}/m.plist"
+	plutil -replace "$mk" -bool NO "${tmp:?}/m.plist"
+	if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: a plist with $mk false passed"
+	elif ! grep -q "$mk is false, not true" "${tmp:?}/o"; then
+		bad "mutant: the plist with $mk false was refused without naming it"
+	fi
+	cp "${tmp:?}/good.plist" "${tmp:?}/m.plist"
+	plutil -replace "$mk" -string true "${tmp:?}/m.plist"
+	if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: a plist with $mk as the string true passed"
+	elif ! grep -q "$mk is of type string, not bool" "${tmp:?}/o"; then
+		bad "mutant: the plist with $mk as the string true was refused without naming the type"
+	fi
+done
 sed 's,<integer>7</integer>,&<integer>1</integer>,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
 if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
 	bad "mutant: a plist with the Apple Vision and the iPhone families passed"
