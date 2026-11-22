@@ -473,9 +473,10 @@ first:
 
 ### The missing-data text
 
-On tvOS `Sys_MissingDataMessage` says that an Apple TV has no Files app and that pak0.pak goes into the app's
-`Documents/baseq2` with a developer tool (Xcode's Devices window, or `simctl` on the simulator). No data path was
-decided for a device (the options above stay the owner's call); the text says only what is true today. The iPhone
+On tvOS `Sys_MissingDataMessage` says that an Apple TV has no Files app and that the way to put the game data on an
+Apple TV is not settled yet; on the tvOS simulator pak0.pak goes into the app's `Documents/baseq2` with `simctl`.
+No data path was decided for a device (the options above stay the owner's call); the text says only what is true
+today (a device has no `Documents` a person can reach, so it names no device tool). The iPhone
 and visionOS texts are as they were: the new branch is `#elif defined(__APPLE__) && defined(TARGET_OS_TV) &&
 TARGET_OS_TV` between them. `tests/check-tvos.sh` (e) pins it in the object: the tvOS `system.o` holds `an Apple TV
 has no Files app` and not `On My iPhone (or iPad)`, and the iOS simulator's `system.o` the other way round (the
@@ -516,9 +517,9 @@ Every device was made by the run and deleted by it. Each run printed `launcher: 
 - Probe, on a throwaway device: `simctl launch <udid> com.apple.Preferences` fails (`FBSOpenApplicationServiceErrorDomain,
   code=4`, "failed to launch"), `com.apple.TVSettings` launches (`com.apple.TVSettings: 35552`), `com.apple.TVHomeScreen`
   and `com.apple.TVMusic` fail.
-- No data: the engine log holds `Quake II needs its game data, and an Apple TV has no Files app. Put pak0.pak from
-  the baseq2 folder of Quake II into the Documents/baseq2 folder of this app with a developer tool (Xcode's
-  Devices window, or simctl on the simulator), then start the game again.`
+- No data: the engine log holds `Quake II needs its game data, and an Apple TV has no Files app. The way to put
+  the game data on an Apple TV is not settled yet. On the tvOS simulator, copy pak0.pak from the baseq2 folder of
+  Quake II into the Documents/baseq2 folder of this app with simctl, then start the game again.`
 - Paks in `Documents/baseq2`, `+set vid_renderer metal +map base1`: `Metal device: Apple tvOS simulator GPU`, then
   `Map: base1` (the start ended at the 40 s screenshot).
 - `--background 3 --shot 0` with the new default: `run ok, 1 start(s)`.

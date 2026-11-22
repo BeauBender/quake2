@@ -580,7 +580,7 @@ EOF
 		t0=$(date +%s)
 		cmd=${ST_CMD:-smoke --out @D@/out}; cmd=${cmd//@D@/$d}
 		# ST_CWD: the directory the script runs in; no pathname expansion of the words of the command
-		( set -f; cd "${ST_CWD:-.}" && bounded "${ST_OUTER:-60}" "${d:?}/run.log" env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_LAUNCHER PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
+		( set -f; cd "${ST_CWD:-.}" && bounded "${ST_OUTER:-60}" "${d:?}/run.log" env -u IOS_SIM_SDK -u IOS_SIM_BACKGROUND_APP -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_LAUNCHER PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
 			bash "$self" $cmd ) || rc=$?
 		t0=$(( $(date +%s) - t0 ))
@@ -644,7 +644,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		mkdir -p "${d:?}/state" || die "cannot create $d"
 		printf '%s\n' "11111111-1111-1111-1111-111111111111 Owner iPhone" \
 			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
-		set -- env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO=extra FAKE_LAUNCHER="$launcher" \
+		set -- env -u IOS_SIM_SDK -u IOS_SIM_BACKGROUND_APP -u IOS_SIM_LAUNCHER_CRASH_OK PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO=extra FAKE_LAUNCHER="$launcher" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10
 		if [ "$sig" = INT ]; then
 			"$@" python3 -I -c "$dfl" "${d:?}/intdisp" bash "$self" smoke --out "${d:?}/out" > "${d:?}/run.log" 2>&1 &
@@ -834,7 +834,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	# the shot is after the return, not before the background (the app lives 5 s here)
 	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-before-shot bgshot ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=2
 	st_has run-background-before-shot grep state/relaunches "com.apple.Preferences"
-	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-fails bgfail fail "simctl launch of the other app failed" 30 IOS_SIM_BACKGROUND_AFTER=0
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-fails bgfail fail "simctl launch of the other app (com.apple.Preferences) failed" 30 IOS_SIM_BACKGROUND_AFTER=0
 	# the app ends during the background: the return is a restart, the run fails before any shot
 	ST_CMD="run --out @D@/out --no-data --background 2 --shot 0" st_case run-background-app-dies bgdies fail "the app did not survive the background" 30 IOS_SIM_BACKGROUND_AFTER=0
 	st_has run-background-app-dies nofile out/screen.1.png
@@ -847,6 +847,8 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-app-set extra ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0 IOS_SIM_BACKGROUND_APP=org.example.other
 	st_has run-background-app-set line1 state/relaunches "org.example.other"
 	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-app-bad extra fail "IOS_SIM_BACKGROUND_APP must be a bundle identifier" 5 IOS_SIM_BACKGROUND_AFTER=0 'IOS_SIM_BACKGROUND_APP=x;y'
+	# the value is judged only when --background uses it
+	ST_CMD="run --out @D@/out --no-data" st_case run-background-app-bad-unused extra ok "run ok, 1 start(s)" 30 'IOS_SIM_BACKGROUND_APP=x;y'
 	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-after-not-digits extra fail "IOS_SIM_BACKGROUND_AFTER must be" 5 IOS_SIM_BACKGROUND_AFTER=x
 	ST_CMD="run --out @D@/out --shot 3s" st_case run-shot-not-digits extra fail "--shot must be a number of seconds" 5
 	ST_CMD="run --out @D@/out" st_case run-limit-not-digits extra fail "IOS_SIM_RUN_SECONDS must be" 5 IOS_SIM_RUN_SECONDS=1h
@@ -1089,16 +1091,18 @@ xrsimulator) ;;
 esac
 # TASK23 slice 3: the other app --background launches. com.apple.Preferences is the iPhone's and iPad's
 # (and visionOS's); the Apple TV simulator has its own settings app
-bg_app=${IOS_SIM_BACKGROUND_APP-}
-if [ -z "$bg_app" ]; then
-	case ${IOS_SIM_SDK:-} in
-	appletvsimulator) bg_app=com.apple.TVSettings ;;
-	*) bg_app=com.apple.Preferences ;;
+if [ -n "$bg" ]; then
+	bg_app=${IOS_SIM_BACKGROUND_APP-}
+	if [ -z "$bg_app" ]; then
+		case ${IOS_SIM_SDK:-} in
+		appletvsimulator) bg_app=com.apple.TVSettings ;;
+		*) bg_app=com.apple.Preferences ;;
+		esac
+	fi
+	case $bg_app in
+	''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*) die "IOS_SIM_BACKGROUND_APP must be a bundle identifier (letters, digits, dots and hyphens), not \"$bg_app\"" ;;
 	esac
 fi
-case $bg_app in
-''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*) die "IOS_SIM_BACKGROUND_APP must be a bundle identifier (letters, digits, dots and hyphens), not \"$bg_app\"" ;;
-esac
 
 # the owner's data: checked before anything is built or created
 if [ -n "$data" ]; then

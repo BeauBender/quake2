@@ -813,10 +813,10 @@ Sys_MissingDataMessage(const char *dir, char *out, size_t len)
 	/* An Apple TV has no Files app (docs/runbook/TASK23.md, game data on tvOS). */
 	Com_sprintf(out, len,
 		"Quake II needs its game data, and an Apple TV has no Files app. "
-		"Put pak0.pak from the baseq2 folder of Quake II into the "
-		"Documents/baseq2 folder of this app with a developer tool "
-		"(Xcode's Devices window, or simctl on the simulator), then "
-		"start the game again.");
+		"The way to put the game data on an Apple TV is not settled "
+		"yet. On the tvOS simulator, copy pak0.pak from the baseq2 "
+		"folder of Quake II into the Documents/baseq2 folder of this "
+		"app with simctl, then start the game again.");
 #else
 	Com_sprintf(out, len,
 		"Quake II needs its game data. Copy pak0.pak from the baseq2 "
