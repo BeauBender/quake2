@@ -1717,10 +1717,19 @@ t_core_id() {
 		[ "$(B lock status)" = lock=free ] || nok "lock: ps silent: TERM did not release the lock"
 		wait_gone 2 "$_lp" || :
 
+		# A stand-in for a command that must outlive every check of it
+		# (FIX184, round 1): it writes its pid to $1, then runs while the
+		# flag file $2 is there, 30 s at most. Each case below removes its
+		# flag once its checks of the running command are done, so no
+		# verdict hangs on how fast the machine runs; the stand-ins for
+		# system_profiler do the same with a flag in the environment.
+		printf '#!/bin/sh\nprintf "%%s\\n" "$$" > "$1"\n_i=0\nwhile [ -e "$2" ] && [ "$_i" -lt 150 ]; do sleep 0.2; _i=$((_i + 1)); done\n' > "${E:?}/standin"
+
 		# lock run, ps silent, and the command leads no group (dash with no
 		# terminal): it is never signalled, the stop says so on the signal
 		# path too (security N1), and the lock is kept until it ends.
-		start env PATH="$E/shim:$PATH" dash "$R/bench.sh" lock run psn -- sh -c 'printf "%s\n" "$$" > "$1"; exec sleep 3' x "${E:?}/n.pid" > "${E:?}/n.out" 2>&1
+		: > "${E:?}/n.life"
+		start env PATH="$E/shim:$PATH" dash "$R/bench.sh" lock run psn -- sh "${E:?}/standin" "${E:?}/n.pid" "${E:?}/n.life" > "${E:?}/n.out" 2>&1
 		_nh=$BG
 		wait_file 5 "${E:?}/n.pid" || nok "lock: no group: the command never started"
 		_np=$(cat "${E:?}/n.pid" 2> /dev/null) || _np=
@@ -1733,8 +1742,8 @@ t_core_id() {
 			_n=$((_n + 1))
 		done
 		command kill -TERM "$_nh"
-		# At most 1.5 s for the hold's line, well inside the command's 3 s,
-		# so the lock is still looked at while the command runs.
+		# At most 1.5 s for the hold's line; the command runs until its flag
+		# goes, so the lock is looked at while it runs.
 		_n=0
 		while ! grep -q 'keeping the lock while pid' "${E:?}/n.out" && pid_running "$_nh" && [ "$_n" -lt 15 ]; do
 			sleep 0.1
@@ -1749,6 +1758,7 @@ t_core_id() {
 		else
 			nok "lock: no group: the command was gone before the check of the lock"
 		fi
+		rm -f "${E:?}/n.life"
 		wait_gone 15 "$_nh" || nok "lock: no group: the lock shell did not exit after the command ended"
 		_st=0
 		collect "$_nh" || _st=$?
@@ -1761,14 +1771,19 @@ t_core_id() {
 
 		# bench_bounded, ps silent, a command that leads no group: not
 		# signalled, never said to be stopped, and 125 within its bound.
+		# The command runs until its flag goes: still running when the bound
+		# returns, it shows the bound did not wait for it.
 		_t0=$(date +%s)
 		_st=0
-		env PATH="$E/shim:$PATH" dash -c 'BENCH_ROOT=$1; . "$1/core/common.sh"; BENCH_STOP_GRACE=1; st=0; bench_bounded 1 sh -c "printf \"%s\\n\" \"\$\$\" > \"\$1\"; exec sleep 3" x "$2" || st=$?; exit "$st"' x "$R" "${E:?}/q.pid" > "${E:?}/q.out" 2>&1 || _st=$?
+		: > "${E:?}/q.life"
+		env PATH="$E/shim:$PATH" dash -c 'BENCH_ROOT=$1; . "$1/core/common.sh"; BENCH_STOP_GRACE=1; st=0; bench_bounded 1 sh "$3" "$2" "$4" || st=$?; exit "$st"' x "$R" "${E:?}/q.pid" "${E:?}/standin" "${E:?}/q.life" > "${E:?}/q.out" 2>&1 || _st=$?
 		_t1=$(date +%s)
 		_qp=$(cat "${E:?}/q.pid" 2> /dev/null) || _qp=
 		record "$_qp"
+		pid_running "$_qp" || nok "bounded: no group: the command was gone when the bound returned"
+		rm -f "${E:?}/q.life"
 		[ "$_st" -eq 125 ] || nok "bounded: no group: wanted 125 (it could not stop it), got $_st: $(tr '\n' '|' < "${E:?}/q.out")"
-		[ $((_t1 - _t0)) -lt 3 ] || nok "bounded: no group: the bound took $((_t1 - _t0)) s for a wall time of 1 s"
+		[ $((_t1 - _t0)) -lt 10 ] || nok "bounded: no group: the bound took $((_t1 - _t0)) s for a wall time of 1 s"
 		grep -q 'could not be stopped' "${E:?}/q.out" || nok "bounded: no group: the bound did not say it could not stop the command"
 		if grep -q 'stopped a command that outlived' "${E:?}/q.out"; then nok "bounded: no group: the bound said it stopped a command it sent nothing"; fi
 		wait_gone 5 "$_qp" || nok "bounded: no group: the command did not end by itself"
@@ -1786,9 +1801,10 @@ t_core_id() {
 		# line itself.
 		mkdir -p "${E:?}/bshim"
 		printf '#!/bin/sh\nexit 1\n' > "${E:?}/bshim/ps"
-		printf '#!/bin/sh\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX181_PID.tmp"\nmv "$FIX181_PID.tmp" "$FIX181_PID"\nexec sleep 3\n' > "${E:?}/bshim/system_profiler"
+		printf '#!/bin/sh\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX181_PID.tmp"\nmv "$FIX181_PID.tmp" "$FIX181_PID"\n_i=0\nwhile [ -e "$FIX181_LIFE" ] && [ "$_i" -lt 150 ]; do sleep 0.2; _i=$((_i + 1)); done\n' > "${E:?}/bshim/system_profiler"
 		chmod +x "${E:?}/bshim/ps" "${E:?}/bshim/system_profiler"
-		start env PATH="$E/bshim:$PATH" FIX181_PID="${E:?}/h.pid" dash "$R/bench.sh" lock run psb -- dash "$R/bench.sh" host > "${E:?}/h.out" 2>&1
+		: > "${E:?}/h.life"
+		start env PATH="$E/bshim:$PATH" FIX181_PID="${E:?}/h.pid" FIX181_LIFE="${E:?}/h.life" dash "$R/bench.sh" lock run psb -- dash "$R/bench.sh" host > "${E:?}/h.out" 2>&1
 		_hh=$BG
 		wait_file 5 "${E:?}/h.pid" || nok "bounded hold: the bounded command never started"
 		_hp= _hi=
@@ -1801,8 +1817,9 @@ t_core_id() {
 		else
 			nok "bounded hold: the bounded command's parent ($_hi) is not the lock shell's command (its parent is ${_hpp:-unknown}, the lock shell $_hh)"
 		fi
-		# At most 1.5 s for the inner bench.sh's trap to run, well inside the
-		# bounded command's 3 s, so the lock is looked at while it runs.
+		# At most 1.5 s for the inner bench.sh's trap to run; the bounded
+		# command runs until its flag goes, so the lock is looked at while it
+		# runs.
 		_n=0
 		while pid_running "$_hi" && [ "$_n" -lt 15 ]; do
 			sleep 0.1
@@ -1817,6 +1834,7 @@ t_core_id() {
 		else
 			nok "bounded hold: the bounded command was gone before the check of the lock"
 		fi
+		rm -f "${E:?}/h.life"
 		wait_gone 15 "$_hh" || nok "bounded hold: the lock shell did not exit after the bounded command ended"
 		_st=0
 		collect "$_hh" || _st=$?
@@ -1839,14 +1857,17 @@ t_core_id() {
 		# the lock shell's at 7 s at the latest, and the lock shell would
 		# free the lock while the bounded command still ran. Since FIX184 the
 		# lock shell's release keeps the lock for the recorded bounded
-		# command instead, until its own end, 15 s after its start: so the
-		# lock shell must also be gone within 8 s of the flag's removal,
-		# which only the hold's renewed stop achieves.
+		# command instead, until its own end: so the lock shell must also be
+		# gone within 8 s of the flag's removal, which only the hold's
+		# renewed stop achieves. The bounded command's own end is its life
+		# flag's removal after that verdict (30 s at most), never a time the
+		# machine's speed could bring inside those 8 s (FIX184, round 1).
 		mkdir -p "${E:?}/cshim"
 		printf '#!/bin/sh\nif [ -e "$FIX181_FLAG" ] && read -r _p _q < "$FIX181_PID" 2> /dev/null; then for _a; do [ "$_a" != "$_p" ] || exit 1; done; fi\nexec /bin/ps "$@"\n' > "${E:?}/cshim/ps"
-		printf '#!/bin/sh\ntrap "" TERM\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX181_PID.tmp"\nmv "$FIX181_PID.tmp" "$FIX181_PID"\nexec sleep 15\n' > "${E:?}/cshim/system_profiler"
+		printf '#!/bin/sh\ntrap "" TERM\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX181_PID.tmp"\nmv "$FIX181_PID.tmp" "$FIX181_PID"\n_i=0\nwhile [ -e "$FIX181_LIFE" ] && [ "$_i" -lt 150 ]; do sleep 0.2; _i=$((_i + 1)); done\n' > "${E:?}/cshim/system_profiler"
 		chmod +x "${E:?}/cshim/ps" "${E:?}/cshim/system_profiler"
-		start env PATH="$E/cshim:$PATH" BENCH_STOP_GRACE=1 FIX181_PID="${E:?}/c.pid" FIX181_FLAG="${E:?}/c.flag" dash "$R/bench.sh" lock run psc -- dash "$R/bench.sh" host > "${E:?}/c.out" 2>&1
+		: > "${E:?}/c.life"
+		start env PATH="$E/cshim:$PATH" BENCH_STOP_GRACE=1 FIX181_PID="${E:?}/c.pid" FIX181_FLAG="${E:?}/c.flag" FIX181_LIFE="${E:?}/c.life" dash "$R/bench.sh" lock run psc -- dash "$R/bench.sh" host > "${E:?}/c.out" 2>&1
 		_ch=$BG
 		wait_file 5 "${E:?}/c.pid" || nok "bounded hold, lock shell: the bounded command never started"
 		_cp= _ci=
@@ -1881,6 +1902,7 @@ t_core_id() {
 		# A command left running is ended here, by its identity, before the
 		# report, which ends a mutant's run.
 		if pid_same "$_cp" "$_cpid"; then command kill -KILL "$_cp" 2> /dev/null || :; fi
+		rm -f "${E:?}/c.life"
 		case $_cr in
 		0) nok "bounded hold, lock shell: the lock shell exited, and so freed the lock, while the bounded command still ran" ;;
 		2) nok "bounded hold, lock shell: cannot tell whether pid $_cp outlived the lock shell, ps gives no answer for it" ;;
@@ -1902,9 +1924,10 @@ t_core_id() {
 		# then is freed; lock status shows the recorded pid meanwhile.
 		mkdir -p "${E:?}/dshim"
 		printf '#!/bin/sh\nif read -r _p _q < "$FIX184_PID" 2> /dev/null; then for _a; do [ "$_a" != "$_p" ] || exit 1; done; fi\nexec /bin/ps "$@"\n' > "${E:?}/dshim/ps"
-		printf '#!/bin/sh\ntrap "" TERM\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX184_PID.tmp"\nmv "$FIX184_PID.tmp" "$FIX184_PID"\nexec sleep 12\n' > "${E:?}/dshim/system_profiler"
+		printf '#!/bin/sh\ntrap "" TERM\nprintf "%%s %%s\\n" "$$" "$PPID" > "$FIX184_PID.tmp"\nmv "$FIX184_PID.tmp" "$FIX184_PID"\n_i=0\nwhile [ -e "$FIX184_LIFE" ] && [ "$_i" -lt 150 ]; do sleep 0.2; _i=$((_i + 1)); done\n' > "${E:?}/dshim/system_profiler"
 		chmod +x "${E:?}/dshim/ps" "${E:?}/dshim/system_profiler"
-		start env PATH="$E/dshim:$PATH" BENCH_STOP_GRACE=1 FIX184_PID="${E:?}/t.pid" dash "$R/bench.sh" lock run psd -- dash "$R/bench.sh" host > "${E:?}/t.out" 2>&1
+		: > "${E:?}/t.life"
+		start env PATH="$E/dshim:$PATH" BENCH_STOP_GRACE=1 FIX184_PID="${E:?}/t.pid" FIX184_LIFE="${E:?}/t.life" dash "$R/bench.sh" lock run psd -- dash "$R/bench.sh" host > "${E:?}/t.out" 2>&1
 		_th=$BG
 		wait_file 5 "${E:?}/t.pid" || nok "lock shell TERM: the bounded command never started"
 		_tp= _ti=
@@ -1920,7 +1943,8 @@ t_core_id() {
 			nok "lock shell TERM: the bounded command's parent ($_ti) is not the lock shell's command (its parent is ${_tpp:-unknown}, the lock shell $_th)"
 		fi
 		# The lock shell's KILL to the inner bench.sh comes 6 to 7 s after
-		# the TERM; the bounded command runs until 12 s after its start.
+		# the TERM; the bounded command runs until its flag goes, after the
+		# check of the lock below.
 		wait_gone 9 "$_ti" || nok "lock shell TERM: the inner bench.sh outlived the lock shell's KILL"
 		sleep 0.5
 		_l=$(B lock status)
@@ -1933,6 +1957,7 @@ t_core_id() {
 		else
 			nok "lock shell TERM: the bounded command was gone before the check of the lock"
 		fi
+		rm -f "${E:?}/t.life"
 		wait_gone 15 "$_th" || nok "lock shell TERM: the lock shell did not exit after the bounded command ended"
 		_st=0
 		collect "$_th" || _st=$?
@@ -1948,7 +1973,8 @@ t_core_id() {
 		# nothing and returns 2, the bound returns 125, and the caller exits,
 		# as host.sh does with bench_die 2. The lock shell's release keeps
 		# the lock until the bounded command ends.
-		start env PATH="$E/shim:$PATH" dash "$R/bench.sh" lock run p125 -- dash -c 'BENCH_ROOT=$1; . "$1/core/common.sh"; . "$1/core/lock.sh"; BENCH_STOP_GRACE=1; st=0; bench_bounded 1 sh -c "printf \"%s\\n\" \"\$\$\" > \"\$1\"; exec sleep 6" x "$2" || st=$?; exit "$st"' x "$R" "${E:?}/v.pid" > "${E:?}/v.out" 2>&1
+		: > "${E:?}/v.life"
+		start env PATH="$E/shim:$PATH" dash "$R/bench.sh" lock run p125 -- dash -c 'BENCH_ROOT=$1; . "$1/core/common.sh"; . "$1/core/lock.sh"; BENCH_STOP_GRACE=1; st=0; bench_bounded 1 sh "$3" "$2" "$4" || st=$?; exit "$st"' x "$R" "${E:?}/v.pid" "${E:?}/standin" "${E:?}/v.life" > "${E:?}/v.out" 2>&1
 		_vh=$BG
 		wait_file 5 "${E:?}/v.pid" || nok "125: the bounded command never started"
 		_vp=$(cat "${E:?}/v.pid" 2> /dev/null) || _vp=
@@ -1973,6 +1999,7 @@ t_core_id() {
 		else
 			nok "125: the bounded command was gone before the check of the lock"
 		fi
+		rm -f "${E:?}/v.life"
 		wait_gone 10 "$_vh" || nok "125: the lock shell did not exit after the bounded command ended"
 		_st=0
 		collect "$_vh" || _st=$?
