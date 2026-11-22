@@ -84,7 +84,7 @@ gp_exit() {
 }
 trap gp_exit EXIT
 trap 'exit 1' HUP INT TERM
-unset GATE_JOBS GATE_PARENT GP_PATH GP_TD GP_NCPU GP_BOUND GP_FIRST GP_ONLY WIRING SELF
+unset GATE_JOBS GATE_PARENT GP_PATH GP_TD GP_NCPU GP_BOUND GP_FIRST GP_ONLY WIRING SELF TTY_BOUND TTY_HOLD TTY_MODE
 export LC_ALL=C
 # INT_OK: SIGINT reaches a command started here (see the top of this file)
 INT_OK=
@@ -93,8 +93,10 @@ sh -c 'kill -INT $$; exit 0' 2> /dev/null || INT_OK=1
 fail=0
 quiet=0
 SCHED=$real
-bad() { echo "$me: $*"; fail=1; }
-say() { [ "$quiet" = 1 ] || echo "$me: $*"; }
+# (printf, not echo: this shell's echo decodes backslashes, and a line can
+# hold process text, which is printed as it is)
+bad() { printf '%s\n' "$me: $*"; fail=1; }
+say() { [ "$quiet" = 1 ] || printf '%s\n' "$me: $*"; }
 # skipint <part>: says that <part> is skipped, as SIGINT is ignored here
 skipint() { say "SIGINT is ignored where this check runs, so $1 is skipped"; }
 
@@ -104,7 +106,9 @@ skipint() { say "SIGINT is ignored where this check runs, so $1 is skipped"; }
 # its lines, "sleep <hold>" in the foreground, holdterm the same ignoring
 # SIGTERM (and so does that sleep), holdtrap the same with a SIGTERM trap
 # that takes 5 s and then logs "cleaned <name>"; mode leave starts that
-# sleep in the background and exits. The sleep logs "sleep <name> <its pid>
+# sleep in the background and exits; mode holdtty sleeps <hold> s, then
+# writes a line to its terminal (with tostop, from a background group, that
+# write stops it). The sleep logs "sleep <name> <its pid>
 # <the check's pid> <the scheduler's pid>". Mode probe logs how SIGINT,
 # SIGQUIT, SIGHUP, SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU reach the check.
 mkdir "${tmp:?}/bin" "${tmp:?}/shim" "${tmp:?}/make"
@@ -152,6 +156,10 @@ hold | holdterm | holdtrap)
 	[ "$mode" != holdterm ] || trap '' TERM
 	[ "$mode" != holdtrap ] || trap 'sleep 5; printf "cleaned %s\n" "$n" >> "$GP_EVENTS"; exit 1' TERM
 	sh -c 'printf "sleep %s %s %s %s\n" "$1" "$$" "$2" "$3" >> "$GP_EVENTS"; exec sleep "$4"' sh "$n" "$$" "$PPID" "$hold"
+	;;
+holdtty)
+	sleep "$hold"
+	printf '%s late\n' "$n" > /dev/tty
 	;;
 leave)
 	sleep "$hold" > /dev/null 2>&1 &
@@ -538,12 +546,15 @@ dead() {
 	case $(ps -o stat= -p "$1" 2> /dev/null) in *Z*) return 0 ;; esac
 	return 1
 }
-# lwait <seconds>: waits for the run _lp (from launch), at most <seconds>;
-# its status, or 124 once it outlives them (it is then killed)
+# lwait <seconds> [keep [<probe> <arg>]]: waits for the run _lp (from
+# launch), at most <seconds>; its status, or 124 once it outlives them (it
+# is then killed). With a probe, "<probe> <arg>" is run every 5 polls (1 s),
+# and once it succeeds the wait ends as at the bound. _wn is left as the
+# number of polls waited (5 a second).
 lwait() {
 	_wn=0
 	while kill -0 "$_lp" 2> /dev/null; do
-		if [ "$_wn" -ge $(($1 * 5)) ]; then
+		if [ "$_wn" -ge $(($1 * 5)) ] || { [ -n "${3:-}" ] && [ $((_wn % 5)) -eq 4 ] && "$3" "${4:-}"; }; then
 			# with a second argument ("keep") the run is left alone: the
 			# caller reads its state first and ends it (and _lp) itself
 			[ -z "${2:-}" ] || return 124
@@ -737,39 +748,116 @@ c_sigs() {
 	fi
 }
 
+# tscrub: its standard input on one line (lines joined by a space), with the
+# home directory printed as ~ wherever a /, a space or the end follows it
+# (not inside a longer name), cut to 120 characters. HOME is read from the
+# environment (awk -v would decode its backslashes), its trailing slashes
+# dropped: HOME empty or / replaces nothing.
+tscrub() {
+	awk '
+		{ s = s (NR > 1 ? " " : "") $0 }
+		END {
+			h = ENVIRON["HOME"]
+			while (substr(h, length(h)) == "/") h = substr(h, 1, length(h) - 1)
+			o = ""
+			while (h != "" && (i = index(s, h)) > 0) {
+				c = substr(s, i + length(h), 1)
+				if (c == "/" || c == " " || c == "") { o = o substr(s, 1, i - 1) "~"; s = substr(s, i + length(h)) }
+				else { o = o substr(s, 1, i); s = substr(s, i + 1) }
+			}
+			print substr(o s, 1, 120)
+		}'
+}
+# tdesc <pid>: that process, read now, on one line, as "[pid=.. stat=..
+# pgid=.. comm=.. args=..]": stat and pgid from one ps call, comm and args
+# through tscrub. One that is gone leaves its fields empty.
+tdesc() {
+	_tdp=$1
+	_tdv=$(ps -o stat= -o pgid= -p "$_tdp" 2> /dev/null || :)
+	_tdc=$(ps -o comm= -p "$_tdp" 2> /dev/null | tscrub)
+	_tda=$(ps -o args= -p "$_tdp" 2> /dev/null | tscrub)
+	set -- $_tdv
+	printf '%s\n' "[pid=$_tdp stat=${1:-} pgid=${2:-} comm=$_tdc args=$_tda]"
+}
+# tcut <width> <word>...: the words, each after a space, as many whole ones
+# as fit in <width> characters
+tcut() {
+	_tcw=$1 _tco=
+	shift
+	for _tcx; do
+		[ $((${#_tco} + 1 + ${#_tcx})) -le "$_tcw" ] || break
+		_tco="$_tco $_tcx"
+	done
+	printf '%s' "$_tco"
+}
+# tsort <pid>...: reads each one's stat now, leaving out one that is gone; a
+# stopped one (a stat with T; a slow run is S or R) sets _tstop and goes to
+# _tdesc (tdesc), the others' " pid=stat" to _toth, and all to _tstate
+tsort() {
+	_tstate= _tstop= _tdesc= _toth=
+	for _tk; do
+		_tst=$(ps -o stat= -p "$_tk" 2> /dev/null | tr -d ' ' || :)
+		[ -n "$_tst" ] || continue
+		_tstate="$_tstate $_tk=$_tst"
+		case $_tst in
+		*T*)
+			_tstop=1
+			_tdesc="$_tdesc $(tdesc "$_tk")"
+			;;
+		*) _toth="$_toth $_tk=$_tst" ;;
+		esac
+	done
+}
+# ttree <pid>: "<pid> <stat>" for <pid> and each process that descends from
+# it, from one ps snapshot
+ttree() {
+	ps -ax -o pid= -o ppid= -o stat= | awk -v p="$1" '
+		{ par[$1] = $2; st[$1] = $3 }
+		END { for (q in par) { x = q; while (x != "" && x != 0 && x != p) x = (x in par) ? par[x] : 0; if (x == p) print q, st[q] } }'
+}
+# tstopped <dir>: a process of the run, the test.sh whose pid is in
+# <dir>/shpid or one that descends from it, is stopped (T)
+tstopped() {
+	_tsy=$(cat "$1/shpid" 2> /dev/null || :)
+	[ -n "$_tsy" ] || return 1
+	ttree "$_tsy" | awk '$2 ~ /T/ { f = 1 } END { exit !f }'
+}
+
 # tty: scripts/test.sh (or $WIRING), on a copy of the gate's layout and one
 # passing check that prints a line, run on a terminal (script(1)) set to
 # `stty tostop`. The scheduler is in a process group of its own, not the
 # terminal's foreground group, so it must ignore SIGTTOU or its first write
 # to the terminal stops it and the gate hangs. The run must end with status
-# 0 within 90 s and show the check's line; on timeout what it left (test.sh,
-# whose pid is recorded before its exec, and what descends from it) is
-# ended by pid
+# 0 within 90 s and show the check's line. The wait ends at once when one of
+# its processes is stopped; then, or on timeout, what the run left (test.sh,
+# whose pid is recorded before its exec, and what descends from it) is read,
+# and ended by pid. A stop is named on one line, each stopped process with
+# tdesc; the others' pid=stat go on one state: line, whole entries within
+# 200 characters. A slow run prints one timed-out line and no state: line.
+# TTY_BOUND, TTY_HOLD and TTY_MODE change the bound and check-a.sh's mode
 c_tty() {
 	_tf=${WIRING:-$top/scripts/test.sh}
 	_tb=${TTY_BOUND:-90}
 	d=$(newcase)
-	if [ -n "${TTY_HOLD:-}" ]; then gtree "$d" "$_tf" 1 0 0 hold "$TTY_HOLD"; else gtree "$d" "$_tf" 1 0 0; fi
+	if [ -n "${TTY_HOLD:-}" ]; then gtree "$d" "$_tf" 1 0 0 "${TTY_MODE:-hold}" "$TTY_HOLD"; else gtree "$d" "$_tf" 1 0 0; fi
 	launch "$d" script -q /dev/null sh -c 'printf "%s\n" "$$" > "$1/shpid"; stty tostop; shift; exec "$@"' sh "$d" \
 		env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PATH="$tmp/make:$PATH" sh "$d/tree/scripts/test.sh"
 	rc=0
-	lwait "$_tb" keep || rc=$?
+	# the wait also ends, as at the bound, once a process of the run is
+	# stopped: nothing sends it SIGCONT, so a stop never resumes
+	lwait "$_tb" keep tstopped "$d" || rc=$?
 	if [ "$rc" -eq 124 ]; then
+		# what it waited, in whole seconds: the bound, unless a stop ended it
+		_twt=$((_wn / 5))
 		_ty=$(cat "$d/shpid" 2> /dev/null || :)
 		_tstate=
 		_tstop=
+		_tdesc=
+		_toth=
 		if [ -n "$_ty" ]; then
 			# the run's own processes: test.sh (its pid is recorded) and
-			# all that descends from it, read before any is ended; a
-			# state with a T is a stop (a slow run is S or R)
-			_tpids=$(ps -ax -o pid= -o ppid= | awk -v p="$_ty" '
-				{ par[$1] = $2 }
-				END { for (q in par) { x = q; while (x != "" && x != 0 && x != p) x = (x in par) ? par[x] : 0; if (x == p) print q } }')
-			for _tk in $_tpids; do
-				_tst=$(ps -o stat= -p "$_tk" 2> /dev/null | tr -d ' ' || :)
-				[ -z "$_tst" ] || _tstate="$_tstate $_tk=$_tst"
-				case $_tst in *T*) _tstop=1 ;; esac
-			done
+			# all that descends from it, read before any is ended
+			tsort $(ttree "$_ty" | awk '{ print $1 }')
 			for _tk in $(ps -ax -o pid= -o ppid= | awk -v p="$_ty" '$2 == p { print $1 }'); do
 				kill -s KILL -- "-$_tk" 2> /dev/null || kill -s KILL "$_tk" 2> /dev/null || :
 			done
@@ -781,11 +869,12 @@ c_tty() {
 		wait "$_lp" 2> /dev/null || :
 		_lp=
 		if [ -n "$_tstop" ]; then
-			say "tty: the run stopped on a terminal with tostop (test.sh pid ${_ty:-unknown}), and was ended by pid"
+			say "tty: the run stopped on a terminal with tostop (test.sh pid ${_ty:-unknown}), and was ended by pid; stopped:$_tdesc"
+			say "tty: state:$(tcut 200 $_toth)"
 		elif [ -n "$_ty" ] && [ -z "$_tstate" ]; then
-			say "tty: timed out after $_tb s; the run's state could not be read (tostop not ruled out)"
+			say "tty: timed out after $_twt s; the run's state could not be read (tostop not ruled out)"
 		else
-			say "tty: timed out after $_tb s (state:$_tstate), not stopped: a slow run, not the tostop bug"
+			say "tty: timed out after $_twt s (state:$_tstate), not stopped: a slow run, not the tostop bug"
 		fi
 		return 1
 	fi
@@ -793,26 +882,184 @@ c_tty() {
 	grep -q 'a line 1' "$d/out" || { say "tty: the check's line did not reach the terminal"; return 1; }
 }
 
-# ttymsg: what c_tty says on a timeout tells a slow run from a real stop. A
-# check that holds 20 s with nothing written to the terminal, against a 3 s
-# bound, fails the case with the "timed out" line, never the tostop one; and
-# the scheduler without its SIGTTOU ignore (a mutant) still fails it with the
-# tostop line
+# ttymsg: what c_tty says on a timeout tells a real stop from a slow run.
+# The scheduler without its SIGTTOU ignore (a mutant), run with HOME=/bin,
+# stops on its first write to the terminal: the case fails with one stop
+# line that names it (pid, stat T, pgid, comm and args, the last two ~/sh,
+# as it runs as /bin/sh: no path under HOME is left), ending with its
+# bracket, and one state: line that holds the others as pid=stat (test.sh
+# among them, none stopped) within 200 characters. A check that holds 20 s
+# with nothing written to the terminal, against a 3 s bound, fails the case
+# with the "timed out after 3 s" line (the wait ran to its bound), never the
+# tostop one, and with no state: line.
 c_ttymsg() {
+	lit "$real" "trap '' TTOU" ':' "	trap '' TTOU #" > "$tmp/mut-ttymsg.sh" || { say "ttymsg: its mutant does not apply"; return 1; }
+	_mo=$(HOME=/bin SCHED=$tmp/mut-ttymsg.sh quiet=0 c_tty) && { say "ttymsg: the run without the SIGTTOU ignore passed"; return 1; }
+	_ms=$(printf '%s\n' "$_mo" | grep 'stopped on a terminal with tostop' || :)
+	[ -n "$_ms" ] || { say "ttymsg: a real stop did not say tostop: $_mo"; return 1; }
+	[ "$(printf '%s\n' "$_ms" | wc -l | tr -d ' ')" -eq 1 ] || { say "ttymsg: more than one stop line: $_mo"; return 1; }
+	case $_ms in
+	*"stopped: [pid="[0-9]*" stat=T"*" pgid="[0-9]*" comm="?*" args="?*) ;;
+	*) say "ttymsg: the stop line does not name the stopped process (pid, stat, pgid, comm, args): $_ms"; return 1 ;;
+	esac
+	case $_ms in
+	*"/bin/"* | *"/bin "* | *"/bin]"*) say "ttymsg: the stop line holds a path under HOME (/bin): $_ms"; return 1 ;;
+	esac
+	case $_ms in
+	*" comm=~/sh args=~/sh "*) ;;
+	*) say "ttymsg: the stopped process's comm and args are not ~/sh (the scheduler's shell, with HOME=/bin): $_ms"; return 1 ;;
+	esac
+	# it ends with the bracket of the stopped process (no other process's
+	# pid=stat after it), and its args are at most 120 characters
+	case $_ms in
+	*"]") ;;
+	*) say "ttymsg: the stop line holds more than the stopped process: $_ms"; return 1 ;;
+	esac
+	_ma=${_ms##* args=}
+	[ "${#_ma}" -le 121 ] || { say "ttymsg: the args are not cut to 120 characters (${#_ma}): $_ms"; return 1; }
+	case $_ms in
+	*" stat=S"* | *" stat=R"*) say "ttymsg: a running process's state is in the stop line: $_ms"; return 1 ;;
+	esac
+	# the state: line: the others as pid=stat, none stopped, test.sh among
+	# them, within its cut
+	_mt=$(printf '%s\n' "$_mo" | grep '^check-gate-parallel: tty: state:' || :)
+	[ "$(printf '%s\n' "$_mt" | grep -c .)" -eq 1 ] || { say "ttymsg: not one state: line below the stop line: $_mo"; return 1; }
+	printf '%s\n' "$_mt" | grep -Eqx 'check-gate-parallel: tty: state:( [0-9]+=[^ T]+)+' ||
+		{ say "ttymsg: the state: line does not hold the others as pid=stat, none stopped: $_mt"; return 1; }
+	_my=$(printf '%s\n' "$_ms" | sed -n 's/.*(test\.sh pid \([0-9][0-9]*\)).*/\1/p')
+	case "$_mt " in
+	*" $_my="[!T]*) ;;
+	*) say "ttymsg: test.sh (pid ${_my:-unknown}) is not on the state: line: $_mt"; return 1 ;;
+	esac
+	_mx=${_mt#check-gate-parallel: tty: state:}
+	[ "${#_mx}" -le 200 ] || { say "ttymsg: the state: line is not cut to 200 characters (${#_mx}): $_mt"; return 1; }
+	# a slow run
 	_mo=$(TTY_BOUND=3 TTY_HOLD=20 quiet=0 c_tty) && { say "ttymsg: a run that outlived the bound passed"; return 1; }
 	case $_mo in
 	*"tty: timed out after 3 s (state:"*) ;;
-	*) say "ttymsg: a slow run did not say it timed out: $_mo"; return 1 ;;
+	*) say "ttymsg: a slow run did not say it timed out after its 3 s bound: $_mo"; return 1 ;;
 	esac
 	case $_mo in
 	*tostop*"ended by pid"*) say "ttymsg: a slow run was reported as stopped on tostop: $_mo"; return 1 ;;
 	esac
-	lit "$real" "trap '' TTOU" ':' "	trap '' TTOU #" > "$tmp/mut-ttymsg.sh" || { say "ttymsg: its mutant does not apply"; return 1; }
-	_mo=$(SCHED=$tmp/mut-ttymsg.sh quiet=0 c_tty) && { say "ttymsg: the run without the SIGTTOU ignore passed"; return 1; }
-	case $_mo in
-	*"stopped on a terminal with tostop"*) ;;
-	*) say "ttymsg: a real stop did not say tostop: $_mo"; return 1 ;;
+	if printf '%s\n' "$_mo" | grep -q '^check-gate-parallel: tty: state:'; then
+		say "ttymsg: a slow run printed a state: line: $_mo"
+		return 1
+	fi
+}
+
+# ttylate: a stop that comes late is caught, and ends the wait: check-a.sh
+# holds 3 s, then writes to the terminal and stops (tostop). c_tty, with a
+# 30 s bound, reports the stop, after the hold and before the bound.
+c_ttylate() {
+	_lt0=$(date +%s)
+	_lo=$(TTY_BOUND=30 TTY_HOLD=3 TTY_MODE=holdtty quiet=0 c_tty) && { say "ttylate: a run whose check stopped passed"; return 1; }
+	_ltw=$(($(date +%s) - _lt0))
+	case $_lo in
+	*"stopped on a terminal with tostop"*"stopped: [pid="*" stat=T"*) ;;
+	*) say "ttylate: a stop after a hold was not reported as a stop: $_lo"; return 1 ;;
 	esac
+	[ "$_ltw" -ge 3 ] || { say "ttylate: the run ended in $_ltw s, inside check-a.sh's 3 s hold"; return 1; }
+	[ "$_ltw" -lt 30 ] || { say "ttylate: the stop ended the wait only at its 30 s bound ($_ltw s)"; return 1; }
+}
+
+# tdesc: how c_tty prints a process. A /bin/sh started here and stopped,
+# with backslashes and a newline in its args, is printed by tdesc through
+# say on exactly one line, which ends with "]", its args as ps writes them
+# (not decoded). tsort, on that shell, a running sleep and a pid that is
+# gone: the shell alone on the stop list, the sleep alone on the others',
+# the gone pid on no list. tcut keeps whole entries, as many as fit.
+c_tdesc() {
+	d=$(newcase)
+	/bin/sh -c 'sleep 30; :' sh 'a\cb' 'p\nq' "$(printf 'x\ny')" &
+	_dp=$!
+	sleep 30 &
+	_dl=$!
+	sh -c 'exit 0' &
+	_dg=$!
+	wait "$_dg" || :
+	kill -s STOP "$_dp"
+	_dn=0
+	while :; do
+		case $(ps -o stat= -p "$_dp" 2> /dev/null || :) in *T*) break ;; esac
+		[ "$_dn" -lt 25 ] || break
+		sleep 0.2
+		_dn=$((_dn + 1))
+	done
+	(HOME=$d/nohome; export HOME; quiet=0; say "tty: stopped: $(tdesc "$_dp")") > "$d/line"
+	_dr=$(HOME=$d/nohome; export HOME; tsort "$_dg" "$_dl" "$_dp"; printf '%s|%s|%s|%s\n' "$_tstop" "$_toth" "$_tstate" "$_tdesc")
+	_dw=
+	_dln=$(cat "$d/line")
+	if [ "$(wc -l < "$d/line" | tr -d ' ')" != 1 ]; then
+		_dw="the stop line is not one line: $_dln"
+	else
+		case $_dln in
+		*"]") ;;
+		*) _dw="the stop line does not end with ]: $_dln" ;;
+		esac
+	fi
+	case $_dln in
+	*"[pid=$_dp stat=T"*" pgid="[0-9]*" comm=/bin/sh args=/bin/sh -c sleep 30; : sh a"*) ;;
+	*) _dw=${_dw:-"the stop line does not name the stopped shell: $_dln"} ;;
+	esac
+	grep -qF ' sh a\cb p\nq ' "$d/line" || _dw=${_dw:-"the args are not printed as ps writes them: $_dln"}
+	case $_dr in
+	"1| $_dl="*"| "*"| [pid=$_dp stat=T"*"]") ;;
+	*) _dw=${_dw:-"tsort did not put the stopped shell alone in the stop list: $_dr"} ;;
+	esac
+	_dro=${_dr#*|}
+	_dro=${_dro%%|*}
+	printf '%s\n' "$_dro" | grep -Eqx " $_dl=[^ T]+" || _dw=${_dw:-"the others are not the running sleep alone: $_dr"}
+	case "$_dr|" in
+	*" $_dg="*) _dw=${_dw:-"a pid that is gone is on a list: $_dr"} ;;
+	esac
+	_dws=
+	_dn=1
+	while [ "$_dn" -le 60 ]; do
+		_dws="$_dws $((10000 + _dn))=S"
+		_dn=$((_dn + 1))
+	done
+	_dc=$(tcut 200 $_dws)
+	[ "${#_dc}" -le 200 ] && [ "${#_dc}" -gt 192 ] || _dw=${_dw:-"tcut 200 gave ${#_dc} characters"}
+	printf '%s\n' "$_dc" | grep -Eqx '( [0-9]+=S)+' || _dw=${_dw:-"tcut 200 did not keep whole entries: $_dc"}
+	# what was started here: the sleep the stopped shell runs (by its
+	# parent's pid), the shell, the other sleep
+	for _dk in $(ps -ax -o pid= -o ppid= | awk -v p="$_dp" '$2 == p { print $1 }') "$_dp" "$_dl"; do
+		kill -s KILL "$_dk" 2> /dev/null || :
+	done
+	wait "$_dp" 2> /dev/null || :
+	wait "$_dl" 2> /dev/null || :
+	[ -z "$_dw" ] || { say "tdesc: $_dw"; return 1; }
+}
+
+# scrub: tscrub on fixed text, for each kind of HOME (home|text|want): the
+# home path becomes ~ where a /, a space or the end follows it, never inside
+# a longer name; trailing slashes in HOME are dropped; HOME / or empty or
+# unset replaces nothing; a backslash in HOME is taken as it is; a match
+# that overlaps a longer name does not hide the next one; lines are joined
+# with a space; the result is cut to 120 characters
+c_scrub() {
+	for _st in \
+		'/u/qq|/u/qq/a.sh cd /u/qq x=/u/qq/b /u/qqzz/c /u/qq|~/a.sh cd ~ x=~/b /u/qqzz/c ~' \
+		'/u/qq/|/u/qq/a.sh cd /u/qq /u/qqzz|~/a.sh cd ~ /u/qqzz' \
+		'/u/qq//|/u/qq/a.sh|~/a.sh' \
+		'/|/bin/sh / //x/ /|/bin/sh / //x/ /' \
+		'|/u/qq/a cd /u/qq|/u/qq/a cd /u/qq' \
+		'/u/a\tb|/u/a\tb/x /u/a	b/y|~/x /u/a	b/y' \
+		'/ab/a|/ab/ab/a/x|/ab~/x'; do
+		_sh=${_st%%|*}
+		_si=${_st#*|}
+		_si=${_si%|*}
+		_sw=${_st##*|}
+		_sg=$(HOME=$_sh; export HOME; printf '%s\n' "$_si" | tscrub)
+		[ "$_sg" = "$_sw" ] || { say "scrub: HOME='$_sh' on '$_si' gave '$_sg', want '$_sw'"; return 1; }
+	done
+	_sg=$(unset HOME; printf '%s\n' /u/qq/a | tscrub)
+	[ "$_sg" = /u/qq/a ] || { say "scrub: HOME unset gave '$_sg'"; return 1; }
+	_sg=$(HOME=/u/qq; export HOME; printf '%s\n' a /u/qq/b | tscrub)
+	[ "$_sg" = "a ~/b" ] || { say "scrub: two lines gave '$_sg', want 'a ~/b'"; return 1; }
+	_sg=$(printf '%0200d\n' 0 | tscrub)
+	[ "${#_sg}" -eq 120 ] || { say "scrub: 200 characters were cut to ${#_sg}, not 120"; return 1; }
 }
 
 # leave: a check that leaves a sleep running in the background (its output
@@ -854,6 +1101,21 @@ c_intskip() {
 	done
 }
 
+# ttyself [<cases>]: those cases (tdesc scrub ttymsg ttylate by default),
+# run alone by this self-test (or $SELF) in a process of its own, so a
+# mutant of this self-test's tty lines (smut) is run and caught
+c_ttyself() {
+	_xf=${SELF:-$top/tests/check-gate-parallel.sh}
+	_xo=${1:-tdesc scrub ttymsg ttylate}
+	d=$(newcase)
+	rc=0
+	bounded 240 "$d/out" env GP_ONLY="$_xo" TMPDIR="$d/td" sh "$_xf" || rc=$?
+	[ "$rc" -eq 0 ] || { say "ttyself: $_xo run alone gave status $rc:"; [ "$quiet" = 1 ] || sed 's/^/  | /' "$d/out"; return 1; }
+	for _xc in $_xo; do
+		grep -qx "  ok   $_xc" "$d/out" || { say "ttyself: $_xc did not pass"; return 1; }
+	done
+}
+
 # lit <file> <old> <new> [<prefix>]: the file with its one occurrence of
 # <old> replaced by <new>, both taken literally (no backslash in either: awk
 # -v reads escapes), lines that start with <prefix> left as they are;
@@ -865,7 +1127,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tty ttymsg leave intskip"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate leave intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
@@ -967,7 +1229,8 @@ intmut wmut no-own-group sigs 'set -m' ':'
 wmut no-parent-pid kgrp 'GATE_PARENT=$$ scripts/gate-checks.sh' 'scripts/gate-checks.sh'
 
 # mutants of this self-test, run from a copy of the scripts it tests:
-# smut <name> <case> <old> <new> (its own smut lines are left as they are)
+# smut <name> <case> <old> <new> [<arg>] (its own smut lines are left as
+# they are); <arg>, when given, is passed to the case
 smut() {
 	_sm=$tmp/self-$1
 	mkdir "${_sm:?}" "${_sm:?}/tests" "${_sm:?}/scripts"
@@ -975,11 +1238,33 @@ smut() {
 	lit "$top/tests/check-gate-parallel.sh" "$3" "$4" "smut " > "$_sm/tests/check-gate-parallel.sh" ||
 		{ bad "mutant $1 does not apply to this self-test"; return 0; }
 	quiet=1 SELF=$_sm/tests/check-gate-parallel.sh
-	if "c_$2"; then bad "mutant $1 was not caught by case $2"; else mutants=$((mutants + 1)); fi
+	if "c_$2" ${5:+"$5"}; then bad "mutant $1 was not caught by case $2${5:+ ($5)}"; else mutants=$((mutants + 1)); fi
 	quiet=0 SELF=
 }
 smut no-int-probe intskip "sh -c 'kill -INT \$\$; exit 0' 2> /dev/null || INT_OK=1" 'INT_OK=1'
 smut skip-unsaid intskip 'skipint() { say' 'skipint() { :'
+# (a fifth argument: the cases ttyself runs)
+smut say-echo ttyself 'say() { [ "$quiet" = 1 ] || printf' 'say() { [ "$quiet" = 1 ] || echo "$me: $*" || printf' tdesc
+smut tty-no-pgid ttyself ' pgid=${2:-}' '' ttymsg
+smut tty-no-comm ttyself ' comm=$_tdc' '' ttymsg
+smut tty-no-args ttyself ' args=$_tda]' ']' ttymsg
+smut tty-no-stat ttyself ' stat=${1:-} pgid' ' pgid' ttymsg
+smut tty-read-after-kill ttyself '_tdv=$(ps -o stat= -o pgid= -p "$_tdp"' '_tdv=$(kill -s KILL "$_tdp" 2> /dev/null; sleep 0.3; ps -o stat= -o pgid= -p "$_tdp"' ttymsg
+smut tty-others-in-stop ttyself 'stopped:$_tdesc"' 'stopped:$_tdesc$_toth"' ttymsg
+smut tty-args-home ttyself '_tda=$(ps -o args= -p "$_tdp" 2> /dev/null | tscrub)' '_tda=$(ps -o args= -p "$_tdp" 2> /dev/null)' ttymsg
+smut tty-comm-home ttyself '_tdc=$(ps -o comm= -p "$_tdp" 2> /dev/null | tscrub)' '_tdc=$(ps -o comm= -p "$_tdp" 2> /dev/null)' ttymsg
+smut tty-home-trailing ttyself 'while (substr(h, length(h)) == "/")' 'while (0)' scrub
+smut tty-home-boundary ttyself 'if (c == "/" || c == " " || c == "")' 'if (1)' scrub
+smut tty-home-overlap ttyself 'o = o substr(s, 1, i); s = substr(s, i + 1)' 'o = o substr(s, 1, i - 1 + length(h)); s = substr(s, i + length(h))' scrub
+smut tty-no-cut ttyself 'print substr(o s, 1, 120)' 'print o s' scrub
+smut tty-no-state-line ttyself '			say "tty: state:$(tcut 200 $_toth)"' ':' ttymsg
+smut tty-state-empty ttyself 'say "tty: state:$(tcut 200 $_toth)"' 'say "tty: state:"' ttymsg
+smut tty-state-dropped ttyself '*) _toth="$_toth $_tk=$_tst" ;;' '*) ;;' ttymsg
+smut tty-state-uncut ttyself '-le "$_tcw" ] || break' '-le "$_tcw" ] || :' tdesc
+smut tty-state-on-slow ttyself '		if [ -n "$_tstop" ]; then' '		say "tty: state:$(tcut 200 $_toth)"; if [ -n "$_tstop" ]; then' ttymsg
+smut tty-gone-kept ttyself '[ -n "$_tst" ] || continue' ':' tdesc
+smut tty-no-early-stop ttyself 'lwait "$_tb" keep tstopped "$d"' 'lwait "$_tb" keep' ttylate
+smut tty-probe-always ttyself '$2 ~ /T/ { f = 1 }' '{ f = 1 }' ttymsg
 smut launch-no-group intskip '{ "$@" > "$_ld/out"' '{ set +m; "$@" > "$_ld/out"'
 
 if [ "$fail" -ne 0 ]; then
