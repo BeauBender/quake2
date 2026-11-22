@@ -766,9 +766,10 @@ c_sigs() {
 # toward over-scrubbing, and a home path inside a longer path hides nothing
 # worth keeping. HOME is read from the environment (awk -v would decode its
 # backslashes) and matched literally (index, not a pattern), its trailing
-# slashes dropped: HOME empty or / replaces nothing.
+# slashes dropped: HOME empty or / replaces nothing. LC_ALL=C is pinned for
+# its awk, so a byte invalid in the caller's locale never aborts it.
 tscrub() {
-	awk '
+	LC_ALL=C awk '
 		{ s = s (NR > 1 ? " " : "") $0 }
 		END {
 			h = ENVIRON["HOME"]
@@ -1160,15 +1161,17 @@ c_tdesc() {
 # _scrow <home> <text> <want>: one row, also run through tscrub_main
 _scrow() {
 	_sg=$(HOME=$1; export HOME; printf '%s\n' "$2" | tscrub)
-	[ "$_sg" = "$3" ] || { say "scrub: HOME='$1' on '$2' gave '$_sg', want '$3'"; return 1; }
 	_so=$(HOME=$1; export HOME; printf '%s\n' "$2" | tscrub_main)
 	_sn=$(printf '%s\n' "$_sg" | _scount "$1")
 	_sc=$(printf '%s\n' "$_so" | _scount "$1")
 	[ "$_sn" -le "$_sc" ] || { say "scrub: HOME='$1' on '$2': tscrub leaves $_sn, origin/main's $_sc"; return 1; }
+	[ "$_sg" = "$3" ] || { say "scrub: HOME='$1' on '$2' gave '$_sg', want '$3'"; return 1; }
 }
-# _scount <home>: the occurrences of that text on standard input
+# _scount <home>: the occurrences of that home on standard input, read as the
+# scrubbers read it: from ENVIRON (awk -v would decode backslashes), trailing
+# slashes dropped
 _scount() {
-	awk -v h="$1" '{ s = s $0 } END { n = 0; while (h != "" && (i = index(s, h)) > 0) { n++; s = substr(s, i + length(h)) } print n }'
+	HOME=$1 awk '{ s = s $0 } END { h = ENVIRON["HOME"]; sub("/+$", "", h); n = 0; while (h != "" && (i = index(s, h)) > 0) { n++; s = substr(s, i + length(h)) } print n }'
 }
 c_scrub() {
 	_tb=$(printf '\t')
@@ -1207,6 +1210,13 @@ c_scrub() {
 	# rows with a | in them cannot go through the table's separator
 	_scrow /u/qq 'a|/u/qq a&&/u/qq /u/qq|' 'a|~ a&&~ ~|' || return 1
 	_scrow /u/qq '/u/qq|x' '~|x' || return 1
+	_sg=$(printf '%s\n' '/u/qq/a /u/qq' | _scount /u/qq/)
+	[ "$_sg" = 2 ] || { say "scrub: _scount with a trailing-slash HOME gave '$_sg', want 2"; return 1; }
+	_sg=$(printf '%s\n' '/u/a\tb' | _scount '/u/a\tb')
+	[ "$_sg" = 1 ] || { say "scrub: _scount with a backslash HOME gave '$_sg', want 1"; return 1; }
+	_sb=$(printf '\351')
+	_sg=$(HOME=/u/qq; export HOME; printf '%s\n' "/u/qq${_sb}x" | LC_ALL=en_US.UTF-8 tscrub)
+	[ "$_sg" = "~${_sb}x" ] || { say "scrub: a non-ASCII byte after the home, under LC_ALL=en_US.UTF-8, gave '$_sg'"; return 1; }
 	_sg=$(unset HOME; printf '%s\n' /u/qq/a | tscrub)
 	[ "$_sg" = /u/qq/a ] || { say "scrub: HOME unset gave '$_sg'"; return 1; }
 	_sg=$(HOME=/u/qq; export HOME; printf '%s\n' a /u/qq/b | tscrub)
@@ -1424,6 +1434,10 @@ smut tty-home-dot-name ttyself '/[A-Za-z0-9_]/' '/[A-Za-z0-9_.]/' scrub
 smut tty-home-dash-name ttyself '/[A-Za-z0-9_]/' '/[A-Za-z0-9_-]/' scrub
 smut tty-home-underscore-boundary ttyself '/[A-Za-z0-9_]/' '/[A-Za-z0-9]/' scrub
 smut tty-home-overlap ttyself 'o = o substr(s, 1, i); s = substr(s, i + 1); }' 'o = o substr(s, 1, i - 1 + length(h)); s = substr(s, i + length(h)); }' scrub
+smut tty-count-awk-v ttyself 'HOME=$1 awk '"'"'{ s = s $0 } END { h = ENVIRON["HOME"];' 'awk -v h="$1" '"'"'{ s = s $0 } END {' scrub
+smut tty-count-no-trim ttyself 'sub("/+$", "", h); n = 0;' 'n = 0;' scrub
+smut tty-tscrub-locale-unpinned ttyself 'LC_ALL=C awk' 'awk' scrub
+smut tty-home-unscrubbed ttyself 'if (c !~ /[A-Za-z0-9_]/) {' 'if (0) {' scrub
 smut tty-no-cut ttyself 'print substr(o s, 1, 120)' 'print o s' scrub
 smut tty-no-state-line ttyself '			say "tty: state:$(tcut 200 $_toth)"' ':' ttymsg
 smut tty-state-empty ttyself 'say "tty: state:$(tcut 200 $_toth)"' 'say "tty: state:"' ttymsg
