@@ -47,7 +47,12 @@
 #             starts the scheduler, or the scheduler a check, reaches no
 #             terminal: on a tostop one it would stop that child (forced
 #             here with xtrace; under load bash's "child setpgid" line);
-#   leave     what a passing check leaves running is gone after the run;
+#   nostderr  test.sh started with its standard error closed, outside the
+#             lock and at its re-entry, runs the scheduler and gives its
+#             status;
+#   watchfork the same for test.sh's start of the lock watcher, under the
+#             lock, and the scheduler's own standard error reaches test.sh's;
+#   leave    what a passing check leaves running is gone after the run;
 #   intskip   interrupt, testsh and sigs, run by this self-test started
 #             with SIGINT ignored, each say what they skip and pass.
 # Then each case is shown failing against at least one mutant of the
@@ -1320,6 +1325,11 @@ mutant ttou-scheduler tty "trap '' TTOU" ':' "	trap '' TTOU #"
 mutant start-stderr-on-tty ttyfork '{ "$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 & } 2> /dev/null' '"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &'
 wmut sched-stderr-on-tty ttyfork '{ 2>&3 3>&- GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh & } 3>&2 2> /dev/null' 'GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &'
 wmut sched-stderr-lost wiring '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
+wmut sched-stderr-lost-run watchfork '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
+# (the watcher's fork with test.sh's standard error; a closed standard error
+# left closed, so the scheduler's start fails and $! is not its pid)
+wmut watch-stderr-on-tty watchfork '{ sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 & } 2> /dev/null' 'sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 &'
+wmut stderr-closed-unguarded nostderr '{ :; } 3>&2 2> /dev/null || exec 2> /dev/null' ':'
 # (without its own group the scheduler, and every check, ignore SIGINT and
 # SIGQUIT; when this self-test already ignores both, nothing differs)
 intmut wmut no-own-group sigs 'set -m' ':'
