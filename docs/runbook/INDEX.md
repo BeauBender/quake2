@@ -107,7 +107,6 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX141](../runbook/FIX141.md): a fully transparent image compares alpha only in the decoder round trip, because macOS 26's ImageIO drops its colour; a mixed control keeps colour under alpha 0 pinned, and check-image-decoder returns to CI
 - [TASK179](../runbook/TASK179.md): one effect table for ref_metal's ray-traced effects: the walks that replaced the hand-written calls, the order and pipeline rule a host test drives, the gate's switches from the table, the call lint and its mutants, and the unchanged frame pins
 - [FIX154](../runbook/FIX154.md): `condump` and `record` refuse a file name with `..`, a leading `/` or `.`, `:` or a backslash, through one filesystem helper; the survey of the other write paths
-- [FIX160](../runbook/FIX160.md): a level name from map data cannot add a command: the AddCommandString import refuses text that Cbuf_Execute would split into more than one command
 - [FIX165](../runbook/FIX165.md): `Cvar_WriteVariables` does not write an archived value holding a quote or a line break: the reachability table (an unquoted word with two quotes and a `;` between them) and the unit test
 - [FIX170](../runbook/FIX170.md): FS_FOpenFile refuses a name with a `..` component after its clean-up, so a server's cinematic name cannot read a file outside the search paths; the other opens and why they are safe
 - [FIX169](../runbook/FIX169.md): svc_serverdata's game directory goes through FS_GameDirValid before it is stored; a bad one drops the connection
