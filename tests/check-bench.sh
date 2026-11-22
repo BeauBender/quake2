@@ -1666,6 +1666,27 @@ t_core_id() {
 			bench_lock_reclaim t-stale 2> /dev/null || nok "record: $_how: a lock kept only by a stale record was not reclaimed"
 			[ ! -e "$BENCH_LOCK_DIR" ] || nok "record: $_how: the reclaim left the lock directory: $(ls "$BENCH_LOCK_DIR" | tr '\n' ' ')"
 		done
+		# Time zones (FIX184, round 2): a record written under one TZ and
+		# read under another, while the recorded command runs, holds: every
+		# start time and written= is in UTC, whatever the caller's TZ. A
+		# reader east of the writer would see the command start after
+		# written=, one west of it would write written= before the command's
+		# start, and a start time in another zone matches no ps answer.
+		for _zz in UTC,Asia/Tokyo UTC,America/Los_Angeles America/Los_Angeles,UTC; do
+			_zw=${_zz%%,*} _zr=${_zz#*,}
+			_zt=$(TZ=$_zw && export TZ && bench_lock_now)
+			_zs=$(TZ=$_zw && export TZ && bench_proc_read "$_d" && printf '%s' "$BENCH_PS_START") || _zs=
+			for _how in unknown same; do
+				case $_how in
+				unknown) srec t-stale "$_d" '?' "$_zt" ;;
+				same) srec t-stale "$_d" "$_zs" "$_zt" ;;
+				esac
+				(TZ=$_zr && export TZ && bench_lock_alive "$(bench_lock_holder)") || nok "record: TZ $_zw then $_zr: $_how: a live recorded pid did not keep the lock alive"
+				if (TZ=$_zr && export TZ && bench_lock_reclaim t-stale 2> /dev/null); then nok "record: TZ $_zw then $_zr: $_how: a waiter reclaimed the lock while the recorded command runs"; fi
+				[ -d "$BENCH_LOCK_DIR" ] || nok "record: TZ $_zw then $_zr: $_how: the lock was removed while the recorded command runs"
+			done
+		done
+		rm -rf "${BENCH_LOCK_DIR:?}"
 		# This shell's own lock, with a stale record: the release frees it
 		# at once.
 		srec t-own "$_gp" "$_ds1"
