@@ -790,14 +790,14 @@ tscrub_main() {
 		{ s = s (NR > 1 ? " " : "") $0 }
 		END {
 			h = ENVIRON["HOME"]
-			while (substr(h, length(h)) == "/") h = substr(h, 1, length(h) - 1)
+			sub("/+$", "", h)
 			o = ""
 			while (h != "" && (i = index(s, h)) > 0) {
 				c = substr(s, i + length(h), 1)
 				if (c == "/" || c == " " || c == "") { o = o substr(s, 1, i - 1) "~"; s = substr(s, i + length(h)) }
 				else { o = o substr(s, 1, i); s = substr(s, i + 1) }
 			}
-			print substr(o s, 1, 120)
+			lim = 120; print substr(o s, 1, lim)
 		}'
 }
 # tdesc <pid>: that process, read now, on one line, as "[pid=.. stat=..
