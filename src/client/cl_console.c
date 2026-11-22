@@ -170,6 +170,12 @@ Con_Dump_f(void)
 		return;
 	}
 
+	if (!FS_SafeRelativeName(Cmd_Argv(1)))
+	{
+		Com_Printf("condump: refusing the file name, it must not contain '..', ':' or '\\', or start with '/' or '.'.\n");
+		return;
+	}
+
 	Com_sprintf(name, sizeof(name), "%s/%s.txt", FS_Gamedir(), Cmd_Argv(1));
 
 	Com_Printf("Dumped console text to %s.\n", name);

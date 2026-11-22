@@ -661,18 +661,43 @@ t_case_cmp(const void *a, const void *b)
 	return r ? r : strcmp(x->name, y->name);
 }
 
+/* What the engine printed while Qcommon_Init's early commands ran, for
+   the tests that check a refusal at start-up (FIX173). */
+static char t_startup_text[1024];
+extern char userGivenGame[MAX_QPATH]; /* src/common/frame.c */
+
+const char *
+t_startup_console(void)
+{
+	return t_startup_text;
+}
+
 static void
 t_engine_init(void)
 {
-	static char *argv[] = { "yq2test" };
+	/* A bad game directory on the command line, as `+set game ../x`:
+	   the engine must refuse it before the filesystem starts (FIX173). */
+	static char *argv[] = { "yq2test", "+set", "game", "../x" };
 
 	/* The order of Qcommon_Init. */
 	Z_Init();
-	COM_InitArgv(1, argv);
+	COM_InitArgv(4, argv);
 	Swap_Init();
 	Cbuf_Init();
 	Cmd_Init();
 	Cvar_Init();
+
+	/* Qcommon_Init: the early commands, then the initial game name. */
+	Cbuf_AddEarlyCommands(false);
+	Cbuf_Execute();
+	Q_strlcpy(t_startup_text, t_console(), sizeof(t_startup_text));
+	t_console_reset();
+
+	{
+		cvar_t *gameCvar = Cvar_Get("game", "", CVAR_LATCH | CVAR_SERVERINFO);
+
+		Q_strlcpy(userGivenGame, gameCvar->string, sizeof(userGivenGame));
+	}
 
 	/* Search path: <tmp>/data/baseq2 and the binary's own directory
 	   (FS_BuildRawPath always adds it), never the user's home: the

@@ -28,6 +28,7 @@ check-metal-shim.sh
 check-metalfx-report.sh
 check-mode-size.sh
 check-no-tracked-memory.sh
+check-pin-chars.sh
 check-pins-latch.sh
 check-pins.sh
 check-pre-commit-hook.sh
@@ -37,7 +38,9 @@ check-refrecord.sh
 check-removed-deps.sh
 check-require-guards.sh
 check-rt-variations.sh
+check-runbook-dedupe.sh
 check-runbook-index.sh
+check-safe-names.sh
 check-savegame-tables.sh
 check-static-modules.sh
 check-stop-invariants.sh

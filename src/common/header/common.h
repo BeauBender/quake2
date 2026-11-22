@@ -409,6 +409,11 @@ void Cbuf_ResetSource(void);
 /* called by Com_Error before its teardown: the error ends the line, */
 /* and the next line is the player's unless it holds the server's bytes. */
 
+qboolean Cmd_ExecutingLine(void);
+
+/* true while Cmd_ExecuteString runs a line; a cvar write outside */
+/* every line is the engine's own (FIX158). */
+
 void Cbuf_ExecuteText(int exec_when, char *text);
 
 /* this can be used in place of either Cbuf_AddText or Cbuf_InsertText */
@@ -536,6 +541,12 @@ float Cvar_VariableValue(const char *var_name);
 const char *Cvar_VariableString(const char *var_name);
 
 /* returns an empty string if not defined */
+
+qboolean Cvar_ServerWrote(const char *var_name);
+
+/* true if a server line wrote the value the cvar holds and the */
+/* player's text has not written it since (FIX158): vstr queues it */
+/* as server text, and a line that expands it with $ is the server's. */
 
 char *Cvar_CompleteVariable(char *partial);
 
@@ -755,6 +766,7 @@ typedef enum
 void FS_DPrintf(const char *format, ...);
 int FS_FOpenFile(const char *name, fileHandle_t *f, qboolean gamedir_only);
 void FS_FCloseFile(fileHandle_t f);
+qboolean FS_TrackNameValid(const char *track);
 int FS_Read(void *buffer, int size, fileHandle_t f);
 int FS_FRead(void *buffer, int size, int count, fileHandle_t f);
 
@@ -769,6 +781,7 @@ strlist_t FS_ListFiles2(const char *findname,
 
 void FS_InitFilesystem(void);
 void FS_ShutdownFilesystem(void);
+qboolean FS_GameDirValid(const char *name);
 void FS_BuildGameSpecificSearchPath(const char *dir);
 const char *FS_Gamedir(void);
 const char *FS_NextPath(const char *prevpath);
@@ -787,6 +800,7 @@ strlist_t FS_ListMods(void);
 
 void FS_FreeFile(void *buffer);
 void FS_CreatePath(const char *path);
+qboolean FS_SafeRelativeName(const char *name);
 
 /* MISC */
 

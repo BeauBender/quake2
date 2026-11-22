@@ -136,13 +136,36 @@ mkdir "${tmp:?}/tpl"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TEMPLATE_DIR="${tmp:?}/tpl"
 : > "${tmp:?}/pids"
 
+# pid_running <pid>: 0 while <pid> runs; 1 when it has gone or is a zombie;
+# 2 when the check cannot tell: <pid> answers kill -0 but ps gives no answer
+# for it, so it may be a zombie or still run (FIX177); when ps gives no
+# answer, kill -0 is asked once more, since the pid may have ended and been
+# reaped between the two probes, and then it has gone (1). kill -0 needs no ps
+# and sends no signal; it is the shell's own (command kill), never a case's
+# stand-in. It fails for a pid that has gone and for one another user runs,
+# and every pid this check waits for is its own user's: so when it fails, ps
+# decides when it answers, and a pid ps gives no answer for has gone. A
+# zombie answers kill -0, so it is told from a running pid by ps alone.
 pid_running() {
 	case $1 in
 	'' | 0 | *[!0-9]*) return 1 ;;
 	esac
-	_s=$(ps -o stat= -p "$1" 2> /dev/null) || return 1
+	if ! command kill -0 "$1" 2> /dev/null; then
+		_s=$(ps -o stat= -p "$1" 2> /dev/null) || return 1
+		case $_s in
+		'' | Z*) return 1 ;;
+		esac
+		return 0
+	fi
+	_s=$(ps -o stat= -p "$1" 2> /dev/null) || _s=
 	case $_s in
-	'' | Z*) return 1 ;;
+	'')
+		# ps gave no answer: the pid may have ended since the first probe
+		# (and been reaped), so ask kill -0 once more (FIX177, round 1).
+		command kill -0 "$1" 2> /dev/null || return 1
+		return 2
+		;;
+	Z*) return 1 ;;
 	esac
 	return 0
 }
@@ -166,9 +189,12 @@ pid_id() {
 	[ -n "$_il" ] || return 1
 	id_of "$_il"
 }
-# id_of <start time>: the identity of a process started then.
+# id_of <start time>: the identity of a process started then, a checksum of
+# the time in its one form: its words with one blank between them and none
+# around them (ps pads it with blanks at the end). Every identity here comes
+# from this function (FIX171).
 id_of() {
-	printf '%s\n' "$1" | cksum
+	printf '%s\n' "$1" | awk '{ $1 = $1; print }' | cksum
 }
 # pid_same <pid> <identity>: <pid> runs and is still the process recorded
 # with <identity>; never for an empty <identity>.
@@ -223,12 +249,23 @@ collect() {
 # stop_listed <list>: TERM to each pid on <list> that is still the process
 # recorded there; nothing else.
 stop_listed() {
-	while read -r _p _i; do
-		if pid_same "$_p" "$_i"; then kill -TERM "$_p" 2> /dev/null || true; fi
-	done < "$1"
+	sed 's/ .*//' "$1" | sort -u | while read -r _p; do
+		if listed_same "$_p" "$1"; then kill -TERM "$_p" 2> /dev/null || true; fi
+	done
+}
+# listed_same <pid> [<list>]: <pid> runs, and one of its lines on the cleanup
+# list (or on <list>) holds the identity it has now. stop_listed and reap
+# both judge a pid by it, so the two agree whatever older lines the list
+# holds for that pid.
+listed_same() {
+	_ln=$(pid_id "$1") || return 1
+	grep -qxF -- "$1 $_ln" "${2:-${tmp:?}/pids}"
 }
 
 cleanup() {
+	# A signal inside a decoy window runs this with decoy's kill and ps
+	# still defined, so they go first (FIX171, round 2; t_decoy_term).
+	unset -f kill ps 2> /dev/null || true
 	# Stop any process this check started that still runs; nothing else.
 	stop_listed "${tmp:?}/pids"
 	rm -rf "${tmp:?}"
@@ -254,23 +291,120 @@ start() {
 	settle "$BG"
 	record "$BG"
 }
-# wait_gone <seconds> <pid>: once <pid> is seen gone, it is forgotten.
+# wait_gone <seconds> <pid>: 0 once <pid> is seen gone, and then it is
+# forgotten; past <seconds>, 1 while it still runs and 2 while the check
+# cannot tell (pid_running): a pid that ps gives no answer for is never
+# taken as gone (FIX177).
 wait_gone() {
 	_n=0
-	while pid_running "$2"; do
-		[ "$_n" -lt $(($1 * 10)) ] || return 1
+	while :; do
+		_wg=0
+		pid_running "$2" || _wg=$?
+		case $_wg in
+		0) _wg=1 ;;
+		1) break ;;
+		esac
+		[ "$_n" -lt $(($1 * 10)) ] || return "$_wg"
 		sleep 0.1
 		_n=$((_n + 1))
 	done
 	forget "$2"
 	return 0
 }
-# reap <pid>: after a failed wait, ends a process this check started (TERM,
-# which its trap turns into a stop of its command; KILL after 30 s), so the
-# wait that follows cannot hang.
+# reap <pid> [<seconds>]: after a failed wait, ends a process this check
+# started (TERM, which its trap turns into a stop of its command; KILL after
+# <seconds>, 30 by default). True once <pid> has gone: only then may the
+# caller wait for it. Each of the two signals goes only while listed_same
+# holds for <pid> (FIX171): the KILL comes 30 s after the TERM, time enough
+# for the system to give the pid to another process. A pid that runs but is
+# not on the list, was listed with no identity, has another identity now,
+# or that ps gives no start time for, gets no signal; that is a failure,
+# said, and reap is false, since nothing would bound a wait for that
+# process. So is a pid that ps gives no answer for at all while it answers
+# kill -0 (the check cannot tell whether it runs, FIX177), and a pid that
+# still runs 5 s after its KILL.
 reap() {
+	if ! listed_same "$1"; then
+		reap_skip TERM "$1"
+		return
+	fi
 	kill -TERM "$1" 2> /dev/null || true
-	wait_gone 30 "$1" || kill -KILL "$1" 2> /dev/null || true
+	wait_gone "${2:-30}" "$1" && return 0
+	if ! listed_same "$1"; then
+		reap_skip KILL "$1"
+		return
+	fi
+	kill -KILL "$1" 2> /dev/null || true
+	wait_gone 5 "$1" && return 0
+	bad "reap: pid $1 still runs 5 s after its KILL, so it is not waited for"
+	return 1
+}
+# reap_skip <signal> <pid>: the signal reap did not send; true when <pid>
+# has gone, a failure (said) and false while it still runs or the check
+# cannot tell (FIX177).
+reap_skip() {
+	_rk=0
+	wait_gone 0 "$2" || _rk=$?
+	case $_rk in
+	0) return 0 ;;
+	2) bad "reap: no $1 to pid $2: it answers kill -0 and ps gives no answer for it, so the check cannot tell whether it still runs, and it is not waited for" ;;
+	*) bad "reap: no $1 to pid $2: it is not the process this check recorded (another identity, none, or no answer from ps), so it is not waited for" ;;
+	esac
+	return 1
+}
+# decoy <how> <identity>: sets _id, the identity one run of a signal site
+# checks, for a site that signals a pid read from a file (FIX171, round 1):
+# another (other), none (none), <identity> with ps giving no answer (nops),
+# or <identity> itself (own). For each but own, kill only notes the signal
+# it is asked for in $E/decoy.sig and sends nothing, so the site runs on
+# the real process and no signal reaches it.
+decoy() {
+	_id=$2
+	: > "${E:?}/decoy.sig"
+	case $1 in
+	own) return 0 ;;
+	other) _id=$(id_of 'Thu Jan  1 00:00:00 2026') ;;
+	none) _id= ;;
+	nops) ps() { return 1; } ;;
+	esac
+	kill() { printf '%s\n' "$*" >> "${E:?}/decoy.sig"; }
+}
+# decoy_end <how> <text>: after that run, kill and ps are the system's
+# again, and a signal the site asked for is a failure, <text>.
+decoy_end() {
+	[ "$1" != own ] || return 0
+	unset -f kill ps
+	[ ! -s "${E:?}/decoy.sig" ] || bad "$2: $1: a signal went to a process that is not the one read: $(tr '\n' ' ' < "${E:?}/decoy.sig")"
+}
+# ended <seconds> <pid> [<text>]: true once <pid>, a child this check
+# started, has ended within <seconds>. Past them, <text> (when given) is a
+# failure, <pid> is reaped, and ended is true only when reap ended it: the
+# caller waits for <pid> (collect) only then.
+ended() {
+	wait_gone "$1" "$2" && return 0
+	[ -z "${3:-}" ] || bad "$3"
+	reap "$2"
+}
+# reap_lint <file> <helpers>: prints each line of <file> that holds the word
+# reap (not reaped, reap_skip or t_reap_id: a word ends at a character other
+# than a letter, a digit, _ or -, and a path's /reap is not one), joined
+# with the lines a trailing \
+# continues, unless it is a whole-line comment or lies in one of the
+# functions <helpers> names (an awk alternation). A function runs from a line
+# that starts with its definition (a name of [A-Za-z_][A-Za-z0-9_]*) to the
+# next line that starts with }; no other line is exempt, the top level
+# included, so no form of a call outside the helpers gets past it (FIX171).
+reap_lint() {
+	awk -v ok="$2" '
+	/\\$/ { b = b substr($0, 1, length($0) - 1); next }
+	{ $0 = b $0; b = "" }
+	/^(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)/ || /^function[ \t]/ {
+		f = $0; sub(/^function[ \t]+/, "", f); sub(/[^A-Za-z0-9_].*/, "", f)
+	}
+	/^}/ { f = ""; next }
+	f ~ ("^(" ok ")$") || /^[ \t]*#/ { next }
+	(" " $0 " ") ~ /[^A-Za-z0-9_\/-]reap[^A-Za-z0-9_-]/ { print FILENAME ":" FNR ": " $0 }
+	' "$1"
 }
 # wait_held <seconds> <label>: the lock shows <label> with its child pid
 # (the holder's line, the first: a waiter's line has a label too).
@@ -527,6 +661,245 @@ t_cleanup_id() {
 	[ "$fails" -eq 0 ]
 }
 
+# t_reap_id: reap's TERM and its KILL each go only while the pid still has
+# the identity it was recorded with on the cleanup list (FIX171). The
+# check's own processes stand in for a pid the system gave to another
+# process: shells that note a TERM and go on (so that only a KILL ends
+# them), and end by themselves once the stop file is there, or within
+# about 30 s. Listed with another's identity, one gets no TERM (t) and one
+# no KILL (k), and reap says so; listed with no identity (none), not listed
+# (off), or with ps giving no start time (ps), one gets neither; listed
+# with its own identity (own), one gets the TERM and then the KILL.
+t_reap_id() {
+	fresh reap-id
+	printf '%s\n' 'trap "echo TERM >> \"\$1\"" TERM' 'n=0' 'while [ ! -e "$2" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/deaf.sh"
+	set --
+	for _q in t k none off ps; do
+		start sh "${E:?}/deaf.sh" "${E:?}/$_q.sig" "${E:?}/stop"
+		set -- "$@" "$BG"
+	done
+	_o=$(pid_id 1) || bad "reap-id: ps gave no start time for pid 1"
+	for _q in "$1" "$3" "$4"; do forget "$_q"; done
+	printf '%s %s\n' "$1" "$_o" >> "${tmp:?}/pids"
+	printf '%s \n' "$3" >> "${tmp:?}/pids"
+	# A reap that sends no signal to a pid that still runs is a failure and
+	# false. Each runs in a subshell, so that its failure is checked here
+	# and not counted.
+	_rs=0
+	(reap "$1" 1) > "${E:?}/t.out" || _rs=$?
+	[ ! -s "${E:?}/t.sig" ] || bad "reap-id: a TERM went to a pid listed with another identity"
+	grep -q "reap: no TERM to pid $1:" "${E:?}/t.out" && [ "$_rs" -ne 0 ] || bad "reap-id: the TERM not sent was not a failure (status $_rs): $(cat "${E:?}/t.out")"
+	# k: listed with its own identity, with ps giving no start time from the
+	# second time it is asked (after the TERM, for the KILL)
+	_rs=0
+	(
+		ps() {
+			case " $* " in
+			*' lstart= '*)
+				echo x >> "${E:?}/k.ps"
+				[ $(($(wc -l < "${E:?}/k.ps"))) -le 1 ] || return 1
+				;;
+			esac
+			command ps "$@"
+		}
+		reap "$2" 1
+	) > "${E:?}/k.out" || _rs=$?
+	grep -qx TERM "${E:?}/k.sig" 2> /dev/null || bad "reap-id: no TERM went to a pid listed with its own identity (k)"
+	pid_running "$2" || bad "reap-id: a KILL went to a pid that ps gave no start time for after its TERM"
+	grep -q "reap: no KILL to pid $2:" "${E:?}/k.out" && [ "$_rs" -ne 0 ] || bad "reap-id: the KILL not sent was not a failure (status $_rs): $(cat "${E:?}/k.out")"
+	for _q in none off; do
+		if [ "$_q" = none ]; then _p=$3; else _p=$4; fi
+		_rs=0
+		(reap "$_p" 1) > "${E:?}/$_q.out" || _rs=$?
+		[ ! -s "${E:?}/$_q.sig" ] && pid_running "$_p" || bad "reap-id: a signal went to a pid listed as $_q"
+		grep -q "reap: no TERM to pid $_p:" "${E:?}/$_q.out" && [ "$_rs" -ne 0 ] || bad "reap-id: $_q: the TERM not sent was not a failure (status $_rs): $(cat "${E:?}/$_q.out")"
+	done
+	_rs=0
+	(
+		ps() {
+			case " $* " in
+			*' lstart= '*) return 1 ;;
+			esac
+			command ps "$@"
+		}
+		reap "$5" 1
+	) > "${E:?}/ps.out" || _rs=$?
+	[ ! -s "${E:?}/ps.sig" ] && pid_running "$5" || bad "reap-id: a signal went to a pid that ps gave no start time for"
+	grep -q "reap: no TERM to pid $5:" "${E:?}/ps.out" && [ "$_rs" -ne 0 ] || bad "reap-id: the signals not sent with no answer from ps were not a failure (status $_rs): $(cat "${E:?}/ps.out")"
+	# own: started, reaped and collected in a subshell with no standard
+	# error, so that the shell's job notice for the KILL is not printed
+	_f0=$fails
+	(
+		start sh "${E:?}/deaf.sh" "${E:?}/own.sig" "${E:?}/stop"
+		reap "$BG" 1 > /dev/null
+		grep -qx TERM "${E:?}/own.sig" 2> /dev/null || bad "reap-id: no TERM went to a pid listed with its own identity"
+		wait_gone 5 "$BG" || bad "reap-id: no KILL went to a pid listed with its own identity"
+		collect "$BG" || true
+		[ "$fails" -eq "$_f0" ]
+	) 2> /dev/null || bad "reap-id: the case listed with its own identity failed"
+	: > "${E:?}/stop"
+	for _q in "$@"; do
+		wait_gone 40 "$_q" || bad "reap-id: pid $_q outlived its own bound"
+		collect "$_q" 2> /dev/null || true
+	done
+	[ "$fails" -eq 0 ]
+}
+
+# t_reap_wait: no caller of reap waits for a pid that reap did not end
+# (FIX171). A child of the check's that ends only once the stop file is
+# there (or after about 30 s) is listed with no identity, or with another's,
+# or with its own while ps fails for every call (nops, FIX177: the check
+# cannot tell, and reap must say so and send nothing). Each kind of caller,
+# finish and ended (then collect, as each caller of ended does), must return
+# within 10 s and count the failure. And no line
+# outside reap, reap_skip, ended and reap's own tests holds the word reap
+# (reap_lint, checked on its own shapes): a caller that did would wait for
+# its pid with nothing to bound the wait.
+t_reap_wait() {
+	fresh reap-wait
+	printf '%s\n' 'trap "echo TERM >> \"\$1\"" TERM' 'n=0' 'while [ ! -e "$2" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/deaf.sh"
+	_o=$(pid_id 1) || bad "reap-wait: ps gave no start time for pid 1"
+	for _k in finish:none finish:other finish:nops ended:none ended:other ended:nops; do
+		rm -f "${E:?}/stop" "${E:?}/c.pid" "${E:?}/c.sig" "${E:?}/c.rv"
+		(
+			start sh "${E:?}/deaf.sh" "${E:?}/c.sig" "${E:?}/stop"
+			echo "$BG" > "${E:?}/c.pid"
+			case ${_k#*:} in
+			none) forget "$BG" && printf '%s \n' "$BG" >> "${tmp:?}/pids" ;;
+			other) forget "$BG" && printf '%s %s\n' "$BG" "$_o" >> "${tmp:?}/pids" ;;
+			# Listed with its own identity, then ps fails for every call
+			# (FIX177): the check cannot tell whether the child runs.
+			nops) ps() { return 1; } ;;
+			esac
+			_f0=$fails
+			case ${_k%:*} in
+			finish) finish reap-wait "$BG" 0 1 || echo false > "${E:?}/c.rv" ;;
+			ended) if ended 1 "$BG"; then collect "$BG" || true; fi ;;
+			esac
+			[ "$fails" -gt "$_f0" ]
+		) > "${E:?}/w.out" 2> /dev/null &
+		_w=$!
+		wait_gone 10 "$_w" || bad "reap-wait: $_k: the caller still waited 10 s after reap sent no signal"
+		: > "${E:?}/stop"
+		_ws=0
+		wait "$_w" || _ws=$?
+		[ "$_ws" -eq 0 ] || bad "reap-wait: $_k: the caller counted no failure: $(cat "${E:?}/w.out")"
+		grep -q "reap: no TERM to pid " "${E:?}/w.out" || bad "reap-wait: $_k: reap did not say it sent no TERM: $(cat "${E:?}/w.out")"
+		[ "${_k%:*}" != finish ] || [ -s "${E:?}/c.rv" ] || bad "reap-wait: $_k: finish was true for a pid reap did not end"
+		if [ "${_k#*:}" = nops ]; then
+			grep -q "so the check cannot tell whether it still runs" "${E:?}/w.out" || bad "reap-wait: $_k: reap did not say it cannot tell: $(cat "${E:?}/w.out")"
+			[ ! -s "${E:?}/c.sig" ] || bad "reap-wait: $_k: a signal went to a pid that ps gave no answer for"
+		fi
+		_c=$(cat "${E:?}/c.pid" 2> /dev/null) || _c=
+		wait_gone 5 "$_c" || bad "reap-wait: $_k: pid $_c outlived its stop file"
+		forget "$_c"
+	done
+	# A pid that ends between the two probes (FIX177, round 1): kill -0
+	# answers, the pid ends and is reaped while ps is slow, and ps then
+	# gives no answer. The second kill -0 fails, so it has gone (1), not
+	# "cannot tell" (2). A child of this shell, and one that is not.
+	for _k in child other; do
+		_r=$(
+			ps() {
+				sleep 0.5
+				command ps "$@"
+			}
+			if [ "$_k" = child ]; then
+				sleep 0.2 &
+				_p=$!
+			else
+				_p=$(sh -c 'sleep 0.2 > /dev/null 2>&1 & echo $!')
+			fi
+			_rv=0
+			pid_running "$_p" || _rv=$?
+			echo "$_rv"
+		)
+		[ "$_r" = 1 ] || bad "reap-wait: a $_k pid that ended between the two probes read as $_r, not 1 (gone)"
+	done
+	_bare=$(reap_lint "$0" 'reap|reap_skip|ended|reap_lint|t_reap_id|t_reap_wait')
+	[ -z "$_bare" ] || bad "reap-wait: reap is called outside ended, so a wait after it may have no bound: $_bare"
+	# The lint itself (FIX171, round 2): each shape below calls reap in a
+	# function after ended's, and must be refused; ended and collect pass.
+	lint_shape() {
+		_ln=$1
+		shift
+		printf '%s\n' 'ended() {' '	reap "$2"' '}' "$_ln() {" "$@" '}' > "${E:?}/lint.sh"
+		[ -n "$(reap_lint "${E:?}/lint.sh" ended)" ] || bad "reap-wait: the lint let through, in $_ln: $*"
+	}
+	while IFS= read -r _s; do
+		lint_shape t_f "	$_s"
+	done << 'SHAPES'
+reap "$x"
+reap "$x"; collect "$x"
+reap "$x" || wait "$x"
+reap "$x" 2>&1
+reap "$x" 2>&1; wait "$x"
+if :; then reap "$x"; fi
+if :; then :; else reap "$x"; fi
+{ reap "$x"; }
+reap $x
+eval reap "$x"
+eval 'reap "$x"'
+r=reap; $r "$x"
+foo && reap "$x"
+reap "$BG" || true
+SHAPES
+	lint_shape t_f '	reap "$x" || true' '	collect "$x"'
+	lint_shape t_f '	reap "$x" || true' '	wait "$x"'
+	lint_shape t_f '	reap \' '		"$x"'
+	lint_shape t_f '	re\' 'ap "$x"'
+	lint_shape t_x2 '	reap "$x"'
+	lint_shape Tx '	reap "$x"'
+	printf '%s\n' 'ended() {' '	reap "$2"' 't_x2() {' '	reap "$x"' '}' > "${E:?}/lint.sh"
+	[ -n "$(reap_lint "${E:?}/lint.sh" ended)" ] || bad "reap-wait: the lint let through a reap in t_x2() with no } before it"
+	printf '%s\n' 't_f() {' '	if ended 10 "$x"; then collect "$x" || true; fi' '	ended 0 "$BG" || true' '	# then reap it' '}' > "${E:?}/lint.sh"
+	_l=$(reap_lint "${E:?}/lint.sh" ended)
+	[ -z "$_l" ] || bad "reap-wait: the lint refused a plain ended: $_l"
+	[ "$fails" -eq 0 ]
+}
+
+# t_decoy_term: a signal inside a decoy window still lets cleanup stop what
+# the cleanup list holds (FIX171, round 2). decoy defines kill and, for nops,
+# ps, and an EXIT trap a signal runs there runs with them defined. A shell
+# the case starts sets the check's own cleanup trap on a list of its own,
+# lists a stand-in, opens a decoy window and waits in it (10 s at most); the
+# case sends that shell a TERM. A subshell's EXIT trap runs on a signal only
+# through a trap of its own for that signal (the system sh installs no
+# handler again in a subshell), so the shell also has trap 'exit 1' TERM.
+# The stand-in ends on TERM, and by itself within about 30 s.
+t_decoy_term() {
+	fresh decoy-term
+	printf '%s\n' 'trap "exit 0" TERM' 'n=0' 'while [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done' > "${E:?}/loop.sh"
+	for _how in other none nops; do
+		rm -f "${E:?}/sd.pid" "${E:?}/open"
+		(
+			tmp=${E:?}/sub.$_how
+			mkdir "${tmp:?}" || exit 1
+			trap cleanup EXIT
+			trap 'exit 1' TERM
+			start sh "${E:?}/loop.sh" decoy-term-sd
+			echo "$BG" > "${E:?}/sd.pid"
+			decoy "$_how" "$(pid_id "$BG")"
+			echo open > "${E:?}/open"
+			_n=0
+			while [ "$_n" -lt 100 ]; do
+				sleep 0.1
+				_n=$((_n + 1))
+			done
+		) > /dev/null 2>&1 &
+		_s=$!
+		wait_file 10 "${E:?}/open" || bad "decoy-term: $_how: the shell never opened its decoy window"
+		_sd=$(cat "${E:?}/sd.pid" 2> /dev/null) || _sd=
+		if [ -n "$_sd" ]; then record "$_sd"; else bad "decoy-term: $_how: the shell listed no stand-in"; fi
+		kill -TERM "$_s" 2> /dev/null || true
+		wait_gone 5 "$_sd" || bad "decoy-term: $_how: a TERM inside a decoy window left the process on the cleanup list running 5 s later"
+		wait_gone 15 "$_s" || bad "decoy-term: $_how: the shell outlived its own bound"
+		collect "$_s" 2> /dev/null || true
+		wait_gone 40 "$_sd" || bad "decoy-term: $_how: pid $_sd outlived its own bound"
+	done
+	[ "$fails" -eq 0 ]
+}
+
 t_lock_exclusion() {
 	fresh excl
 	start sh "$R/bench.sh" lock run first -- sh -c 'echo first-start >> "$1"; sleep 2; echo first-end >> "$1"' x "${E:?}/log" > "${E:?}/first.out" 2>&1
@@ -664,12 +1037,8 @@ t_lock_stop() {
 	_gq=$(cat "${E:?}/gc.quiet" 2> /dev/null) || _gq=
 	_gi=$(pid_id "$_gq") || _gi=
 	{ pid_same "$_gq" "$_gi" && kill -TERM "$_gq" 2> /dev/null; } || bad "stop: the quiet probe's grandchild is gone, or ps gave no answer for it"
-	if ! wait_gone 15 "$_h"; then
-		bad "stop: the quiet probe's lock shell did not exit"
-		reap "$_h"
-	fi
 	_st=0
-	collect "$_h" || _st=$?
+	if ended 15 "$_h" "stop: the quiet probe's lock shell did not exit"; then collect "$_h" || _st=$?; fi
 	[ "$_st" -eq 143 ] || bad "stop: the quiet probe: wanted exit 143 from gc.sh after its grandchild's TERM, got $_st"
 	if foreign "${E:?}/quiet.out" > "${E:?}/foreign"; then
 		cat "${E:?}/foreign"
@@ -697,8 +1066,17 @@ t_lock_stop() {
 	wait_file 5 "${E:?}/s2/pid" || bad "stop: the stubborn command never started"
 	_sl=$(sed -n 's/^pid=//p' "${E:?}/s2/state/lock/holder")
 	record "$_sl"
-	_t0=$(date +%s)
-	pid_running "$_sl" && kill -TERM "$_sl" || bad "stop: the stubborn command's lock shell is not running"
+	_sli=$(pid_id "$_sl") || _sli=
+	# The TERM goes only while the lock shell still has the identity read
+	# with it (FIX171): run with that identity replaced (decoy), the site
+	# sends nothing; the last run, own, sends it. The grace floor is timed
+	# from that TERM, not from before the decoy runs.
+	for _how in other none nops own; do
+		[ "$_how" != own ] || _t0=$(date +%s)
+		decoy "$_how" "$_sli"
+		{ pid_same "$_sl" "$_id" && kill -TERM "$_sl"; } || [ "$_how" != own ] || bad "stop: the stubborn command's lock shell is not running, or is not the process read (FIX171)"
+		decoy_end "$_how" "stop: the TERM to the stubborn command's lock shell"
+	done
 	# Ctrl-C at a terminal: INT to the lock shell's process group.
 	if [ -n "$INT_OK" ]; then
 		set -m
@@ -729,14 +1107,18 @@ t_lock_stop() {
 	_h=$BG
 	wait_held 5 stopped || bad "stop: the stopped command's holder never showed"
 	wait_file 5 "${E:?}/gc.stop" || bad "stop: the stopped command's grandchild never started"
+	# the group leader read with its identity, and the group stopped only
+	# while the leader still has it (FIX171), after the decoy runs, as for
+	# the lock shell above
 	_c=$(sed -n 's/^child=//p' "${E:?}/state/lock/holder")
-	kill -s STOP -- "-$_c"
-	if ! wait_gone 10 "$_h"; then
-		bad "stop: lock run still waits on a stopped command"
-		reap "$_h"
-	fi
+	_ci=$(pid_id "$_c") || _ci=
+	for _how in other none nops own; do
+		decoy "$_how" "$_ci"
+		{ pid_same "$_c" "$_id" && kill -s STOP -- "-$_c"; } || [ "$_how" != own ] || bad "stop: the stopped command's group leader is gone, or ps gave no answer for it"
+		decoy_end "$_how" "stop: the STOP to the stopped command's group"
+	done
 	_st=0
-	collect "$_h" || _st=$?
+	if ended 10 "$_h" "stop: lock run still waits on a stopped command"; then collect "$_h" || _st=$?; fi
 	[ "$_st" -eq 74 ] || bad "stop: wanted exit 74 from a stopped command, got $_st"
 	grep -q '^bench: the command stopped' "${E:?}/stopped.out" || bad "stop: a stopped command was not said"
 	[ "$(B lock status)" = lock=free ] || bad "stop: a stopped command's lock was not released"
@@ -765,10 +1147,7 @@ t_lock_stop() {
 		printf '%s\n' 'st=0; sh "$1/bench.sh" lock run tty -- sh -c "stty -echo < /dev/tty; echo after-stty" > "$2/tty.out" 2>&1 || st=$?; echo "$st" > "$2/tty.st"' > "${E:?}/tty.sh"
 		start env BENCH_STOP_GRACE=0 script -q /dev/null sh "${E:?}/tty.sh" "$R" "${E:?}" < /dev/null > /dev/null 2>&1
 		_h=$BG
-		if ! wait_gone 15 "$_h"; then
-			bad "stop: a command that touched the terminal held the lock"
-			reap "$_h"
-		fi
+		ended 15 "$_h" "stop: a command that touched the terminal held the lock" || true
 		wait_file 10 "${E:?}/tty.st" || bad "stop: the terminal test never ended"
 		[ "$(cat "${E:?}/tty.st" 2> /dev/null)" = 74 ] || bad "stop: a command that touched the terminal: wanted 74, got $(cat "${E:?}/tty.st" 2> /dev/null)"
 		grep -q '^bench: the command stopped' "${E:?}/tty.out" || bad "stop: a command that touched the terminal was not said"
@@ -868,12 +1247,8 @@ t_lock_defer() {
 	_h=$BG
 	wait_file 5 "${E:?}/d.gc" || bad "defer: the grandchild never started"
 	kill -TERM "$_h"
-	if ! wait_gone 15 "$_h"; then
-		bad "defer: the lock shell did not exit on a TERM in the window"
-		reap "$_h"
-	fi
 	_st=0
-	collect "$_h" || _st=$?
+	if ended 15 "$_h" "defer: the lock shell did not exit on a TERM in the window"; then collect "$_h" || _st=$?; fi
 	[ "$_st" -eq 143 ] || bad "defer: wanted exit 143 on a TERM in the window, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "defer: the lock was not released"
 	if pid_running "$(cat "${E:?}/d.gc")"; then bad "defer: a TERM in the window left the command's grandchild running"; fi
@@ -1098,18 +1473,10 @@ t_lock_stall() {
 	*) bad "stall: the taker's holder file did not survive the stalled maker: $(B lock status)" ;;
 	esac
 	: > "${E:?}/release"
-	wait_gone 20 "$_mk" || {
-		bad "stall: the stalled maker did not finish"
-		reap "$_mk"
-	}
-	wait_gone 20 "$_c" || {
-		bad "stall: the taker did not finish"
-		reap "$_c"
-	}
 	_s1=0
-	collect "$_mk" || _s1=$?
+	if ended 20 "$_mk" "stall: the stalled maker did not finish"; then collect "$_mk" || _s1=$?; fi
 	_s2=0
-	collect "$_c" || _s2=$?
+	if ended 20 "$_c" "stall: the taker did not finish"; then collect "$_c" || _s2=$?; fi
 	[ "$_s1" -eq 0 ] && [ "$_s2" -eq 0 ] || bad "stall: the maker and the taker exited $_s1 and $_s2"
 	case $(tr '\n' ' ' < "${E:?}/slog") in
 	"C-start C-end N-start N-end " | "N-start N-end C-start C-end ") ;;
@@ -1187,13 +1554,12 @@ holder() {
 	HOLDER=$BG
 	wait_held 5 "$1" || bad "queue: the holder $1 never held the lock"
 }
-# finish <test> <pid> <status>: waits for <pid>, wants <status>.
+# finish <test> <pid> <status> [<seconds>]: waits for <pid> (at most
+# <seconds>, 30 by default, then reaps it), wants <status>. False, the
+# failure counted by ended, when reap did not end <pid> (FIX177).
 finish() {
-	wait_gone 30 "$2" || {
-		bad "$1: pid $2 did not finish"
-		reap "$2"
-	}
 	_st=0
+	ended "${4:-30}" "$2" "$1: pid $2 did not finish" || return 1
 	collect "$2" || _st=$?
 	[ "$_st" -eq "$3" ] || bad "$1: pid $2 exited $_st, not $3"
 }
@@ -2191,7 +2557,7 @@ t_gate() {
 	start sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
 	_st=0
 	if wait_gone 30 "$BG"; then collect "$BG" || _st=$?; else
-		reap "$BG"
+		ended 0 "$BG" || true
 		bad "gate: the gate waited past its bound of 2 s"
 	fi
 	_t=$(($(date +%s) - _t0))
@@ -2261,7 +2627,7 @@ settle_put() {
 	export BENCH_GATE_POLL
 	start env PATH="${E:?}/napbin:$PATH" sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
 	if wait_gone 40 "$BG"; then collect "$BG" || _st=$?; else
-		reap "$BG"
+		ended 0 "$BG" || true
 		_st=99
 	fi
 	_took=$(($(date +%s) - _t0))
@@ -2375,7 +2741,7 @@ t_quiet_marker() {
 		wait_file 10 "$_q" || bad "marker: not written by a lock shell for $_sig"
 		kill -s "$_sig" "$BG" 2> /dev/null || true
 		wait_gone 40 "$BG" || {
-			reap "$BG"
+			ended 0 "$BG" || true
 			bad "marker: the lock shell did not end on $_sig"
 		}
 		[ ! -e "$_q" ] || bad "marker: left after $_sig to the lock shell"
@@ -2564,7 +2930,7 @@ t_gate_poll() {
 	_t0=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 	start env BENCH_GATE_POLL=20 sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
 	if wait_gone 12 "$BG"; then collect "$BG" || true; else
-		reap "$BG"
+		ended 0 "$BG" || true
 		bad "gate poll: a poll of 20 s was not cut to the gate's wait of 4 s"
 	fi
 	_t=$(perl -MTime::HiRes=time -e 'printf "%.3f", time - $ARGV[0]' "$_t0")
@@ -2741,7 +3107,7 @@ t_digit_cap() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_cleanup_id t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
+all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*

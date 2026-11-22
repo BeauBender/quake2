@@ -26,6 +26,7 @@
 
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "test.h"
 
@@ -258,6 +259,82 @@ TEST(fs_refused_paths)
 		T_EQ_INT(FS_FOpenFile(longname, &f, false), -1);
 		T_CONSOLE_HAS("used unexpectly long name");
 	}
+}
+
+/*
+ * FS_FOpenFile never opens a path outside its search paths (FIX170): a
+ * name with a ".." component is refused as if missing, after the
+ * clean-up of "./", "//" and a leading "/". Names that only contain two
+ * dots stay valid. cl_cin.c is not linked into the suite, so the
+ * cinematic path (SCR_PlayCinematic -> "video/%s") is tested through
+ * FS_FOpenFile directly.
+ */
+TEST(fs_name_escape)
+{
+	static const char *refused[] = {
+		"../x", "a/../../x", ".//../x", "a\\..\\x", "a/..", "..",
+	};
+	static const char *valid[] = {
+		"a/b.txt", "a..b.txt", "..foo/x.txt",
+	};
+	fileHandle_t f;
+	size_t i;
+
+	FS_BuildGameSpecificSearchPath("");
+	/* data/x is one level above the data/baseq2 search directory. */
+	t_write_file("data/x", "outside", 7);
+	t_write_file("data/baseq2/x", "inside", 6);
+	t_write_file("data/baseq2/a/b.txt", "b", 1);
+	t_write_file("data/baseq2/a..b.txt", "c", 1);
+	t_write_file("data/baseq2/..foo/x.txt", "d", 1);
+
+	for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
+	{
+		f = 1;
+		T_EQ_INT(FS_FOpenFile(refused[i], &f, false), -1);
+		T_EQ_INT(f, 0);
+	}
+
+	/* 64 bytes: handle->name holds 63, so without the length check the
+	   name is truncated to the 63-byte file that exists and that one
+	   is opened instead. A 63-byte name is still fine. (Q_fopen refuses
+	   directories, so the "<60 a>/..x" shape cannot open anything
+	   either way; the length check is the defence in depth.) */
+	t_write_file("data/baseq2/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "l", 1);
+	f = 1;
+	T_EQ_INT(FS_FOpenFile("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbx", &f, false), -1);
+	T_EQ_INT(f, 0);
+	T_EQ_INT(FS_FOpenFile("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &f, false), 1);
+	FS_FCloseFile(f);
+
+	for (i = 0; i < sizeof(valid) / sizeof(valid[0]); i++)
+	{
+		T_EQ_INT(FS_FOpenFile(valid[i], &f, false), 1);
+		FS_FCloseFile(f);
+	}
+}
+
+/*
+ * The CD track is joined onto "<path>/music/" by OGG_PlayTrack with
+ * Q_fopen, past FS_FOpenFile. ogg.c is not linked into the suite, so
+ * the check is the helper FS_TrackNameValid, which ogg.c calls first.
+ */
+TEST(fs_track_name)
+{
+	static const char *refused[] = {
+		"../../x", "a/b", "a\\b", ".", "..", "", "../x", "x/..",
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
+	{
+		T_CHECK(!FS_TrackNameValid(refused[i]));
+	}
+
+	T_CHECK(!FS_TrackNameValid(NULL));
+	T_CHECK(FS_TrackNameValid("track02"));
+	T_CHECK(FS_TrackNameValid("02"));
+	T_CHECK(FS_TrackNameValid("a..b.ogg"));
 }
 
 /* Children for the malformed paks: each switches to a mod whose pak0
@@ -908,4 +985,45 @@ TEST(fs_missing_data_message)
 	snprintf(dir, sizeof(dir), "%s/msg_ok", t_tmpdir());
 	T_CHECK(!Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)));
 	T_EQ_STR(wrong, "");
+}
+
+/*
+ * condump and record build "<gamedir>/<arg>.ext" from a console
+ * argument. FS_SafeRelativeName is the gate in front of both (FIX154).
+ * The control half shows what the unchecked construction did: a ".."
+ * argument opened a file outside the game directory, since FS_CreatePath
+ * refuses ".." but Q_fopen does not.
+ */
+TEST(fs_safe_relative_name)
+{
+	char gamedir[MAX_OSPATH];
+	char path[MAX_OSPATH];
+	FILE *f;
+
+	T_CHECK(FS_SafeRelativeName("dump"));
+	T_CHECK(FS_SafeRelativeName("sub/dump"));
+	T_CHECK(FS_SafeRelativeName("my.demo"));
+	T_CHECK(!FS_SafeRelativeName(""));
+	T_CHECK(!FS_SafeRelativeName(".."));
+	T_CHECK(!FS_SafeRelativeName("../x"));
+	T_CHECK(!FS_SafeRelativeName("a/../x"));
+	T_CHECK(!FS_SafeRelativeName("a..b"));
+	T_CHECK(!FS_SafeRelativeName("/etc/x"));
+	T_CHECK(!FS_SafeRelativeName(".hidden"));
+	T_CHECK(!FS_SafeRelativeName("c:x"));
+	T_CHECK(!FS_SafeRelativeName("a\\b"));
+
+	/* Control: the unchecked construction escapes the game directory. */
+	Com_sprintf(gamedir, sizeof(gamedir), "%s/fix154/game", t_tmpdir());
+	FS_CreatePath(va("%s/x", gamedir));
+	t_write_file("fix154/game/keep", "k", 1);
+	Com_sprintf(path, sizeof(path), "%s/%s.txt", gamedir, "../escaped");
+	f = Q_fopen(path, "w");
+	T_CHECK(f != NULL);
+	if (f)
+	{
+		fclose(f);
+	}
+	Com_sprintf(path, sizeof(path), "%s/fix154/escaped.txt", t_tmpdir());
+	T_CHECK(access(path, F_OK) == 0);
 }
