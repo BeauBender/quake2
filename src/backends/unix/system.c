@@ -835,15 +835,19 @@ Sys_MissingDataMessage(const char *dir, char *out, size_t len)
    at that first call only. */
 static char home_dir_cache[MAX_OSPATH];
 
+#ifdef YQ2_UNIT_TESTS
 /*
  * Clears the cache so the next Sys_GetHomeDir builds the directory
- * again. Only tests/unit calls this: the engine never does.
+ * again. Only tests/unit calls this: the engine never does, so it is
+ * built only into the unit-test objects (the Makefile's TEST_CFLAGS
+ * define YQ2_UNIT_TESTS), never into a shipped quake2 or q2ded.
  */
 void
 Sys_ForgetHomeDir(void)
 {
 	home_dir_cache[0] = '\0';
 }
+#endif
 
 char *
 Sys_GetHomeDir()
