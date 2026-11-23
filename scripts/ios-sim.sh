@@ -1133,6 +1133,8 @@ udid=
 lpid=
 cleanup()
 {
+	# a second signal must not cut a group stop short (as pins.sh and ios-device.sh do)
+	trap '' INT TERM HUP
 	# a bounded call a signal cut short: its child's whole group, before cleanup's own bounded calls
 	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then
 		bench_stop_group "$BENCH_BOUNDED_PID" 5 "${BENCH_BOUNDED_REAPED:-}" ||

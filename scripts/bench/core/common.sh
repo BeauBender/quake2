@@ -563,13 +563,19 @@ bench_stop_group() {
 # cannot tell (bench_proc_same), it says so once and polls on, and
 # reports a stop only of the command itself. With <until>, the name of a
 # function, it calls that function at every poll while the command runs,
-# and returns 3 once it is true (FIX122). Its standard error is
+# and returns 3 once it is true (FIX122); one that names no function or
+# command is refused before the first poll: a line, and status 4 (2 is a
+# stopped command). Its standard error is
 # /dev/null (the shell's job notices), all but that line.
 bench_watch() {
 	_bw_p=$1
 	_bw_end=$2
 	_bw_cap=$3
 	_bw_until=${4:-}
+	if [ -n "$_bw_until" ] && ! command -v "$_bw_until" > /dev/null 2>&1; then
+		bench_note "bench_watch: the until test $_bw_until is not defined" 2>&8
+		return 4
+	fi
 	_bw_n=0
 	_bw_told=
 	bench_spawned "$_bw_p" || return 0
@@ -669,7 +675,8 @@ BENCH_BOUNDED_UNTIL=
 # its own status (a quit time not under the wall time is never reached);
 # BENCH_BOUNDED_UNTIL, the name of a function: once it is true at a poll,
 # the group is stopped as past the wall time, the status is 124 and
-# BENCH_BOUNDED_HOW "until".
+# BENCH_BOUNDED_HOW "until"; one that names no function is refused before
+# the command starts (status 2, as a bad wall time is).
 bench_bounded() {
 	_bb_s=$1
 	shift
@@ -678,6 +685,9 @@ bench_bounded() {
 	if [ -n "$_bb_q" ]; then
 		bench_is_uint "$_bb_q" || bench_die 2 "a quit time is whole seconds"
 		[ "$_bb_q" -lt "$_bb_s" ] || _bb_q=
+	fi
+	if [ -n "${BENCH_BOUNDED_UNTIL:-}" ] && ! command -v "$BENCH_BOUNDED_UNTIL" > /dev/null 2>&1; then
+		bench_die 2 "BENCH_BOUNDED_UNTIL names no function: $BENCH_BOUNDED_UNTIL"
 	fi
 	_bb_t0=$(date +%s)
 	_bb_end=$((_bb_t0 + _bb_s))
