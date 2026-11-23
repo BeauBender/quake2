@@ -815,26 +815,50 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 			echo "ios-sim: selftest: ok $name"
 		fi
 	}
-	# st_decoy <case dir name> (FIX171): the decoy the fake started in that case, a sleep that is not the
-	# hung call although hang.pid names it, still runs its own command, so the check of the hung call left
-	# it alone; it is then stopped, only while it still runs that command
+	# st_decoy <case dir name> [<reason>] (FIX171, FIX189): the decoy the fake started in that case, which
+	# is not the hung call although hang.pid names it, was in a group of its own when it was named, got no
+	# signal, and still runs its own command until the case releases it, so the check of the hung call
+	# left it alone. Three outcomes: it was signalled (decoy.sig names the signal), it ended before the
+	# release (its own record in decoy.end, or none), or it ran until it was released, which is the pass.
+	# With a reason (a mutant case), the check must fail with that reason
 	st_decoy()
 	{
-		local name=$1 d=$sroot/$1 dp dc pc why=
+		local name=$1 want=${2:-} d=$sroot/$1 dp dc dg pc w why=
 		ncase=$((ncase + 1))
 		dp=$(cat "${d:?}/state/decoy.pid" 2>/dev/null)
 		dc=$(cat "${d:?}/state/decoy.cmd" 2>/dev/null)
+		dg=$(cat "${d:?}/state/decoy.pgid" 2>/dev/null)
 		if [ -z "$dp" ] || [ -z "$dc" ]; then
 			why="the fake started no decoy"
 		else
-			pc=$(ps -o command= -p "$dp" 2>/dev/null)
-			if [ "$pc" = "$dc" ]; then
-				kill -TERM "$dp" 2>/dev/null # bounded-run: allowed: selftest: ends the decoy it checked
-			elif [ -z "$pc" ] && kill -0 "$dp" 2>/dev/null; then # bounded-run: allowed: selftest: a decoy ps cannot name
+			pc=$(ps -ww -o command= -p "$dp" 2>/dev/null)
+			if [ ! -s "${d:?}/state/decoy.sig" ] && [ "$pc" = "$dc" ]; then
+				: > "${d:?}/state/decoy.release"
+				w=0; while [ ! -s "${d:?}/state/decoy.end" ] && [ ! -s "${d:?}/state/decoy.sig" ] && [ "$w" -lt 300 ]; do sleep 0.1; w=$((w + 1)); done
+				if [ ! -s "${d:?}/state/decoy.sig" ] && [ "$(cat "${d:?}/state/decoy.end" 2>/dev/null)" != released ]; then
+					why="the decoy (pid $dp) did not end within 30 s of its release"
+					[ "$(ps -ww -o command= -p "$dp" 2>/dev/null)" != "$dc" ] || kill -TERM "$dp" 2>/dev/null # bounded-run: allowed: selftest: ends the decoy it checked
+				fi
+			elif [ ! -s "${d:?}/state/decoy.sig" ] && [ -z "$pc" ] && kill -0 "$dp" 2>/dev/null; then # bounded-run: allowed: selftest: a decoy ps cannot name
 				why="ps gave no command line for the decoy (pid $dp), which runs"
-			else
-				why="the decoy (pid $dp), which is not the hung call, was killed"
+			elif [ ! -s "${d:?}/state/decoy.sig" ] && [ -s "${d:?}/state/decoy.end" ]; then
+				why="the decoy (pid $dp), which is not the hung call, ended on its own before the release ($(cat "${d:?}/state/decoy.end"))"
+			elif [ ! -s "${d:?}/state/decoy.sig" ]; then
+				why="the decoy (pid $dp), which is not the hung call, ended before the release and recorded neither a signal nor an end of its own (a SIGKILL, or a crash)"
 			fi
+			# read last: a signal its trap recorded while the case waited on the release
+			if [ -s "${d:?}/state/decoy.sig" ]; then
+				why="the decoy (pid $dp), which is not the hung call, was signalled ($(cat "${d:?}/state/decoy.sig"))"
+			fi
+			if [ "$dg" != "$dp" ]; then
+				why="${why:+$why; }the decoy (pid $dp) was not in a process group of its own when the fake named it (its group: ${dg:-none read})"
+			fi
+		fi
+		if [ -n "$want" ]; then
+			case $why in
+			*"$want"*) why= ;;
+			*) why="the mutant's decoy check gave \"${why:-no failure}\", not \"$want\"" ;;
+			esac
 		fi
 		if [ -n "$why" ]; then
 			echo "ios-sim: selftest: FAIL $name decoy: $why"
