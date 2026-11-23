@@ -27,7 +27,9 @@ software renderer's SDL-free `src/client/refresh/soft/sw_view.c`; and
 `tests/unit/test_imgsize.c` includes `src/client/refresh/files/pcx.c` and
 `wal.c` whole, with a fake `ri`, and tests the pure checks in `imgsize.h`; only
 `main()` is replaced by the
-test runner. `tests/unit/test_bspgraph.c` includes the renderers' shared
+test runner. The test objects also define `YQ2_UNIT_TESTS`, which builds
+the hooks only a test calls (`Sys_ForgetHomeDir`, which clears the cached
+home directory); no shipped binary holds them. `tests/unit/test_bspgraph.c` includes the renderers' shared
 BSP loader `src/client/refresh/files/models.c` whole, and the `Makefile`
 names that file as a prerequisite of the test object, since Darwin
 builds track no include dependencies. The last line says how many tests ran and how many failed; the
