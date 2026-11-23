@@ -33,8 +33,10 @@
 #
 # What the guard matches. It reads logical lines: a shell line that ends
 # in an odd number of backslashes goes on (a whole-line comment does not),
-# and a Python line goes on while a parenthesis is open (50 lines at most).
-# Each is lowered and its " and ' deleted, so kill -s "KILL" is kill -s
+# and a Python line goes on while a parenthesis is open (50 lines at most; a
+# whole-line comment inside it does not end the join, and is read on its
+# own). A bench_* definition is matched at the start of a logical line or
+# after ; & | ( ) { or }. Each is lowered and its " and ' deleted, so kill -s "KILL" is kill -s
 # kill. A number may have leading zeros (-09, -00). A KILL is kill, pkill
 # or killall with -9, -KILL, -SIGKILL, -s KILL, -s 9, -n 9 or --signal
 # KILL (or 9), and timeout with -s KILL (or 9), any prefix of --signal
@@ -42,7 +44,8 @@
 # (--kill=1). In a .py file a KILL is also the word SIGKILL (signal.SIGKILL,
 # signal.Signals.SIGKILL, from signal import SIGKILL), .kill() (Popen),
 # Signals(9), send_signal(9), and kill or killpg (os.kill, os.killpg) with
-# 9 as the last argument. A liveness test is kill -0, kill -s 0, kill -n 0,
+# 9 as the last argument (a trailing comma allowed), through one level of
+# nested parentheses. A liveness test is kill -0, kill -s 0, kill -n 0,
 # kill -EXIT or kill -s EXIT on a shell line that is not a whole-line
 # comment. A marker followed by a quote is in a string, so it is no marker;
 # a marked line holds one kill, pkill, killall or timeout word or Python
@@ -159,9 +162,10 @@ scan_file() {
 		WORDRE = "(^|[^a-z0-9_.-])(kill|pkill|killall|timeout)([^a-z0-9_-]|$)"
 		PY1 = "(^|[^a-z0-9_])sigkill([^a-z0-9_]|$)"
 		PY2 = "\\.kill[ \t]*\\([ \t]*\\)"
-		PY3 = "signals[ \t]*\\([ \t]*0*9[ \t]*\\)"
-		PY4 = "send_signal[ \t]*\\([^)0-9]*0*9[ \t]*\\)"
-		PY5 = "(^|[^a-z0-9_])kill(pg)?[ \t]*\\(([^()]|\\([^()]*\\))*,[ \t]*0*9[ \t]*\\)"
+		PY3 = "signals[ \t]*\\([ \t]*0*9[ \t]*,?[ \t]*\\)"
+		PY4 = "send_signal[ \t]*\\([^)0-9]*0*9[ \t]*,?[ \t]*\\)"
+		PY5 = "(^|[^a-z0-9_])kill(pg)?[ \t]*\\(([^()]|\\([^()]*\\))*,[ \t]*0*9[ \t]*,?[ \t]*\\)"
+		BDEF = "(^|[;&|(){}])[ \t]*bench_[A-Za-z0-9_]*[ \t]*\\(\\)"
 		LIT = "\"\\$[A-Za-z_][A-Za-z0-9_]*/scripts/bench/core/common\\.sh\""
 		hn = 0; hi = 0; lost = 0; acc = ""; depth = 0
 		np = split(ENVIRON["PINNED"], PR, "\n")
@@ -175,6 +179,18 @@ scan_file() {
 		return n
 	}
 	function lower(s) { s = tolower(s); gsub(/["\047]/, "", s); return s }
+	# bdefs(s): 1 if s defines a bench_* function other than bench_on_signal,
+	# the hook of the primitive; every definition on the line is looked at
+	function bdefs(s,    t) {
+		while (match(s, BDEF)) {
+			t = substr(s, RSTART, RLENGTH)
+			sub(/^[^b]*/, "", t)
+			sub(/[ \t]*\(\)$/, "", t)
+			if (t != "bench_on_signal") return 1
+			s = substr(s, RSTART + RLENGTH)
+		}
+		return 0
+	}
 	# check(line, ln): the rules on one logical line, which starts at line ln
 	function check(line, ln,    lc, t, nw) {
 		mk = 0
@@ -199,7 +215,7 @@ scan_file() {
 		if (!py && line !~ /^[ \t]*#/ && lc ~ ZERORE) say("a kill -0 liveness test outside the bounded-run primitive (the shape of a polling loop)", ln)
 		if (caller && lc ~ ANYRE) say("a caller that sends a signal itself, not through the primitive", ln)
 		if (mk && !hit) printf "%s:%d: a bounded-run marker on a line no rule refuses\n", rel, ln
-		if (caller && line ~ /^[ \t]*bench_[A-Za-z0-9_]*[ \t]*\(\)/ && line !~ /^[ \t]*bench_on_signal[ \t]*\(\)/)
+		if (caller && line !~ /^[ \t]*#/ && bdefs(line))
 			printf "%s:%d: a caller that defines a bench_* function of its own\n", rel, ln
 		if (caller && line !~ /^[ \t]*#/ && line ~ /(^|[^A-Za-z0-9_])bench_bounded([ \t]|$)/) uses = 1
 	}
@@ -214,6 +230,12 @@ scan_file() {
 		bs = line
 		cont = (match(bs, /\\+$/) && RLENGTH % 2 == 1 && !(acc == "" && !py && line ~ /^[ \t]*#/))
 		if (cont) bs = substr(bs, 1, length(bs) - 1)
+		if (py && line ~ /^[ \t]*#/ && depth > 0) {
+			# a whole-line comment inside an open parenthesis does not end the
+			# join; it is read on its own and not joined
+			if (NR - an < 50) { check(line, NR); next }
+			depth = 0
+		}
 		if (py && line !~ /^[ \t]*#/) {
 			t = lower(line)
 			depth += gsub(/\(/, "", t)
@@ -708,6 +730,22 @@ timeout --kill=1 5 true
 '
 mutant timeout-sig-KILL scripts/test.sh "$K" '' '
 timeout --sig=KILL 5 true
+'
+# FIX188: a define after a continuation, a trailing comma, a comment in an open call
+mutant define-after-continuation scripts/ios-sim.sh 'defines a bench_*' '' '
+true; \
+bench_foo() { :; }
+'
+mutant bench-prefix-on-signal scripts/ios-sim.sh 'defines a bench_*' '' '
+bench_bench_on_signal() { :; }
+'
+mutant py-kill-trailing-comma scripts/metalfx-report/mfx.py "$K" '' '
+os.kill(os.getpid(), 9,)
+'
+mutant py-kill-comment-in-parens scripts/metalfx-report/mfx.py "$K" '' '
+os.kill(os.getpid(),
+    # why
+    9)
 '
 # the pinned reasons: a marker is a line whose reason the check pins, once
 mutant marker-in-zero-file scripts/pins.sh 'does not pin: borrowed' '' '
