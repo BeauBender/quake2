@@ -225,7 +225,7 @@ bench_pid_alive() {
 	case $1 in
 	'' | 0 | *[!0-9]*) return 1 ;;
 	esac
-	kill -0 "$1" 2> /dev/null
+	kill -0 "$1" 2> /dev/null # bounded-run: allowed: the primitive: bench_pid_alive
 }
 
 # bench_pid_running <pid>: alive and not a zombie (a child that exited and
@@ -333,7 +333,7 @@ bench_spawn_id() {
 		bench_nap 0.1
 	done
 	if [ -z "$BENCH_SPAWN_GROUP" ]; then
-		if kill -0 -- "-$1" 2> /dev/null; then BENCH_SPAWN_GROUP=$1; else BENCH_SPAWN_GROUP=-; fi
+		if kill -0 -- "-$1" 2> /dev/null; then BENCH_SPAWN_GROUP=$1; else BENCH_SPAWN_GROUP=-; fi # bounded-run: allowed: the primitive: the group a spawn made
 	fi
 	bench_spawn_forget "$1"
 	BENCH_SPAWNED="$BENCH_SPAWNED;$1|$BENCH_SPAWN_GROUP|$BENCH_SPAWN_START"
@@ -438,7 +438,7 @@ bench_group_alive() {
 	bench_proc_same "$1" "$BENCH_ID_START" || _ga_r=$?
 	if [ "$BENCH_ID_GROUP" = "$1" ]; then
 		[ "$_ga_r" -ne 3 ] || return 1
-		kill -0 -- "-$1" 2> /dev/null
+		kill -0 -- "-$1" 2> /dev/null # bounded-run: allowed: the primitive: a group still has a member
 		return
 	fi
 	[ "${2:-}" != group ] || return 1

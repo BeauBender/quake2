@@ -494,7 +494,7 @@ build_args() {
 # its output and errors in <log>, through the one bounded-run primitive
 # (bench_bounded, scripts/bench/core/common.sh; FIX122): in its own process
 # group, the whole group stopped past <limit> seconds (TERM, 5 s of grace,
-# then KILL), or once the function <until> (empty for none) is true. Sets
+# then SIGKILL), or once the function <until> (empty for none) is true. Sets
 # pb_status (the engine's status, or the primitive's) and pb_how
 # (BENCH_BOUNDED_HOW: exit, wall, stopped, until or untold). An INT, TERM or
 # HUP to this script while it runs stops the group first, then exits 130,

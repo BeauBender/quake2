@@ -111,7 +111,7 @@ gate_lock_shell=
 gate_watch_sh='trap "exit 0" TERM
 pp() { ps -o "$1=" -p "$2" 2> /dev/null | tr -d " "; }
 on=1
-while kill -0 "$PPID" 2> /dev/null; do
+while kill -0 "$PPID" 2> /dev/null; do # bounded-run: allowed: the gate parent watch: it polls the caller, and sends TERM only
 	sleep 0.5 2> /dev/null || sleep 1
 	o=$(pp ppid $$)
 	[ -z "$o" ] || [ "$o" = "$PPID" ] || exit 0

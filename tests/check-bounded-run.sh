@@ -7,15 +7,20 @@
 # it with TERM, a grace period and KILL. This check holds that in three
 # parts:
 #
-#   guard   every file under scripts/ is read (one it cannot read is a
-#           failure). Outside the allow-list below it refuses a KILL
-#           (kill -9, kill -KILL, kill -s KILL, SIGKILL) and a loop that
-#           polls with kill -0 and sleeps. Each caller (pins.sh, ios-sim.sh,
-#           ios-device.sh, the quake2 adapter) must run its commands through
-#           the primitive: the three scripts source it, none of the four
-#           defines a bench_* function of its own (bench_on_signal, the
-#           primitive's hook, aside), and none sends a signal itself.
-#   mutants each one literal change to a copy of scripts/ must be refused.
+#   guard   every line of every file under scripts/ is read, here-doc
+#           bodies, strings and comments included (a file it cannot read
+#           is a failure). No line may send a KILL, and no shell line may
+#           test a pid with kill -0, unless it carries the marker comment
+#           "# bounded-run: allowed: <reason>" at its end; each file may
+#           hold exactly the number of marked lines MARKED pins below, so a
+#           new one needs a visible edit to this check. Each caller
+#           (pins.sh, ios-sim.sh, ios-device.sh, the quake2 adapter) must
+#           run its commands through the primitive: the three scripts
+#           source it, none of the four defines a bench_* function of its
+#           own (bench_on_signal, the primitive's hook, aside), and none
+#           sends a signal itself (any kill, pkill or killall, unmarked).
+#   mutants each one literal change to a copy of scripts/ must be refused,
+#           in its own file and for its own rule.
 #   probe   the disposition probe: each caller runs a stand-in (a child
 #           that starts a grandchild; both live while a flag file exists, so
 #           no verdict depends on the host's speed), and the caller gets
@@ -23,13 +28,31 @@
 #           running is read once the caller has exited, then the flag is
 #           removed and the stand-ins end by themselves.
 #
-# The allow-list: the primitive's file, and the selftests that test the
-# callers from outside (their fakes and harnesses), each by its function;
-# plus two known copies, each named by its function so that nothing else in
-# its file is let through: scripts/gate-checks.sh's gate_reap, the gate's own
-# scheduler (its gate_end is card FIX186), and stop_group in
-# scripts/metalfx-report/mfx.py, a Python process-group watchdog: the shell
-# primitive cannot serve it; it is group-scoped and sends TERM first.
+# What the guard matches. Each line is lowered and its " and ' deleted, so
+# kill -s "KILL" is kill -s kill. A KILL is kill, pkill or killall with
+# -9, -KILL, -SIGKILL, -s KILL, -s 9, -n 9 or --signal KILL (or 9), and
+# timeout with -s KILL (or 9), --signal KILL, -k or --kill-after. In a .py
+# file a KILL is also the word SIGKILL (signal.SIGKILL,
+# signal.Signals.SIGKILL, from signal import SIGKILL), .kill() (Popen),
+# Signals(9), send_signal(9), and kill or killpg (os.kill, os.killpg) with
+# 9 as the last argument. A liveness test is kill -0, kill -s 0 or kill
+# -n 0 on a shell line that is not a whole-line comment.
+#
+# What it does not match, and so does not claim: a signal named through a
+# variable (kill -s "$sig", the shape of gate_end in scripts/gate-checks.sh,
+# card FIX186), a liveness test through a function (bench_pid_alive), and
+# subprocess.run(..., timeout=), whose KILL is inside Python (rtvar.py,
+# upscale-report/report.py and mfx.py use it). The probe is the
+# behavioural proof for the callers; the guard only lints their shape.
+#
+# A source of the primitive is a line . "$<var>/scripts/bench/core/common.sh",
+# or . "$<v>" where the name <v> occurs once in the whole file other than
+# as $<v> or ${<v>}, in the line <v>="$<var>/scripts/bench/core/common.sh"
+# (export, local or readonly before it allowed). A line in a here-doc body
+# is no source and no such assignment. Here-docs are tracked for this rule
+# alone: a << whose word cannot be read (an odd quote, nothing after it)
+# ends the search for a source in that file (fails closed), and a source
+# line inside a multi-line quoted string is not told from code.
 #
 # Usage: tests/check-bounded-run.sh            the three parts, on this tree
 #        tests/check-bounded-run.sh guard <root>   the guard alone on <root>
@@ -42,7 +65,19 @@ export LC_ALL
 me=check-bounded-run
 here=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
 
-ALLOW='scripts/bench/core/common.sh:* scripts/ios-sim.sh:selftest scripts/ios-device.sh:selftest scripts/gate-checks.sh:gate_reap scripts/metalfx-report/mfx.py:stop_group'
+# The marked lines each file may hold ("# bounded-run: allowed: <reason>"
+# at the end of the line), file and count; a file not listed holds none.
+# A file with more or fewer fails, and so does a marker on a line no rule
+# refuses. There is no whole-file entry.
+MARKED='
+scripts/bench/core/common.sh 3
+scripts/bench/core/lock.sh 1
+scripts/gate-checks.sh 2
+scripts/test.sh 1
+scripts/ios-sim.sh 15
+scripts/ios-device.sh 6
+scripts/metalfx-report/mfx.py 3
+'
 
 W=
 cleanup() { if [ -n "$W" ]; then chmod -R u+rwx "$W" 2> /dev/null; rm -rf "$W"; fi; }
@@ -52,82 +87,100 @@ trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 W=$(mktemp -d "${TMPDIR:-/tmp}/check-bounded-run.XXXXXX") || exit 1
 
+# pinned <rel>: the marked lines MARKED allows <rel>
+pinned() {
+	printf '%s\n' "$MARKED" | awk -v f="$1" '$1 == f { n = $2 } END { print n + 0 }'
+}
+
 # scan_file <root> <rel>: one line per finding, "<rel>:<line>: <rule>"
 scan_file() {
-	awk -v rel="$2" -v allow="$ALLOW" '
+	awk -v rel="$2" -v want="$(pinned "$2")" '
 	BEGIN {
-		n = split(allow, A, " ")
-		for (i = 1; i <= n; i++) ok[A[i]] = 1
-		region = "-"; depth = 0; pend = 0; hd = ""; py = (rel ~ /\.py$/)
+		py = (rel ~ /\.py$/)
+		caller = (rel ~ /^scripts\/((pins|ios-sim|ios-device)\.sh|bench\/adapters\/quake2\.sh)$/)
+		src = (rel ~ /^scripts\/(pins|ios-sim|ios-device)\.sh$/)
+		S = "[ \t,]"
+		K = "(sig)?kill"
+		KILLRE = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+[^;&|]*(-9|-" K "|-[sn]" S "*(" K "|9)|--signal" S "*=?" S "*(" K "|9))([^a-z0-9_]|$)"
+		TOSRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-s" S "*(" K "|9)|--signal" S "*=?" S "*(" K "|9))([^a-z0-9_]|$)"
+		TOKRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-k|--kill-after)([^a-z_-]|$)"
+		ZERORE = "(^|[^a-z0-9_.-])kill[ \t]+(-0|-[sn][ \t]*0|--signal[ \t=]*0)([^0-9]|$)"
+		ANYRE = "(^|[^a-z0-9_.-])(kill|pkill|killall)([^a-z0-9_-]|$)"
+		LIT = "\"\\$[A-Za-z_][A-Za-z0-9_]*/scripts/bench/core/common\\.sh\""
+		hn = 0; hi = 0; lost = 0; nmk = 0
 	}
-	function allowed() { return ((rel ":*") in ok) || ((rel ":" region) in ok) }
-	function say(l, what) { if (!allowed()) printf "%s:%d: %s\n", rel, l, what }
-	function named(r) { if ((rel ":" r) in ok) { defs[r]++; if (defs[r] > 1) bad[NR] = "the allowed name " r " is defined more than once" } }
+	function say(what) { hit = 1; if (!mk) printf "%s:%d: %s\n", rel, NR, what }
 	{
 		line = $0
-		inhd = (hd != "")
-		if (inhd && line ~ ("^[\t]*" hd "$")) { hd = ""; inhd = 1 }
-		closes = 0
-		# a region: a shell function or a multi-line string assignment at column 0, or a Python def
-		if (!inhd && !py && match(line, /^[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)/)) {
-			r = substr(line, 1, RLENGTH); sub(/[ \t]*\(\)$/, "", r); region = r; named(r)
-			if (line ~ /}[ \t]*$/) closes = 1
-		} else if (!inhd && !py && match(line, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
-			r = substr(line, 1, RLENGTH - 1)
-			if ((rel ":" r) in ok) bad[NR] = "the allowed name " r " is assigned at column 0"
-			if (line ~ /^[A-Za-z_][A-Za-z0-9_]*='\''/ && line !~ /^[A-Za-z_][A-Za-z0-9_]*='\''[^'\'']*'\''[ \t]*$/) { region = r; instr = 1 }
-		} else if (!inhd && py && match(line, /^def[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
-			r = substr(line, 1, RLENGTH); sub(/^def[ \t]+/, "", r); region = r; named(r)
-		} else if (!inhd && py && line ~ /^[^ \t#)\]}]/ && line !~ /^(def|@)/) region = "-"
-		code = inhd ? line : line
-		if (code ~ /^[ \t]*#/) code = ""
-		lc = tolower(code)
-		k9 = (lc ~ /(^|[^a-z0-9_.-])(kill|pkill|killall)[ \t]+[^;&|]*(-9|-(sig)?kill|-[sn][ \t]+((sig)?kill|9))([^a-z0-9_]|$)/ ||
-			lc ~ /signal\.sigkill/ || lc ~ /os\.kill(pg)?\([^)]*,[ \t]*9[ \t]*\)/)
-		k0 = (code ~ /(^|[^A-Za-z0-9_-])kill[ \t]+(-s[ \t]+)?-0([^0-9]|$)/ || code ~ /kill[ \t]+-s[ \t]+0([^0-9]|$)/)
-		sl = (code ~ /(^|[^A-Za-z0-9_-])sleep([ \t]|$)/)
-		sig = (lc ~ /(^|[^a-z0-9_.-])(kill|pkill|killall)([ \t]|$)/)
-		if (k9) say(NR, "a KILL outside the bounded-run primitive")
-		if (sig) sigs[NR] = region
-		if (!inhd && match(code, /^[A-Za-z_][A-Za-z0-9_]*="\$[A-Za-z_]+\/scripts\/bench\/core\/common\.sh"$/)) { v = code; sub(/=.*/, "", v); libvar[v] = 1 }
-		if (code ~ /^[ \t]*\.[ \t]+"?\$[A-Za-z_]+\/scripts\/bench\/core\/common\.sh"?[ \t]*$/) sourced = 1
-		if (match(code, /^[ \t]*\.[ \t]+"\$[A-Za-z_]+"[ \t]*$/)) { v = code; sub(/^[ \t]*\.[ \t]+"\$/, "", v); sub(/"[ \t]*$/, "", v); if (v in libvar) sourced = 1 }
-		if (match(code, /^[ \t]*bench_[A-Za-z0-9_]*[ \t]*\(\)/) && code !~ /^[ \t]*bench_on_signal[ \t]*\(\)/) owndef[NR] = region
-		if (code ~ /(^|[^A-Za-z0-9_])bench_bounded([ \t]|$)/) uses = 1
-		if (inhd || py) next
-		# the line with its quoted strings and comments taken out (a here-doc word is kept)
-		c = code
-		gsub(/<<-?[ \t]*'\''/, "<<", c); gsub(/<<-?[ \t]*"/, "<<", c)
-		gsub(/"[^"]*"|'\''[^'\'']*'\''/, " ", c)
-		sub(/(^|[ \t])#.*$/, "", c)
-		# loops: the outermost one gathers what its lines hold
-		d = c; gsub(/[;&|()]/, " ", d)
-		m = split(d, T, /[ \t]+/)
-		if (depth > 0 || pend) { lk0 = lk0 || k0; lsl = lsl || sl }
-		for (i = 1; i <= m; i++) {
-			t = T[i]
-			if (t == "while" || t == "until" || t == "for") {
-				if (depth == 0 && !pend) { pend = 1; lk0 = k0; lsl = sl; lstart = NR }
-			} else if (t == "do") { depth++; pend = 0 }
-			else if (t == "done" && depth > 0) {
-				depth--
-				if (depth == 0) { if (lk0 && lsl) say(lstart, "a kill -0 and sleep polling loop outside the bounded-run primitive"); lk0 = 0; lsl = 0 }
-			}
+		L[NR] = line
+		mk = (line ~ /# bounded-run: allowed: [^ \t#][^#]*$/)
+		nmk += mk
+		hit = 0
+		lc = tolower(line)
+		gsub(/["\047]/, "", lc)
+		if (lc ~ KILLRE || lc ~ TOSRE || lc ~ TOKRE) say("a KILL outside the bounded-run primitive")
+		else if (py && (lc ~ /(^|[^a-z0-9_])sigkill([^a-z0-9_]|$)/ || lc ~ /\.kill[ \t]*\([ \t]*\)/ || lc ~ /signals[ \t]*\([ \t]*9[ \t]*\)/ ||
+			lc ~ /send_signal[ \t]*\([^)0-9]*9[ \t]*\)/ || lc ~ /(^|[^a-z0-9_])kill(pg)?[ \t]*\([^)]*,[ \t]*9[ \t]*\)/))
+			say("a KILL outside the bounded-run primitive")
+		if (!py && line !~ /^[ \t]*#/ && lc ~ ZERORE) say("a kill -0 liveness test outside the bounded-run primitive (the shape of a polling loop)")
+		if (caller && lc ~ ANYRE) say("a caller that sends a signal itself, not through the primitive")
+		if (mk && !hit) printf "%s:%d: a bounded-run marker on a line no rule refuses\n", rel, NR
+		if (caller && line ~ /^[ \t]*bench_[A-Za-z0-9_]*[ \t]*\(\)/ && line !~ /^[ \t]*bench_on_signal[ \t]*\(\)/)
+			printf "%s:%d: a caller that defines a bench_* function of its own\n", rel, NR
+		if (caller && line !~ /^[ \t]*#/ && line ~ /(^|[^A-Za-z0-9_])bench_bounded([ \t]|$)/) uses = 1
+		if (!src) next
+		# the source rule: here-doc bodies tracked, for this rule alone
+		IB[NR] = 0
+		if (hn > 0) {
+			IB[NR] = 1
+			t = line
+			if (hs[hi]) sub(/^\t+/, "", t)
+			if (t == hw[hi]) { hi++; if (hi > hn) { hn = 0; hi = 0 } }
+			next
 		}
-		if (match(c, /<<-?[ \t]*[A-Za-z_][A-Za-z0-9_]*/)) { h = substr(c, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", h); hd = h; hdline = NR }
-		if (hd == "" && (closes || line ~ /^}/)) region = "-"
-		else if (instr && line ~ /'\''[ \t]*$/ && line !~ /^[A-Za-z_][A-Za-z0-9_]*='\''/) { region = "-"; instr = 0 }
+		if (!lost && line ~ ("^[ \t]*\\.[ \t]+" LIT "[ \t]*$")) sourced = 1
+		if (!lost && match(line, /^[ \t]*\.[ \t]+"\$[A-Za-z_][A-Za-z0-9_]*"[ \t]*$/)) {
+			v = line; sub(/^[ \t]*\.[ \t]+"\$/, "", v); sub(/"[ \t]*$/, "", v); via[v] = NR
+		}
+		s = line
+		while ((p = index(s, "<<")) > 0) {
+			s = substr(s, p + 2)
+			if (substr(s, 1, 1) == "<") { s = substr(s, 2); continue }
+			dash = 0
+			if (substr(s, 1, 1) == "-") { dash = 1; s = substr(s, 2) }
+			sub(/^[ \t]*/, "", s)
+			if (!match(s, /^[^ \t;&|<>()]+/)) { lost = 1; break }
+			w = substr(s, 1, RLENGTH); s = substr(s, RLENGTH + 1)
+			q1 = w; q2 = w
+			if (gsub(/\047/, "", q1) % 2 || gsub(/"/, "", q2) % 2) { lost = 1; break }
+			gsub(/["\047\\]/, "", w)
+			if (w == "") { lost = 1; break }
+			hn++; hw[hn] = w; hs[hn] = dash
+			if (hi == 0) hi = 1
+		}
 	}
 	END {
-		for (l in bad) printf "%s:%d: %s\n", rel, l, bad[l]
-		if (hd != "") printf "%s:%d: a here-doc (%s) still open at the end of the file\n", rel, hdline, hd
-		if (!py && region != "-" && ((rel ":" region) in ok)) printf "%s:0: the allowed region %s is still open at the end of the file\n", rel, region
-		if (rel ~ /^scripts\/(pins|ios-sim|ios-device)\.sh$/ && !sourced) printf "%s:0: a caller that does not source the bounded-run primitive (scripts/bench/core/common.sh)\n", rel
+		if (nmk != want) printf "%s:0: %d marked lines (# bounded-run: allowed:), and the check pins %d\n", rel, nmk, want
 		if (rel == "scripts/bench/adapters/quake2.sh" && !uses) printf "%s:0: the adapter does not run the engine through bench_bounded\n", rel
-		if (rel ~ /^scripts\/((pins|ios-sim|ios-device)\.sh|bench\/adapters\/quake2\.sh)$/) {
-			for (l in owndef) { region = owndef[l]; say(l, "a caller that defines a bench_* function of its own") }
-			for (l in sigs) { region = sigs[l]; say(l, "a caller that sends a signal itself, not through the primitive") }
+		if (!src) exit
+		for (v in via) {
+			n = 0; good = 0
+			for (i = 1; i <= NR; i++) {
+				r = L[i]; off = 0
+				while (match(r, "(^|[^A-Za-z0-9_])" v "([^A-Za-z0-9_]|$)")) {
+					b = (RSTART == 1 && substr(r, 1, length(v)) == v) ? RSTART : RSTART + 1
+					pre = substr(r, 1, b - 1); post = substr(r, b + length(v))
+					if (!(pre ~ /\$$/ || (pre ~ /\$\{$/ && post ~ /^\}/))) {
+						n++
+						if (!IB[i] && r ~ ("^[ \t]*((export|local|readonly)[ \t]+)?" v "=" LIT "[ \t]*$")) good = 1
+					}
+					r = substr(r, b + length(v))
+				}
+			}
+			if (n == 1 && good) sourced = 1
+			else printf "%s:%d: a source through $%s, a name not assigned exactly once, to the literal path of the primitive (%d uses other than $%s)\n", rel, via[v], v, n, v
 		}
+		if (!sourced) printf "%s:0: a caller that does not source the bounded-run primitive (scripts/bench/core/common.sh)\n", rel
 	}' "$1/$2"
 }
 
@@ -379,18 +432,76 @@ mutant heredoc-in-comment scripts/ios-device.sh "$K" 'selftest()
 {
 	kill -9 "$$" 2>/dev/null
 	stop_child 2'
-mutant heredoc-open-at-eof scripts/ios-device.sh 'still open at the end' '' '
-cat <<NEVER
+# round 2: the shapes that leaked past the old region tracking; no region
+# is tracked now, so each KILL after them is still refused
+mutant stub-selftest scripts/ios-sim.sh "$K" '' '
+selftest() { :; } # stub
+kill -9 "$$"
 '
-mutant allowed-name-twice scripts/ios-device.sh 'defined more than once' '' '
+mutant subshell-gate-reap scripts/gate-checks.sh "$K" '' '
+gate_reap() (
+	:
+)
+kill -KILL "$$"
+'
+mutant indented-brace scripts/ios-device.sh "$K" '' '
 selftest()
 {
-	kill -9 "$$"
-}
+	:
+	}
+kill -s KILL "$$"
 '
-mutant allowed-name-assigned scripts/ios-sim.sh 'assigned at column 0' '' "
-selftest='x'
-"
+mutant heredoc-shapes scripts/gate-checks.sh "$K" '' '
+cat <<<"x"
+cat <<\EOF
+	EOF
+echo "\"<<EOF"
+kill -9 "$$"
+EOF
+'
+mutant quoted-kill scripts/pins.sh "$K" '    pb_how=$BENCH_BOUNDED_HOW' '    pb_how=$BENCH_BOUNDED_HOW; kill -s "KILL" "$$" 2>/dev/null'
+mutant timeout-s-kill scripts/test.sh "$K" '' '
+timeout -s KILL 5 true
+'
+mutant timeout-k scripts/test.sh "$K" '' '
+timeout -k 2 5 true
+'
+mutant py-from-import scripts/metalfx-report/mfx.py "$K" 'def parse_scenario(path):
+' 'from signal import SIGKILL
+def parse_scenario(path):
+' 'def stop_group(p, wait):
+' 'def stop_group(p, wait):
+    os.killpg(p.pid, SIGKILL)
+'
+mutant py-signals-enum scripts/pins/rtvar.py "$K" '' '
+X = signal.Signals.SIGKILL
+'
+mutant py-signals-9 scripts/pins/rtvar.py "$K" '' '
+X = signal.Signals(9)
+'
+mutant py-popen-kill scripts/upscale-report/report.py "$K" '' '
+p.kill()
+'
+mutant py-killpg-9 scripts/pins/evidence.py "$K" '' '
+os.killpg(p.pid, 9)
+'
+# the pinned table: a marker is a line, and each file holds its pinned count
+mutant marker-in-zero-file scripts/pins.sh 'and the check pins 0' '' '
+kill -9 "$$" # bounded-run: allowed: borrowed
+'
+mutant marker-one-more scripts/gate-checks.sh 'and the check pins 2' '' '
+kill -0 "$$" # bounded-run: allowed: one more
+'
+mutant marker-one-less scripts/gate-checks.sh 'and the check pins 2' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' ''
+mutant marker-moved scripts/gate-checks.sh 'no rule refuses' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' '' 'gate_alive() {' 'gate_alive() { # bounded-run: allowed: moved'
+# the source rule
+mutant pins-lib-reassigned scripts/pins.sh 'not assigned exactly once' 'pins_lib_file="$root/scripts/bench/core/common.sh"' 'pins_lib_file="$root/scripts/bench/core/common.sh"
+pins_lib_file=/dev/null'
+mutant source-in-heredoc scripts/ios-sim.sh 'does not source' '. "$repo/scripts/bench/core/common.sh"
+exec 8>&-' 'cat <<EOF
+. "$repo/scripts/bench/core/common.sh"
+EOF
+exec 8>&-'
 mutant unreadable scripts/pins/scenario-cases.txt 'cannot be read'
 mutant unreadable-dir scripts 'cannot list every file'
 

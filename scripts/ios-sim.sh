@@ -48,7 +48,7 @@
 #     smoke data's console is its background alone, scripts/ios/smokepak.py);
 #   - the app ended through its own quit path (TASK147): engine.log has
 #     Com_Quit's "shutting down" line and after it the renderer's close
-#     (its metal_stats line); a kill or a crash leaves neither;
+#     (its metal_stats line); a signal or a crash leaves neither;
 #   - at most one vid_restart (each loads the renderer again, so its
 #     "refresher initialization" line is counted): a fresh window that is
 #     measured before UIKit's first layout gets its insets in one later
@@ -199,7 +199,7 @@ exec 8>&-
 
 # bounded <seconds> <log> [-e <err>] <command>...: runs it through
 # bench_bounded: past the bound its group gets TERM, 5 s of grace, then
-# KILL, and it fails with 124; its output goes to <log>, its errors there
+# SIGKILL, and it fails with 124; its output goes to <log>, its errors there
 # too or to <err>. The child's PID is BENCH_BOUNDED_PID while it runs, so
 # the trap's cleanup stops its group when a signal ends the script mid-call
 # (FIX131)
@@ -230,7 +230,7 @@ bounded()
 }
 
 # stop_spawned <pid>: ends a command bench_spawn started, with its whole
-# process group (bench_stop_group: TERM, 5 s of grace, then KILL), and
+# process group (bench_stop_group: TERM, 5 s of grace, then SIGKILL), and
 # forgets it
 stop_spawned()
 {
@@ -352,7 +352,7 @@ terminate)
 	# only the process this fake started: the PID in app.pid still runs the command recorded in app.cmd
 	# (a PID that is gone may belong to anyone by now)
 	if [ -f "$st/app.pid" ] && [ -f "$st/app.cmd" ] && [ "$(ps -o command= -p "$(cat "$st/app.pid")" 2>/dev/null)" = "$(cat "$st/app.cmd")" ]; then
-		kill "$(cat "$st/app.pid")" 2>/dev/null
+		kill "$(cat "$st/app.pid")" 2>/dev/null # bounded-run: allowed: selftest: the fake xcrun terminate, only the app it started
 	fi
 	echo "$*" >> "$st/terminates"; exit 0 ;;
 bootstatus) [ "$sc" = bootfail ] && exit 1; true ;;
@@ -612,9 +612,9 @@ EOF
 			hpid=$(cat "${d:?}/state/hang.pid")
 			hcmd=$(ps -o command= -p "$hpid" 2>/dev/null)
 			if [ "$hcmd" = "$(cat "${d:?}/state/hang.cmd")" ]; then
-				kill -9 "$hpid" 2>/dev/null
+				kill -9 "$hpid" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hung call it checked
 				why="${why:+$why; }the hung simctl call was left running"
-			elif [ -z "$hcmd" ] && kill -0 "$hpid" 2>/dev/null; then
+			elif [ -z "$hcmd" ] && kill -0 "$hpid" 2>/dev/null; then # bounded-run: allowed: selftest: a hung call ps cannot name
 				why="${why:+$why; }ps gave no command line for the pid in hang.pid ($hpid), which runs"
 			fi
 		fi
@@ -653,7 +653,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 			"$@" bash "$self" smoke --out "${d:?}/out" > "${d:?}/run.log" 2>&1 &
 		fi
 		spid=$!
-		w=0; while [ ! -s "${d:?}/state/hang.pid" ] && kill -0 "$spid" 2>/dev/null && [ "$w" -lt 300 ]; do sleep 0.1; w=$((w + 1)); done
+		w=0; while [ ! -s "${d:?}/state/hang.pid" ] && kill -0 "$spid" 2>/dev/null && [ "$w" -lt 300 ]; do sleep 0.1; w=$((w + 1)); done # bounded-run: allowed: selftest: waits for the fake hung read
 		hp=$(cat "${d:?}/state/hang.pid" 2>/dev/null)
 		[ "$sig" != INT ] || intdisp=$(cat "${d:?}/intdisp" 2>/dev/null)
 		if [ -z "$hp" ]; then
@@ -661,12 +661,12 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		elif [ "$intdisp" != default ]; then
 			:
 		else
-			kill -s "$sig" "$spid" 2>/dev/null && sent=1
-			w=0; while kill -0 "$spid" 2>/dev/null && [ "$w" -lt 200 ]; do sleep 0.1; w=$((w + 1)); done
+			kill -s "$sig" "$spid" 2>/dev/null && sent=1 # bounded-run: allowed: selftest: sends the signal under test
+			w=0; while kill -0 "$spid" 2>/dev/null && [ "$w" -lt 200 ]; do sleep 0.1; w=$((w + 1)); done # bounded-run: allowed: selftest: waits for the script under test
 		fi
-		if kill -0 "$spid" 2>/dev/null; then
+		if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal
 			[ -n "$why" ] || [ "$intdisp" != default ] || why="the script did not exit within 20 s of $sig"
-			kill -9 "$spid" 2>/dev/null
+			kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: ends the script under test that hung
 		fi
 		wait "$spid" 2>/dev/null || rc=$?
 		sleep 3
@@ -675,9 +675,9 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		if [ -n "$hp" ] && [ -s "${d:?}/state/hang.cmd" ]; then
 			hcmd=$(ps -o command= -p "$hp" 2>/dev/null)
 			if [ "$hcmd" = "$(cat "${d:?}/state/hang.cmd")" ]; then
-				kill -9 "$hp" 2>/dev/null
+				kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hung call it checked
 				[ "$intdisp" != default ] || why="${why:+$why; }the bounded launcher read (pid $hp) still ran 3 s after the script exited on $sig"
-			elif [ -z "$hcmd" ] && kill -0 "$hp" 2>/dev/null; then
+			elif [ -z "$hcmd" ] && kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: a hung call ps cannot name
 				why="${why:+$why; }ps gave no command line for the pid in hang.pid ($hp), which runs"
 			fi
 		fi
@@ -714,8 +714,8 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		else
 			pc=$(ps -o command= -p "$dp" 2>/dev/null)
 			if [ "$pc" = "$dc" ]; then
-				kill -TERM "$dp" 2>/dev/null
-			elif [ -z "$pc" ] && kill -0 "$dp" 2>/dev/null; then
+				kill -TERM "$dp" 2>/dev/null # bounded-run: allowed: selftest: ends the decoy it checked
+			elif [ -z "$pc" ] && kill -0 "$dp" 2>/dev/null; then # bounded-run: allowed: selftest: a decoy ps cannot name
 				why="ps gave no command line for the decoy (pid $dp), which runs"
 			else
 				why="the decoy (pid $dp), which is not the hung call, was killed"
@@ -878,19 +878,19 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	printf '%s\n' "$spid" > "$sroot/fake-terminate-stale/state/app.pid"
 	printf '%s\n' "sleep 31.1" > "$sroot/fake-terminate-stale/state/app.cmd"
 	FAKE_STATE="$sroot/fake-terminate-stale/state" "$sroot/bin/xcrun" simctl terminate AAAAAAAA-0000-0000-0000-000000000001 com.example
-	# a kill and its reap are asynchronous: give a wrongly sent signal up to 3 s to show before deciding
+	# a signal and its reap are asynchronous: give a wrongly sent signal up to 3 s to show before deciding
 	i=0
-	while kill -0 "$spid" 2>/dev/null && [ "$i" -lt 6 ]; do
+	while kill -0 "$spid" 2>/dev/null && [ "$i" -lt 6 ]; do # bounded-run: allowed: selftest: waits for a wrongly sent signal to show
 		sleep 0.5
 		i=$((i + 1))
 	done
-	if kill -0 "$spid" 2>/dev/null; then
+	if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the stale pid must still run
 		echo "ios-sim: selftest: ok fake-terminate-stale"
 	else
 		echo "ios-sim: selftest: FAIL fake-terminate-stale: the fake's terminate killed a PID that is not its app"
 		nfail=$((nfail + 1))
 	fi
-	kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
+	kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null # bounded-run: allowed: selftest: ends its own sleep
 	# the runtime pick: the newest runtime that lists the device type, the general one on a tie
 	st_case runtime-tie-picks-general rttie ok "iOS 27.2)" 30
 	st_case runtime-newer-bound-picks-general rtnewer ok "iOS 27.2)" 30
@@ -1807,7 +1807,7 @@ if grep -E -i 'failed assertion|MTLDebug|validation error' "$out/console.log" "$
 	bad "a Metal validation message: $(head -n 2 "${tmp:?}/val" | tr '\n' ' ')"
 fi
 # TASK147: the app ended through its own quit path (smoke.cfg's quit): Com_Quit's line, then the
-# renderer's close (its metal_stats line); a kill or a crash leaves neither
+# renderer's close (its metal_stats line); a signal or a crash leaves neither
 awk -v s="$shutdown_line" '$0 == s { q = 1; next } q && /^ref_metal: metal_stats: / { m = 1 } END { exit !(q && m) }' "$out/engine.log" \
 	|| bad "engine.log does not show the app's own quit path (\"$shutdown_line\", then the renderer's metal_stats line): it was killed or it crashed"
 # TASK147: every vid_restart loads the renderer again (VID_CheckChanges); one is allowed (the header says why)

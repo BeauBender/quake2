@@ -51,7 +51,7 @@
 # (120); security cms and codesign --verify have 60. A command past its
 # limit is killed (by its PID, which this script started) and fails. An
 # INT (Ctrl-C), QUIT (Ctrl-\) or TERM to the script ends the running
-# command the same way (TERM, then KILL after 2 s; the command ignores INT
+# command the same way (TERM, then SIGKILL after 2 s; the command ignores INT
 # and QUIT, as every command a script starts in the background does) and
 # exits 1; a HUP does too through the exit cleanup, and the script then
 # ends by the HUP (status 129).
@@ -104,7 +104,7 @@ usage()
 exec 8>&-
 
 # stop_child <grace>: ends the command bounded runs, with its whole process
-# group: TERM, then KILL when it outlives <grace> seconds (bench_stop_group).
+# group: TERM, then SIGKILL when it outlives <grace> seconds (bench_stop_group).
 # Never INT.
 stop_child()
 {
@@ -116,7 +116,7 @@ stop_child()
 
 # bounded <seconds> <log> <command>...: runs it, its output and errors to
 # <log>, through bench_bounded: past the bound its group gets TERM, 5 s of
-# grace, then KILL, and it fails with 124
+# grace, then SIGKILL, and it fails with 124
 bounded()
 {
 	local limit=$1 log=$2 status=0 given=$1
@@ -456,11 +456,11 @@ EOF
 			spid=$!
 			n=0
 			while [ ! -s "$d/state/hang.pid" ] && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
-			if [ "$sig" = INT ]; then kill -INT -- "-$spid"; else kill -"$sig" "$spid"; fi
+			if [ "$sig" = INT ]; then kill -INT -- "-$spid"; else kill -"$sig" "$spid"; fi # bounded-run: allowed: selftest: sends the signal under test
 			n=0
-			while kill -0 "$spid" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
-			if kill -0 "$spid" 2>/dev/null; then
-				kill -9 "$spid" 2>/dev/null
+			while kill -0 "$spid" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done # bounded-run: allowed: selftest: waits for the script under test
+			if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal
+				kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: ends the script under test that hung
 				wait "$spid" 2>/dev/null
 				echo hung
 				exit 0
@@ -472,9 +472,9 @@ EOF
 		hp=$(cat "${d:?}/state/hang.pid" 2>/dev/null) || hp=
 		if [ -z "$hp" ]; then
 			why="the fake never started its hanging step"
-		elif kill -0 "$hp" 2>/dev/null; then
+		elif kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: the fake hanging step outlived the script
 			why="the fake (PID $hp) still runs after the script exited"
-			kill -9 "$hp" 2>/dev/null
+			kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hanging step
 		elif [ "$rc" = hung ]; then
 			why="it outlived 10 s after the $sig"
 		elif [ "$rc" != "$want" ]; then
