@@ -434,23 +434,24 @@ mutant heredoc-in-comment scripts/ios-device.sh "$K" 'selftest()
 	stop_child 2'
 # round 2: the shapes that leaked past the old region tracking; no region
 # is tracked now, so each KILL after them is still refused
-mutant stub-selftest scripts/ios-sim.sh "$K" '' '
-selftest() { :; } # stub
+mutant stub-gate-reap scripts/gate-checks.sh "$K" 'gate_reap() {
+	while :; do' 'gate_reap() { :; } # stub
 kill -9 "$$"
-'
-mutant subshell-gate-reap scripts/gate-checks.sh "$K" '' '
-gate_reap() (
+gate_reap_body() {
+	while :; do'
+mutant subshell-gate-reap scripts/gate-checks.sh "$K" 'gate_reap() {
+	while :; do' 'gate_reap() (
 	:
 )
 kill -KILL "$$"
-'
-mutant indented-brace scripts/ios-device.sh "$K" '' '
-selftest()
-{
-	:
-	}
+gate_reap_body() {
+	while :; do'
+mutant indented-brace scripts/ios-device.sh "$K" '}
+
+if [ $# -eq 1 ] && [ "$1" = --selftest ]; then' '	}
 kill -s KILL "$$"
-'
+
+if [ $# -eq 1 ] && [ "$1" = --selftest ]; then'
 mutant heredoc-shapes scripts/gate-checks.sh "$K" '' '
 cat <<<"x"
 cat <<\EOF
