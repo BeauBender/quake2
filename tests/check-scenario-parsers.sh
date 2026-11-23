@@ -39,6 +39,9 @@ cases=$here/scripts/pins/scenario-cases.txt
 tab=$(printf '\t')
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/check-scenario-parsers.XXXXXX") || exit 1
 trap 'rm -rf "${tmp:?}"' EXIT
+# dash runs no EXIT trap on a signal: the scratch directory goes on INT and TERM too
+trap 'rm -rf "${tmp:?}"; exit 130' INT
+trap 'rm -rf "${tmp:?}"; exit 143' TERM
 for t in bash python3 awk; do
 	command -v "$t" > /dev/null 2>&1 || {
 		echo "$me: FAIL: no $t"
@@ -249,7 +252,8 @@ t_closed() {
 		'two spaces|printf "timedemo 1\\ncl_gun  0\\n"' \
 		'an empty line|printf "timedemo 1\\n\\ncl_gun 0\\n"' \
 		'a capital|printf "timedemo 1\\nCl_gun 0\\n"' \
-		'a leading space|printf " timedemo 1\\n"'; do
+		'a leading space|printf " timedemo 1\\n"' \
+		'no newline after the last line|printf "timedemo 1\\ncl_gun 0"; exit 0'; do
 		printf '#!/bin/sh\n%s\n' "${_stub#*|}" > "$tmp/t-closed/scripts/pins.sh"
 		readers "$tmp/t-closed" "$tmp/l-good" "$tmp/o-closed"
 		want "$tmp/o-closed" 1 refused "a shared reader that gives ${_stub%%|*}" adapter mfx mfxcvars

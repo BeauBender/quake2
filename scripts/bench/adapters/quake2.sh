@@ -591,26 +591,11 @@ adapter_build() {
 	fi
 }
 
-# The run's wrapper: starts the engine, sends it TERM after $1 seconds (it
-# quits at its next frame, and its teardown prints the totals), and exits
-# with its status. bench_bounded bounds the whole by the case's wall time.
-Q2_RUNNER='s=$1
-shift
-"$@" &
-p=$!
-n=0
-while kill -0 "$p" 2> /dev/null; do
-	if [ "$n" -ge "$((s * 5))" ]; then
-		echo "bench: quake2: TERM after $s s"
-		kill -TERM "$p" 2> /dev/null
-		break
-	fi
-	sleep 0.2
-	n=$((n + 1))
-done
-st=0
-wait "$p" || st=$?
-exit "$st"'
+# The run goes through bench_bounded alone (FIX122): the engine leads its
+# process group, which gets TERM after the case's seconds= (it quits at its
+# next frame, and its teardown prints the totals; BENCH_BOUNDED_QUIT, which
+# says "bench: quake2: TERM after <n> s" in the log), and the whole group is
+# stopped past the case's wall time.
 
 # q2_scenario_args <file>: appends the cvars of a pin scenario to the global
 # Q2_ARGS list file ("+set", the cvar, the value: one argument a line).
@@ -627,7 +612,11 @@ q2_scenario_args() {
 		q2_say "the scenario is refused by scripts/pins.sh scenario-args: $(sed -n '$p' "$_qa_err" 2> /dev/null)"
 		return 1
 	fi
-	while IFS= read -r _qa_l || [ -n "$_qa_l" ]; do
+	if [ -s "$_qa_out" ] && [ -n "$(tail -c 1 "$_qa_out")" ]; then
+		q2_say "scripts/pins.sh scenario-args gave a last line with no newline (cut short)"
+		return 1
+	fi
+	while IFS= read -r _qa_l; do
 		case $_qa_l in
 		*' '*' '* | ' '* | *' ') _qa_k= ;;
 		*' '*) _qa_k=${_qa_l%% *} _qa_v=${_qa_l#* } ;;
@@ -761,8 +750,11 @@ adapter_run() {
 	IFS=$_qr_IFS
 	set +f
 	_qr_st=0
-	bench_bounded "$(bench_case_wall)" sh -c "$Q2_RUNNER" quake2-run "$(q2_word seconds)" "$_qr_bin" "$@" \
-		> "${_qr_log:?}" 2>&1 || _qr_st=$?
+	BENCH_BOUNDED_QUIT=$(q2_word seconds)
+	BENCH_BOUNDED_TAG='quake2: '
+	bench_bounded "$(bench_case_wall)" "$_qr_bin" "$@" > "${_qr_log:?}" 2>&1 || _qr_st=$?
+	BENCH_BOUNDED_QUIT=
+	BENCH_BOUNDED_TAG=
 	rm -rf "${_qr_run:?}"
 	if [ -n "${BENCH_Q2_LOGS:-}" ]; then
 		_qr_keep=$(

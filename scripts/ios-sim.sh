@@ -48,7 +48,7 @@
 #     smoke data's console is its background alone, scripts/ios/smokepak.py);
 #   - the app ended through its own quit path (TASK147): engine.log has
 #     Com_Quit's "shutting down" line and after it the renderer's close
-#     (its metal_stats line); a kill or a crash leaves neither;
+#     (its metal_stats line); a signal or a crash leaves neither;
 #   - at most one vid_restart (each loads the renderer again, so its
 #     "refresher initialization" line is counted): a fresh window that is
 #     measured before UIKit's first layout gets its insets in one later
@@ -188,16 +188,24 @@ usage()
 }
 uuid_re='[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}'
 
-# bounded <seconds> <log> [-e <err>] <command>...: runs it, kills it (our
-# PID) past the bound; its output goes to <log>, its errors there too or
-# to <err>. The child's PID is in bounded_pid while it runs, so the trap's
-# cleanup stops it by that PID when a signal ends the script mid-call
-# (FIX131): an async child of a non-interactive bash has SIGINT ignored,
-# and nothing else signals it
-bounded_pid=
+# The one bounded-run primitive (FIX122): bench_bounded, bench_spawn and
+# bench_stop_group run a command in its own process group and stop that
+# whole group, by the identity recorded when it started, so a child that
+# simctl leaves behind is stopped too, and no pid this script did not start
+# is signalled.
+[ -r "$repo/scripts/bench/core/common.sh" ] || die "no bounded-run primitive at scripts/bench/core/common.sh"
+. "$repo/scripts/bench/core/common.sh"
+exec 8>&-
+
+# bounded <seconds> <log> [-e <err>] <command>...: runs it through
+# bench_bounded: past the bound its group gets TERM, 5 s of grace, then
+# SIGKILL, and it fails with 124; its output goes to <log>, its errors there
+# too or to <err>. The child's PID is BENCH_BOUNDED_PID while it runs, so
+# the trap's cleanup stops its group when a signal ends the script mid-call
+# (FIX131)
 bounded()
 {
-	local limit=$1 log=$2 err=$2 pid t=0 w status=0
+	local limit=$1 log=$2 err=$2 status=0 given=$1
 	shift 2
 	if [ "${1:-}" = -e ]; then
 		err=$2
@@ -206,46 +214,40 @@ bounded()
 	case $limit in
 	''|*[!0-9]*) echo "ios-sim: bounded: not a number of seconds: $limit" >&2; return 2 ;;
 	esac
-	if [ "$err" = "$log" ]; then
-		"$@" > "$log" 2>&1 &
-	else
-		"$@" > "$log" 2> "$err" &
-	fi
-	pid=$!
-	bounded_pid=$pid
-	while kill -0 "$pid" 2>/dev/null; do
-		if [ "$t" -ge $((limit * 5)) ]; then
-			kill "$pid" 2>/dev/null
-			w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w + 1)); done
-			kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
-			wait "$pid" 2>/dev/null
-			bounded_pid=
-			echo "ios-sim: timed out after $limit s: $*" >&2
-			return 124
-		fi
-		sleep 0.2
-		t=$((t + 1))
-	done
-	wait "$pid" || status=$?
-	bounded_pid=
+	limit=${limit#"${limit%%[!0]*}"}
+	[ -n "$limit" ] || limit=0
+	bench_is_uint "$limit" || { echo "ios-sim: bounded: not a number of seconds of at most 9 digits: $given" >&2; return 2; }
+	BENCH_STOP_GRACE=5
+	bench_bounded "$limit" bench_to "$log" "$err" "$@" || status=$?
+	case $BENCH_BOUNDED_HOW in
+	wall|untold)
+		echo "ios-sim: timed out after $limit s: $*" >&2
+		return 124
+		;;
+	stopped) echo "ios-sim: stopped by a stop signal, then ended: $*" >&2 ;;
+	esac
 	return $status
 }
 
-# stop_pid <pid>: TERM, a few seconds of grace, then KILL and reap (our
-# PID only); returns 0 if it had to be killed hard, 1 if TERM was enough
-stop_pid()
+# stop_spawned <pid>: ends a command bench_spawn started, with its whole
+# process group (bench_stop_group: TERM, 5 s of grace, then SIGKILL), and
+# forgets it
+stop_spawned()
 {
-	local w=0
-	kill "$1" 2>/dev/null
-	while kill -0 "$1" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w + 1)); done
-	if kill -0 "$1" 2>/dev/null; then
-		kill -9 "$1" 2>/dev/null
-		wait "$1" 2>/dev/null
-		return 0
-	fi
-	wait "$1" 2>/dev/null
-	return 1
+	bench_stop_group "$1" 5 || echo "ios-sim: could not tell whether pid $1 is still the command this script started; it may still run" >&2
+	bench_spawn_forget "$1"
 }
+
+# on_signal <status>: the INT, TERM and HUP trap; the EXIT trap's cleanup
+# stops what this script started
+on_signal()
+{
+	if bench_deferred "$1"; then return 0; fi
+	exit "$1"
+}
+# bench_undefer calls it with a signal that came while a command started
+# (late_signal in cleanup's late calls)
+bench_on_signal() { if [ -n "${late:-}" ]; then late_signal; else on_signal "$1"; fi; }
 
 # ---- selftest: the smoke against a fake xcrun and make -------------------
 
@@ -351,7 +353,7 @@ terminate)
 	# only the process this fake started: the PID in app.pid still runs the command recorded in app.cmd
 	# (a PID that is gone may belong to anyone by now)
 	if [ -f "$st/app.pid" ] && [ -f "$st/app.cmd" ] && [ "$(ps -o command= -p "$(cat "$st/app.pid")" 2>/dev/null)" = "$(cat "$st/app.cmd")" ]; then
-		kill "$(cat "$st/app.pid")" 2>/dev/null
+		kill "$(cat "$st/app.pid")" 2>/dev/null # bounded-run: allowed: selftest: the fake xcrun terminate, only the app it started
 	fi
 	echo "$*" >> "$st/terminates"; exit 0 ;;
 bootstatus) [ "$sc" = bootfail ] && exit 1; true ;;
@@ -404,6 +406,22 @@ launch)
 	if [ "${2:-}" != --console-pty ]; then
 		printf '%s\n' "$*" >> "$st/relaunches"
 		[ "$sc" = bgfail ] && [ "${3:-}" = com.apple.Preferences ] && exit 1
+		# bgdies: this launch of the other app ends the app (the flag file background), and returns only
+		# once its launch client has ended (gone, or a zombie not yet reaped), at most 20 s: the run's
+		# check after the return then finds it ended however slow the host is (FIX122 slice 2)
+		if [ "$sc" = bgdies ] && [ "${3:-}" = com.apple.Preferences ]; then
+			: > "$st/background"
+			w=0
+			while [ "$w" -lt 200 ]; do
+				c=$(cat "$st/client.pid" 2>/dev/null)
+				if [ -n "$c" ]; then
+					s=$(ps -o stat= -p "$c" 2>/dev/null) || break
+					case $s in Z*) break ;; esac
+				fi
+				sleep 0.1
+				w=$((w + 1))
+			done
+		fi
 		exit 0
 	fi
 	# launch --console-pty <udid> <bundle id> <args>...
@@ -448,12 +466,21 @@ launch)
 		echo "sleep 30.$$" > "$st/app.cmd"
 		exec sleep "30.$$"
 	fi
-	# a run with --background (IOS_SIM_BACKGROUND_AFTER is set) keeps the app alive through the background;
-	# bgdies is the app that ends during it
+	# bgdies: the app that ends during the background. It runs until the launch of the other app writes
+	# the flag file background (at most 30 s), not for a time of its own: a life of 1 s raced the run's
+	# 2 s background, and a slow host (the fake's own python3 above) let it outlive it (FIX122 slice 2)
+	if [ "$sc" = bgdies ]; then
+		echo $$ > "$st/client.pid"
+		echo "$4: $$"
+		echo "Metal API Validation Enabled"
+		w=0
+		while [ ! -f "$st/background" ] && [ "$w" -lt 300 ]; do sleep 0.1; w=$((w + 1)); done
+		exit 0
+	fi
+	# a run with --background (IOS_SIM_BACKGROUND_AFTER is set) keeps the app alive through the background
 	life=1
 	[ -n "${IOS_SIM_BACKGROUND_AFTER-}" ] && life=4
 	[ "$sc" = bgshot ] && life=5
-	[ "$sc" = bgdies ] && life=1
 	sleep "$life.$$" &
 	p=$!
 	echo $p > "$st/app.pid"
@@ -611,9 +638,9 @@ EOF
 			hpid=$(cat "${d:?}/state/hang.pid")
 			hcmd=$(ps -o command= -p "$hpid" 2>/dev/null)
 			if [ "$hcmd" = "$(cat "${d:?}/state/hang.cmd")" ]; then
-				kill -9 "$hpid" 2>/dev/null
+				kill -9 "$hpid" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hung call it checked
 				why="${why:+$why; }the hung simctl call was left running"
-			elif [ -z "$hcmd" ] && kill -0 "$hpid" 2>/dev/null; then
+			elif [ -z "$hcmd" ] && kill -0 "$hpid" 2>/dev/null; then # bounded-run: allowed: selftest: a hung call ps cannot name
 				why="${why:+$why; }ps gave no command line for the pid in hang.pid ($hpid), which runs"
 			fi
 		fi
@@ -652,7 +679,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 			"$@" bash "$self" smoke --out "${d:?}/out" > "${d:?}/run.log" 2>&1 &
 		fi
 		spid=$!
-		w=0; while [ ! -s "${d:?}/state/hang.pid" ] && kill -0 "$spid" 2>/dev/null && [ "$w" -lt 300 ]; do sleep 0.1; w=$((w + 1)); done
+		w=0; while [ ! -s "${d:?}/state/hang.pid" ] && kill -0 "$spid" 2>/dev/null && [ "$w" -lt 300 ]; do sleep 0.1; w=$((w + 1)); done # bounded-run: allowed: selftest: waits for the fake hung read
 		hp=$(cat "${d:?}/state/hang.pid" 2>/dev/null)
 		[ "$sig" != INT ] || intdisp=$(cat "${d:?}/intdisp" 2>/dev/null)
 		if [ -z "$hp" ]; then
@@ -660,12 +687,12 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		elif [ "$intdisp" != default ]; then
 			:
 		else
-			kill -s "$sig" "$spid" 2>/dev/null && sent=1
-			w=0; while kill -0 "$spid" 2>/dev/null && [ "$w" -lt 200 ]; do sleep 0.1; w=$((w + 1)); done
+			kill -s "$sig" "$spid" 2>/dev/null && sent=1 # bounded-run: allowed: selftest: sends the signal under test
+			w=0; while kill -0 "$spid" 2>/dev/null && [ "$w" -lt 200 ]; do sleep 0.1; w=$((w + 1)); done # bounded-run: allowed: selftest: waits for the script under test
 		fi
-		if kill -0 "$spid" 2>/dev/null; then
+		if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal
 			[ -n "$why" ] || [ "$intdisp" != default ] || why="the script did not exit within 20 s of $sig"
-			kill -9 "$spid" 2>/dev/null
+			kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: ends the script under test that hung
 		fi
 		wait "$spid" 2>/dev/null || rc=$?
 		sleep 3
@@ -674,9 +701,9 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		if [ -n "$hp" ] && [ -s "${d:?}/state/hang.cmd" ]; then
 			hcmd=$(ps -o command= -p "$hp" 2>/dev/null)
 			if [ "$hcmd" = "$(cat "${d:?}/state/hang.cmd")" ]; then
-				kill -9 "$hp" 2>/dev/null
+				kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hung launcher read it checked
 				[ "$intdisp" != default ] || why="${why:+$why; }the bounded launcher read (pid $hp) still ran 3 s after the script exited on $sig"
-			elif [ -z "$hcmd" ] && kill -0 "$hp" 2>/dev/null; then
+			elif [ -z "$hcmd" ] && kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: a hung launcher read ps cannot name
 				why="${why:+$why; }ps gave no command line for the pid in hang.pid ($hp), which runs"
 			fi
 		fi
@@ -713,8 +740,8 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		else
 			pc=$(ps -o command= -p "$dp" 2>/dev/null)
 			if [ "$pc" = "$dc" ]; then
-				kill -TERM "$dp" 2>/dev/null
-			elif [ -z "$pc" ] && kill -0 "$dp" 2>/dev/null; then
+				kill -TERM "$dp" 2>/dev/null # bounded-run: allowed: selftest: ends the decoy it checked
+			elif [ -z "$pc" ] && kill -0 "$dp" 2>/dev/null; then # bounded-run: allowed: selftest: a decoy ps cannot name
 				why="ps gave no command line for the decoy (pid $dp), which runs"
 			else
 				why="the decoy (pid $dp), which is not the hung call, was killed"
@@ -877,19 +904,19 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	printf '%s\n' "$spid" > "$sroot/fake-terminate-stale/state/app.pid"
 	printf '%s\n' "sleep 31.1" > "$sroot/fake-terminate-stale/state/app.cmd"
 	FAKE_STATE="$sroot/fake-terminate-stale/state" "$sroot/bin/xcrun" simctl terminate AAAAAAAA-0000-0000-0000-000000000001 com.example
-	# a kill and its reap are asynchronous: give a wrongly sent signal up to 3 s to show before deciding
+	# a signal and its reap are asynchronous: give a wrongly sent signal up to 3 s to show before deciding
 	i=0
-	while kill -0 "$spid" 2>/dev/null && [ "$i" -lt 6 ]; do
+	while kill -0 "$spid" 2>/dev/null && [ "$i" -lt 6 ]; do # bounded-run: allowed: selftest: waits for a wrongly sent signal to show
 		sleep 0.5
 		i=$((i + 1))
 	done
-	if kill -0 "$spid" 2>/dev/null; then
+	if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the stale pid must still run
 		echo "ios-sim: selftest: ok fake-terminate-stale"
 	else
 		echo "ios-sim: selftest: FAIL fake-terminate-stale: the fake's terminate killed a PID that is not its app"
 		nfail=$((nfail + 1))
 	fi
-	kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
+	kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null # bounded-run: allowed: selftest: ends its own sleep
 	# the runtime pick: the newest runtime that lists the device type, the general one on a tie
 	st_case runtime-tie-picks-general rttie ok "iOS 27.2)" 30
 	st_case runtime-newer-bound-picks-general rtnewer ok "iOS 27.2)" 30
@@ -1130,16 +1157,45 @@ case "$out/" in "$repo/"*) die "--out must be outside the checkout ($repo), not 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ios-sim.XXXXXX") || die "no scratch directory"
 udid=
 lpid=
+late=
+# late_signal: the INT, TERM and HUP trap while cleanup's own bounded calls
+# run (a second signal): the bounded call it cut short is stopped with its
+# whole group, the scratch directory goes, and the script ends; the device
+# is left, and said. A signal while bench_spawn starts that call is kept
+# for bench_undefer, which calls it again once the pid is stored
+late_signal()
+{
+	if bench_deferred 1; then return 0; fi
+	trap '' INT TERM HUP
+	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then
+		bench_stop_group "$BENCH_BOUNDED_PID" 5 "${BENCH_BOUNDED_REAPED:-}" ||
+			echo "ios-sim: could not tell whether pid $BENCH_BOUNDED_PID is still the command this script started; it may still run" >&2
+		BENCH_BOUNDED_PID=
+	fi
+	[ -z "$udid" ] || echo "ios-sim: a second signal in cleanup: the device $udid is left; delete it with: xcrun simctl delete $udid" >&2
+	rm -rf "${tmp:?}"
+	exit 1
+}
 cleanup()
 {
-	# a bounded call a signal cut short: its child, by its own PID, before cleanup's own bounded calls
-	if [ -n "$bounded_pid" ] && kill -0 "$bounded_pid" 2>/dev/null; then
-		stop_pid "$bounded_pid" || true
+	# a second signal must not cut a group stop short (as pins.sh and ios-device.sh do)
+	trap '' INT TERM HUP
+	# a bounded call a signal cut short: its child's whole group, before cleanup's own bounded calls
+	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then
+		bench_stop_group "$BENCH_BOUNDED_PID" 5 "${BENCH_BOUNDED_REAPED:-}" ||
+			echo "ios-sim: could not tell whether pid $BENCH_BOUNDED_PID is still the command this script started; it may still run" >&2
+		BENCH_BOUNDED_PID=
 	fi
-	bounded_pid=
-	if [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null; then
-		stop_pid "$lpid" || true
+	if [ -n "$lpid" ]; then
+		stop_spawned "$lpid"
+		lpid=
 	fi
+	# those stops are done: INT, TERM and HUP caught again (late_signal),
+	# not ignored, since a command started while they are ignored inherits
+	# that, and the bounded calls below could then never stop it with TERM
+	# (only with SIGKILL); a caught one is the default in the command
+	late=1
+	trap late_signal INT TERM HUP
 	if [ -n "$udid" ]; then
 		# a run that stopped early still says what its launcher did (its exit status is already a failure)
 		[ -z "$launcher_booted" ] || launcher_report || true
@@ -1150,7 +1206,7 @@ cleanup()
 	rm -rf "${tmp:?}"
 }
 trap cleanup EXIT
-trap 'exit 1' INT TERM HUP
+trap 'on_signal 1' INT TERM HUP
 
 # list_devices <file>: "simctl list devices -j" into <file>.json (bounded,
 # its status checked), then the default device set's devices, one
@@ -1420,15 +1476,16 @@ launch_app()
 	shift 4
 	shot_taken=0
 	log=$out/console.$n.log
-	SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@" > "$log" 2>&1 &
-	lpid=$!
+	bench_spawn bench_to "$log" "$log" env SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@" < /dev/null
+	lpid=$BENCH_SPAWN_PID
+	bench_undefer
 	# the launch client lives as long as the app (--console-pty) and
 	# its pid line may come only when the app ends: watch the client
 	apid=$lpid
 	echo "ios-sim: app $bid pid $apid"
 	t=0
 	t0=$SECONDS
-	while kill -0 "$apid" 2>/dev/null; do
+	while bench_spawn_running "$apid"; do
 		if [ -n "$bg" ] && [ "$bgdone" = 0 ] && [ "$t" -ge "$bgafter" ]; then
 			# the app goes to the background as a person's Home does: another app takes the screen
 			bounded 30 "${tmp:?}/bg.out" xcrun simctl launch "$udid" "$bg_app" || die "simctl launch of the other app ($bg_app) failed"
@@ -1438,7 +1495,7 @@ launch_app()
 			bgdone=1
 			shotbase=$t
 			# the same process must have lived through the background: a launch of a dead app starts a new one, which is a restart, not a resume
-			kill -0 "$apid" 2>/dev/null || die "the app did not survive the background (the process $apid ended; the return started it again)"
+			bench_spawn_running "$apid" || die "the app did not survive the background (the process $apid ended; the return started it again)"
 			# the system's own log of the app (a command buffer submitted in the background is reported there)
 			[ -n "$shotat" ] || shotat=0
 		fi
@@ -1464,12 +1521,9 @@ launch_app()
 	if [ -n "$shotat" ] && [ "$shot_taken" = 0 ]; then
 		echo "ios-sim: start $n: the app ended before the screenshot (due $shotat s after the start or the return): none was taken" >&2
 	fi
-	while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w + 1)); done
-	if kill -0 "$lpid" 2>/dev/null; then
+	if ! bench_await "$lpid" 10; then
 		echo "ios-sim: the launch client did not exit after the app; stopping it" >&2
-		stop_pid "$lpid" || true
-	else
-		wait "$lpid" 2>/dev/null
+		stop_spawned "$lpid"
 	fi
 	lpid=
 }
@@ -1533,8 +1587,9 @@ fi
 # The engine finds Documents/baseq2 by itself: no write-directory option.
 # r_mode 4 and vid_fullscreen 1 are what the real data's default.cfg sets: the screen is its own size whatever they say (TASK147)
 args=(+set vid_renderer metal +set logfile 2 +set metal_stats 1 +set r_mode 4 +set vid_fullscreen 1 +exec smoke.cfg)
-SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "${args[@]}" > "$out/console.log" 2>&1 &
-lpid=$!
+bench_spawn bench_to "$out/console.log" "$out/console.log" env SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "${args[@]}" < /dev/null
+lpid=$BENCH_SPAWN_PID
+bench_undefer
 # TASK147: the app stays at the console for smoke.cfg's frames, then quits by itself (the launch
 # client prints the app's pid only when it ends, so the app is watched through the launch client).
 # Once the engine's log shows the frame written, the simulator's own screenshot of it; then the app
@@ -1557,41 +1612,39 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 		framed=1
 		break
 	fi
-	kill -0 "$lpid" 2>/dev/null || break
+	bench_spawn_running "$lpid" || break
 	sleep 1
 done
 if [ -n "$framed" ]; then
 	sleep "${IOS_SIM_SETTLE_SECONDS:-3}"   # the console is drawn and presented
 	bounded 60 "${tmp:?}/appshot.out" xcrun simctl io "$udid" screenshot ${IOS_SIM_DISPLAY:+"--display=$IOS_SIM_DISPLAY"} "$out/app.png" || die "simctl io screenshot of the app failed"
 	# the app quits by itself (smoke.cfg's quit): its shutdown line, or its end
-	while kill -0 "$lpid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+	while bench_spawn_running "$lpid" && [ "$SECONDS" -lt "$deadline" ]; do
 		if engine_log_has "$shutdown_line"; then
 			quit_seen=1
 			break
 		fi
 		sleep 1
 	done
-elif kill -0 "$lpid" 2>/dev/null; then
+elif bench_spawn_running "$lpid"; then
 	bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 	die "the engine did not write its frame within $smoke_s s; terminated the app"
 fi
 # an app that has not quit by itself is terminated (this device only; engine.log then shows no quit
 # path, which fails below); the launch client ends with the app
-if [ -z "$quit_seen" ] && kill -0 "$lpid" 2>/dev/null; then
+if [ -z "$quit_seen" ] && bench_spawn_running "$lpid"; then
 	echo "ios-sim: the app did not quit by itself within $smoke_s s; terminating it" >&2
 	bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 fi
-w=0
-while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w + 1)); done
+lgone=
+if bench_await "$lpid" 10; then lgone=1; fi
 apid=$(sed -n "s/^$bid: \([0-9][0-9]*\).*/\1/p" "$out/console.log" | head -n 1)
 [ -n "$apid" ] || echo "ios-sim: no pid line from the launch client (log: $out/console.log)" >&2
 echo "ios-sim: app $bid pid ${apid:-?}"
-if kill -0 "$lpid" 2>/dev/null; then
+if [ -z "$lgone" ]; then
 	bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 	echo "ios-sim: the launch client did not exit after the app; stopping it" >&2
-	stop_pid "$lpid" || true
-else
-	wait "$lpid" 2>/dev/null
+	stop_spawned "$lpid"
 fi
 lpid=
 
@@ -1805,7 +1858,7 @@ if grep -E -i 'failed assertion|MTLDebug|validation error' "$out/console.log" "$
 	bad "a Metal validation message: $(head -n 2 "${tmp:?}/val" | tr '\n' ' ')"
 fi
 # TASK147: the app ended through its own quit path (smoke.cfg's quit): Com_Quit's line, then the
-# renderer's close (its metal_stats line); a kill or a crash leaves neither
+# renderer's close (its metal_stats line); a signal or a crash leaves neither
 awk -v s="$shutdown_line" '$0 == s { q = 1; next } q && /^ref_metal: metal_stats: / { m = 1 } END { exit !(q && m) }' "$out/engine.log" \
 	|| bad "engine.log does not show the app's own quit path (\"$shutdown_line\", then the renderer's metal_stats line): it was killed or it crashed"
 # TASK147: every vid_restart loads the renderer again (VID_CheckChanges); one is allowed (the header says why)

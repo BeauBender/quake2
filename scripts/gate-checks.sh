@@ -104,7 +104,7 @@ gate_reap() {
 			_grr=${_grp#*:}
 			_grpid=${_grr%%:*}
 			_grt0=${_grr#*:}
-			if kill -0 "$_grpid" 2> /dev/null; then
+			if kill -0 "$_grpid" 2> /dev/null; then # bounded-run: allowed: gate_reap: the gate scheduler polls its checks; it signals none
 				_grk="$_grk $_grp"
 				continue
 			fi
@@ -169,7 +169,7 @@ gate_kill() {
 # gate_alive <group>...: some process of one of those groups is still there
 gate_alive() {
 	for _gag; do
-		if kill -0 -- "-$_gag" 2> /dev/null; then return 0; fi
+		if kill -0 -- "-$_gag" 2> /dev/null; then return 0; fi # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186
 	done
 	return 1
 }
