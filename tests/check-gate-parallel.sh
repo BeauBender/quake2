@@ -1600,6 +1600,7 @@ mutant no-process-group interrupt '	set -m' '	:'
 mutant grace-3s interrupt 'gate_grace=10' 'gate_grace=3'
 mutant grace-3s-stop stop 'gate_grace=10' 'gate_grace=3'
 mutant no-stop stop '	bench_stop_groups "$gate_grace" group "$@" || :' '	:'
+mutant stderr-closed-unguarded-sched stopnoerr '{ :; } 8>&2 2> /dev/null || exec 2> /dev/null' ':'
 mutant no-parent-check kgrp 'if [ -n "$_gparent" ] && ! gate_parent "$_gparent"; then' 'if false; then'
 mutant no-end-at-exit leave '			gate_end "$_grpid"' '			:'
 intmut mutant int-passes interrupt "trap 'exit 130' INT" "trap 'exit 0' INT"
@@ -1622,6 +1623,7 @@ cmutant() {
 cmutant group-kill-dropped interrupt 'kill -s "$1" -- "-$2" 2> /dev/null' 'kill -s "$1" -- "$2" 2> /dev/null'
 cmutant no-kill-after-grace interrupt 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
 cmutant no-kill-after-grace-stop stop 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
+cmutant no-cont stop 'bench_signal_group CONT "$_sg_p" "$_sg_o" || true' ':'
 
 # mutants of scripts/test.sh: wmut <name> <case> <old> <new>
 wmut() {

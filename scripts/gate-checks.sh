@@ -48,6 +48,13 @@ me=gate
 # the seconds from SIGTERM to SIGKILL, so that a check's own cleanup trap
 # can finish on a loaded host
 gate_grace=10
+# A standard error that is closed (scripts/ci-checks.sh execs this as it was
+# started) becomes /dev/null before the primitive is sourced: its functions
+# copy it (bench_stop_groups and bench_watch to fd 8, bench_spawn to fd 9),
+# and a copy of a closed fd fails the redirection, so the function's body
+# would never run and no group would be stopped. One test covers both fds:
+# a copy fails or not by its source, never by the fd it goes to.
+{ :; } 8>&2 2> /dev/null || exec 2> /dev/null
 gate_core=$(dirname "$0")/bench/core/common.sh
 if [ ! -r "$gate_core" ]; then
 	echo "$me: cannot read the bounded-run primitive, $gate_core" >&2
@@ -127,8 +134,13 @@ gate_reap() {
 			fi
 			_grst=0
 			wait "$_grpid" || _grst=$?
-			# what it left running in its group
+			# what it left running in its group; then it leaves _grun
+			# before its record goes, so that a signal in between (while
+			# a later check's gate_end waits its grace) never makes
+			# gate_cleanup record and signal that pid anew, as whatever
+			# holds it by then
 			gate_end "$_grpid"
+			gate_drop "$_grp"
 			bench_spawn_forget "$_grpid"
 			printf '%s %s\n' "$_grst" "$(($(date +%s) - _grt0))" > "$_gd/$_grk_i.end"
 			_grd=$((_grd + 1))
@@ -141,6 +153,13 @@ gate_reap() {
 		fi
 		sleep 0.2 2> /dev/null || sleep 1
 	done
+}
+
+# gate_drop <entry>: takes that entry (<index>:<pid>:<start>, unique) out of
+# the running list _grun
+gate_drop() {
+	_gdr=" $_grun "
+	_grun="${_gdr%% "$1" *} ${_gdr#* "$1" }"
 }
 
 # gate_flush: prints, in the order given, every ended check whose
