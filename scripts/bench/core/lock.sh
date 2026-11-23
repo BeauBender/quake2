@@ -725,7 +725,7 @@ bench_lock_alive() {
 	case $_lv_c in
 	'' | 0 | 1 | *[!0-9]*) return 1 ;;
 	esac
-	kill -0 -- "-$_lv_c" 2> /dev/null
+	kill -0 -- "-$_lv_c" 2> /dev/null # bounded-run: allowed: the lock: its holder group still has a member; it signals none
 }
 
 # bench_lock_run [--quiet] <label> -- <command...>: runs the command under

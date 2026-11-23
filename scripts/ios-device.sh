@@ -51,7 +51,7 @@
 # (120); security cms and codesign --verify have 60. A command past its
 # limit is killed (by its PID, which this script started) and fails. An
 # INT (Ctrl-C), QUIT (Ctrl-\) or TERM to the script ends the running
-# command the same way (TERM, then KILL after 2 s; the command ignores INT
+# command the same way (TERM, then SIGKILL after 2 s; the command ignores INT
 # and QUIT, as every command a script starts in the background does) and
 # exits 1; a HUP does too through the exit cleanup, and the script then
 # ends by the HUP (status 129).
@@ -94,45 +94,59 @@ usage()
 	exit 2
 }
 
-# the PID of the command bounded runs, while it runs: the timeout and the
-# EXIT, INT, TERM and QUIT handling end it, so the script never leaves it running
-bpid=
+# The one bounded-run primitive (FIX122): bench_bounded and
+# bench_stop_group run a command in its own process group and stop that
+# whole group, by the identity recorded when it started. The command bounded
+# runs is BENCH_BOUNDED_PID while it runs: the timeout and the EXIT, INT,
+# TERM and QUIT handling end it, so the script never leaves it running.
+[ -r "$repo/scripts/bench/core/common.sh" ] || die "no bounded-run primitive at scripts/bench/core/common.sh"
+. "$repo/scripts/bench/core/common.sh"
+exec 8>&-
 
-# stop_child <grace>: ends bpid (our PID): TERM, then KILL when it outlives
-# <grace> seconds. Never INT: a command a shell without job control starts
-# in the background ignores it.
+# stop_child <grace>: ends the command bounded runs, with its whole process
+# group: TERM, then SIGKILL when it outlives <grace> seconds (bench_stop_group).
+# Never INT.
 stop_child()
 {
-	local w=0
-	[ -n "$bpid" ] || return 0
-	kill "$bpid" 2>/dev/null
-	while kill -0 "$bpid" 2>/dev/null && [ "$w" -lt $(($1 * 5)) ]; do sleep 0.2; w=$((w + 1)); done
-	kill -0 "$bpid" 2>/dev/null && kill -9 "$bpid" 2>/dev/null
-	wait "$bpid" 2>/dev/null
-	bpid=
+	[ -n "${BENCH_BOUNDED_PID:-}" ] || return 0
+	bench_stop_group "$BENCH_BOUNDED_PID" "$1" "${BENCH_BOUNDED_REAPED:-}" ||
+		echo "ios-device: could not tell whether the command (pid $BENCH_BOUNDED_PID) still runs; it may" >&2
+	BENCH_BOUNDED_PID=
 }
 
 # bounded <seconds> <log> <command>...: runs it, its output and errors to
-# <log>, and ends it (stop_child) past the bound
+# <log>, through bench_bounded: past the bound its group gets TERM, 5 s of
+# grace, then SIGKILL, and it fails with 124
 bounded()
 {
-	local limit=$1 log=$2 t=0 status=0
+	local limit=$1 log=$2 status=0 given=$1
 	shift 2
-	"$@" > "$log" 2>&1 &
-	bpid=$!
-	while kill -0 "$bpid" 2>/dev/null; do
-		if [ "$t" -ge $((limit * 5)) ]; then
-			stop_child 5
-			echo "ios-device: timed out after $limit s: $1 $2" >&2
-			return 124
-		fi
-		sleep 0.2
-		t=$((t + 1))
-	done
-	wait "$bpid" || status=$?
-	bpid=
+	limit=${limit#"${limit%%[!0]*}"}
+	[ -n "$limit" ] || limit=0
+	bench_is_uint "$limit" || { echo "ios-device: bounded: not a number of seconds of at most 9 digits: $given" >&2; return 2; }
+	BENCH_STOP_GRACE=5
+	bench_bounded "$limit" bench_to "$log" "$log" "$@" || status=$?
+	case $BENCH_BOUNDED_HOW in
+	wall|untold)
+		echo "ios-device: timed out after $limit s: $1 $2" >&2
+		return 124
+		;;
+	stopped) echo "ios-device: stopped by a stop signal, then ended: $1 $2" >&2 ;;
+	esac
 	return $status
 }
+
+# on_signal <status>: the INT, TERM and QUIT trap: the running command's
+# group is ended first (grace 2 s), then the script exits <status>
+on_signal()
+{
+	if bench_deferred "$1"; then return 0; fi
+	trap '' INT TERM QUIT
+	stop_child 2
+	exit "$1"
+}
+# bench_undefer calls it with a signal that came while a command started
+bench_on_signal() { on_signal "$1"; }
 
 # shown <path>: the path as messages print it: relative to the repository
 # when it is in it, its last component otherwise
@@ -324,8 +338,8 @@ EOF
 		&& : > "$sroot/signed.app/_CodeSignature/CodeResources" || die "cannot make the signed bundle"
 	mkapp "$sroot/platchars.app" "iPhone;OS" "$id"
 	# a copy of this script in a scratch repository, the signed bundle at its default path
-	mkdir -p "$sroot/repo/scripts" "$sroot/repo/build/ios-iphoneos/release" || die "cannot create the scratch repository"
-	cp "$self" "$sroot/repo/scripts/ios-device.sh" && cp -R "$sroot/signed.app" "$sroot/repo/build/ios-iphoneos/release/Quake2.app" \
+	mkdir -p "$sroot/repo/scripts/bench/core" "$sroot/repo/build/ios-iphoneos/release" || die "cannot create the scratch repository"
+	cp "$self" "$sroot/repo/scripts/ios-device.sh" && cp "$repo/scripts/bench/core/common.sh" "$sroot/repo/scripts/bench/core/common.sh" && cp -R "$sroot/signed.app" "$sroot/repo/build/ios-iphoneos/release/Quake2.app" \
 		|| die "cannot fill the scratch repository"
 	# the scratch root as the script sees it (pwd -P); no message names it
 	sroot_p=$(cd "$sroot" && pwd -P) || die "cannot resolve the scratch root"
@@ -442,11 +456,15 @@ EOF
 			spid=$!
 			n=0
 			while [ ! -s "$d/state/hang.pid" ] && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
-			if [ "$sig" = INT ]; then kill -INT -- "-$spid"; else kill -"$sig" "$spid"; fi
+			if [ "$sig" = INT ]; then
+				kill -INT -- "-$spid" # bounded-run: allowed: selftest: sends INT under test to the group of the script
+			else
+				kill -"$sig" "$spid" # bounded-run: allowed: selftest: sends the signal under test
+			fi
 			n=0
-			while kill -0 "$spid" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
-			if kill -0 "$spid" 2>/dev/null; then
-				kill -9 "$spid" 2>/dev/null
+			while kill -0 "$spid" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done # bounded-run: allowed: selftest: waits for the script under test
+			if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal
+				kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: ends the script under test that hung
 				wait "$spid" 2>/dev/null
 				echo hung
 				exit 0
@@ -458,9 +476,9 @@ EOF
 		hp=$(cat "${d:?}/state/hang.pid" 2>/dev/null) || hp=
 		if [ -z "$hp" ]; then
 			why="the fake never started its hanging step"
-		elif kill -0 "$hp" 2>/dev/null; then
+		elif kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: the fake hanging step outlived the script
 			why="the fake (PID $hp) still runs after the script exited"
-			kill -9 "$hp" 2>/dev/null
+			kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hanging step
 		elif [ "$rc" = hung ]; then
 			why="it outlived 10 s after the $sig"
 		elif [ "$rc" != "$want" ]; then
@@ -687,7 +705,7 @@ cleanup()
 	rm -rf "${tmp:?}"
 }
 trap cleanup EXIT
-trap 'stop_child 2; exit 1' INT TERM QUIT
+trap 'on_signal 1' INT TERM QUIT
 
 if [ "$mode" = sign ]; then
 	plat=$(plutil -extract CFBundleSupportedPlatforms.0 raw -o - "$app/Info.plist" 2>/dev/null) || plat=

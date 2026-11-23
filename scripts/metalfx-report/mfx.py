@@ -467,7 +467,7 @@ class CfgGuard:
     file would end holding the last run's settings. hold() moves the owner's file aside (renamed to
     config.cfg.mfx-saved beside it), clear() removes what a run left before the next run starts,
     restore() puts the owner's file back, and the generator calls it in a finally and from a
-    SIGTERM/SIGHUP handler (SIGINT unwinds as KeyboardInterrupt). A SIGKILL or a power cut cannot be
+    SIGTERM/SIGHUP handler (SIGINT unwinds as KeyboardInterrupt). A KILL signal or a power cut cannot be
     caught: it leaves the owner's file at config.cfg.mfx-saved, and the next run puts it back before
     it does anything else (or rename it by hand). That reading is only right under the run locks
     (cmd_run): with one run per binary, a .mfx-saved is always a killed run's. When a config.cfg
@@ -613,7 +613,7 @@ def stop_group(p, wait):
         except Exception:  # the wait ran out (or the pipe failed): KILL
             pass
         try:
-            os.killpg(p.pid, signal.SIGKILL)
+            os.killpg(p.pid, signal.SIGKILL) # bounded-run: allowed: stop_group, the Python group watchdog: TERM first, KILL after the wait
         except OSError:
             pass
         if not ended:
@@ -768,11 +768,11 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
             try:
                 p.wait(5)
             except subprocess.TimeoutExpired:
-                p.kill()
+                p.kill() # bounded-run: allowed: run_engine, the pty run: KILL after terminate and 5 s
                 p.wait()
     finally:
         if p is not None and p.poll() is None:  # an interrupt must not leave the engine running
-            p.kill()
+            p.kill() # bounded-run: allowed: run_engine, the pty run: an interrupt must not leave the engine running
             p.wait()
         if slave >= 0:
             os.close(slave)
@@ -839,6 +839,10 @@ def timed_run(ctx, sc_sets, sets, log, gpu):
 SCENARIO_SET_RE = re.compile(r"([a-z0-9_]+) ([^ ]+)")
 
 
+# the seconds parse_scenario gives scripts/pins.sh scenario-args, a file read (FIX122)
+SCENARIO_READ_SECONDS = 30
+
+
 def parse_scenario(path):
     """The (cvar, value) pairs of a pin scenario, in order. The file is read by `scripts/pins.sh
     scenario-args`, the one reader of the format (FIX122; no list of refused names is kept here):
@@ -847,13 +851,16 @@ def parse_scenario(path):
     reader = os.path.join(ROOT, "scripts", "pins.sh")
     try:
         p = subprocess.run(["/bin/bash", reader, "scenario-args", path], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=SCENARIO_READ_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise Refuse("the scenario %s cannot be read: scripts/pins.sh scenario-args did not answer within %d s"
+                     % (path, SCENARIO_READ_SECONDS))
     except (OSError, subprocess.SubprocessError) as e:
         raise Refuse("the scenario %s cannot be read: scripts/pins.sh scenario-args did not run (%s)" % (path, e))
     if p.returncode != 0:
-        why = p.stderr.decode("utf-8", "replace").strip().splitlines()
+        why = p.stderr.decode("utf-8", "replace").strip().split("\n")
         raise Refuse("the scenario %s is refused by scripts/pins.sh scenario-args: %s"
-                     % (path, why[-1][:300] if why else "status %d" % p.returncode))
+                     % (path, why[-1][:300] if why[-1] else "status %d" % p.returncode))
     text = p.stdout.decode("utf-8", "replace")
     if text and not text.endswith("\n"):
         raise Refuse("scripts/pins.sh scenario-args gave %s a last line with no newline (cut short)" % path)
