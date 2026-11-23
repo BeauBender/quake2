@@ -47,7 +47,14 @@
 # 9 as the last argument (a trailing comma allowed), through one level of
 # nested parentheses. A liveness test is kill -0, kill -s 0, kill -n 0,
 # kill -EXIT or kill -s EXIT on a shell line that is not a whole-line
-# comment. A marker followed by a quote is in a string, so it is no marker;
+# comment. A variable signal is kill, pkill or killall whose first argument
+# is - and a parameter (kill -"$sig", kill -$sig), or with -s, -n or
+# --signal followed by a parameter (kill -s "$sig", kill -s "${sig}"),
+# anywhere on a shell line, comments included: the guard cannot trace what
+# the variable holds, and it can hold KILL (card FIX186, #699), so every one
+# outside the primitive is refused unless marked. A group after -- (kill -s
+# TERM -- "-$pgid") is no signal; pkill's -s (a session) is refused too.
+# A marker followed by a quote is in a string, so it is no marker;
 # a marked line holds one kill, pkill, killall or timeout word or Python
 # KILL form at most.
 #
@@ -58,9 +65,8 @@
 # which line a reason is on: a KILL removed and another added elsewhere
 # with the same reason passes, and it is the reviewer who reads the diff.
 #
-# What the guard does not see, and so does not claim: a signal named
-# through a variable (kill -s "$sig", the shape of gate_end in
-# scripts/gate-checks.sh, card FIX186, #699); a liveness test through a
+# What the guard does not see, and so does not claim: a variable signal
+# to timeout (timeout -s "$sig"); a liveness test through a
 # function (bench_pid_alive); subprocess.run(..., timeout=), whose KILL is
 # inside Python (rtvar.py, upscale-report/report.py and mfx.py use it);
 # other languages (Perl, Ruby); Python inside a shell -c string; eval'd or
@@ -99,6 +105,8 @@ MARKED='
 scripts/bench/core/common.sh the primitive: bench_pid_alive
 scripts/bench/core/common.sh the primitive: the group a spawn made
 scripts/bench/core/common.sh the primitive: a group still has a member
+scripts/bench/core/common.sh the primitive: bench_signal_group, to the group
+scripts/bench/core/common.sh the primitive: bench_signal_group, to the pid
 scripts/bench/core/lock.sh the lock: its holder group still has a member; it signals none
 scripts/gate-checks.sh gate_reap: the gate scheduler polls its checks; it signals none
 scripts/gate-checks.sh gate_alive: the group test of gate_end, card FIX186
@@ -158,6 +166,10 @@ scan_file() {
 		TOSRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-s" S "*(" K "|" N9 ")|--s(i(g(n(a(l)?)?)?)?)?" S "*=?" S "*(" K "|" N9 "))([^a-z0-9_]|$)"
 		TOKRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-k|--k(i(l(l(-(a(f(t(e(r)?)?)?)?)?)?)?)?)?)([^a-z_-]|$)"
 		ZERORE = "(^|[^a-z0-9_.-])kill[ \t]+(-0+|-[sn][ \t]*0+|--signal[ \t=]*0+|-(sig)?exit|-s[ \t]*(sig)?exit)([^a-z0-9_]|$)"
+		# a signal through a variable: the first argument -$v, or -s, -n or
+		# --signal and $v anywhere on the line (after -- it is a group, not this)
+		VARSIG1 = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+-\\$"
+		VARSIG2 = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+([^;&|]*" S ")?(-[sn]" S "*|--signal" S "*=?" S "*)\\$"
 		ANYRE = "(^|[^a-z0-9_.-])(kill|pkill|killall)([^a-z0-9_-]|$)"
 		WORDRE = "(^|[^a-z0-9_.-])(kill|pkill|killall|timeout)([^a-z0-9_-]|$)"
 		PY1 = "(^|[^a-z0-9_])sigkill([^a-z0-9_]|$)"
@@ -212,6 +224,7 @@ scan_file() {
 		if (lc ~ KILLRE || lc ~ TOSRE || lc ~ TOKRE) say("a KILL outside the bounded-run primitive", ln)
 		else if (py && (lc ~ PY1 || lc ~ PY2 || lc ~ PY3 || lc ~ PY4 || lc ~ PY5))
 			say("a KILL outside the bounded-run primitive", ln)
+		if (!py && (lc ~ VARSIG1 || lc ~ VARSIG2)) say("a signal named through a variable outside the bounded-run primitive (it can hold KILL)", ln)
 		if (!py && line !~ /^[ \t]*#/ && lc ~ ZERORE) say("a kill -0 liveness test outside the bounded-run primitive (the shape of a polling loop)", ln)
 		if (caller && lc ~ ANYRE) say("a caller that sends a signal itself, not through the primitive", ln)
 		if (mk && !hit) printf "%s:%d: a bounded-run marker on a line no rule refuses\n", rel, ln
@@ -746,6 +759,23 @@ mutant py-kill-comment-in-parens scripts/metalfx-report/mfx.py "$K" '' '
 os.kill(os.getpid(),
     # why
     9)
+'
+# FIX186: a TERM-then-KILL through a variable signal, in each spelling
+V='a signal named through a variable'
+mutant varsig-s-quoted scripts/gate-checks.sh "$V" '' '
+for sig in TERM KILL; do kill -s "$sig" -- "-$g"; sleep 1; done
+'
+mutant varsig-s-braced scripts/gate-checks.sh "$V" '' '
+for sig in TERM KILL; do kill -s "${sig}" "$p"; sleep 1; done
+'
+mutant varsig-dash-quoted scripts/gate-checks.sh "$V" '' '
+for sig in TERM KILL; do kill -"$sig" "$p"; sleep 1; done
+'
+mutant varsig-dash-bare scripts/gate-checks.sh "$V" '' '
+for sig in TERM KILL; do kill -$sig "$p"; sleep 1; done
+'
+mutant varsig-signal-long scripts/test.sh "$V" '' '
+kill --signal="$sig" "$p"
 '
 # the pinned reasons: a marker is a line whose reason the check pins, once
 mutant marker-in-zero-file scripts/pins.sh 'does not pin: borrowed' '' '

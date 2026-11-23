@@ -473,13 +473,13 @@ bench_signal_group() {
 	bench_proc_same "$2" "$BENCH_ID_START" || _sg2_r=$?
 	if [ "$BENCH_ID_GROUP" = "$2" ]; then
 		[ "$_sg2_r" -ne 3 ] || return 1
-		kill -s "$1" -- "-$2" 2> /dev/null || return 1
+		kill -s "$1" -- "-$2" 2> /dev/null || return 1 # bounded-run: allowed: the primitive: bench_signal_group, to the group
 		return 0
 	fi
 	[ "${3:-}" != group ] || return 1
 	case $_sg2_r in
 	0)
-		kill -s "$1" "$2" 2> /dev/null || return 1
+		kill -s "$1" "$2" 2> /dev/null || return 1 # bounded-run: allowed: the primitive: bench_signal_group, to the pid
 		return 0
 		;;
 	2) return 2 ;;
