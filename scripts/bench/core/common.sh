@@ -676,7 +676,9 @@ BENCH_BOUNDED_UNTIL=
 # BENCH_BOUNDED_UNTIL, the name of a function: once it is true at a poll,
 # the group is stopped as past the wall time, the status is 124 and
 # BENCH_BOUNDED_HOW "until"; one that names no function is refused before
-# the command starts (status 2, as a bad wall time is).
+# the command starts (status 2, as a bad wall time is), and one that is no
+# longer defined at a later poll (bench_watch status 4) is refused too: the
+# group is stopped, then the same status 2 and a line, never "wall".
 bench_bounded() {
 	_bb_s=$1
 	shift
@@ -732,6 +734,10 @@ bench_bounded() {
 				bench_note "a command outlived its wall time of $_bb_s s, and it could not be stopped: it may still run"
 			fi
 			return 125
+		fi
+		if [ "$_bb_w" -eq 4 ]; then
+			BENCH_BOUNDED_HOW=
+			bench_die 2 "BENCH_BOUNDED_UNTIL names no function at a poll: ${BENCH_BOUNDED_UNTIL:-}; stopped the command"
 		fi
 		if [ "$_bb_w" -eq 2 ]; then
 			BENCH_BOUNDED_HOW=stopped

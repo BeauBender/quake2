@@ -516,6 +516,18 @@ else
 	echo "$me: FAIL: until: an undefined test must be refused; got $ust: $u / $w"
 	fails="$fails until"
 fi
+# an until test gone by a later poll (bench_watch status 4: the test unsets
+# itself, the quit time starts a second watch) is refused, never "wall"
+g=$(sh -c '. "$1/scripts/bench/core/common.sh"; gone() { unset -f gone; return 1; }; BENCH_STOP_GRACE=1; BENCH_BOUNDED_QUIT=1; BENCH_BOUNDED_UNTIL=gone
+st=0; bench_bounded 30 sleep 30 || st=$?; echo "status $st how $BENCH_BOUNDED_HOW"' sh "$here" 2>&1)
+gst=$?
+if [ "$gst" -eq 2 ] && printf '%s\n' "$g" | grep -F 'BENCH_BOUNDED_UNTIL names no function at a poll: gone; stopped the command' > /dev/null &&
+	! printf '%s\n' "$g" | grep -F -e 'how wall' -e 'outlived its wall time' > /dev/null; then
+	echo "$me: ok   until: a test gone at a later poll is refused (status 2), not taken as the wall time"
+else
+	echo "$me: FAIL: until: a test gone at a later poll must be refused with status 2; got $gst: $(printf '%s\n' "$g" | tr '\n' ' ')"
+	fails="$fails until-gone"
+fi
 
 # 3. the probe: TERM and INT stop the child and the grandchild; the wall
 # time does too; nothing can run after a KILL of the caller, so both stay
