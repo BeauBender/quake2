@@ -50,12 +50,18 @@
 # nested parentheses. A liveness test is kill -0, kill -s 0, kill -n 0,
 # kill -EXIT or kill -s EXIT on a shell line that is not a whole-line
 # comment. A variable signal is kill, pkill or killall whose first argument
-# is - and a parameter (kill -"$sig", kill -$sig), or with -s, -n or
-# --signal followed by a parameter (kill -s "$sig", kill -s "${sig}"),
-# anywhere on a shell line, comments included: the guard cannot trace what
-# the variable holds, and it can hold KILL (card FIX186, #699), so every one
-# outside the primitive is refused unless marked. A group after -- (kill -s
-# TERM -- "-$pgid") is no signal; pkill's -s (a session) is refused too.
+# is a parameter or a command substitution ($ or a backtick), alone or
+# after - or -SIG (kill -"$sig", kill -$sig, kill -SIG"$sig", kill
+# -`cmd`, kill $flag "$p", kill "$@", and so kill "$pid" too), or with -s,
+# -n or --signal followed by one, a SIG prefix allowed (kill -s "$sig",
+# kill -s "${sig}", kill -s SIG"$sig", kill -s `cmd`), anywhere on a shell
+# line, comments included: the guard cannot trace what the variable holds,
+# and it can hold KILL (card FIX186, #699), so every one outside the
+# primitive is refused unless marked. The word is matched wherever it
+# stands, so a KILL passed to a function (bench_signal_group KILL "$p") is
+# refused too, and the primitive's one such line is marked. A group after --
+# (kill -s TERM -- "-$pgid") is no signal; pkill's -s (a session) is
+# refused too.
 # A marker followed by a quote is in a string, so it is no marker;
 # a marked line holds one kill, pkill, killall or timeout word or Python
 # KILL form at most.
@@ -109,6 +115,7 @@ scripts/bench/core/common.sh the primitive: the group a spawn made
 scripts/bench/core/common.sh the primitive: a group still has a member
 scripts/bench/core/common.sh the primitive: bench_signal_group, to the group
 scripts/bench/core/common.sh the primitive: bench_signal_group, to the pid
+scripts/bench/core/common.sh the primitive: bench_stop_groups, the KILL after the grace
 scripts/bench/core/lock.sh the lock: its holder group still has a member; it signals none
 scripts/test.sh the gate parent watch: it polls the caller, and sends TERM only
 scripts/ios-sim.sh selftest: the fake xcrun terminate, only the app it started
@@ -166,10 +173,12 @@ scan_file() {
 		TOSRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-s" S "*(" K "|" N9 ")|--s(i(g(n(a(l)?)?)?)?)?" S "*=?" S "*(" K "|" N9 "))([^a-z0-9_]|$)"
 		TOKRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-k|--k(i(l(l(-(a(f(t(e(r)?)?)?)?)?)?)?)?)?)([^a-z_-]|$)"
 		ZERORE = "(^|[^a-z0-9_.-])kill[ \t]+(-0+|-[sn][ \t]*0+|--signal[ \t=]*0+|-(sig)?exit|-s[ \t]*(sig)?exit)([^a-z0-9_]|$)"
-		# a signal through a variable: the first argument -$v, or -s, -n or
-		# --signal and $v anywhere on the line (after -- it is a group, not this)
-		VARSIG1 = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+-\\$"
-		VARSIG2 = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+([^;&|]*" S ")?(-[sn]" S "*|--signal" S "*=?" S "*)\\$"
+		# a signal through a variable or a command substitution ($ or a
+		# backtick, a SIG prefix allowed): the first argument -$v, -sig$v
+		# or $v itself, or -s, -n or --signal and $v anywhere on the line
+		# (after -- it is a group, not this)
+		VARSIG1 = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+(-(sig)?)?[$`]"
+		VARSIG2 = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+([^;&|]*" S ")?(-[sn]" S "*|--signal" S "*=?" S "*)(sig)?[$`]"
 		ANYRE = "(^|[^a-z0-9_.-])(kill|pkill|killall)([^a-z0-9_-]|$)"
 		WORDRE = "(^|[^a-z0-9_.-])(kill|pkill|killall|timeout)([^a-z0-9_-]|$)"
 		PY1 = "(^|[^a-z0-9_])sigkill([^a-z0-9_]|$)"
@@ -776,6 +785,28 @@ for sig in TERM KILL; do kill -$sig "$p"; sleep 1; done
 '
 mutant varsig-signal-long scripts/test.sh "$V" '' '
 kill --signal="$sig" "$p"
+'
+# (the SIG prefix, a backtick, and a first argument that is the variable)
+mutant varsig-sig-quoted scripts/gate-checks.sh "$V" '' '
+kill -SIG"$sig" "$p"
+'
+mutant varsig-sig-bare scripts/gate-checks.sh "$V" '' '
+kill -SIG$sig "$p"
+'
+mutant varsig-s-sig-quoted scripts/bench/core/lock.sh "$V" '' '
+kill -s SIG"$sig" "$p"
+'
+mutant varsig-backtick scripts/gate-checks.sh "$V" '' '
+kill -`printf KILL` "$p"
+'
+mutant varsig-s-backtick scripts/test.sh "$V" '' '
+kill -s `printf KILL` "$p"
+'
+mutant varsig-first-flag scripts/gate-checks.sh "$V" '' '
+kill $flag "$p"
+'
+mutant varsig-first-all scripts/bench/core/lock.sh "$V" '' '
+kill "$@"
 '
 # the pinned reasons: a marker is a line whose reason the check pins, once
 mutant marker-in-zero-file scripts/pins.sh 'does not pin: borrowed' '' '

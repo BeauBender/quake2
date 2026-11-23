@@ -556,7 +556,7 @@ bench_stop_groups() {
 	for _sg_p in $_sg_l; do
 		if bench_group_alive "$_sg_p" "$_sg_o"; then
 			_sg_r=0
-			bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?
+			bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$? # bounded-run: allowed: the primitive: bench_stop_groups, the KILL after the grace
 			if [ "$_sg_r" -eq 2 ]; then
 				bench_untold "$_sg_p" 2>&8
 				_sg_rv=2
