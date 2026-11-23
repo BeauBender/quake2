@@ -848,6 +848,10 @@ ttree() {
 		{ par[$1] = $2; st[$1] = $3 }
 		END { for (q in par) { x = q; while (x != "" && x != 0 && x != p) x = (x in par) ? par[x] : 0; if (x == p) print q, st[q] } }'
 }
+# tkids <pid>: the pids whose parent is <pid>, from one ps snapshot
+tkids() {
+	ps -ax -o pid= -o ppid= | awk -v p="$1" '$2 == p { print $1 }'
+}
 # tstopped <dir>: a process of the run, the test.sh whose pid is in
 # <dir>/shpid or one that descends from it, is stopped (T)
 tstopped() {
@@ -1088,26 +1092,70 @@ c_watchfork() {
 # (not decoded). tsort, on that shell, a running sleep and a pid that is
 # gone: the shell alone on the stop list, the sleep alone on the others',
 # the gone pid on no list. tcut keeps whole entries, as many as fit.
+# The STOP is sent only once the shell has started its sleep (a child of its
+# pid is there): a STOP sent while a just-forked child is still in its exec
+# can be lost, and the shell then runs on, never stopped (FIX187). Both
+# waits are on state, with a ceiling of 30 s that only a hang reaches; a
+# shell that never shows T fails the case with that reason, before any
+# line is read about it. The sleeps (120 s) outlast both ceilings, so the
+# shell and the sleep are still there to be read, and killed, at the end.
 c_tdesc() {
 	d=$(newcase)
-	/bin/sh -c 'sleep 30; :' sh 'a\cb' 'p\nq' "$(printf 'x\ny')" &
+	/bin/sh -c 'sleep 120; :' sh 'a\cb' 'p\nq' "$(printf 'x\ny')" &
 	_dp=$!
-	sleep 30 &
+	sleep 120 &
 	_dl=$!
 	sh -c 'exit 0' &
 	_dg=$!
 	wait "$_dg" || :
-	kill -s STOP "$_dp"
+	_dw=
 	_dn=0
-	while :; do
-		case $(ps -o stat= -p "$_dp" 2> /dev/null || :) in *T*) break ;; esac
-		[ "$_dn" -lt 25 ] || break
+	until [ -n "$(tkids "$_dp")" ]; do
+		if [ "$_dn" -ge 150 ]; then
+			_dw="the shell never started its sleep (stat=$(ps -o stat= -p "$_dp" 2> /dev/null | tr -d ' ' || :))"
+			break
+		fi
 		sleep 0.2
 		_dn=$((_dn + 1))
 	done
+	if [ -z "$_dw" ]; then
+		kill -s STOP "$_dp"
+		_dn=0
+		while :; do
+			_dst=$(ps -o stat= -p "$_dp" 2> /dev/null | tr -d ' ' || :)
+			case $_dst in *T*) break ;; esac
+			if [ "$_dn" -ge 150 ]; then
+				_dw="the shell never showed state T (stat=$_dst)"
+				break
+			fi
+			sleep 0.2
+			_dn=$((_dn + 1))
+		done
+	fi
+	[ -n "$_dw" ] || tdesc_lines
+	_dws=
+	_dn=1
+	while [ "$_dn" -le 60 ]; do
+		_dws="$_dws $((10000 + _dn))=S"
+		_dn=$((_dn + 1))
+	done
+	_dc=$(tcut 200 $_dws)
+	[ "${#_dc}" -le 200 ] && [ "${#_dc}" -gt 192 ] || _dw=${_dw:-"tcut 200 gave ${#_dc} characters"}
+	printf '%s\n' "$_dc" | grep -Eqx '( [0-9]+=S)+' || _dw=${_dw:-"tcut 200 did not keep whole entries: $_dc"}
+	# what was started here: the sleep the stopped shell runs (by its
+	# parent's pid), the shell, the other sleep
+	for _dk in $(tkids "$_dp") "$_dp" "$_dl"; do
+		kill -s KILL "$_dk" 2> /dev/null || :
+	done
+	wait "$_dp" 2> /dev/null || :
+	wait "$_dl" 2> /dev/null || :
+	[ -z "$_dw" ] || { say "tdesc: $_dw"; return 1; }
+}
+# tdesc_lines: c_tdesc's assertions on the stopped shell _dp (with the
+# running sleep _dl and the gone pid _dg); the first that fails sets _dw
+tdesc_lines() {
 	(HOME=$d/nohome; export HOME; quiet=0; say "tty: stopped: $(tdesc "$_dp")") > "$d/line"
 	_dr=$(HOME=$d/nohome; export HOME; tsort "$_dg" "$_dl" "$_dp"; printf '%s|%s|%s|%s\n' "$_tstop" "$_toth" "$_tstate" "$_tdesc")
-	_dw=
 	_dln=$(cat "$d/line")
 	if [ "$(wc -l < "$d/line" | tr -d ' ')" != 1 ]; then
 		_dw="the stop line is not one line: $_dln"
@@ -1118,7 +1166,7 @@ c_tdesc() {
 		esac
 	fi
 	case $_dln in
-	*"[pid=$_dp stat=T"*" pgid="[0-9]*" comm=/bin/sh args=/bin/sh -c sleep 30; : sh a"*) ;;
+	*"[pid=$_dp stat=T"*" pgid="[0-9]*" comm=/bin/sh args=/bin/sh -c sleep 120; : sh a"*) ;;
 	*) _dw=${_dw:-"the stop line does not name the stopped shell: $_dln"} ;;
 	esac
 	grep -qF ' sh a\cb p\nq ' "$d/line" || _dw=${_dw:-"the args are not printed as ps writes them: $_dln"}
@@ -1132,23 +1180,6 @@ c_tdesc() {
 	case "$_dr|" in
 	*" $_dg="*) _dw=${_dw:-"a pid that is gone is on a list: $_dr"} ;;
 	esac
-	_dws=
-	_dn=1
-	while [ "$_dn" -le 60 ]; do
-		_dws="$_dws $((10000 + _dn))=S"
-		_dn=$((_dn + 1))
-	done
-	_dc=$(tcut 200 $_dws)
-	[ "${#_dc}" -le 200 ] && [ "${#_dc}" -gt 192 ] || _dw=${_dw:-"tcut 200 gave ${#_dc} characters"}
-	printf '%s\n' "$_dc" | grep -Eqx '( [0-9]+=S)+' || _dw=${_dw:-"tcut 200 did not keep whole entries: $_dc"}
-	# what was started here: the sleep the stopped shell runs (by its
-	# parent's pid), the shell, the other sleep
-	for _dk in $(ps -ax -o pid= -o ppid= | awk -v p="$_dp" '$2 == p { print $1 }') "$_dp" "$_dl"; do
-		kill -s KILL "$_dk" 2> /dev/null || :
-	done
-	wait "$_dp" 2> /dev/null || :
-	wait "$_dl" 2> /dev/null || :
-	[ -z "$_dw" ] || { say "tdesc: $_dw"; return 1; }
 }
 
 # scrub: tscrub on fixed text, for each kind of HOME: the home path becomes ~
@@ -1267,13 +1298,20 @@ c_intskip() {
 
 # ttyself [<cases>]: those cases (tdesc scrub ttymsg ttylate by default),
 # run alone by this self-test (or $SELF) in a process of its own, so a
-# mutant of this self-test's tty lines (smut) is run and caught
+# mutant of this self-test's tty lines (smut) is run and caught. With
+# <want> (a mutant's own reason), a run that fails without <want> in its
+# output passes this case, so that mutant counts as not caught: it is caught
+# by that reason alone, never by any failure
 c_ttyself() {
 	_xf=${SELF:-$top/tests/check-gate-parallel.sh}
 	_xo=${1:-tdesc scrub ttymsg ttylate}
 	d=$(newcase)
 	rc=0
 	bounded 240 "$d/out" env GP_ONLY="$_xo" TMPDIR="$d/td" sh "$_xf" || rc=$?
+	if [ "$rc" -ne 0 ] && [ -n "${2:-}" ] && ! grep -qF -- "$2" "$d/out"; then
+		say "ttyself: $_xo failed (status $rc), but not with: $2"
+		return 0
+	fi
 	[ "$rc" -eq 0 ] || { say "ttyself: $_xo run alone gave status $rc:"; [ "$quiet" = 1 ] || sed 's/^/  | /' "$d/out"; return 1; }
 	for _xc in $_xo; do
 		grep -qx "  ok   $_xc" "$d/out" || { say "ttyself: $_xc did not pass"; return 1; }
@@ -1404,7 +1442,9 @@ wmut no-parent-pid kgrp 'GATE_PARENT=$$ scripts/gate-checks.sh' 'scripts/gate-ch
 
 # mutants of this self-test, run from a copy of the scripts it tests:
 # smut <name> <case> <old> <new> [<arg>] (its own smut lines are left as
-# they are); <arg>, when given, is passed to the case
+# they are); <arg>, when given, is passed to the case, and so is <want>
+# (smut <name> <case> <old> <new> <arg> <want>: for ttyself, the reason the
+# mutant must fail with)
 smut() {
 	_sm=$tmp/self-$1
 	mkdir "${_sm:?}" "${_sm:?}/tests" "${_sm:?}/scripts"
@@ -1412,7 +1452,7 @@ smut() {
 	lit "$top/tests/check-gate-parallel.sh" "$3" "$4" "smut " > "$_sm/tests/check-gate-parallel.sh" ||
 		{ bad "mutant $1 does not apply to this self-test"; return 0; }
 	quiet=1 SELF=$_sm/tests/check-gate-parallel.sh
-	if "c_$2" ${5:+"$5"}; then bad "mutant $1 was not caught by case $2${5:+ ($5)}"; else mutants=$((mutants + 1)); fi
+	if "c_$2" ${5:+"$5"} ${6:+"$6"}; then bad "mutant $1 was not caught by case $2${5:+ ($5)}"; else mutants=$((mutants + 1)); fi
 	quiet=0 SELF=
 }
 smut no-int-probe intskip "sh -c 'kill -INT \$\$; exit 0' 2> /dev/null || INT_OK=1" 'INT_OK=1'
@@ -1445,6 +1485,9 @@ smut tty-state-dropped ttyself '*) _toth="$_toth $_tk=$_tst" ;;' '*) ;;' ttymsg
 smut tty-state-uncut ttyself '-le "$_tcw" ] || break' '-le "$_tcw" ] || :' tdesc
 smut tty-state-on-slow ttyself '		if [ -n "$_tstop" ]; then' '		say "tty: state:$(tcut 200 $_toth)"; if [ -n "$_tstop" ]; then' ttymsg
 smut tty-gone-kept ttyself '[ -n "$_tst" ] || continue' ':' tdesc
+# (a SIGCONT right after the STOP: the shell is never in T, and the case
+# fails with that reason, never falls through to the stop line)
+smut tdesc-cont ttyself 'kill -s STOP "$_dp"' 'kill -s STOP "$_dp"; kill -s CONT "$_dp"' tdesc 'tdesc: the shell never showed state T (stat='
 smut tty-no-early-stop ttyself 'lwait "$_tb" keep tstopped "$d"' 'lwait "$_tb" keep' ttylate
 smut tty-probe-always ttyself '$2 ~ /T/ { f = 1 }' '{ f = 1 }' ttymsg
 smut launch-no-group intskip '{ "$@" > "$_ld/out"' '{ set +m; "$@" > "$_ld/out"'
