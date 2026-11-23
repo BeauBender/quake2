@@ -223,8 +223,11 @@ mkfake eng-noexec yes 0 yes noexec
 printf '#!/bin/sh\nexec sleep 60\n' > "$tmp/eng-slow"
 chmod +x "$tmp/eng-failopt" "$tmp/eng-cfg" "$tmp/eng-slow"
 # a stub scripts/pins.sh for a tree copy: what a complete record writes (the status, an engine.log with the
-# validation line) and three frames, 60, 120 and 180, that differ between the native record and an option
+# validation line) and three frames, 60, 120 and 180, that differ between the native record and an option.
+# scenario-args, the one reader of the scenario format that the generator calls (FIX122), is the real one
+stub_reader="[ \"\${1:-}\" != scenario-args ] || exec /bin/bash '$root/scripts/pins.sh' \"\$@\""
 { echo '#!/bin/sh'
+  echo "$stub_reader"
   echo '[ "$1" = record ] || exit 2'
   echo 'name=$3; d="$PINS_STORE/$name/metal/stub1"; mkdir -p "$d" || exit 1'
   # the real record puts every `set` line of the scratch scenario on the engine command line as three arguments,
@@ -242,6 +245,7 @@ chmod +x "$tmp/eng-failopt" "$tmp/eng-cfg" "$tmp/eng-slow"
 # lock it writes its pid (MFX_STUB_SH), its parent's (MFX_STUB_PARENT), the holder it sees (MFX_STUB_LABEL)
 # and, with MFX_STUB_DEAF, ignores TERM, HUP and INT (so does its child); then it records as the stub above
 { echo '#!/bin/sh'
+  echo "$stub_reader"
   echo 'if [ "${BENCH_LOCK_ENTRY:-}" != pins-record ] || [ -z "${BENCH_LOCK_TOKEN:-}" ]; then'
   echo '    exec sh "$(dirname "$0")/bench/bench.sh" lock run pins-record -- env BENCH_LOCK_ENTRY=pins-record /bin/sh "$0" "$@"'
   echo 'fi'
@@ -773,7 +777,8 @@ limit" "$out"
     printf 'set timedemo 1\nset r_drawworld 1;quit\n' > "$d/../pins/scenarios/unsafe.cfg"
     mkeng "$w/uns" "$tmp/eng-cfg"; mkdir -p "$w/ou"
     out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/uns/quake2" "$w/ou" --scenarios unsafe 2>&1); want_rc e2e-unsafe 3 $?
-    want_has e2e-unsafe "the value '1;quit' of the cvar r_drawworld" "$out"
+    # (refused by scripts/pins.sh scenario-args, the one reader of the scenario format, FIX122)
+    want_has e2e-unsafe "unsafe.cfg line 2: the value of r_drawworld must hold only" "$out"
     [ -f "$w/uns/baseq2/config.cfg" ] && [ ! -e "$w/uns/baseq2/config.cfg.mfx-saved" ] && grep -q owner_cvar "$w/uns/baseq2/config.cfg" \
         || ko e2e-unsafe-clean "the owner's config.cfg is not back: $(ls "$w/uns/baseq2")"
     [ ! -e "$w/uns/baseq2/mfx-run.cfg" ] || ko e2e-script "the console script is left after a refused run"

@@ -1,0 +1,56 @@
+# scripts/pins/scenario-cases.txt -- the cases of the scenario format (FIX122).
+# One case a line: "refuse" or "accept", a tab, then one scenario line, kept
+# byte for byte (a leading space is part of the case). Lines starting with
+# "#" and empty lines are comments. Each case is put after "set timedemo 1"
+# in a scenario of its own. The pin harness selftest (scripts/pins.sh,
+# st_scenario_lines) records each one, and tests/check-scenario-parsers.sh
+# gives each to every reader of the format: scripts/pins.sh, the quake2
+# adapter of the bench harness and the MetalFX report generator. A refuse
+# case must be refused by each of them, and an accept case accepted.
+accept	set cl_gun 0
+accept	set cl_gun -1
+accept	set cl_gun -0.5
+accept	set cl_gun -.5
+# the cvars the driver sets itself
+refuse	set pins_capture 1
+refuse	set pins_dir /tmp/x
+refuse	set pins_seed 7
+refuse	set pins_record x
+refuse	set vid_renderer gl1
+refuse	set vid_fullscreen 1
+refuse	set r_mode 3
+refuse	set r_customwidth 9
+refuse	set r_customheight 9
+refuse	set s_initsound 1
+refuse	set vid_highdpiaware 1
+# the cvars that choose a directory or the game module
+refuse	set basedir /opt/x
+refuse	set basedir x
+refuse	set cddir /opt/x
+refuse	set game mymod
+refuse	set datadir /opt/x
+refuse	set cfgdir /opt/x
+# ".." anywhere in a value
+refuse	set timedemo ../x
+refuse	set timedemo a..b
+refuse	set timedemo 1..
+refuse	set timedemo ..
+# a value starting with "-" that is not a plain number
+refuse	set timedemo -datadir
+refuse	set timedemo -cfgdir
+refuse	set timedemo -b
+refuse	set timedemo -1x
+refuse	set timedemo -
+# what is not one "set <cvar> <value>" line
+refuse	exec evil.cfg
+refuse	quit
+refuse	+set timedemo 1
+refuse	set timedemo
+refuse	set timedemo 1 2
+refuse	set TimeDemo 1
+refuse	set time-demo 1
+refuse	 set timedemo 1
+refuse	set  timedemo 1
+refuse	set timedemo "1"
+refuse	set timedemo 1;quit
+refuse	# a comment the format does not have
