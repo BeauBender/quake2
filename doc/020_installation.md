@@ -584,10 +584,13 @@ with no data at all, `--launch "ARGS"` (repeatable) is one start of the
 app with engine arguments, and `--shot SECONDS` takes a simulator
 screenshot and ends the app. Without either data option the synthetic
 data of the smoke is used. The words of a `--launch` argument are split at
-spaces and never expanded as file patterns. A start that ended on its own
-must show the engine's quit line in its own log (*engine.N.log*), or, for
-a start with no game data, the missing-data text, which is where that start
-ends; without either the app was killed or crashed and the run fails. A
+spaces and never expanded as file patterns. The engine's log is removed
+before each start, so each start is judged by its own. A start that ended
+on its own must show the engine's quit line, as a whole line, in its own
+log (*engine.N.log*), or, for a start with no game data, the whole
+missing-data text as a line there and the engine's last line on quitting
+in the app's output (*console.N.log*), which is where that start ends;
+without either the app was killed or crashed and the run fails. A
 start that `--shot` ended needs none, and an app that ended before the shot
 is reported. Without `--shot`, closing the app from the app switcher is
 reported as killed.
