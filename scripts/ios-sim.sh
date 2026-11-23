@@ -1145,6 +1145,10 @@ cleanup()
 		stop_spawned "$lpid"
 		lpid=
 	fi
+	# those stops are done: the dispositions back, since a command started
+	# while INT, TERM and HUP are ignored inherits that, and the bounded
+	# calls below could then never stop it with TERM (only with SIGKILL)
+	trap - INT TERM HUP
 	if [ -n "$udid" ]; then
 		# a run that stopped early still says what its launcher did (its exit status is already a failure)
 		[ -z "$launcher_booted" ] || launcher_report || true
