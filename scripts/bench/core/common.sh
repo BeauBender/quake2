@@ -564,8 +564,8 @@ bench_stop_group() {
 # reports a stop only of the command itself. With <until>, the name of a
 # function, it calls that function at every poll while the command runs,
 # and returns 3 once it is true (FIX122); one that names no function or
-# command is refused before the first poll: a line, and status 4 (2 is a
-# stopped command). Its standard error is
+# command, before the first poll or at any later one, is refused: a line,
+# and status 4 (2 is a stopped command). Its standard error is
 # /dev/null (the shell's job notices), all but that line.
 bench_watch() {
 	_bw_p=$1
@@ -602,8 +602,13 @@ bench_watch() {
 			;;
 		*) return 0 ;;
 		esac
-		if [ -n "$_bw_until" ] && "$_bw_until"; then
-			return 3
+		if [ -n "$_bw_until" ]; then
+			# a test gone since the last poll is refused, not read as false
+			command -v "$_bw_until" > /dev/null 2>&1 || {
+				bench_note "bench_watch: the until test $_bw_until is not defined" 2>&8
+				return 4
+			}
+			if "$_bw_until"; then return 3; fi
 		fi
 		if [ -n "$_bw_end" ] && [ "$(date +%s)" -gt "$_bw_end" ]; then
 			return 1
