@@ -1999,7 +1999,8 @@ VID_MenuInit(void)
 		SetRule(&s_mfx_scaler_list.generic, VIDITEM_MFX_SCALER, s_mfx_scaler_list.curvalue);
 		ScaleItemUpdate(s_mfx_scaler_list.curvalue);
 		SetRule(&s_mfx_interp_list.generic, VIDITEM_MFX_INTERP, s_mfx_scaler_list.curvalue);
-		SetRule(&s_denoiser_list.generic, VIDITEM_DENOISER, s_mfx_scaler_list.curvalue);
+		SetRule(&s_denoiser_list.generic, VIDITEM_DENOISER,
+				Cvar_VariableValue("r_rt_available") != 0);
 		SetRule(&s_rtw_hits_list.generic, VIDITEM_RTW_HITS, water);
 
 		/* A greyed list shows that it has no value here. */
