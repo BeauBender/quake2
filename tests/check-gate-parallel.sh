@@ -63,7 +63,13 @@
 #             them, no sooner than the 10 s grace. The scheduler started
 #             with SIGINT ignored (as merge-gate.sh starts the gate): SIGINT
 #             then SIGTERM give status 143, both stopped (no SIGINT when it
-#             is ignored here);
+#             is ignored here). A check that has stopped itself (SIGSTOP)
+#             acts on the SIGTERM at once, well inside the grace: the gate
+#             sends SIGCONT after it;
+#   stopnoerr the scheduler itself started with its standard error closed:
+#             what a passing check left running (its flag-held grandchild)
+#             is gone after the run, and so are a check and its grandchild
+#             after a SIGTERM to the scheduler;
 #   intskip   interrupt, testsh and sigs, run by this self-test started
 #             with SIGINT ignored, each say what they skip and pass.
 # Then each case is shown failing against at least one mutant of the
@@ -226,14 +232,16 @@ kill) kill -KILL $$ ;;
 esac
 exit "$status"
 EOF
-# The stand-in of the stop case: stand <who> <dir> [ignore] writes its pid
-# to <dir>/<who>.pid and lives while <dir>/<who>.flag exists; every SIGTERM,
-# SIGINT or SIGHUP it gets is a line in <dir>/<who>.sig, after which it
-# exits (with "ignore" it goes on after a SIGTERM); its end by the flag is
-# the line "end" there. The check (who=check) starts the grandchild (gc).
+# The stand-in of the stop case: stand <who> <dir> [ignore] [stop] writes
+# its pid to <dir>/<who>.pid and lives while <dir>/<who>.flag exists; every
+# SIGTERM, SIGINT or SIGHUP it gets is a line in <dir>/<who>.sig, after
+# which it exits (with "ignore" it goes on after a SIGTERM); its end by the
+# flag is the line "end" there. With "stop" it sends itself SIGSTOP once its
+# pid is written, so a signal reaches it only after a SIGCONT. The check
+# (who=check) starts the grandchild (gc), which never stops itself.
 cat > "${tmp:?}/stand" << 'EOF'
 #!/bin/sh
-who=$1 r=$2 ign=${3:-}
+who=$1 r=$2 ign=${3:-} stp=${4:-}
 for s in TERM INT HUP; do
 	if [ "$s" = TERM ] && [ -n "$ign" ]; then
 		trap "echo $s >> \"\$r/$who.sig\"" "$s"
@@ -243,6 +251,7 @@ for s in TERM INT HUP; do
 done
 if [ "$who" = check ]; then "$0" gc "$r" "$ign" & fi
 echo "$$" > "$r/$who.pid"
+[ -z "$stp" ] || kill -s STOP "$$"
 while [ -e "$r/$who.flag" ]; do sleep 0.1; done
 echo end >> "$r/$who.sig"
 EOF
@@ -1352,30 +1361,45 @@ c_leave() {
 	[ "$rc" -eq 0 ] && [ "$(status "$d" a)" = ok ] || { say "leave: status $rc, want 0, and check-a.sh passed"; return 1; }
 }
 
-# stop_one <signal> <status> [ignore] [intign]: one run of the stop case
-# (see the top of this file) on a check-a.sh stand-in, GATE_JOBS=1. Once
-# both stand-ins have written their pids, the scheduler gets <signal>
+# stop_one <signal> <status> [ignore] [intign] [<how>]: one run of the stop
+# case (see the top of this file) on a check-a.sh stand-in, GATE_JOBS=1.
+# Once both stand-ins have written their pids, the scheduler gets <signal>
 # ("none": the check's flag is removed instead; "INTTERM": SIGINT, then
 # SIGTERM); it must end with <status> within 60 s, and both stand-ins must
-# be gone within 2 s more. Then both flags go, so a stand-in a broken run
-# left ends by itself.
+# be gone within 2 s more. <how> "nostderr" starts the scheduler with its
+# standard error closed; "stopped" has the check stop itself (SIGSTOP), and
+# the signal goes only once ps shows it stopped (T): the run must then end
+# within 5 s, half the grace. Then both flags go (and a check left stopped
+# gets SIGCONT), so a stand-in a broken run left ends by itself.
 stop_one() {
 	_od=$(newcase)
 	_or=$_od/rec
 	mkdir "${_or:?}"
 	: > "$_or/check.flag"
 	: > "$_or/gc.flag"
-	printf '%s\n' '#!/bin/sh' 'exec "$GP_STAND" check "$GP_REC" $GP_IGN' > "$_od/check-a.sh"
+	printf '%s\n' '#!/bin/sh' 'exec "$GP_STAND" check "$GP_REC" "$GP_IGN" "$GP_STP"' > "$_od/check-a.sh"
 	chmod +x "$_od/check-a.sh"
-	_ow=
+	_ow= _ohow=${5:-} _ostp=
 	[ -z "${4:-}" ] || _ow='trap "" INT;'
-	launch "$_od" env GATE_JOBS=1 GP_STAND="$tmp/stand" GP_REC="$_or" GP_IGN="${3:-}" TMPDIR="$_od/td" \
+	[ "$_ohow" != nostderr ] || _ow="$_ow exec 2>&-;"
+	[ "$_ohow" != stopped ] || _ostp=stop
+	launch "$_od" env GATE_JOBS=1 GP_STAND="$tmp/stand" GP_REC="$_or" GP_IGN="${3:-}" GP_STP="$_ostp" TMPDIR="$_od/td" \
 		sh -c "$_ow"' exec sh "$@"' sh "$SCHED" "" "" "$_od/check-a.sh"
 	_obad=
 	_on=0
 	while [ ! -s "$_or/check.pid" ] || [ ! -s "$_or/gc.pid" ]; do
 		if [ "$_on" -ge 300 ] || ! kill -0 "$_lp" 2> /dev/null; then
 			_obad="the stand-ins did not start"
+			break
+		fi
+		sleep 0.2
+		_on=$((_on + 1))
+	done
+	_on=0
+	while [ -z "$_obad" ] && [ -n "$_ostp" ]; do
+		case $(ps -o stat= -p "$(cat "$_or/check.pid")" 2> /dev/null) in *T*) break ;; esac
+		if [ "$_on" -ge 150 ] || ! kill -0 "$_lp" 2> /dev/null; then
+			_obad="the check never showed state T"
 			break
 		fi
 		sleep 0.2
@@ -1405,10 +1429,19 @@ stop_one() {
 	_oleft=
 	[ -z "$_ocp" ] || dead "$_ocp" || _oleft="$_oleft check"
 	[ -z "$_ogp" ] || dead "$_ogp" || _oleft="$_oleft grandchild"
-	_ocs=$(tr '\n' ' ' < "$_or/check.sig" 2> /dev/null || :)
-	_ogs=$(tr '\n' ' ' < "$_or/gc.sig" 2> /dev/null || :)
+	# (in braces: a record that is not there is said by the <, before a 2>
+	# on the same command takes effect)
+	_ocs=$({ tr '\n' ' ' < "$_or/check.sig"; } 2> /dev/null || :)
+	_ogs=$({ tr '\n' ' ' < "$_or/gc.sig"; } 2> /dev/null || :)
 	rm -f "$_or/check.flag" "$_or/gc.flag"
-	say "stop: ${1}${3:+ (both ignore SIGTERM)}${4:+ (SIGINT ignored at the start)}: status $_ors, check got: ${_ocs:-nothing}, grandchild got: ${_ogs:-nothing}, left:${_oleft:- none}, $_ot s"
+	# a check a broken run left stopped: SIGCONT, and it ends by its flag
+	[ -z "$_ostp" ] || [ -z "$_ocp" ] || dead "$_ocp" || kill -s CONT "$_ocp" 2> /dev/null || :
+	case $_ohow in
+	nostderr) _ohs=' (standard error closed)' ;;
+	stopped) _ohs=' (the check stopped itself)' ;;
+	*) _ohs= ;;
+	esac
+	say "stop: ${1}${3:+ (both ignore SIGTERM)}${4:+ (SIGINT ignored at the start)}$_ohs: status $_ors, check got: ${_ocs:-nothing}, grandchild got: ${_ogs:-nothing}, left:${_oleft:- none}, $_ot s"
 	[ -z "$_obad" ] || { say "stop $1: $_obad"; return 1; }
 	[ "$_ors" -eq "$2" ] || { say "stop $1: status $_ors, want $2"; return 1; }
 	[ -z "$_oleft" ] || { say "stop $1: left running:$_oleft"; return 1; }
@@ -1419,9 +1452,14 @@ stop_one() {
 		say "stop $1: the stand-ins that ignore SIGTERM were killed after $_ot s, before the 10 s grace"
 		return 1
 	fi
+	if [ -n "$_ostp" ] && [ "$_ot" -ge 5 ]; then
+		say "stop $1: the check that stopped itself ended only after $_ot s, not within 5 s (no SIGCONT after its SIGTERM)"
+		return 1
+	fi
 	return 0
 }
 c_stop() {
+	stop_one TERM 143 "" "" stopped || return 1
 	_ol="TERM:143 INT:130 HUP:129 none:0"
 	[ -n "$INT_OK" ] || { skipint "stop's SIGINT"; _ol="TERM:143 HUP:129 none:0"; }
 	for _oc in $_ol; do
@@ -1429,6 +1467,13 @@ c_stop() {
 	done
 	stop_one TERM 143 ignore || return 1
 	stop_one INTTERM 143 "" intign
+}
+# stopnoerr: the stop case's stand-ins under a scheduler whose own standard
+# error is closed (as scripts/ci-checks.sh can start it): its stops must not
+# depend on that standard error (FIX186)
+c_stopnoerr() {
+	stop_one none 0 "" "" nostderr || return 1
+	stop_one TERM 143 "" "" nostderr
 }
 
 # intskip: interrupt, testsh and sigs, run by this self-test (or $SELF)
@@ -1483,7 +1528,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave stop intskip ttyself"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave stop stopnoerr intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
