@@ -84,10 +84,27 @@ only=${GP_ONLY:-}
 # _lp: a run started by launch and not yet reaped; on the way out it gets
 # SIGTERM, which ends it and what it started (that is what the cases test)
 _lp=
+# _xdp, _xdl: the shell and the sleep case tdesc started and has not yet
+# reaped; on the way out the shell's own children (its sleep) get SIGKILL,
+# the shell gets SIGCONT (it may be stopped) and SIGKILL, and so does the sleep
+_xdp=
+_xdl=
 gp_exit() {
 	if [ -n "$_lp" ]; then
 		kill -s TERM "$_lp" 2> /dev/null || :
 		wait "$_lp" 2> /dev/null || :
+	fi
+	if [ -n "$_xdp" ]; then
+		for _xk in $(ps -ax -o pid= -o ppid= | awk -v p="$_xdp" '$2 == p { print $1 }'); do
+			kill -s KILL "$_xk" 2> /dev/null || :
+		done
+		kill -s CONT "$_xdp" 2> /dev/null || :
+		kill -s KILL "$_xdp" 2> /dev/null || :
+		wait "$_xdp" 2> /dev/null || :
+	fi
+	if [ -n "$_xdl" ]; then
+		kill -s KILL "$_xdl" 2> /dev/null || :
+		wait "$_xdl" 2> /dev/null || :
 	fi
 	rm -rf "${tmp:?}"
 }
@@ -1092,25 +1109,43 @@ c_watchfork() {
 # (not decoded). tsort, on that shell, a running sleep and a pid that is
 # gone: the shell alone on the stop list, the sleep alone on the others',
 # the gone pid on no list. tcut keeps whole entries, as many as fit.
-# The STOP is sent only once the shell has started its sleep (a child of its
-# pid is there): a STOP sent while a just-forked child is still in its exec
-# can be lost, and the shell then runs on, never stopped (FIX187). Both
+# The STOP is sent only once the shell has exec'd (its args are its own) and
+# started its sleep (a child of its pid is there): a STOP sent while a
+# just-forked child is still in its exec can be lost, and the shell then
+# runs on, never stopped (FIX187). All three
 # waits are on state, with a ceiling of 30 s that only a hang reaches; a
 # shell that never shows T fails the case with that reason, before any
-# line is read about it. The sleeps (120 s) outlast both ceilings, so the
-# shell and the sleep are still there to be read, and killed, at the end.
+# line is read about it. The sleeps (120 s) outlast the three ceilings
+# together (90 s), so the shell and the sleep are still there to be read,
+# and killed, at the end; one the check leaves on a signal is killed by
+# gp_exit.
 c_tdesc() {
 	d=$(newcase)
-	/bin/sh -c 'sleep 120; :' sh 'a\cb' 'p\nq' "$(printf 'x\ny')" &
+	# the argument is made before the fork: in "$(...)" among the words,
+	# the forked child would run it as a child of its own before its exec,
+	# and tkids would see that child (FIX187)
+	_dnl=$(printf 'x\ny')
+	/bin/sh -c 'sleep 120; :' sh 'a\cb' 'p\nq' "$_dnl" &
 	_dp=$!
+	_xdp=$_dp
 	sleep 120 &
 	_dl=$!
+	_xdl=$_dl
 	sh -c 'exit 0' &
 	_dg=$!
 	wait "$_dg" || :
 	_dw=
 	_dn=0
-	until [ -n "$(tkids "$_dp")" ]; do
+	until ps -o args= -p "$_dp" 2> /dev/null | grep -q '^/bin/sh -c sleep 120'; do
+		if [ "$_dn" -ge 150 ]; then
+			_dw="the shell never showed its own args (args=$(ps -o args= -p "$_dp" 2> /dev/null | tscrub || :))"
+			break
+		fi
+		sleep 0.2
+		_dn=$((_dn + 1))
+	done
+	_dn=0
+	[ -n "$_dw" ] || until [ -n "$(tkids "$_dp")" ]; do
 		if [ "$_dn" -ge 150 ]; then
 			_dw="the shell never started its sleep (stat=$(ps -o stat= -p "$_dp" 2> /dev/null | tr -d ' ' || :))"
 			break
@@ -1149,6 +1184,8 @@ c_tdesc() {
 	done
 	wait "$_dp" 2> /dev/null || :
 	wait "$_dl" 2> /dev/null || :
+	_xdp=
+	_xdl=
 	[ -z "$_dw" ] || { say "tdesc: $_dw"; return 1; }
 }
 # tdesc_lines: c_tdesc's assertions on the stopped shell _dp (with the
@@ -1444,15 +1481,19 @@ wmut no-parent-pid kgrp 'GATE_PARENT=$$ scripts/gate-checks.sh' 'scripts/gate-ch
 # smut <name> <case> <old> <new> [<arg>] (its own smut lines are left as
 # they are); <arg>, when given, is passed to the case, and so is <want>
 # (smut <name> <case> <old> <new> <arg> <want>: for ttyself, the reason the
-# mutant must fail with)
+# mutant must fail with). The arguments after <new> are passed as they
+# are, by position: an empty <arg> stays the case's first argument
 smut() {
 	_sm=$tmp/self-$1
+	_smn=$1
+	_smc=$2
 	mkdir "${_sm:?}" "${_sm:?}/tests" "${_sm:?}/scripts"
 	cp "$top/scripts/test.sh" "$top/scripts/gate-checks.sh" "$_sm/scripts/"
 	lit "$top/tests/check-gate-parallel.sh" "$3" "$4" "smut " > "$_sm/tests/check-gate-parallel.sh" ||
 		{ bad "mutant $1 does not apply to this self-test"; return 0; }
+	shift 4
 	quiet=1 SELF=$_sm/tests/check-gate-parallel.sh
-	if "c_$2" ${5:+"$5"} ${6:+"$6"}; then bad "mutant $1 was not caught by case $2${5:+ ($5)}"; else mutants=$((mutants + 1)); fi
+	if "c_$_smc" "$@"; then bad "mutant $_smn was not caught by case $_smc${1:+ ($1)}"; else mutants=$((mutants + 1)); fi
 	quiet=0 SELF=
 }
 smut no-int-probe intskip "sh -c 'kill -INT \$\$; exit 0' 2> /dev/null || INT_OK=1" 'INT_OK=1'
