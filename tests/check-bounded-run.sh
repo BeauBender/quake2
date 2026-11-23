@@ -25,9 +25,11 @@
 #
 # The allow-list: the primitive's file, and the selftests that test the
 # callers from outside (their fakes and harnesses), each by its function;
-# plus the gate's own process handling, which is not a harness entry point
-# (scripts/gate-checks.sh's reap
-# loop, carded as a follow-up), named so that nothing else there is let through.
+# plus two known copies, each named by its function so that nothing else in
+# its file is let through: scripts/gate-checks.sh's gate_reap, the gate's own
+# scheduler (its gate_end is card FIX186), and stop_group in
+# scripts/metalfx-report/mfx.py, a Python process-group watchdog: the shell
+# primitive cannot serve it; it is group-scoped and sends TERM first.
 #
 # Usage: tests/check-bounded-run.sh            the three parts, on this tree
 #        tests/check-bounded-run.sh guard <root>   the guard alone on <root>
@@ -40,7 +42,7 @@ export LC_ALL
 me=check-bounded-run
 here=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
 
-ALLOW='scripts/bench/core/common.sh:* scripts/ios-sim.sh:selftest scripts/ios-device.sh:selftest scripts/gate-checks.sh:gate_reap'
+ALLOW='scripts/bench/core/common.sh:* scripts/ios-sim.sh:selftest scripts/ios-device.sh:selftest scripts/gate-checks.sh:gate_reap scripts/metalfx-report/mfx.py:stop_group'
 
 W=
 cleanup() { if [ -n "$W" ]; then chmod -R u+rwx "$W" 2> /dev/null; rm -rf "$W"; fi; }
@@ -56,31 +58,51 @@ scan_file() {
 	BEGIN {
 		n = split(allow, A, " ")
 		for (i = 1; i <= n; i++) ok[A[i]] = 1
-		region = "-"; depth = 0; pend = 0; hd = ""
+		region = "-"; depth = 0; pend = 0; hd = ""; py = (rel ~ /\.py$/)
 	}
 	function allowed() { return ((rel ":*") in ok) || ((rel ":" region) in ok) }
 	function say(l, what) { if (!allowed()) printf "%s:%d: %s\n", rel, l, what }
+	function named(r) { if ((rel ":" r) in ok) { defs[r]++; if (defs[r] > 1) bad[NR] = "the allowed name " r " is defined more than once" } }
 	{
 		line = $0
-		if (hd != "") { if (line ~ ("^[\t]*" hd "$")) hd = ""; else { body = line } }
-		else body = line
-		# a function or a multi-line string assignment at column 0 opens a region
-		if (hd == "" && match(line, /^[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)/)) { r = substr(line, 1, RLENGTH); sub(/[ \t]*\(\)$/, "", r); region = r }
-		else if (hd == "" && match(line, /^[A-Za-z_][A-Za-z0-9_]*='\''/) && line !~ /^[A-Za-z_][A-Za-z0-9_]*='\''[^'\'']*'\''[ \t]*$/) { region = substr(line, 1, RLENGTH - 2); instr = 1 }
-		code = body
+		inhd = (hd != "")
+		if (inhd && line ~ ("^[\t]*" hd "$")) { hd = ""; inhd = 1 }
+		closes = 0
+		# a region: a shell function or a multi-line string assignment at column 0, or a Python def
+		if (!inhd && !py && match(line, /^[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)/)) {
+			r = substr(line, 1, RLENGTH); sub(/[ \t]*\(\)$/, "", r); region = r; named(r)
+			if (line ~ /}[ \t]*$/) closes = 1
+		} else if (!inhd && !py && match(line, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
+			r = substr(line, 1, RLENGTH - 1)
+			if ((rel ":" r) in ok) bad[NR] = "the allowed name " r " is assigned at column 0"
+			if (line ~ /^[A-Za-z_][A-Za-z0-9_]*='\''/ && line !~ /^[A-Za-z_][A-Za-z0-9_]*='\''[^'\'']*'\''[ \t]*$/) { region = r; instr = 1 }
+		} else if (!inhd && py && match(line, /^def[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+			r = substr(line, 1, RLENGTH); sub(/^def[ \t]+/, "", r); region = r; named(r)
+		} else if (!inhd && py && line ~ /^[^ \t#)\]}]/ && line !~ /^(def|@)/) region = "-"
+		code = inhd ? line : line
 		if (code ~ /^[ \t]*#/) code = ""
-		k9 = (code ~ /(^|[^A-Za-z0-9_-])kill[ \t]+(-s[ \t]+)?-?(9|KILL|SIGKILL)([^A-Za-z0-9_]|$)/)
+		lc = tolower(code)
+		k9 = (lc ~ /(^|[^a-z0-9_.-])(kill|pkill|killall)[ \t]+[^;&|]*(-9|-(sig)?kill|-[sn][ \t]+((sig)?kill|9))([^a-z0-9_]|$)/ ||
+			lc ~ /signal\.sigkill/ || lc ~ /os\.kill(pg)?\([^)]*,[ \t]*9[ \t]*\)/)
 		k0 = (code ~ /(^|[^A-Za-z0-9_-])kill[ \t]+(-s[ \t]+)?-0([^0-9]|$)/ || code ~ /kill[ \t]+-s[ \t]+0([^0-9]|$)/)
 		sl = (code ~ /(^|[^A-Za-z0-9_-])sleep([ \t]|$)/)
-		sig = (code ~ /(^|[^A-Za-z0-9_.-])(kill|pkill|killall)([ \t]|$)/)
+		sig = (lc ~ /(^|[^a-z0-9_.-])(kill|pkill|killall)([ \t]|$)/)
 		if (k9) say(NR, "a KILL outside the bounded-run primitive")
 		if (sig) sigs[NR] = region
-		if (code ~ /^[ \t]*\.[ \t]+"?\$[A-Za-z_]+\/scripts\/bench\/core\/common\.sh"?/) sourced = 1
+		if (!inhd && match(code, /^[A-Za-z_][A-Za-z0-9_]*="\$[A-Za-z_]+\/scripts\/bench\/core\/common\.sh"$/)) { v = code; sub(/=.*/, "", v); libvar[v] = 1 }
+		if (code ~ /^[ \t]*\.[ \t]+"?\$[A-Za-z_]+\/scripts\/bench\/core\/common\.sh"?[ \t]*$/) sourced = 1
+		if (match(code, /^[ \t]*\.[ \t]+"\$[A-Za-z_]+"[ \t]*$/)) { v = code; sub(/^[ \t]*\.[ \t]+"\$/, "", v); sub(/"[ \t]*$/, "", v); if (v in libvar) sourced = 1 }
 		if (match(code, /^[ \t]*bench_[A-Za-z0-9_]*[ \t]*\(\)/) && code !~ /^[ \t]*bench_on_signal[ \t]*\(\)/) owndef[NR] = region
 		if (code ~ /(^|[^A-Za-z0-9_])bench_bounded([ \t]|$)/) uses = 1
+		if (inhd || py) next
+		# the line with its quoted strings and comments taken out (a here-doc word is kept)
+		c = code
+		gsub(/<<-?[ \t]*'\''/, "<<", c); gsub(/<<-?[ \t]*"/, "<<", c)
+		gsub(/"[^"]*"|'\''[^'\'']*'\''/, " ", c)
+		sub(/(^|[ \t])#.*$/, "", c)
 		# loops: the outermost one gathers what its lines hold
-		c = code; gsub(/"[^"]*"|'\''[^'\'']*'\''/, " ", c); gsub(/[;&|()]/, " ", c)
-		m = split(c, T, /[ \t]+/)
+		d = c; gsub(/[;&|()]/, " ", d)
+		m = split(d, T, /[ \t]+/)
 		if (depth > 0 || pend) { lk0 = lk0 || k0; lsl = lsl || sl }
 		for (i = 1; i <= m; i++) {
 			t = T[i]
@@ -92,11 +114,14 @@ scan_file() {
 				if (depth == 0) { if (lk0 && lsl) say(lstart, "a kill -0 and sleep polling loop outside the bounded-run primitive"); lk0 = 0; lsl = 0 }
 			}
 		}
-		if (hd == "" && match(line, /<<-?[ \t]*['\''"]?[A-Za-z_]+['\''"]?/)) { h = substr(line, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", h); gsub(/['\''"]/, "", h); hd = h }
-		if (line ~ /^}/ && hd == "") region = "-"
-		else if (instr && NR > 0 && line ~ /'\''[ \t]*$/ && line !~ /^[A-Za-z_][A-Za-z0-9_]*='\''/) { region = "-"; instr = 0 }
+		if (match(c, /<<-?[ \t]*[A-Za-z_][A-Za-z0-9_]*/)) { h = substr(c, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", h); hd = h; hdline = NR }
+		if (hd == "" && (closes || line ~ /^}/)) region = "-"
+		else if (instr && line ~ /'\''[ \t]*$/ && line !~ /^[A-Za-z_][A-Za-z0-9_]*='\''/) { region = "-"; instr = 0 }
 	}
 	END {
+		for (l in bad) printf "%s:%d: %s\n", rel, l, bad[l]
+		if (hd != "") printf "%s:%d: a here-doc (%s) still open at the end of the file\n", rel, hdline, hd
+		if (!py && region != "-" && ((rel ":" region) in ok)) printf "%s:0: the allowed region %s is still open at the end of the file\n", rel, region
 		if (rel ~ /^scripts\/(pins|ios-sim|ios-device)\.sh$/ && !sourced) printf "%s:0: a caller that does not source the bounded-run primitive (scripts/bench/core/common.sh)\n", rel
 		if (rel == "scripts/bench/adapters/quake2.sh" && !uses) printf "%s:0: the adapter does not run the engine through bench_bounded\n", rel
 		if (rel ~ /^scripts\/((pins|ios-sim|ios-device)\.sh|bench\/adapters\/quake2\.sh)$/) {
@@ -106,11 +131,21 @@ scan_file() {
 	}' "$1/$2"
 }
 
-# guard <root>: every finding under <root>/scripts; false when there is one
+# guard <root>: every finding under <root>/scripts; false when there is one.
+# find runs on its own: a status other than 0, or anything on its standard
+# error (a directory it cannot read), is a failure (fails closed)
 guard() {
 	_g_bad=0
+	_g_raw=$W/files.raw.$$
+	_g_err=$W/files.err.$$
 	_g_list=$W/files.$$
-	(cd "$1" && find scripts -type f) | sort > "$_g_list" || return 1
+	_g_fs=0
+	(cd "$1" && exec find scripts -type f) > "$_g_raw" 2> "$_g_err" || _g_fs=$?
+	if [ "$_g_fs" -ne 0 ] || [ -s "$_g_err" ]; then
+		echo "scripts:0: cannot list every file (find exited $_g_fs: $(head -n 1 "$_g_err")) (the guard fails closed)"
+		_g_bad=1
+	fi
+	sort "$_g_raw" > "$_g_list" || return 1
 	[ -s "$_g_list" ] || { echo "$me: no files under $1/scripts"; return 1; }
 	while IFS= read -r _g_f; do
 		if [ ! -r "$1/$_g_f" ]; then
@@ -127,26 +162,45 @@ guard() {
 	return "$_g_bad"
 }
 
-# mutant <name> <file> <python replacement: old> <new>: a copy of scripts/
-# with one change; the guard must refuse it
+# mutant <name> <file> <expected rule> <old> <new> [<old2> <new2>]: a copy
+# of scripts/ with one change (two edits at most); the guard must refuse it
+# with a finding in <file> that holds <expected rule>, so a refusal for any
+# other reason (a standing failure) never counts
 nmut=0
 fails=
 mutant() {
-	_m_d=$W/m-$1
+	_m_n=$1 _m_f=$2 _m_x=$3
+	shift 3
+	_m_d=$W/m-$_m_n
 	rm -rf "$_m_d"
-	mkdir -p "$_m_d" && cp -R "$here/scripts" "$_m_d/scripts" || { fails="$fails $1"; return; }
-	if [ "$2" = - ]; then
-		chmod 000 "$_m_d/scripts/pins/scenario-cases.txt"
-	else
+	mkdir -p "$_m_d" && cp -R "$here/scripts" "$_m_d/scripts" || { fails="$fails $_m_n"; return; }
+	case $_m_n in
+	unreadable) chmod 000 "$_m_d/$_m_f" ;;
+	unreadable-dir)
+		mkdir -p "$_m_d/scripts/zz-hidden" && printf 'kill -9 "$$"\n' > "$_m_d/scripts/zz-hidden/x.sh" && chmod 000 "$_m_d/scripts/zz-hidden"
+		;;
+	*)
 		python3 -I -c 'import sys
-p, old, new = sys.argv[1:4]
+p = sys.argv[1]
 s = open(p).read()
-if s.count(old) != 1: sys.exit("the mutant does not apply: %d" % s.count(old))
-open(p, "w").write(s.replace(old, new))' "$_m_d/$2" "$3" "$4" || { echo "$me: FAIL: mutant $1 does not apply"; fails="$fails $1"; return; }
+a = sys.argv[2:]
+for old, new in zip(a[0::2], a[1::2]):
+    if old == "": s = s + new; continue
+    if s.count(old) != 1: sys.exit("the mutant does not apply: %d" % s.count(old))
+    s = s.replace(old, new)
+open(p, "w").write(s)' "$_m_d/$_m_f" "$@" || { echo "$me: FAIL: mutant $_m_n does not apply"; fails="$fails $_m_n"; return; }
+		;;
+	esac
+	_m_o=$(guard "$_m_d" 2>&1) && { echo "$me: FAIL: mutant $_m_n was not refused"; fails="$fails $_m_n"; }
+	chmod -R u+rwx "$_m_d" 2> /dev/null
+	_m_hit=$(printf '%s\n' "$_m_o" | grep -F -e "$_m_f:" | grep -F -e "$_m_x" | head -n 1)
+	if [ -z "$_m_hit" ]; then
+		echo "$me: FAIL: mutant $_m_n was not refused for \"$_m_x\" in $_m_f; the guard said: $(printf '%s\n' "$_m_o" | head -n 2 | tr '\n' ' ')"
+		fails="$fails $_m_n"
+		return
 	fi
-	_m_o=$(guard "$_m_d" 2>&1) && { echo "$me: FAIL: mutant $1 was not refused"; fails="$fails $1"; return; }
 	nmut=$((nmut + 1))
-	echo "$me: mutant $1: refused ($(printf '%s\n' "$_m_o" | head -n 1))"
+	echo "$me: mutant $_m_n: refused ($_m_hit)"
 }
 
 # ---- the disposition probe ----------------------------------------------
@@ -286,24 +340,71 @@ else
 	fails="$fails guard"
 fi
 
-# 2. the mutants
-mutant ios-sim-kill9 scripts/ios-sim.sh '	bench_spawn_forget "$1"
+# 2. the mutants: each must be refused in its file, for its rule
+K='a KILL outside'
+mutant ios-sim-kill9 scripts/ios-sim.sh "$K" '	bench_spawn_forget "$1"
 }' '	kill -9 "$1" 2>/dev/null
 	bench_spawn_forget "$1"
 }'
-mutant pins-kill9 scripts/pins.sh '    trap '"''"' HUP INT TERM
+mutant pins-kill9 scripts/pins.sh "$K" '    trap '"''"' HUP INT TERM
     if [ -n "${BENCH_BOUNDED_PID:-}" ]; then' '    trap '"''"' HUP INT TERM
     kill -9 "${BENCH_BOUNDED_PID:-0}" 2>/dev/null
     if [ -n "${BENCH_BOUNDED_PID:-}" ]; then'
-mutant pins-kill-s-KILL scripts/pins.sh '    pb_how=$BENCH_BOUNDED_HOW' '    pb_how=$BENCH_BOUNDED_HOW; kill -s KILL "$$" 2>/dev/null'
-mutant device-poll-loop scripts/ios-device.sh '	[ -n "${BENCH_BOUNDED_PID:-}" ] || return 0' '	[ -n "${BENCH_BOUNDED_PID:-}" ] || return 0
+mutant pins-kill-s-KILL scripts/pins.sh "$K" '    pb_how=$BENCH_BOUNDED_HOW' '    pb_how=$BENCH_BOUNDED_HOW; kill -s KILL "$$" 2>/dev/null'
+mutant pins-kill-s-kill scripts/pins.sh "$K" '    pb_how=$BENCH_BOUNDED_HOW' '    pb_how=$BENCH_BOUNDED_HOW; kill -s kill "$$" 2>/dev/null'
+mutant pins-kill-n-9 scripts/pins.sh "$K" '    pb_how=$BENCH_BOUNDED_HOW' '    pb_how=$BENCH_BOUNDED_HOW; kill -n 9 "$$" 2>/dev/null'
+mutant sim-pkill-9 scripts/ios-sim.sh "$K" '	bench_spawn_forget "$1"
+}' '	pkill -9 -g "$1"
+	bench_spawn_forget "$1"
+}'
+mutant mfx-os-kill scripts/metalfx-report/mfx.py "$K" 'def parse_scenario(path):
+' 'def parse_scenario(path):
+    os.kill(os.getpid(), signal.SIGKILL)
+'
+mutant device-poll-loop scripts/ios-device.sh 'polling loop' '	[ -n "${BENCH_BOUNDED_PID:-}" ] || return 0' '	[ -n "${BENCH_BOUNDED_PID:-}" ] || return 0
 	while kill -0 "$BENCH_BOUNDED_PID" 2>/dev/null; do sleep 0.2; done'
-mutant device-own-watchdog scripts/ios-device.sh '. "$repo/scripts/bench/core/common.sh"' 'bench_bounded() { "$@" & p=$!; sleep "$1"; kill -TERM "$p"; sleep 5; kill -KILL "$p"; }'
-mutant adapter-term-runner scripts/bench/adapters/quake2.sh '	bench_bounded "$(bench_case_wall)" "$_qr_bin" "$@" > "${_qr_log:?}" 2>&1 || _qr_st=$?' \
+mutant device-own-watchdog scripts/ios-device.sh 'does not source' '. "$repo/scripts/bench/core/common.sh"' 'bench_bounded() { "$@" & p=$!; sleep "$1"; kill -TERM "$p"; sleep 5; kill -KILL "$p"; }'
+mutant adapter-term-runner scripts/bench/adapters/quake2.sh 'sends a signal itself' '	bench_bounded "$(bench_case_wall)" "$_qr_bin" "$@" > "${_qr_log:?}" 2>&1 || _qr_st=$?' \
 	'	{ "$_qr_bin" "$@" & p=$!; sleep "$BENCH_BOUNDED_QUIT"; kill -TERM "$p"; wait "$p"; } > "${_qr_log:?}" 2>&1 || _qr_st=$?'
-mutant kill9-elsewhere scripts/gate-checks.sh 'gate_end() {' 'gate_end() {
+mutant kill9-elsewhere scripts/gate-checks.sh "$K" 'gate_end() {' 'gate_end() {
 	kill -9 "$@" 2>/dev/null'
-mutant unreadable - '' ''
+mutant heredoc-in-comment scripts/ios-device.sh "$K" 'selftest()
+{
+' 'selftest()
+{
+	# a fake reads its input <<END
+' 'cleanup()
+{
+	stop_child 2' 'cleanup()
+{
+	kill -9 "$$" 2>/dev/null
+	stop_child 2'
+mutant heredoc-open-at-eof scripts/ios-device.sh 'still open at the end' '' '
+cat <<NEVER
+'
+mutant allowed-name-twice scripts/ios-device.sh 'defined more than once' '' '
+selftest()
+{
+	kill -9 "$$"
+}
+'
+mutant allowed-name-assigned scripts/ios-sim.sh 'assigned at column 0' '' "
+selftest='x'
+"
+mutant unreadable scripts/pins/scenario-cases.txt 'cannot be read'
+mutant unreadable-dir scripts 'cannot list every file'
+
+# 2b. a misspelled until test is refused before the command starts
+u=$(sh -c '. "$1/scripts/bench/core/common.sh"; BENCH_BOUNDED_UNTIL=no_such_test bench_bounded 5 true' sh "$here" 2>&1)
+ust=$?
+w=$(sh -c '. "$1/scripts/bench/core/common.sh"; st=0; bench_watch "$$" "" 1 no_such_test || st=$?; echo "status $st"' sh "$here" 2>&1)
+if [ "$ust" -eq 2 ] && printf '%s\n' "$u" | grep -F 'BENCH_BOUNDED_UNTIL names no function: no_such_test' > /dev/null &&
+	printf '%s\n' "$w" | grep -F 'status 4' > /dev/null && printf '%s\n' "$w" | grep -F 'until test no_such_test is not defined' > /dev/null; then
+	echo "$me: ok   until: an undefined test is refused (bench_bounded status 2, bench_watch status 4)"
+else
+	echo "$me: FAIL: until: an undefined test must be refused; got $ust: $u / $w"
+	fails="$fails until"
+fi
 
 # 3. the probe: TERM and INT stop the child and the grandchild; the wall
 # time does too; nothing can run after a KILL of the caller, so both stay
