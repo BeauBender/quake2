@@ -290,7 +290,15 @@ VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler)
 			{
 				return (vidrule_t){ 0, "Metal renderer only" };
 			}
-			return (vidrule_t){ 0, "needs ray tracing" };
+			/* scaler: whether the device traces rays (r_rt_available).
+			   Without it the denoiser has nothing to clean; with it, the
+			   denoiser itself is not built yet (no code creates
+			   r_rt_denoiser), so that is the reason. */
+			if (!scaler)
+			{
+				return (vidrule_t){ 0, "needs ray tracing" };
+			}
+			return (vidrule_t){ 0, "not built yet" };
 
 		case VIDITEM_RTW_HITS:
 			if (ref != VIDREF_METAL)

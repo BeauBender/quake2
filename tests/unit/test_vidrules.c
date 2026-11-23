@@ -193,7 +193,18 @@ TEST(vidrules_denoiser_is_always_greyed_today)
 			}
 		}
 	}
-	T_EQ_STR(why(VIDITEM_DENOISER, "metal", 31, 3), "needs ray tracing");
+
+	/* the reason is the true one: scaler is r_rt_available here */
+	for (int m = 0; m < 5; m++)
+	{
+		T_EQ_STR(why(VIDITEM_DENOISER, "metal", masks[m], 0), "needs ray tracing");
+		T_EQ_STR(why(VIDITEM_DENOISER, "metal", masks[m], 1), "not built yet");
+		for (int r = 1; r < NREFS; r++)
+		{
+			T_EQ_STR(why(VIDITEM_DENOISER, refs[r], masks[m], 0), "Metal renderer only");
+			T_EQ_STR(why(VIDITEM_DENOISER, refs[r], masks[m], 1), "Metal renderer only");
+		}
+	}
 }
 
 /* TASK121: the Metal layer's colour space: Metal only, then always available */

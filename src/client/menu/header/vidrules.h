@@ -104,7 +104,8 @@ vidref_t VidRules_Renderer(const char *name);
    items that need a ray-traced effect on, whether it is: VIDITEM_RTW_HITS
    whether r_rt_water is on (VidRules_WaterOn), the ray-traced AO's items
    (VIDITEM_AO_*) whether r_rt_ao is on, VIDITEM_COLORSPACE whether r_hdr 1
-   is in force (VidRules_HdrInForce). */
+   is in force (VidRules_HdrInForce), VIDITEM_DENOISER whether the device
+   traces rays (r_rt_available). */
 vidrule_t VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler);
 
 /* the cvar an item sets under this renderer, NULL when it sets none */
