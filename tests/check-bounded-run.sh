@@ -179,6 +179,18 @@ scan_file() {
 		return n
 	}
 	function lower(s) { s = tolower(s); gsub(/["\047]/, "", s); return s }
+	# bdefs(s): 1 if s defines a bench_* function other than bench_on_signal,
+	# the hook of the primitive; every definition on the line is looked at
+	function bdefs(s,    t) {
+		while (match(s, BDEF)) {
+			t = substr(s, RSTART, RLENGTH)
+			sub(/^[^b]*/, "", t)
+			sub(/[ \t]*\(\)$/, "", t)
+			if (t != "bench_on_signal") return 1
+			s = substr(s, RSTART + RLENGTH)
+		}
+		return 0
+	}
 	# check(line, ln): the rules on one logical line, which starts at line ln
 	function check(line, ln,    lc, t, nw) {
 		mk = 0
@@ -203,9 +215,7 @@ scan_file() {
 		if (!py && line !~ /^[ \t]*#/ && lc ~ ZERORE) say("a kill -0 liveness test outside the bounded-run primitive (the shape of a polling loop)", ln)
 		if (caller && lc ~ ANYRE) say("a caller that sends a signal itself, not through the primitive", ln)
 		if (mk && !hit) printf "%s:%d: a bounded-run marker on a line no rule refuses\n", rel, ln
-		bl = line
-		gsub(/bench_on_signal[ \t]*\(\)/, "", bl)
-		if (caller && bl ~ BDEF)
+		if (caller && line !~ /^[ \t]*#/ && bdefs(line))
 			printf "%s:%d: a caller that defines a bench_* function of its own\n", rel, ln
 		if (caller && line !~ /^[ \t]*#/ && line ~ /(^|[^A-Za-z0-9_])bench_bounded([ \t]|$)/) uses = 1
 	}
@@ -725,6 +735,9 @@ timeout --sig=KILL 5 true
 mutant define-after-continuation scripts/ios-sim.sh 'defines a bench_*' '' '
 true; \
 bench_foo() { :; }
+'
+mutant bench-prefix-on-signal scripts/ios-sim.sh 'defines a bench_*' '' '
+bench_bench_on_signal() { :; }
 '
 mutant py-kill-trailing-comma scripts/metalfx-report/mfx.py "$K" '' '
 os.kill(os.getpid(), 9,)
