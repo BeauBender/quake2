@@ -2,9 +2,11 @@
 # tests/check-bounded-run.sh -- one bounded-run primitive in the harness
 # (FIX122, finding AR-14 of docs/reviews/2026-11-17-fork-window.md).
 #
-# bench_bounded and bench_stop_group (scripts/bench/core/common.sh) are
-# meant to be the only code under scripts/ that runs a command with a wall
-# time and stops it with TERM, a grace period and KILL. This check holds
+# bench_bounded and bench_stop_group, with its list form bench_stop_groups
+# (scripts/bench/core/common.sh), are meant to be the only code under
+# scripts/ that runs a command with a wall time and stops it with TERM, a
+# grace period and KILL; the gate's scheduler (scripts/gate-checks.sh)
+# stops its checks through bench_stop_groups (FIX186). This check holds
 # that in three parts:
 #
 #   guard   a lint over the common spellings, which a reviewer keeps
