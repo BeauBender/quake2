@@ -549,9 +549,13 @@ def cmd_selftest(a):
 
         # the tree copy, the stub engine and the game-data stand-in
         tree = os.path.join(tmp, "tree")
-        for d in ("scripts/pins", "scripts/metalfx-report"):
+        for d in ("scripts/pins", "scripts/metalfx-report", "scripts/bench/core"):
             os.makedirs(os.path.join(tree, d))
         shutil.copy2(PINS, os.path.join(tree, "scripts"))
+        # the bounded-run primitive pins.sh runs the engine under (bench_bounded, FIX122): the real
+        # one, so the record in this tree is the record a checkout makes
+        shutil.copy2(os.path.join(ROOT, "scripts", "bench", "core", "common.sh"),
+                     os.path.join(tree, "scripts", "bench", "core"))
         shutil.copy2(os.path.join(ROOT, "scripts", "rt-variations.sh"), os.path.join(tree, "scripts"))
         shutil.copy2(MFX, os.path.join(tree, "scripts", "metalfx-report"))
         for f in ("framediff.c", "evidence.py", "rtvar.py"):
@@ -678,7 +682,8 @@ def cmd_selftest(a):
         n = len(calls())
         rc, text = run(["--out", out])
         ok(rc != 0 and "pass --replace" in text and len(calls()) == n, "an existing view is refused: " + text[-300:])
-        shutil.rmtree(os.path.join(out, "v1"))
+        if os.path.isdir(os.path.join(out, "v1")):  # absent when the first run failed: its reason is in fails
+            shutil.rmtree(os.path.join(out, "v1"))
         rc, text = run(["--out", out, "--views", "v1"])
         ok(rc == 0 and len(calls()) == n and "using the complete record" in text,
            "a complete record is used again: " + text[-300:])

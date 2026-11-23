@@ -406,6 +406,22 @@ launch)
 	if [ "${2:-}" != --console-pty ]; then
 		printf '%s\n' "$*" >> "$st/relaunches"
 		[ "$sc" = bgfail ] && [ "${3:-}" = com.apple.Preferences ] && exit 1
+		# bgdies: this launch of the other app ends the app (the flag file background), and returns only
+		# once its launch client has ended (gone, or a zombie not yet reaped), at most 20 s: the run's
+		# check after the return then finds it ended however slow the host is (FIX122 slice 2)
+		if [ "$sc" = bgdies ] && [ "${3:-}" = com.apple.Preferences ]; then
+			: > "$st/background"
+			w=0
+			while [ "$w" -lt 200 ]; do
+				c=$(cat "$st/client.pid" 2>/dev/null)
+				if [ -n "$c" ]; then
+					s=$(ps -o stat= -p "$c" 2>/dev/null) || break
+					case $s in Z*) break ;; esac
+				fi
+				sleep 0.1
+				w=$((w + 1))
+			done
+		fi
 		exit 0
 	fi
 	# launch --console-pty <udid> <bundle id> <args>...
@@ -450,12 +466,21 @@ launch)
 		echo "sleep 30.$$" > "$st/app.cmd"
 		exec sleep "30.$$"
 	fi
-	# a run with --background (IOS_SIM_BACKGROUND_AFTER is set) keeps the app alive through the background;
-	# bgdies is the app that ends during it
+	# bgdies: the app that ends during the background. It runs until the launch of the other app writes
+	# the flag file background (at most 30 s), not for a time of its own: a life of 1 s raced the run's
+	# 2 s background, and a slow host (the fake's own python3 above) let it outlive it (FIX122 slice 2)
+	if [ "$sc" = bgdies ]; then
+		echo $$ > "$st/client.pid"
+		echo "$4: $$"
+		echo "Metal API Validation Enabled"
+		w=0
+		while [ ! -f "$st/background" ] && [ "$w" -lt 300 ]; do sleep 0.1; w=$((w + 1)); done
+		exit 0
+	fi
+	# a run with --background (IOS_SIM_BACKGROUND_AFTER is set) keeps the app alive through the background
 	life=1
 	[ -n "${IOS_SIM_BACKGROUND_AFTER-}" ] && life=4
 	[ "$sc" = bgshot ] && life=5
-	[ "$sc" = bgdies ] && life=1
 	sleep "$life.$$" &
 	p=$!
 	echo $p > "$st/app.pid"
