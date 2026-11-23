@@ -456,7 +456,11 @@ EOF
 			spid=$!
 			n=0
 			while [ ! -s "$d/state/hang.pid" ] && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
-			if [ "$sig" = INT ]; then kill -INT -- "-$spid"; else kill -"$sig" "$spid"; fi # bounded-run: allowed: selftest: sends the signal under test
+			if [ "$sig" = INT ]; then
+				kill -INT -- "-$spid" # bounded-run: allowed: selftest: sends INT under test to the group of the script
+			else
+				kill -"$sig" "$spid" # bounded-run: allowed: selftest: sends the signal under test
+			fi
 			n=0
 			while kill -0 "$spid" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done # bounded-run: allowed: selftest: waits for the script under test
 			if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal

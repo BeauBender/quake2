@@ -65,18 +65,45 @@ export LC_ALL
 me=check-bounded-run
 here=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
 
-# The marked lines each file may hold ("# bounded-run: allowed: <reason>"
-# at the end of the line), file and count; a file not listed holds none.
-# A file with more or fewer fails, and so does a marker on a line no rule
-# refuses. There is no whole-file entry.
+# The marked lines ("# bounded-run: allowed: <reason>" at the end of the
+# line): one per entry, the file and the exact reason text after the
+# marker, which is unique within its file. A file not listed holds none.
+# A marker whose reason is not listed, a listed reason no line carries, a
+# reason on two lines, and a marker on a line no rule refuses each fail.
+# There is no whole-file entry.
 MARKED='
-scripts/bench/core/common.sh 3
-scripts/bench/core/lock.sh 1
-scripts/gate-checks.sh 2
-scripts/test.sh 1
-scripts/ios-sim.sh 15
-scripts/ios-device.sh 6
-scripts/metalfx-report/mfx.py 3
+scripts/bench/core/common.sh the primitive: bench_pid_alive
+scripts/bench/core/common.sh the primitive: the group a spawn made
+scripts/bench/core/common.sh the primitive: a group still has a member
+scripts/bench/core/lock.sh the lock: its holder group still has a member; it signals none
+scripts/gate-checks.sh gate_reap: the gate scheduler polls its checks; it signals none
+scripts/gate-checks.sh gate_alive: the group test of gate_end, card FIX186
+scripts/test.sh the gate parent watch: it polls the caller, and sends TERM only
+scripts/ios-sim.sh selftest: the fake xcrun terminate, only the app it started
+scripts/ios-sim.sh selftest: ends the fake hung call it checked
+scripts/ios-sim.sh selftest: a hung call ps cannot name
+scripts/ios-sim.sh selftest: waits for the fake hung read
+scripts/ios-sim.sh selftest: sends the signal under test
+scripts/ios-sim.sh selftest: waits for the script under test
+scripts/ios-sim.sh selftest: the script under test outlived the signal
+scripts/ios-sim.sh selftest: ends the script under test that hung
+scripts/ios-sim.sh selftest: ends the fake hung launcher read it checked
+scripts/ios-sim.sh selftest: a hung launcher read ps cannot name
+scripts/ios-sim.sh selftest: ends the decoy it checked
+scripts/ios-sim.sh selftest: a decoy ps cannot name
+scripts/ios-sim.sh selftest: waits for a wrongly sent signal to show
+scripts/ios-sim.sh selftest: the stale pid must still run
+scripts/ios-sim.sh selftest: ends its own sleep
+scripts/ios-device.sh selftest: sends INT under test to the group of the script
+scripts/ios-device.sh selftest: sends the signal under test
+scripts/ios-device.sh selftest: waits for the script under test
+scripts/ios-device.sh selftest: the script under test outlived the signal
+scripts/ios-device.sh selftest: ends the script under test that hung
+scripts/ios-device.sh selftest: the fake hanging step outlived the script
+scripts/ios-device.sh selftest: ends the fake hanging step
+scripts/metalfx-report/mfx.py stop_group, the Python group watchdog: TERM first, KILL after the wait
+scripts/metalfx-report/mfx.py run_engine, the pty run: KILL after terminate and 5 s
+scripts/metalfx-report/mfx.py run_engine, the pty run: an interrupt must not leave the engine running
 '
 
 W=
@@ -87,47 +114,96 @@ trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 W=$(mktemp -d "${TMPDIR:-/tmp}/check-bounded-run.XXXXXX") || exit 1
 
-# pinned <rel>: the marked lines MARKED allows <rel>
+# pinned <rel>: the marker reasons MARKED pins for <rel>, one per line
 pinned() {
-	printf '%s\n' "$MARKED" | awk -v f="$1" '$1 == f { n = $2 } END { print n + 0 }'
+	printf '%s\n' "$MARKED" | awk -v f="$1" '$1 == f { sub(/^[^ ]+ /, ""); print }'
 }
 
 # scan_file <root> <rel>: one line per finding, "<rel>:<line>: <rule>"
 scan_file() {
-	awk -v rel="$2" -v want="$(pinned "$2")" '
+	PINNED=$(pinned "$2") awk -v rel="$2" '
 	BEGIN {
 		py = (rel ~ /\.py$/)
 		caller = (rel ~ /^scripts\/((pins|ios-sim|ios-device)\.sh|bench\/adapters\/quake2\.sh)$/)
 		src = (rel ~ /^scripts\/(pins|ios-sim|ios-device)\.sh$/)
 		S = "[ \t,]"
 		K = "(sig)?kill"
-		KILLRE = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+[^;&|]*(-9|-" K "|-[sn]" S "*(" K "|9)|--signal" S "*=?" S "*(" K "|9))([^a-z0-9_]|$)"
-		TOSRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-s" S "*(" K "|9)|--signal" S "*=?" S "*(" K "|9))([^a-z0-9_]|$)"
-		TOKRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-k|--kill-after)([^a-z_-]|$)"
-		ZERORE = "(^|[^a-z0-9_.-])kill[ \t]+(-0|-[sn][ \t]*0|--signal[ \t=]*0)([^0-9]|$)"
+		N9 = "0*9"
+		KILLRE = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+[^;&|]*(-" N9 "|-" K "|-[sn]" S "*(" K "|" N9 ")|--signal" S "*=?" S "*(" K "|" N9 "))([^a-z0-9_]|$)"
+		# any prefix of --signal that names KILL, any prefix of --kill-after
+		TOSRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-s" S "*(" K "|" N9 ")|--s(i(g(n(a(l)?)?)?)?)?" S "*=?" S "*(" K "|" N9 "))([^a-z0-9_]|$)"
+		TOKRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-k|--k(i(l(l(-(a(f(t(e(r)?)?)?)?)?)?)?)?)?)([^a-z_-]|$)"
+		ZERORE = "(^|[^a-z0-9_.-])kill[ \t]+(-0+|-[sn][ \t]*0+|--signal[ \t=]*0+|-(sig)?exit|-s[ \t]*(sig)?exit)([^a-z0-9_]|$)"
 		ANYRE = "(^|[^a-z0-9_.-])(kill|pkill|killall)([^a-z0-9_-]|$)"
+		WORDRE = "(^|[^a-z0-9_.-])(kill|pkill|killall|timeout)([^a-z0-9_-]|$)"
+		PY1 = "(^|[^a-z0-9_])sigkill([^a-z0-9_]|$)"
+		PY2 = "\\.kill[ \t]*\\([ \t]*\\)"
+		PY3 = "signals[ \t]*\\([ \t]*0*9[ \t]*\\)"
+		PY4 = "send_signal[ \t]*\\([^)0-9]*0*9[ \t]*\\)"
+		PY5 = "(^|[^a-z0-9_])kill(pg)?[ \t]*\\(([^()]|\\([^()]*\\))*,[ \t]*0*9[ \t]*\\)"
 		LIT = "\"\\$[A-Za-z_][A-Za-z0-9_]*/scripts/bench/core/common\\.sh\""
-		hn = 0; hi = 0; lost = 0; nmk = 0
+		hn = 0; hi = 0; lost = 0; acc = ""; depth = 0
+		np = split(ENVIRON["PINNED"], PR, "\n")
+		for (i = 1; i <= np; i++) if (PR[i] != "") PIN[PR[i]] = 1
 	}
-	function say(what) { hit = 1; if (!mk) printf "%s:%d: %s\n", rel, NR, what }
+	function say(what, ln) { hit = 1; if (!mk) printf "%s:%d: %s\n", rel, ln, what }
+	# count(s, re): how many times re matches in s, a boundary character shared
+	function count(s, re,    n) {
+		n = 0
+		while (match(s, re)) { n++; s = substr(s, RSTART + (RLENGTH > 1 ? RLENGTH - 1 : 1)) }
+		return n
+	}
+	function lower(s) { s = tolower(s); gsub(/["\047]/, "", s); return s }
+	# check(line, ln): the rules on one logical line, which starts at line ln
+	function check(line, ln,    lc, t, nw) {
+		mk = 0
+		hit = 0
+		if (match(line, /# bounded-run: allowed: [^ \t#][^#]*$/)) {
+			t = substr(line, RSTART + 24)
+			sub(/[ \t]+$/, "", t)
+			if (t ~ /["\047`]/) printf "%s:%d: a bounded-run marker followed by a quote (in a string, not a comment)\n", rel, ln
+			else {
+				mk = 1
+				R[t]++
+				RL[t] = ln
+				nw = count(lower(substr(line, 1, RSTART - 1)), WORDRE)
+				if (py) nw += count(lower(substr(line, 1, RSTART - 1)), PY1) + count(lower(substr(line, 1, RSTART - 1)), PY2) + count(lower(substr(line, 1, RSTART - 1)), PY3) + count(lower(substr(line, 1, RSTART - 1)), PY4) + count(lower(substr(line, 1, RSTART - 1)), PY5)
+				if (nw > 1) printf "%s:%d: a marked line with %d kill, pkill, killall or timeout words or Python KILL forms (a marker covers one)\n", rel, ln, nw
+			}
+		}
+		lc = lower(line)
+		if (lc ~ KILLRE || lc ~ TOSRE || lc ~ TOKRE) say("a KILL outside the bounded-run primitive", ln)
+		else if (py && (lc ~ PY1 || lc ~ PY2 || lc ~ PY3 || lc ~ PY4 || lc ~ PY5))
+			say("a KILL outside the bounded-run primitive", ln)
+		if (!py && line !~ /^[ \t]*#/ && lc ~ ZERORE) say("a kill -0 liveness test outside the bounded-run primitive (the shape of a polling loop)", ln)
+		if (caller && lc ~ ANYRE) say("a caller that sends a signal itself, not through the primitive", ln)
+		if (mk && !hit) printf "%s:%d: a bounded-run marker on a line no rule refuses\n", rel, ln
+		if (caller && line ~ /^[ \t]*bench_[A-Za-z0-9_]*[ \t]*\(\)/ && line !~ /^[ \t]*bench_on_signal[ \t]*\(\)/)
+			printf "%s:%d: a caller that defines a bench_* function of its own\n", rel, ln
+		if (caller && line !~ /^[ \t]*#/ && line ~ /(^|[^A-Za-z0-9_])bench_bounded([ \t]|$)/) uses = 1
+	}
 	{
 		line = $0
 		L[NR] = line
-		mk = (line ~ /# bounded-run: allowed: [^ \t#][^#]*$/)
-		nmk += mk
-		hit = 0
-		lc = tolower(line)
-		gsub(/["\047]/, "", lc)
-		if (lc ~ KILLRE || lc ~ TOSRE || lc ~ TOKRE) say("a KILL outside the bounded-run primitive")
-		else if (py && (lc ~ /(^|[^a-z0-9_])sigkill([^a-z0-9_]|$)/ || lc ~ /\.kill[ \t]*\([ \t]*\)/ || lc ~ /signals[ \t]*\([ \t]*9[ \t]*\)/ ||
-			lc ~ /send_signal[ \t]*\([^)0-9]*9[ \t]*\)/ || lc ~ /(^|[^a-z0-9_])kill(pg)?[ \t]*\([^)]*,[ \t]*9[ \t]*\)/))
-			say("a KILL outside the bounded-run primitive")
-		if (!py && line !~ /^[ \t]*#/ && lc ~ ZERORE) say("a kill -0 liveness test outside the bounded-run primitive (the shape of a polling loop)")
-		if (caller && lc ~ ANYRE) say("a caller that sends a signal itself, not through the primitive")
-		if (mk && !hit) printf "%s:%d: a bounded-run marker on a line no rule refuses\n", rel, NR
-		if (caller && line ~ /^[ \t]*bench_[A-Za-z0-9_]*[ \t]*\(\)/ && line !~ /^[ \t]*bench_on_signal[ \t]*\(\)/)
-			printf "%s:%d: a caller that defines a bench_* function of its own\n", rel, NR
-		if (caller && line !~ /^[ \t]*#/ && line ~ /(^|[^A-Za-z0-9_])bench_bounded([ \t]|$)/) uses = 1
+		# the logical line: a shell line that ends in an odd number of
+		# backslashes goes on (a whole-line comment does not), and so does
+		# a Python line inside an open parenthesis (counted with quotes
+		# deleted, a whole-line comment not counted), for 50 lines at most
+		if (acc == "") an = NR
+		bs = line
+		cont = (match(bs, /\\+$/) && RLENGTH % 2 == 1 && !(acc == "" && !py && line ~ /^[ \t]*#/))
+		if (cont) bs = substr(bs, 1, length(bs) - 1)
+		if (py && line !~ /^[ \t]*#/) {
+			t = lower(line)
+			depth += gsub(/\(/, "", t)
+			t = lower(line)
+			depth -= gsub(/\)/, "", t)
+			if (depth < 0) depth = 0
+			if (depth > 0 && NR - an < 50) cont = 1
+			else depth = 0
+		}
+		if (cont) acc = acc bs " "
+		else { check(acc line, an); acc = "" }
 		if (!src) next
 		# the source rule: here-doc bodies tracked, for this rule alone
 		IB[NR] = 0
@@ -160,7 +236,12 @@ scan_file() {
 		}
 	}
 	END {
-		if (nmk != want) printf "%s:0: %d marked lines (# bounded-run: allowed:), and the check pins %d\n", rel, nmk, want
+		if (acc != "") check(acc, an)
+		for (t in R) {
+			if (!(t in PIN)) printf "%s:%d: a bounded-run marker whose reason the check does not pin: %s\n", rel, RL[t], t
+			else if (R[t] > 1) printf "%s:%d: the marker reason \"%s\" is on %d lines; a pinned reason marks one\n", rel, RL[t], t, R[t]
+		}
+		for (t in PIN) if (!(t in R)) printf "%s:0: the check pins the marker reason \"%s\", and no line carries it\n", rel, t
 		if (rel == "scripts/bench/adapters/quake2.sh" && !uses) printf "%s:0: the adapter does not run the engine through bench_bounded\n", rel
 		if (!src) exit
 		for (v in via) {
@@ -576,15 +657,55 @@ p.kill()
 mutant py-killpg-9 scripts/pins/evidence.py "$K" '' '
 os.killpg(p.pid, 9)
 '
-# the pinned table: a marker is a line, and each file holds its pinned count
-mutant marker-in-zero-file scripts/pins.sh 'and the check pins 0' '' '
+# round 3: leading zeros, a continued line, -EXIT, timeout's long prefixes
+mutant kill-09 scripts/gate-checks.sh "$K" '' '
+kill -09 "$$"
+'
+mutant kill-s-09 scripts/test.sh "$K" '' '
+kill -s 09 "$$"
+'
+mutant kill-continued scripts/gate-checks.sh "$K" '' '
+kill \
+	-9 "$$"
+'
+mutant py-kill-continued scripts/metalfx-report/mfx.py "$K" '' '
+os.kill(os.getpid(),
+        9)
+'
+mutant kill-00 scripts/gate-checks.sh 'polling loop' '' '
+while kill -00 "$pid" 2>/dev/null; do sleep 1; done
+'
+mutant kill-EXIT scripts/gate-checks.sh 'polling loop' '' '
+while kill -EXIT "$pid" 2>/dev/null; do sleep 1; done
+'
+mutant kill-s-EXIT scripts/test.sh 'polling loop' '' '
+kill -s EXIT "$pid" && echo alive
+'
+mutant timeout-kill-1 scripts/test.sh "$K" '' '
+timeout --kill=1 5 true
+'
+mutant timeout-sig-KILL scripts/test.sh "$K" '' '
+timeout --sig=KILL 5 true
+'
+# the pinned reasons: a marker is a line whose reason the check pins, once
+mutant marker-in-zero-file scripts/pins.sh 'does not pin: borrowed' '' '
 kill -9 "$$" # bounded-run: allowed: borrowed
 '
-mutant marker-one-more scripts/gate-checks.sh 'and the check pins 2' '' '
+mutant marker-one-more scripts/gate-checks.sh 'does not pin: one more' '' '
 kill -0 "$$" # bounded-run: allowed: one more
 '
-mutant marker-one-less scripts/gate-checks.sh 'and the check pins 2' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' ''
-mutant marker-moved scripts/gate-checks.sh 'no rule refuses' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' '' 'gate_alive() {' 'gate_alive() { # bounded-run: allowed: moved'
+mutant marker-reason-twice scripts/gate-checks.sh 'is on 2 lines' '' '
+kill -0 "$$" # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186
+'
+mutant marker-one-less scripts/gate-checks.sh 'and no line carries it' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' ''
+mutant marker-moved scripts/gate-checks.sh 'no rule refuses' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' '' 'gate_alive() {' 'gate_alive() { # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186'
+mutant marker-joined scripts/ios-device.sh 'a marker covers one' 'if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal
+				kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: ends the script under test that hung' 'if kill -0 "$spid" 2>/dev/null; then kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: the script under test outlived the signal' '' '
+kill -9 "$$" # bounded-run: allowed: selftest: ends the script under test that hung
+'
+mutant marker-appended scripts/gate-checks.sh 'a marker covers one' 'if kill -0 -- "-$_gag" 2> /dev/null; then return 0; fi #' 'if kill -0 -- "-$_gag" 2> /dev/null; then kill -9 -- "-$_gag"; return 0; fi #'
+mutant marker-in-echo scripts/gate-checks.sh 'followed by a quote' 'gate_end() {' 'gate_end() {
+	kill -9 "$	" 2>/dev/null; echo "# bounded-run: allowed: x"'
 # the source rule
 mutant pins-lib-reassigned scripts/pins.sh 'not assigned exactly once' 'pins_lib_file="$root/scripts/bench/core/common.sh"' 'pins_lib_file="$root/scripts/bench/core/common.sh"
 pins_lib_file=/dev/null'

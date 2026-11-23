@@ -676,9 +676,9 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		if [ -n "$hp" ] && [ -s "${d:?}/state/hang.cmd" ]; then
 			hcmd=$(ps -o command= -p "$hp" 2>/dev/null)
 			if [ "$hcmd" = "$(cat "${d:?}/state/hang.cmd")" ]; then
-				kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hung call it checked
+				kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hung launcher read it checked
 				[ "$intdisp" != default ] || why="${why:+$why; }the bounded launcher read (pid $hp) still ran 3 s after the script exited on $sig"
-			elif [ -z "$hcmd" ] && kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: a hung call ps cannot name
+			elif [ -z "$hcmd" ] && kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: a hung launcher read ps cannot name
 				why="${why:+$why; }ps gave no command line for the pid in hang.pid ($hp), which runs"
 			fi
 		fi
