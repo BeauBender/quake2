@@ -3,8 +3,10 @@
 Plan anchors: [the ray-tracing design](metal-raytracing-design.md) and
 [the Metal renderer plan](metal-renderer.md). Related: [the high-resolution
 plan](high-resolution.md), decision records
-[0011](../decisions/0011-metalfx-framework.md) and
-[0012](../decisions/0012-metalfx-in-the-client.md), and the cards TASK56
+[0011](../decisions/0011-metalfx-framework.md),
+[0012](../decisions/0012-metalfx-in-the-client.md) and
+[0014](../decisions/0014-no-performance-gating.md) (no feature is gated
+on performance; it replaces the apple9-only limit below), and the cards TASK56
 (the sun, #98), TASK59 (the denoiser, #102), TASK60 (hardware gating, #103),
 TASK106 (apple7 costs, #249), TASK173 (RT variations in the harness, #475)
 and TASK175 (visionOS, #477).
@@ -48,7 +50,7 @@ the renderer API (`API_VERSION 8`).
 | `0` (default) | **stock** | Today's `ref_metal`, exactly: the lightmap, and each `r_rt_*` effect cvar switching its own layer as now. With the shipped defaults (every effect off) it is the gl1 look the pins hold | any GPU `ref_metal` runs on |
 | `1` | **enhanced** | The stock lighting model with today's ray-traced layers on at their defaults: dlight shadows, the sun (once TASK56 lands), AO and water reflections | ray tracing (`supportsRaytracing`) |
 | `2` | **retro** | A 3dfx Glide-style look: 16-bit colour with an ordered dither, that era's texture filtering and mip selection, a low-resolution 3D view, its gamma (section 5) | any GPU `ref_metal` runs on, the VM included |
-| `3` | **RT-primary** | The lightmap replaced on world surfaces by traced direct light, emissive faces, sky light and one bounce of indirect light, denoised, upscaled with MetalFX (section 4) | hardware ray tracing (apple9: M3, A17 Pro and later) and the MetalFX temporal scaler, until TASK106 says otherwise (INFORM P3) |
+| `3` | **RT-primary** | The lightmap replaced on world surfaces by traced direct light, emissive faces, sky light and one bounce of indirect light, denoised, upscaled with MetalFX (section 4) | ray tracing (`supportsRaytracing`) and the MetalFX temporal scaler. ~~hardware ray tracing (apple9: M3, A17 Pro and later) and the MetalFX temporal scaler, until TASK106 says otherwise (INFORM P3)~~ (replaced by record 0014: capability only, no family limit) |
 
 The values are in the order the slices land (section 7), not in order of
 cost. A later mode takes the next free value; a value is never renumbered,
@@ -90,8 +92,10 @@ apply:
 
 - under `ref_gl1`, `ref_gl3` or `ref_soft`: "ref_metal only";
 - a mode on a device without ray tracing (the VM): "needs ray tracing";
-- RT-primary on apple6 to apple8 (M1, M2, A13 to A16): "needs hardware ray
-  tracing" (INFORM P3);
+- ~~RT-primary on apple6 to apple8 (M1, M2, A13 to A16): "needs hardware ray
+  tracing" (INFORM P3);~~ (replaced by record 0014: RT-primary is offered
+  on every family with ray tracing, on the compute path below apple9; the
+  rule above greys it where there is none);
 - RT-primary where MetalFX has no temporal scaler (visionOS, decision
   0011): "needs the MetalFX temporal scaler";
 - a mode the owner has not yet accepted from its frames: "awaiting review"
@@ -106,7 +110,7 @@ presentation" and shows the value in use.
 | Class | Examples | stock | enhanced | retro | RT-primary |
 |---|---|---|---|---|---|
 | No ray tracing | the build VM's paravirtual GPU | yes | greyed | yes | greyed |
-| apple6 to apple8, compute ray queries on Metal's software traverser (design section 4) | M1, M2; A13 (iPhone 11) to A16 | yes | yes | yes | greyed until TASK106 and a device run (INFORM P3) |
+| apple6 to apple8, compute ray queries on Metal's software traverser (design section 4) | M1, M2; A13 (iPhone 11) to A16 | yes | yes | yes | yes, once its slices land and the owner accepts it; ~~greyed until TASK106 and a device run (INFORM P3)~~ (replaced by record 0014) |
 | apple9 and later, hardware intersection | M3 and later, the M6; A17 Pro and later | yes | yes | yes | yes, once its slices land and the owner accepts it |
 | visionOS | Apple Vision Pro (TASK175) | yes | yes | yes | greyed: no MetalFX temporal scaler (decision 0011) |
 
@@ -251,14 +255,18 @@ own assumption is 8 to 14 ms for about 5 rays a pixel at 1080p on apple7
 *Estimate*: RT-primary's 3 to 4 rays a pixel at 720 lines (0.44 of the
 1080p pixels) trace in 2.1 to 5.0 ms, before a raster, denoiser and scaler
 on a GPU smaller than the M6's by a factor no one has measured here. It
-may fit 60 Hz at 720 lines; it is greyed until a measurement says so.
+may fit 60 Hz at 720 lines; ~~it is greyed until a measurement says so.~~
+(replaced by record 0014: it is offered as on apple9, and the estimate is
+information for the player's choice, not a gate).
 
 **An older iPhone.** An iPhone 11 (A13, apple6) has ray queries on the
 software traverser and a 1792 x 828 display whose render targets take 31 to
 36 MB (high-resolution plan, section 3); no ray-tracing cost has been
-measured on any phone. *Estimate*: RT-primary is not a phone mode below
+measured on any phone. *Estimate*: ~~RT-primary is not a phone mode below
 A17 Pro; stock and retro are, and enhanced at reduced effect scales where
-a device run shows it holds.
+a device run shows it holds.~~ (replaced by record 0014: every mode the
+phone has the capabilities for is offered on it, and a device run is
+information, not a gate).
 
 ### 4.6 What stays stock
 
@@ -366,8 +374,8 @@ changed lines, M about 300 to 700, L about 700 to 1,000.
 | PM7 | RT-primary sky and bounce: sky light, the sun, the bounce reading the lightmap at its hit; AO off under the mode | PM6, TASK56 | M6 | M |
 | PM8 | RT-primary denoise and upscale: TASK59's filter on demodulated irradiance for every term, the temporal scaler through the overlay; the cost table of section 4.5 measured | PM7, TASK59 | M6 | M |
 | PM9 | RT-primary on models: alias models and the view weapon lit by traced light | PM8 | M6 | M |
-| PM10 | RT-primary on modest hardware: the cost on an apple7 Mac and an iPhone, and the gating rule of section 2.3 set from it | PM8, TASK106 | device | S |
-| PM11 | RT-primary frames for the owner; the look accepted, the pins recorded, the menu item ungreyed on the classes PM10 allows | PM8, PM10, TASK173 | M6 | S |
+| PM10 | RT-primary on modest hardware: the cost on an apple7 Mac and an iPhone, ~~and the gating rule of section 2.3 set from it~~ (replaced by record 0014: optional and informational, taken where such a device is available; it sets no gating rule) | PM8, TASK106 | device | S |
+| PM11 | RT-primary frames for the owner; the look accepted, the pins recorded, the menu item ungreyed ~~on the classes PM10 allows~~ on every class with ray tracing and the temporal scaler (replaced by record 0014) | PM8, ~~PM10,~~ TASK173 | M6 | S |
 
 Optional, only if the owner asks: a variance-guided denoiser (after PM8),
 and a committed table of material values by texture name, the way
@@ -402,11 +410,15 @@ cvars when the mode changes (and show "custom" after any edit); overlay
 effective values. The call: the overlay. Reverse: a menu action that copies
 a mode's values into the user's cvars, added beside it.
 
-**P3. RT-primary needs hardware ray tracing until measured.**
+**~~P3. RT-primary needs hardware ray tracing until measured.~~** (superseded by record 0014)
+Superseded by record 0014 (2026-11-22), which takes the first option:
+RT-primary is allowed wherever ray queries exist (`supportsRaytracing`)
+and the temporal scaler is present, with no family limit and no
+measurement it waits for. The call as it stood:
 Context: apple6 to apple8 trace on Metal's software traverser and nothing
 is measured there (section 4.5). Options: allow it everywhere ray queries
-exist; gate to apple9; gate per measured device. The call: apple9 and
-later, greyed with its reason elsewhere, until PM10. Reverse: one rule in
+exist; gate to apple9; gate per measured device. ~~The call: apple9 and
+later, greyed with its reason elsewhere, until PM10.~~ Reverse: one rule in
 `vidrules.c` and the renderer's capability check.
 
 **P4. The bounce reads the lightmap at its hit.**

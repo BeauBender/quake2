@@ -23,3 +23,4 @@ them (record 0004); one becomes a record here when it is settled.
 | [0010](0010-imageio-decoder.md) | ImageIO decodes PNG, JPEG and TGA on Apple platforms; the vendored `stb_image` is removed (redirects INFORM2) |
 | [0011](0011-metalfx-framework.md) | MetalFX is linked, weak, into `ref_metal` only, on Apple platforms, for the selectable scalers and frame generation |
 | [0012](0012-metalfx-in-the-client.md) | MetalFX is also linked, weak, into the macOS client, used only by `upscale_textures <2\|4> metalfx` (extends 0011) |
+| [0014](0014-no-performance-gating.md) | No feature is gated on performance: capability only, no performance target as acceptance, no card needs an M1-class Mac (supersedes the RT7 apple7 target and RT-primary's apple9-only limit) |
