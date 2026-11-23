@@ -362,7 +362,7 @@ need_tools() {
 }
 # the external tools record and replay call (make and cc are optional: a
 # missing make skips the staleness check, compare alone builds framediff)
-pins_tools="awk basename cat cksum date dirname find git grep head ls mkdir rm sleep tr wc"
+pins_tools="awk basename cat cksum date dirname find git grep head ls mkdir ps rm sleep tr wc"
 # build_tool <name> <what> <source>...: prints the path of <name> in the store's
 # bin/, built with cc when missing or older than any source (the first is the
 # program). It builds to a temporary name and moves it into place, so a
@@ -447,6 +447,7 @@ scenario_sets() {
     while IFS= read -r line || [ -n "$line" ]; do
         n=$((n+1))
         case $line in ''|//*) continue ;; esac
+        case $line in *[[:cntrl:]]*) die "$label line $n: a tab or other control character in the line (FIX122): $line";; esac
         [[ $line =~ ^set\ [^\ ]+\ [^\ ]+$ ]] || die "$label line $n: not 'set <cvar> <value>' with single spaces: $line"
         read -r verb name value extra <<< "$line"
         [ "$verb" = set ] && [ -n "$value" ] && [ -z "$extra" ] || die "$label line $n: not 'set <cvar> <value>': $line"
@@ -487,28 +488,75 @@ build_args() {
     engine_args+=(+demomap "${PINS_DEMO:-demo1.dm2}")
 }
 
+# pins_bounded <limit> <log> <until> <bin>: runs <bin> with engine_args,
+# its output and errors in <log>, through the one bounded-run primitive
+# (bench_bounded, scripts/bench/core/common.sh; FIX122): in its own process
+# group, the whole group stopped past <limit> seconds (TERM, 5 s of grace,
+# then KILL), or once the function <until> (empty for none) is true. Sets
+# pb_status (the engine's status, or the primitive's) and pb_how
+# (BENCH_BOUNDED_HOW: exit, wall, stopped, until or untold). An INT, TERM or
+# HUP to this script while it runs stops the group first, then exits 130,
+# 143 or 129 (pins_on_signal).
+pins_lib=
+pins_bounded() {
+    local limit=$1 log=$2 until=$3 bin=$4 l
+    if [ -z "$pins_lib" ]; then
+        [ -r "$root/scripts/bench/core/common.sh" ] || die "no bounded-run primitive at scripts/bench/core/common.sh"
+        . "$root/scripts/bench/core/common.sh"
+        exec 8>&-
+        pins_lib=1
+    fi
+    # leading zeros are dropped (the primitive reads 08 as no number); more than 9 digits is refused
+    l=${limit#"${limit%%[!0]*}"}; [ -n "$l" ] || l=0
+    bench_is_uint "$l" || die "PINS_TIMEOUT must be a number of seconds of at most 9 digits, got '$limit'"
+    pb_status=0
+    BENCH_STOP_GRACE=5
+    BENCH_BOUNDED_UNTIL=$until
+    trap 'pins_on_signal 129' HUP
+    trap 'pins_on_signal 130' INT
+    trap 'pins_on_signal 143' TERM
+    bench_bounded "$l" bench_to "$log" "$log" "$bin" "${engine_args[@]}" || pb_status=$?
+    trap - HUP INT TERM
+    BENCH_BOUNDED_UNTIL=
+    pb_how=$BENCH_BOUNDED_HOW
+}
+# pins_on_signal <status>: the trap while the engine runs: the engine's
+# whole process group is stopped (bench_stop_group), then this script exits
+# with <status> (its EXIT trap, when it has one, runs then)
+pins_on_signal() {
+    if bench_deferred "$1"; then return 0; fi
+    trap '' HUP INT TERM
+    if [ -n "${BENCH_BOUNDED_PID:-}" ]; then
+        bench_stop_group "$BENCH_BOUNDED_PID" "" "${BENCH_BOUNDED_REAPED:-}" ||
+            echo "pins: the engine (pid $BENCH_BOUNDED_PID) may still run" >&2
+    fi
+    exit "$1"
+}
+# the primitive's bench_undefer calls bench_on_signal with a signal that came while the engine started
+bench_on_signal() { pins_on_signal "$1"; }
+
 # run_engine <bin> <out> <limit>: runs the engine with engine_args, its
-# output in <out>/engine.log, killed after <limit> seconds; sets run_status
-# (its exit status) and run_timedout (1 when it was killed)
+# output in <out>/engine.log, stopped after <limit> seconds (pins_bounded);
+# sets run_status (its exit status) and run_timedout (1 when it was stopped
+# past the limit, or could not be told about then)
 run_engine() {
-    local bin=$1 out=$2 limit=$3 pid t=0 w
+    local bin=$1 out=$2 limit=$3
     run_status=0; run_timedout=0
-    "$bin" "${engine_args[@]}" > "$out/engine.log" 2>&1 &
-    pid=$!
-    while kill -0 "$pid" 2>/dev/null; do
-        if [ "$t" -ge "$limit" ]; then
-            run_timedout=1
-            kill "$pid" 2>/dev/null || true
-            w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w+1)); done
-            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-            echo "pins: engine killed after ${limit}s (PINS_TIMEOUT)" >> "$out/engine.log"
-            break
-        fi
-        sleep 1; t=$((t+1))
-    done
-    wait "$pid" 2>/dev/null || run_status=$?
+    pins_bounded "$limit" "$out/engine.log" "" "$bin"
+    case $pb_how in
+    exit) run_status=$pb_status ;;
+    stopped)
+        run_status=$pb_status
+        echo "pins: the engine was stopped (a stop signal, or the terminal); ended it" >> "$out/engine.log" ;;
+    *)
+        run_timedout=1
+        echo "pins: engine killed after ${limit}s (PINS_TIMEOUT)" >> "$out/engine.log" ;;
+    esac
     grep -E 'frames,.*fps' "$out/engine.log" > "$out/timedemo.txt" || true
 }
+# pins_map_missing: make-demo's until test: the engine's log says a map is not in the game data
+pins_demo_log=
+pins_map_missing() { grep -q "^Can't find maps/" "$pins_demo_log" 2>/dev/null; }
 # judge_pin <out> <renderer> <limit>: after run_engine, sets reason to why
 # the pin in <out> is not complete (empty when it is) and n to its frames
 judge_pin() {
@@ -2005,21 +2053,15 @@ cmd_make_demo() {
         [ ! -L "$f" ] || die "$f is a symbolic link; make-demo writes only plain files there"
     done
     mkdir -p "$wdir"; rm -f "$demo"; cp "$script" "$wdir/$copy"
-    "$bin" "${engine_args[@]}" > "$log" 2>&1 &
-    local pid=$! t=0 w status=0 timedout=0 missing=0
-    while kill -0 "$pid" 2>/dev/null; do
-        # a map that is not in the game data: the engine stays up, so stop it now
-        if grep -q "^Can't find maps/" "$log" 2>/dev/null; then missing=1; fi
-        if [ "$missing" -ne 0 ] || [ "$t" -ge "$limit" ]; then
-            [ "$missing" -ne 0 ] || timedout=1
-            kill "$pid" 2>/dev/null || true
-            w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w+1)); done
-            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-            break
-        fi
-        sleep 1; t=$((t+1))
-    done
-    wait "$pid" 2>/dev/null || status=$?
+    # a map that is not in the game data: the engine stays up, so it is stopped at once (pins_map_missing)
+    local status=0 timedout=0 missing=0
+    pins_demo_log=$log
+    pins_bounded "$limit" "$log" pins_map_missing "$bin"
+    case $pb_how in
+    exit|stopped) status=$pb_status ;;
+    until) missing=1 ;;
+    *) timedout=1 ;;
+    esac
     rm -f "$wdir/$copy"
     if grep -q "^Can't find maps/" "$log" 2>/dev/null; then missing=1; fi
     local reason="" blocks=""

@@ -561,12 +561,15 @@ bench_stop_group() {
 # bench_spawn recorded (FIX172): once <pid> has gone, or another process has
 # it (another start time), the command has exited (0). While this shell
 # cannot tell (bench_proc_same), it says so once and polls on, and
-# reports a stop only of the command itself. Its standard error is
+# reports a stop only of the command itself. With <until>, the name of a
+# function, it calls that function at every poll while the command runs,
+# and returns 3 once it is true (FIX122). Its standard error is
 # /dev/null (the shell's job notices), all but that line.
 bench_watch() {
 	_bw_p=$1
 	_bw_end=$2
 	_bw_cap=$3
+	_bw_until=${4:-}
 	_bw_n=0
 	_bw_told=
 	bench_spawned "$_bw_p" || return 0
@@ -593,6 +596,9 @@ bench_watch() {
 			;;
 		*) return 0 ;;
 		esac
+		if [ -n "$_bw_until" ] && "$_bw_until"; then
+			return 3
+		fi
 		if [ -n "$_bw_end" ] && [ "$(date +%s)" -gt "$_bw_end" ]; then
 			return 1
 		fi
@@ -633,6 +639,10 @@ bench_end_group() {
 
 BENCH_BOUNDED_PID=
 BENCH_BOUNDED_REAPED=
+BENCH_BOUNDED_HOW=
+BENCH_BOUNDED_QUIT=
+BENCH_BOUNDED_TAG=
+BENCH_BOUNDED_UNTIL=
 
 # bench_bounded <seconds> <command...>: runs the command, standard input
 # from /dev/null, in its own process group (bench_spawn), and stops the
@@ -646,18 +656,52 @@ BENCH_BOUNDED_REAPED=
 # whatever this shell does next (FIX184). Once the command has exited,
 # what it left running in its group is stopped too (bench_end_group, with
 # the same BENCH_STOP_GRACE) before the bound returns.
-# For adapters. The poll settles at every 0.5 s.
+# It is the one bounded-run primitive (FIX122): the adapters,
+# scripts/pins.sh, scripts/ios-sim.sh and scripts/ios-device.sh run their
+# commands through it, and tests/check-bounded-run.sh refuses another
+# TERM, grace and KILL under scripts/. The poll settles at every 0.5 s.
+# What ended the run is in BENCH_BOUNDED_HOW, since a command may itself
+# exit 74, 124 or 125: "exit" (its own status), "wall", "stopped", "until"
+# or "untold" (125). Two settings, each empty for none:
+# BENCH_BOUNDED_QUIT, whole seconds: at that time the group gets TERM (and
+# CONT) once, the line "bench: <BENCH_BOUNDED_TAG>TERM after <n> s" goes
+# to standard output, and the command has to the wall time to end, with
+# its own status (a quit time not under the wall time is never reached);
+# BENCH_BOUNDED_UNTIL, the name of a function: once it is true at a poll,
+# the group is stopped as past the wall time, the status is 124 and
+# BENCH_BOUNDED_HOW "until".
 bench_bounded() {
 	_bb_s=$1
 	shift
 	bench_is_uint "$_bb_s" || bench_die 2 "a wall time is whole seconds"
-	_bb_end=$(($(date +%s) + _bb_s))
+	_bb_q=${BENCH_BOUNDED_QUIT:-}
+	if [ -n "$_bb_q" ]; then
+		bench_is_uint "$_bb_q" || bench_die 2 "a quit time is whole seconds"
+		[ "$_bb_q" -lt "$_bb_s" ] || _bb_q=
+	fi
+	_bb_t0=$(date +%s)
+	_bb_end=$((_bb_t0 + _bb_s))
+	BENCH_BOUNDED_HOW=
 	bench_spawn "$@" < /dev/null
 	BENCH_BOUNDED_PID=$BENCH_SPAWN_PID
 	BENCH_BOUNDED_REAPED=
 	bench_undefer
 	_bb_w=0
-	bench_watch "$BENCH_BOUNDED_PID" "$_bb_end" 0.5 || _bb_w=$?
+	if [ -n "$_bb_q" ]; then
+		bench_watch "$BENCH_BOUNDED_PID" "$((_bb_t0 + _bb_q))" 0.5 "${BENCH_BOUNDED_UNTIL:-}" || _bb_w=$?
+		if [ "$_bb_w" -eq 1 ]; then
+			printf 'bench: %sTERM after %s s\n' "${BENCH_BOUNDED_TAG:-}" "$_bb_q"
+			# Status 2 (cannot tell) sends nothing; the wall time's stop
+			# then says so.
+			if bench_signal_group TERM "$BENCH_BOUNDED_PID" 2> /dev/null; then
+				bench_signal_group CONT "$BENCH_BOUNDED_PID" 2> /dev/null || true
+			fi
+			_bb_w=0
+			bench_watch "$BENCH_BOUNDED_PID" "$_bb_end" 0.5 "${BENCH_BOUNDED_UNTIL:-}" || _bb_w=$?
+		fi
+	else
+		bench_watch "$BENCH_BOUNDED_PID" "$_bb_end" 0.5 "${BENCH_BOUNDED_UNTIL:-}" || _bb_w=$?
+	fi
 	if [ "$_bb_w" -ne 0 ]; then
 		_bb_k=0
 		bench_stop_group "$BENCH_BOUNDED_PID" || _bb_k=$?
@@ -671,6 +715,7 @@ bench_bounded() {
 		BENCH_BOUNDED_PID=
 		bench_spawn_forget "$_bb_p"
 		if [ "$_bb_k" -ne 0 ]; then
+			BENCH_BOUNDED_HOW=untold
 			if [ "$_bb_w" -eq 2 ]; then
 				bench_note "the command stopped (a stop signal, or the terminal), and it could not be stopped: it may still run"
 			else
@@ -679,9 +724,15 @@ bench_bounded() {
 			return 125
 		fi
 		if [ "$_bb_w" -eq 2 ]; then
+			BENCH_BOUNDED_HOW=stopped
 			bench_note "the command stopped (a stop signal, or the terminal); stopped it"
 			return 74
 		fi
+		if [ "$_bb_w" -eq 3 ]; then
+			BENCH_BOUNDED_HOW=until
+			return 124
+		fi
+		BENCH_BOUNDED_HOW=wall
 		bench_note "stopped a command that outlived its wall time of $_bb_s s"
 		return 124
 	fi
@@ -693,7 +744,81 @@ bench_bounded() {
 	BENCH_BOUNDED_PID=
 	BENCH_BOUNDED_REAPED=
 	bench_spawn_forget "$_bb_p"
+	BENCH_BOUNDED_HOW=exit
 	return "$_bb_st"
+}
+
+# bench_to <out> <err> <command...>: becomes the command (exec) with
+# standard output to the file <out> and standard error to <err>; the same
+# path twice opens it once for both. For bench_bounded and bench_spawn, so
+# that a command's output goes to its log while the core's own lines stay
+# on the caller's standard error. A file that cannot be opened ends it
+# with a failure, and so does a command that cannot be run (127).
+bench_to() {
+	_bt_o=$1
+	_bt_e=$2
+	shift 2
+	if [ "$_bt_o" = "$_bt_e" ]; then exec "$@" > "$_bt_o" 2>&1; fi
+	exec "$@" > "$_bt_o" 2> "$_bt_e"
+}
+
+# bench_spawn_running <pid>: the command bench_spawn started as <pid> (not
+# yet collected) is itself still running: <pid> is still that command and
+# not a zombie, or this shell cannot tell (bench_proc_same returns 2), as
+# kill -0 would then answer. For a caller that watches a command it spawned
+# while it does other work.
+bench_spawn_running() {
+	bench_spawned "$1" || return 1
+	_sr_r=0
+	bench_proc_same "$1" "$BENCH_ID_START" || _sr_r=$?
+	case $_sr_r in
+	0)
+		case $BENCH_PS_F in
+		Z*) return 1 ;;
+		esac
+		return 0
+		;;
+	2) return 0 ;;
+	esac
+	return 1
+}
+
+BENCH_AWAIT_STATUS=
+
+# bench_await <pid> <seconds>: waits up to <seconds> (by the clock) for the
+# command bench_spawn started as <pid> to exit (bench_watch). 0 once it has:
+# it is reaped (its status in BENCH_AWAIT_STATUS), what it left running in
+# its process group is stopped (bench_end_group, with BENCH_STOP_GRACE), and
+# it is collected. 1 while it still runs, 2 when it is stopped (a stop
+# signal); it is then neither reaped nor collected, and the caller stops it
+# (bench_stop_group) or waits again.
+bench_await() {
+	_ba_w=0
+	bench_watch "$1" "$(($(date +%s) + $2))" 0.5 || _ba_w=$?
+	[ "$_ba_w" -eq 0 ] || return "$_ba_w"
+	BENCH_AWAIT_STATUS=0
+	wait "$1" 2> /dev/null || BENCH_AWAIT_STATUS=$?
+	bench_end_group "$1" "${BENCH_STOP_GRACE:-10}" || bench_note "stopped what the command left running in its process group"
+	bench_spawn_forget "$1"
+	return 0
+}
+
+# bench_deferred <status>: the first call of the signal trap of a caller of
+# bench_spawn or bench_bounded outside bench.sh (FIX122). While bench_spawn
+# starts a command it keeps the signal for bench_undefer, which calls the
+# caller's bench_on_signal <status> with it once the pid is stored, and is
+# true: the trap then returns. Otherwise it puts standard error back to the
+# caller's when the signal came inside bench_watch or bench_stop_group (fd
+# 8, as bench.sh does), and is false: the trap goes on to stop what it
+# started (bench_stop_group) and exit. The caller closes an inherited fd 8
+# once, before its first spawn (exec 8>&-).
+bench_deferred() {
+	if [ -n "${BENCH_DEFER:-}" ]; then
+		BENCH_DEFERRED=$1
+		return 0
+	fi
+	if (: >&8) 2> /dev/null; then exec 2>&8; fi
+	return 1
 }
 
 # bench_record_untold <pid>: records a command the stop of <pid> could not
