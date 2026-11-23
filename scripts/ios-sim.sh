@@ -92,11 +92,13 @@
 # whole: Com_Quit's "shutting down" line in its engine log (engine.<n>.log,
 # the engine's own, not the launcher's output), or, for a start with no
 # game data, the alert's whole text there (VID_CheckGameData, which quits
-# through Sys_Quit and never prints that line) and Sys_Quit's last line
-# ("------------------------------------") in the app's own output
-# (console.<n>.log), which a crash in the shutdown after the alert never
-# reaches. Without either the app was killed or crashed, and the run
-# fails. --shot SECONDS:
+# through Sys_Quit and never prints that line) and, in the app's own
+# output (console.<n>.log), the alert's text and then Sys_Quit's last line
+# ("------------------------------------") as the last line of the
+# engine's output (Com_Printf prints the same dashes at startup and in
+# the shutdown; empty lines and the launch client's pid line do not
+# count), which a crash in the shutdown after the alert never reaches.
+# Without either the app was killed or crashed, and the run fails. --shot SECONDS:
 # a simctl screenshot that long after each start (DIR/screen.<n>.png),
 # then simctl terminate (that start needs no quit path; an app that ended
 # before the shot says so and takes none). After each start DIR/engine.<n>.log is the
@@ -144,7 +146,7 @@
 # ended before the shot says so; the missing-data quit passes, with or
 # without the rename sentence, while that text's opening sentence alone or
 # inside a longer line fails, and so does a crash after the alert (no
-# Sys_Quit line); a second start that dies before it prints fails, not
+# Sys_Quit line, or a shutdown dash line followed by more output); a second start that dies before it prints fails, not
 # judged by the first one's log; the runtime pick follows one rule, in the
 # default and within a version or name given; a bad version names its
 # runtime and a runtime that cannot be a candidate is skipped.
@@ -473,7 +475,7 @@ launch)
 	# no game data: the engine writes only the missing-data text, shows the alert and ends (VID_CheckGameData, Sys_Quit)
 	nodatatext="Quake II needs its game data. Copy pak0.pak from the baseq2 folder of Quake II into Files > On My iPhone (or iPad) > Quake II > baseq2, then start the game again."
 	case $sc in
-	nodata|alertcrash) printf '%s\n' "$nodatatext" > "$c/qconsole.log" ;;
+	nodata|alertcrash|alertdashmore) printf '%s\n' "$nodatatext" > "$c/qconsole.log" ;;
 	# a pak named in the wrong case: the alert's text ends with the rename sentence
 	nodatarename) printf '%s\n' "$nodatatext The file PAK0.PAK must be renamed with lower case letters, for example pak0.pak." > "$c/qconsole.log" ;;
 	# the opening sentence on a line of its own (--launch "+echo Quake II needs its game data."), then a quit
@@ -511,15 +513,30 @@ launch)
 	p=$!
 	echo $p > "$st/app.pid"
 	echo "sleep $life.$$" > "$st/app.cmd"
-	echo "$4: $p"
+	# nodatarename's launch client prints its pid line only when the app ends (after Sys_Quit's line)
+	[ "$sc" = nodatarename ] || echo "$4: $p"
 	echo "Metal API Validation Enabled"
-	wait "$p"
-	# Sys_Quit's last line, on the app's stdout, after the missing-data alert; alertcrash crashed in the
-	# shutdown before it. nodatarename ends its lines as a terminal does (\r\n, the --console-pty output)
+	# no game data: the app's stdout as the engine's: Com_Printf's own 36-dash lines at startup
+	# (VID_Init, the sound and input init), then the alert's text (Com_Printf), before the alert ends
+	# it (FIX88). nodatarename ends its lines as a terminal does (\r\n, the --console-pty output)
+	dash="------------------------------------"
+	eol='\n'
+	[ "$sc" = nodatarename ] && eol='\r\n'
+	alert=
 	case $sc in
-	nodata|echodata|inlinedata) printf '%s\n' "------------------------------------" ;;
-	nodatarename) printf '%s\r\n' "------------------------------------" ;;
+	nodata|alertcrash|alertdashmore) alert=$nodatatext ;;
+	nodatarename) alert="$nodatatext The file PAK0.PAK must be renamed with lower case letters, for example pak0.pak." ;;
+	esac
+	[ -z "$alert" ] || printf "%s$eol" "------- sound initialization -------" "sound sampling rate: 44100" "$dash" "$dash" "$alert"
+	wait "$p"
+	# Sys_Quit's last line, on the app's stdout, after the missing-data alert, and nothing of the engine's
+	# after it; alertcrash crashed in the shutdown before it; alertdashmore printed a Com_Printf dash line
+	# in the shutdown (the sound's) and more after it, then crashed
+	case $sc in
+	nodata|echodata|inlinedata) printf '%s\n' "$dash" ;;
+	nodatarename) printf '%s\r\n' "$dash" "" "$4: $p" ;;
 	alertcrash) echo "Received signal 11, exiting..." ;;
+	alertdashmore) printf '%s\n' "$dash" "Shutting down the input." "Received signal 11, exiting..." ;;
 	esac
 	# a launch client that ignores TERM and outlives the app
 	[ "$sc" = launchterm ] && { hang 60; }
@@ -929,6 +946,9 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	ST_CMD="run --out @D@/out --no-data" st_case run-missing-data-inline inlinedata fail "does not show its own quit path" 30
 	# FIX88: after the alert the app must reach Sys_Quit's last line: one that crashed in the shutdown fails
 	ST_CMD="run --out @D@/out --no-data" st_case run-missing-data-crash-after-alert alertcrash fail "does not show Sys_Quit's last line" 30
+	# FIX88: Sys_Quit's line is the last of the engine's output: a Com_Printf dash line after the alert
+	# (the shutdown's own) followed by more of the engine's output is not it
+	ST_CMD="run --out @D@/out --no-data" st_case run-missing-data-dash-then-more alertdashmore fail "does not show Sys_Quit's last line" 30
 	# FIX88: each start is judged by its own log: a second start that dies before it prints is not judged by
 	# the first one's log, which holds the shutdown line
 	ST_CMD="run --out @D@/out --no-data --launch +a --launch +b" st_case run-second-start-dies-unprinted seconddies fail "the engine wrote no qconsole.log in Documents/baseq2 after start 2" 30
@@ -1509,6 +1529,23 @@ missing_data_re='^Quake II needs its game data[.,] .*then start the game again\.
 # Sys_Quit's last line, printf to stdout just before exit(0): after the alert the app's own output
 # (--console-pty, console.<n>.log) must reach it, or it crashed in the shutdown (FIX88)
 sys_quit_line='------------------------------------'
+# sys_quit_last <console log>: the app's output, read with any \r of a terminal's line end removed, holds
+# the alert's whole text as a line of its own (Com_Printf echoes it to stdout), and its last line is
+# Sys_Quit's, leaving out empty lines and the launch client's own pid line ("<bundle id>: <pid>", which
+# it may print only when the app ends). Com_Printf prints the same 36 dashes at startup (VID_Init, the
+# sound and input init) and in the shutdown, so a dash line anywhere is not Sys_Quit's; Sys_Quit prints
+# its line just before exit(0), and the engine registers no atexit handler, so nothing of the engine's
+# comes after it. The last line is not the alert's, so the alert's line comes before it (FIX88)
+sys_quit_last()
+{
+	local f=${tmp:?}/console.lines
+	tr -d '\r' < "$1" | BID=$bid awk 'BEGIN { b = ENVIRON["BID"] ": " }
+		$0 == "" { next }
+		index($0, b) == 1 && substr($0, length(b) + 1) ~ /^[0-9]+$/ { next }
+		{ print }' > "$f" || return 1
+	grep -E -e "$missing_data_re" "$f" >/dev/null || return 1
+	[ "$(tail -n 1 "$f")" = "$sys_quit_line" ]
+}
 # data_container: the app's data container into $container (fail closed)
 data_container()
 {
@@ -1622,9 +1659,9 @@ if [ "$mode" = run ]; then
 			if ! grep -E -e "$missing_data_re" "$out/engine.$n.log" >/dev/null; then
 				die "start $n: the app ended and engine.$n.log does not show its own quit path (\"$shutdown_line\", or the missing-data alert's whole text, each a line of its own): it was killed or it crashed"
 			fi
-			# the output's lines may end as a terminal's do (\r\n)
-			if ! tr -d '\r' < "$out/console.$n.log" | grep -F -x -e "$sys_quit_line" >/dev/null; then
-				die "start $n: the app showed the missing-data alert and console.$n.log does not show Sys_Quit's last line (\"$sys_quit_line\"): it crashed in the shutdown"
+			# Sys_Quit's line as the last of the engine's output, after the alert's text (sys_quit_last)
+			if ! sys_quit_last "$out/console.$n.log"; then
+				die "start $n: the app showed the missing-data alert and console.$n.log does not show Sys_Quit's last line (\"$sys_quit_line\") as the last of the engine's output after the alert's text: it crashed in the shutdown"
 			fi
 		fi
 		if [ -d "$docs/scrnshot" ]; then

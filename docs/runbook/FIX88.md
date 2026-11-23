@@ -25,6 +25,13 @@ not by a time). On the old logic it passed ("run ok, 2 start(s)") and left an
 `engine.2.log` copied from start 1; now it fails with the line above and
 leaves no `engine.2.log`.
 
+The removal runs `data_container` before the first launch. An installed
+app's data container exists before its first launch: the run with `--data`
+already copies the paks into it at that point (TASK175's recorded runs on a
+new device, `simctl get_app_container <udid> <bundle> data` right after
+`simctl install`). So the removal keeps failing closed when the lookup fails,
+at start 1 as at any later start.
+
 ## 2. The quit lines were matched loosely
 
 The shutdown line was already matched as a whole line (`grep -F -x`). The
@@ -39,10 +46,28 @@ The fix, for a start with no game data:
   optional rename sentence (`Sys_MissingDataMessage` on every SDK: iOS,
   visionOS, and tvOS, whose text opens with a comma), to the end of the line.
 - The app's own output (`console.N.log`, the `--console-pty` output, read with
-  any `\r` of a terminal's line end removed) must hold `Sys_Quit`'s last line,
-  `------------------------------------` (36 dashes, `printf` to stdout just
-  before `exit(0)`), as a whole line. A crash in the shutdown after the alert
-  never prints it, and fails with "does not show Sys_Quit's last line".
+  any `\r` of a terminal's line end removed) must hold the alert's whole text
+  as a line (`Com_Printf` echoes it to stdout) and end with `Sys_Quit`'s last
+  line, `------------------------------------` (36 dashes, `printf` to stdout
+  just before `exit(0)`): it must be the last line, leaving out empty lines
+  and the launch client's own pid line (`<bundle id>: <pid>`). A crash in the
+  shutdown after the alert never prints it, and fails with "does not show
+  Sys_Quit's last line".
+
+The dash line is not unique to `Sys_Quit`: `Com_Printf` prints the same 36
+dashes, to stdout as well as the log, in `VID_Init` (`src/client/vid/vid.c`),
+the window, sound and input setup (`glimp_sdl3.c`, `sound/sound.c`,
+`input/sdl3.c`) and the server (`sv_game.c`, `sv_init.c`), several of them
+at startup before `VID_CheckGameData` shows the alert, and some in the
+shutdown. A whole dash line anywhere in the output therefore proved nothing.
+Only its position does: `Sys_Quit` prints its line after `CL_Shutdown` and
+`Qcommon_Shutdown` and immediately before `exit(0)`, and nothing in `src`
+registers an `atexit` handler, so nothing of the engine's follows it. The
+rule is "the last line other than an empty one or the launch client's pid
+line", not "the last non-empty line", because the launch client writes its
+pid line into the same output and may write it only when the app ends
+(`launch_app` and the smoke both say so); that line is the launcher's, not
+the engine's, and is matched whole (`<bundle id>: ` and digits only).
 
 Proof, each red on the old logic ("the smoke passed") and green now:
 
@@ -51,6 +76,19 @@ Proof, each red on the old logic ("the smoke passed") and green now:
 | `run-missing-data-echoed` | `echodata` | printed only the opening sentence, as `+echo` would, then quit through `Sys_Quit` |
 | `run-missing-data-inline` | `inlinedata` | printed the whole text inside a longer line |
 | `run-missing-data-crash-after-alert` | `alertcrash` | printed the whole alert text, then crashed before `Sys_Quit`'s line |
+
+The fakes print what the engine prints: `nodata`, `nodatarename` and
+`alertcrash` write `Com_Printf`'s startup dash lines to stdout before the
+alert's text, and the two that pass end with `Sys_Quit`'s line
+(`nodatarename` then an empty line and the launch client's pid line, which
+it prints only at the end). With the startup dashes in place `alertcrash`
+passed again on the first form of this rule (any whole dash line, commit
+`abb3fa92`: "the smoke passed"), and fails now. One more case is red there
+and green now:
+
+| Case | Fake scenario | What the start did |
+|---|---|---|
+| `run-missing-data-dash-then-more` | `alertdashmore` | startup dashes, the alert's text, a dash line in the shutdown, then more engine output and a crash |
 
 Two cases stay green on both: `run-missing-data-quits` (`nodata`, the plain
 alert) and the new `run-missing-data-rename` (`nodatarename`, the alert with
