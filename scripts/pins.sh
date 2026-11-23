@@ -201,6 +201,8 @@ set -eu
 export LC_ALL=C
 root=$(cd "$(dirname "$0")/.." && pwd)
 scen_dir="$root/scripts/pins/scenarios"
+# the bounded-run primitive (FIX122), named once from this checkout: a selftest that points root at a toy tree still runs it
+pins_lib_file="$root/scripts/bench/core/common.sh"
 die() { echo "pins: $*" >&2; exit 1; }
 # usage: the header comment of this file, from line 2 to the first line that is not a comment
 usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$root/scripts/pins.sh"; }
@@ -501,8 +503,8 @@ pins_lib=
 pins_bounded() {
     local limit=$1 log=$2 until=$3 bin=$4 l
     if [ -z "$pins_lib" ]; then
-        [ -r "$root/scripts/bench/core/common.sh" ] || die "no bounded-run primitive at scripts/bench/core/common.sh"
-        . "$root/scripts/bench/core/common.sh"
+        [ -r "$pins_lib_file" ] || die "no bounded-run primitive at scripts/bench/core/common.sh"
+        . "$pins_lib_file"
         exec 8>&-
         pins_lib=1
     fi
