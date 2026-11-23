@@ -264,16 +264,8 @@ def load_options(path):
 
 
 def scenario_cvars(path):
-    """The cvars a scenario file sets."""
-    names = set()
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("set "):
-                parts = line.split()
-                if len(parts) == 3:
-                    names.add(parts[1])
-    return names
+    """The cvars a scenario file sets (refused as parse_scenario refuses)."""
+    return set(k for k, _ in parse_scenario(path))
 
 
 def plan(options, cvars, scenarios):
@@ -342,7 +334,7 @@ def largest_run(options, cvarlist_text, cv, scen_dir, rows):
             scen[sc] = parse_scenario(os.path.join(scen_dir, sc + ".cfg"))
         c = Ctx()
         c.bin, c.basedir, c.width, c.height = "quake2", "-", 1280, 720
-        c.defaults = default_cvars(cv, parse_noset(cvarlist_text), options, dict((k, scenario_cvars(os.path.join(scen_dir, k + ".cfg"))) for k in scen),
+        c.defaults = default_cvars(cv, parse_noset(cvarlist_text), options, dict((k, set(x for x, _ in scen[k])) for k in scen),
                                    parse_archived(cvarlist_text))
         sets = by[oid] + [("metal_stats", "1")]
         a = engine_args(c, scen[sc], sets, ["+demomap", "demo1.dm2"])
@@ -844,15 +836,36 @@ def timed_run(ctx, sc_sets, sets, log, gpu):
     return float(m.group(3)), text
 
 
+SCENARIO_SET_RE = re.compile(r"([a-z0-9_]+) ([^ ]+)")
+
+
 def parse_scenario(path):
+    """The (cvar, value) pairs of a pin scenario, in order. The file is read by `scripts/pins.sh
+    scenario-args`, the one reader of the format (FIX122; no list of refused names is kept here):
+    a scenario it refuses, a reader that cannot be run, and a line of its output that is not
+    `<cvar> <value>` are each refused, never skipped. CVAR_RE and VALUE_RE (no "/") restrict further."""
+    reader = os.path.join(ROOT, "scripts", "pins.sh")
+    try:
+        p = subprocess.run(["/bin/bash", reader, "scenario-args", path], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Refuse("the scenario %s cannot be read: scripts/pins.sh scenario-args did not run (%s)" % (path, e))
+    if p.returncode != 0:
+        why = p.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise Refuse("the scenario %s is refused by scripts/pins.sh scenario-args: %s"
+                     % (path, why[-1][:300] if why else "status %d" % p.returncode))
+    text = p.stdout.decode("utf-8", "replace")
+    if text and not text.endswith("\n"):
+        raise Refuse("scripts/pins.sh scenario-args gave %s a last line with no newline (cut short)" % path)
     out = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("set "):
-                p = line.split()
-                if len(p) == 3:
-                    out.append((p[1], p[2]))
+    for line in text.split("\n")[:-1]:
+        m = SCENARIO_SET_RE.fullmatch(line)
+        if not m:
+            raise Refuse("scripts/pins.sh scenario-args gave a line that is not '<cvar> <value>' for %s: %r" % (path, line[:100]))
+        k, v = m.group(1), m.group(2)
+        if not CVAR_RE.fullmatch(k) or not VALUE_RE.fullmatch(v):
+            raise Refuse("the scenario %s sets %s to %r, which cannot be written safely into a console script" % (path, k, v[:100]))
+        out.append((k, v))
     return out
 
 

@@ -14,6 +14,7 @@
 #                   [--mask-dir d] [--top N] [--delta n]
 #   pins.sh check-content                      the scenarios README's content tags, against the cfg files
 #   pins.sh check-text <trace> [demo [every]]  a captured frame with text the demo's table does not declare (FIX157)
+#   pins.sh scenario-args <file.cfg>           a scenario's cvars, "<cvar> <value>" a line, or its refusal (FIX122)
 #   pins.sh make-demo <name> [--replace]       make demos/<name>.dm2 beside the binary
 #   pins.sh list                               what the store holds
 #   pins.sh selftest [case...]                 no engine, no game data
@@ -143,7 +144,10 @@
 # or the game module (basedir, cddir, game, datadir, cfgdir), is refused, as
 # is a value holding ".." or starting with "-" that is not a number. The driver passes
 # each line to the engine as a "+set" argument, then its own settings, then
-# starts the demo with +demomap. Nothing is written into the game data: with
+# starts the demo with +demomap. scenario-args is that reader alone: it prints
+# the accepted lines of a file as "<cvar> <value>", one a line, or refuses the
+# file with status 1 and the reason. The bench harness's quake2 adapter and
+# the MetalFX report generator read every scenario through it (FIX122). Nothing is written into the game data: with
 # -portable the engine writes beside its binary (qconsole.log,
 # console_history.txt), and with pin capture on it neither reads nor writes
 # config.cfg or autoexec.cfg. A demo that cannot be opened, or whose file
@@ -423,33 +427,55 @@ cmd_check_text() {
     echo "pins: $trace: no undeclared text in a captured frame"
 }
 
-# Fills the global array engine_args for <renderer> <scenario> <outdir>.
-build_args() {
-    local renderer=$1 scenario=$2 out=$3 line verb name value extra n=0
-    engine_args=(-datadir "${PINS_BASEDIR:-}" -portable)
-    # every line is exactly "set <cvar> <value>". Refused: the cvars the driver
-    # sets itself and the ones that choose a data or config directory or the
-    # game module, a value holding "..", and a value starting with "-" unless
-    # it is a plain number. That is all the filter guarantees; the cvars that
-    # remain are the scenario author's to reason about.
+# scenario_sets <file> <label>: the one reader of the scenario format (FIX122).
+# Every line is exactly "set <cvar> <value>"; an empty line and a "//" comment
+# are skipped. Refused, with "<label> line <n>: <why>" and status 1: a file it
+# cannot read, any other line, the cvars the driver sets itself and the ones
+# that choose a data or config directory or the game module, a value holding
+# "..", and a value starting with "-" unless it is a plain number. That is all
+# the filter guarantees; the cvars that remain are the scenario author's to
+# reason about. Prints "<cvar> <value>", a line for each set line in order,
+# and only once the whole file is accepted. build_args and "pins.sh
+# scenario-args" read here, and through scenario-args so do
+# scripts/bench/adapters/quake2.sh and scripts/metalfx-report/mfx.py; those
+# two add restrictions of their own, never an allowance
+# (tests/check-scenario-parsers.sh).
+scenario_sets() {
+    local file=$1 label=$2 line verb name value extra n=0 sets=""
+    [ -f "$file" ] && [ -r "$file" ] || die "$label: not a readable file"
     set -f
     while IFS= read -r line || [ -n "$line" ]; do
         n=$((n+1))
         case $line in ''|//*) continue ;; esac
-        [[ $line =~ ^set\ [^\ ]+\ [^\ ]+$ ]] || die "$scenario.cfg line $n: not 'set <cvar> <value>' with single spaces: $line"
+        [[ $line =~ ^set\ [^\ ]+\ [^\ ]+$ ]] || die "$label line $n: not 'set <cvar> <value>' with single spaces: $line"
         read -r verb name value extra <<< "$line"
-        [ "$verb" = set ] && [ -n "$value" ] && [ -z "$extra" ] || die "$scenario.cfg line $n: not 'set <cvar> <value>': $line"
-        case $name in ''|*[!a-z0-9_]*) die "$scenario.cfg line $n: the cvar must match [a-z0-9_]+, got '$name'";; esac
+        [ "$verb" = set ] && [ -n "$value" ] && [ -z "$extra" ] || die "$label line $n: not 'set <cvar> <value>': $line"
+        case $name in ''|*[!a-z0-9_]*) die "$label line $n: the cvar must match [a-z0-9_]+, got '$name'";; esac
         case $name in pins_*|vid_renderer|vid_fullscreen|r_mode|r_customwidth|r_customheight|s_initsound|vid_highdpiaware)
-            die "$scenario.cfg line $n: $name is set by the driver, a scenario may not set it";; esac
+            die "$label line $n: $name is set by the driver, a scenario may not set it";; esac
         case $name in basedir|cddir|game|datadir|cfgdir)
-            die "$scenario.cfg line $n: $name chooses a directory or the game module, a scenario may not set it";; esac
-        case $value in *..*) die "$scenario.cfg line $n: the value must not contain '..': $value";; esac
-        case $value in -*) [[ $value =~ ^-([0-9]+\.?[0-9]*|\.[0-9]+)$ ]] || die "$scenario.cfg line $n: a value starting with - must be a number: $value";; esac
-        check_arg "$scenario.cfg value" "$value" value
-        engine_args+=(+set "$name" "$value")
-    done < "$scen_dir/$scenario.cfg"
+            die "$label line $n: $name chooses a directory or the game module, a scenario may not set it";; esac
+        case $value in *..*) die "$label line $n: the value must not contain '..': $value";; esac
+        case $value in -*) [[ $value =~ ^-([0-9]+\.?[0-9]*|\.[0-9]+)$ ]] || die "$label line $n: a value starting with - must be a number: $value";; esac
+        check_arg "$label line $n: the value of $name" "$value" value
+        sets="$sets$name $value"$'\n'
+    done < "$file"
     set +f
+    printf '%s' "$sets"
+}
+
+# Fills the global array engine_args for <renderer> <scenario> <outdir>.
+build_args() {
+    local renderer=$1 scenario=$2 out=$3 sets name value
+    engine_args=(-datadir "${PINS_BASEDIR:-}" -portable)
+    sets=$(scenario_sets "$scen_dir/$scenario.cfg" "$scenario.cfg") || exit 1
+    if [ -n "$sets" ]; then
+        set -f
+        while read -r name value; do
+            engine_args+=(+set "$name" "$value")
+        done <<< "$sets"
+        set +f
+    fi
     local hd; hd=$(hidpi) || exit 1
     engine_args+=(+set vid_renderer "$(engine_renderer "$renderer")" +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
@@ -2750,13 +2776,27 @@ st_scenario_lines() { # TASK39 (b, c): only "set <cvar> <value>", never a driver
     case $line in *"+set cl_gun 0 "*"+set pins_dir "*"+set pins_capture 30 +set pins_record trace.q2r +demomap demo1.dm2") ;; *) st_fail "the driver's own arguments must follow the scenario's: $line"; return 1;; esac
     printf '%s\n' 'set timedemo 1' 'set cl_gun -1' 'set cl_gun -0.5' 'set cl_gun -.5' > "$tmp/scen/neg.cfg"
     PINS_DRYRUN=1 cmd_record gl1 neg >/dev/null || st_fail "negative numbers must be accepted" || return 1
-    for bad in 'set pins_capture 1' 'set pins_dir /tmp/x' 'set vid_renderer gl1' 'set r_customwidth 9' 'set s_initsound 1' 'set vid_highdpiaware 1' \
-        'set basedir /opt/x' 'set cddir /opt/x' 'set game mymod' 'set datadir /opt/x' 'set cfgdir /opt/x' \
-        'set timedemo ../x' 'set timedemo a..b' 'set timedemo -datadir' 'set timedemo -cfgdir' 'set timedemo -b' 'set timedemo -1x' 'set timedemo -' \
-        'exec evil.cfg' 'quit' '+set timedemo 1' 'set timedemo' 'set timedemo 1 2' 'set TimeDemo 1' 'set time-demo 1' ' set timedemo 1'; do
-        printf '%s\n' 'set timedemo 1' "$bad" > "$tmp/scen/bad.cfg"
-        if (PINS_DRYRUN=1 cmd_record gl1 bad) >/dev/null 2>&1; then st_fail "scenario line '$bad' must be refused"; return 1; fi
-    done
+    # the cases every reader of the format is held to (tests/check-scenario-parsers.sh)
+    local cases="$root/scripts/pins/scenario-cases.txt" c verdict nr=0 na=0
+    [ -f "$cases" ] || st_fail "no $cases" || return 1
+    while IFS= read -r c || [ -n "$c" ]; do
+        case $c in ''|'#'*) continue;; refuse$'\t'*) verdict=refuse;; accept$'\t'*) verdict=accept;; *) st_fail "scenario-cases.txt: not '<refuse|accept><tab><line>': $c"; return 1;; esac
+        printf '%s\n' 'set timedemo 1' "${c#*$'\t'}" > "$tmp/scen/case.cfg"
+        if [ "$verdict" = refuse ]; then
+            nr=$((nr+1))
+            if (PINS_DRYRUN=1 cmd_record gl1 case) >/dev/null 2>&1; then st_fail "scenario line '${c#*$'\t'}' must be refused"; return 1; fi
+        else
+            na=$((na+1))
+            (PINS_DRYRUN=1 cmd_record gl1 case) >/dev/null 2>&1 || st_fail "scenario line '${c#*$'\t'}' must be accepted" || return 1
+        fi
+    done < "$cases"
+    [ "$nr" -ge 30 ] && [ "$na" -ge 1 ] || st_fail "scenario-cases.txt holds $nr refuse and $na accept cases, too few" || return 1
+    # scenario-args, the reader the other harness scripts call, says the same
+    [ "$(PINS_DRYRUN=1 cmd_record gl1 good | sed 's/.* -portable //; s/ +set vid_renderer .*//')" = "+set timedemo 1 +set cl_gun 0" ] ||
+        st_fail "record must pass on the scenario's own lines" || return 1
+    [ "$(scenario_sets "$tmp/scen/good.cfg" good)" = "timedemo 1
+cl_gun 0" ] || st_fail "scenario_sets must print '<cvar> <value>' a line" || return 1
+    if (scenario_sets "$tmp/scen/no-such.cfg" x) >/dev/null 2>&1; then st_fail "a scenario that cannot be read must be refused"; return 1; fi
 }
 st_store_place() { # TASK39 (d): the store is never inside this repository or another work tree
     if (PINS_STORE="$root/pins-store" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "a store inside the repository must be refused"; return 1; fi
@@ -3498,6 +3538,7 @@ case "${1:-}" in
     check-content) check_content "$scen_dir/README.md" "$scen_dir" && echo "pins: content tags ok";;
     make-demo) [ $# -ge 2 ] || die "usage: pins.sh make-demo <name> [--replace]"; [ -n "${PINS_DRYRUN:-}" ] || lock_self pins-make-demo "$@"; shift; cmd_make_demo "$@";;
     check-text) shift; cmd_check_text "$@";;
+    scenario-args) [ $# -eq 2 ] || die "usage: pins.sh scenario-args <scenario.cfg>"; scenario_sets "$2" "$2";;
     list)     cmd_list;;
     selftest) lock_self pins-selftest "$@"; shift; cmd_selftest "$@";;
     evidence) lock_self pins-evidence "$@"; shift; cmd_evidence "$@";;
