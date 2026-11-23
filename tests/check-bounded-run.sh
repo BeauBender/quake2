@@ -2,48 +2,69 @@
 # tests/check-bounded-run.sh -- one bounded-run primitive in the harness
 # (FIX122, finding AR-14 of docs/reviews/2026-11-17-fork-window.md).
 #
-# bench_bounded and bench_stop_group (scripts/bench/core/common.sh) are the
-# only code under scripts/ that runs a command with a wall time and stops
-# it with TERM, a grace period and KILL. This check holds that in three
-# parts:
+# bench_bounded and bench_stop_group (scripts/bench/core/common.sh) are
+# meant to be the only code under scripts/ that runs a command with a wall
+# time and stops it with TERM, a grace period and KILL. This check holds
+# that in three parts:
 #
-#   guard   every line of every file under scripts/ is read, here-doc
-#           bodies, strings and comments included (a file it cannot read
-#           is a failure). No line may send a KILL, and no shell line may
-#           test a pid with kill -0, unless it carries the marker comment
-#           "# bounded-run: allowed: <reason>" at its end; each file may
-#           hold exactly the number of marked lines MARKED pins below, so a
-#           new one needs a visible edit to this check. Each caller
-#           (pins.sh, ios-sim.sh, ios-device.sh, the quake2 adapter) must
-#           run its commands through the primitive: the three scripts
-#           source it, none of the four defines a bench_* function of its
-#           own (bench_on_signal, the primitive's hook, aside), and none
-#           sends a signal itself (any kill, pkill or killall, unmarked).
+#   guard   a lint over the common spellings, which a reviewer keeps
+#           honest; it is no trust boundary. Every line of every file
+#           under scripts/ is read, here-doc bodies, strings and comments
+#           included (a file it cannot read is a failure). A line the rules
+#           below refuse passes only with the marker comment
+#           "# bounded-run: allowed: <reason>" at its end, and MARKED pins
+#           each file's reasons, by their exact text, unique in the file.
+#           Each caller (pins.sh, ios-sim.sh, ios-device.sh, the quake2
+#           adapter) must run its commands through the primitive: the three
+#           scripts source it, none of the four defines a bench_* function
+#           of its own (bench_on_signal, the primitive's hook, aside), and
+#           none sends a signal itself (any kill, pkill or killall,
+#           unmarked).
 #   mutants each one literal change to a copy of scripts/ must be refused,
 #           in its own file and for its own rule.
-#   probe   the disposition probe: each caller runs a stand-in (a child
-#           that starts a grandchild; both live while a flag file exists, so
-#           no verdict depends on the host's speed), and the caller gets
-#           TERM, INT or KILL, or its wall time runs out. What is left
-#           running is read once the caller has exited, then the flag is
-#           removed and the stand-ins end by themselves.
+#   probe   the disposition probe, the behavioural proof: each caller runs
+#           a stand-in (a child that starts a grandchild; both live while a
+#           flag file exists, so no verdict depends on the host's speed),
+#           and the caller gets TERM, INT or KILL, or its wall time runs
+#           out; and ios-sim gets a second TERM in its cleanup's late
+#           bounded call. What is left running is read once the caller has
+#           exited, then the flag is removed and the stand-ins end by
+#           themselves.
 #
-# What the guard matches. Each line is lowered and its " and ' deleted, so
-# kill -s "KILL" is kill -s kill. A KILL is kill, pkill or killall with
-# -9, -KILL, -SIGKILL, -s KILL, -s 9, -n 9 or --signal KILL (or 9), and
-# timeout with -s KILL (or 9), --signal KILL, -k or --kill-after. In a .py
-# file a KILL is also the word SIGKILL (signal.SIGKILL,
+# What the guard matches. It reads logical lines: a shell line that ends
+# in an odd number of backslashes goes on (a whole-line comment does not),
+# and a Python line goes on while a parenthesis is open (50 lines at most).
+# Each is lowered and its " and ' deleted, so kill -s "KILL" is kill -s
+# kill. A number may have leading zeros (-09, -00). A KILL is kill, pkill
+# or killall with -9, -KILL, -SIGKILL, -s KILL, -s 9, -n 9 or --signal
+# KILL (or 9), and timeout with -s KILL (or 9), any prefix of --signal
+# naming KILL or 9 (--sig=KILL), -k, or any prefix of --kill-after
+# (--kill=1). In a .py file a KILL is also the word SIGKILL (signal.SIGKILL,
 # signal.Signals.SIGKILL, from signal import SIGKILL), .kill() (Popen),
 # Signals(9), send_signal(9), and kill or killpg (os.kill, os.killpg) with
-# 9 as the last argument. A liveness test is kill -0, kill -s 0 or kill
-# -n 0 on a shell line that is not a whole-line comment.
+# 9 as the last argument. A liveness test is kill -0, kill -s 0, kill -n 0,
+# kill -EXIT or kill -s EXIT on a shell line that is not a whole-line
+# comment. A marker followed by a quote is in a string, so it is no marker;
+# a marked line holds one kill, pkill, killall or timeout word or Python
+# KILL form at most.
 #
-# What it does not match, and so does not claim: a signal named through a
-# variable (kill -s "$sig", the shape of gate_end in scripts/gate-checks.sh,
-# card FIX186), a liveness test through a function (bench_pid_alive), and
-# subprocess.run(..., timeout=), whose KILL is inside Python (rtvar.py,
-# upscale-report/report.py and mfx.py use it). The probe is the
-# behavioural proof for the callers; the guard only lints their shape.
+# What the pinned reasons guarantee: every marked line carries a reason
+# the check lists for its file, each listed reason is on exactly one line,
+# and each marked line refuses something. So a marker with a new reason
+# needs an edit to MARKED, and so does one taken away. They do not tell
+# which line a reason is on: a KILL removed and another added elsewhere
+# with the same reason passes, and it is the reviewer who reads the diff.
+#
+# What the guard does not see, and so does not claim: a signal named
+# through a variable (kill -s "$sig", the shape of gate_end in
+# scripts/gate-checks.sh, card FIX186, #699); a liveness test through a
+# function (bench_pid_alive); subprocess.run(..., timeout=), whose KILL is
+# inside Python (rtvar.py, upscale-report/report.py and mfx.py use it);
+# other languages (Perl, Ruby); Python inside a shell -c string; eval'd or
+# constructed text; a backslash inside the command word (k\ill); gtimeout;
+# a parenthesis inside a Python string, which the join counts. The source
+# rule below ignores order and dead code: an assignment after the source,
+# or inside if false, passes.
 #
 # A source of the primitive is a line . "$<var>/scripts/bench/core/common.sh",
 # or . "$<v>" where the name <v> occurs once in the whole file other than
@@ -340,7 +361,8 @@ open(p, "w").write(s)' "$_m_d/$_m_f" "$@" || { echo "$me: FAIL: mutant $_m_n doe
 # ---- the disposition probe ----------------------------------------------
 
 # standin <dir>: the stand-in command: records its pid, starts a grandchild
-# that records its own, and both live while <dir>/flag exists
+# that records its own, and both live while <dir>/flag exists; with
+# PROBE_TAG, the pid files are <tag>child.pid and <tag>gc.pid
 mk_standin() {
 	cat > "$1" << 'EOF'
 #!/bin/sh
