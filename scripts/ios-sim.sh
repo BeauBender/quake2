@@ -146,7 +146,7 @@
 # ended before the shot says so; the missing-data quit passes, with or
 # without the rename sentence, while that text's opening sentence alone or
 # inside a longer line fails, and so does a crash after the alert (no
-# Sys_Quit line, or a shutdown dash line followed by more output); a second start that dies before it prints fails, not
+# Sys_Quit line, or a shutdown dash line followed by more output), and so does an alert whose text never reached the app's stdout; a second start that dies before it prints fails, not
 # judged by the first one's log; the runtime pick follows one rule, in the
 # default and within a version or name given; a bad version names its
 # runtime and a runtime that cannot be a candidate is skipped.
@@ -475,7 +475,7 @@ launch)
 	# no game data: the engine writes only the missing-data text, shows the alert and ends (VID_CheckGameData, Sys_Quit)
 	nodatatext="Quake II needs its game data. Copy pak0.pak from the baseq2 folder of Quake II into Files > On My iPhone (or iPad) > Quake II > baseq2, then start the game again."
 	case $sc in
-	nodata|alertcrash|alertdashmore) printf '%s\n' "$nodatatext" > "$c/qconsole.log" ;;
+	nodata|alertcrash|alertdashmore|alertnoecho) printf '%s\n' "$nodatatext" > "$c/qconsole.log" ;;
 	# a pak named in the wrong case: the alert's text ends with the rename sentence
 	nodatarename) printf '%s\n' "$nodatatext The file PAK0.PAK must be renamed with lower case letters, for example pak0.pak." > "$c/qconsole.log" ;;
 	# the opening sentence on a line of its own (--launch "+echo Quake II needs its game data."), then a quit
@@ -527,13 +527,15 @@ launch)
 	nodata|alertcrash|alertdashmore) alert=$nodatatext ;;
 	nodatarename) alert="$nodatatext The file PAK0.PAK must be renamed with lower case letters, for example pak0.pak." ;;
 	esac
+	# alertnoecho: the alert's text is in qconsole.log but never on the app's stdout
+	[ "$sc" = alertnoecho ] && printf '%s\n' "------- sound initialization -------" "sound sampling rate: 44100" "$dash" "$dash"
 	[ -z "$alert" ] || printf "%s$eol" "------- sound initialization -------" "sound sampling rate: 44100" "$dash" "$dash" "$alert"
 	wait "$p"
 	# Sys_Quit's last line, on the app's stdout, after the missing-data alert, and nothing of the engine's
 	# after it; alertcrash crashed in the shutdown before it; alertdashmore printed a Com_Printf dash line
 	# in the shutdown (the sound's) and more after it, then crashed
 	case $sc in
-	nodata|echodata|inlinedata) printf '%s\n' "$dash" ;;
+	nodata|echodata|inlinedata|alertnoecho) printf '%s\n' "$dash" ;;
 	nodatarename) printf '%s\r\n' "$dash" "" "$4: $p" ;;
 	alertcrash) echo "Received signal 11, exiting..." ;;
 	alertdashmore) printf '%s\n' "$dash" "Shutting down the input." "Received signal 11, exiting..." ;;
@@ -949,6 +951,8 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	# FIX88: Sys_Quit's line is the last of the engine's output: a Com_Printf dash line after the alert
 	# (the shutdown's own) followed by more of the engine's output is not it
 	ST_CMD="run --out @D@/out --no-data" st_case run-missing-data-dash-then-more alertdashmore fail "does not show Sys_Quit's last line" 30
+	# FIX88: the alert's text must be on the app's stdout too: a final dash line alone is not enough
+	ST_CMD="run --out @D@/out --no-data" st_case run-missing-data-alert-not-echoed alertnoecho fail "does not show Sys_Quit's last line" 30
 	# FIX88: each start is judged by its own log: a second start that dies before it prints is not judged by
 	# the first one's log, which holds the shutdown line
 	ST_CMD="run --out @D@/out --no-data --launch +a --launch +b" st_case run-second-start-dies-unprinted seconddies fail "the engine wrote no qconsole.log in Documents/baseq2 after start 2" 30

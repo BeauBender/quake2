@@ -124,3 +124,5 @@ neither, but the code ships); built from this branch it lists
 call it. The mutant (the unit build with `YQ2_UNIT_TESTS` left out of
 `TEST_CFLAGS`, `DEBUG=1` so it has a tree of its own) fails the unit build
 on `Sys_ForgetHomeDir`.
+
+SDL3's UIKit message box (`third_party/SDL3/src/video/uikit/SDL_uikitmessagebox.m`) blocks until dismissed. So an unattended `run --no-data` reaches `Sys_Quit` only after a tap, and otherwise runs to the run limit. This is pre-existing and not changed here.
