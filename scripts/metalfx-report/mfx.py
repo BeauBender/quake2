@@ -839,6 +839,10 @@ def timed_run(ctx, sc_sets, sets, log, gpu):
 SCENARIO_SET_RE = re.compile(r"([a-z0-9_]+) ([^ ]+)")
 
 
+# the seconds parse_scenario gives scripts/pins.sh scenario-args, a file read (FIX122)
+SCENARIO_READ_SECONDS = 30
+
+
 def parse_scenario(path):
     """The (cvar, value) pairs of a pin scenario, in order. The file is read by `scripts/pins.sh
     scenario-args`, the one reader of the format (FIX122; no list of refused names is kept here):
@@ -847,13 +851,16 @@ def parse_scenario(path):
     reader = os.path.join(ROOT, "scripts", "pins.sh")
     try:
         p = subprocess.run(["/bin/bash", reader, "scenario-args", path], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=SCENARIO_READ_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise Refuse("the scenario %s cannot be read: scripts/pins.sh scenario-args did not answer within %d s"
+                     % (path, SCENARIO_READ_SECONDS))
     except (OSError, subprocess.SubprocessError) as e:
         raise Refuse("the scenario %s cannot be read: scripts/pins.sh scenario-args did not run (%s)" % (path, e))
     if p.returncode != 0:
-        why = p.stderr.decode("utf-8", "replace").strip().splitlines()
+        why = p.stderr.decode("utf-8", "replace").strip().split("\n")
         raise Refuse("the scenario %s is refused by scripts/pins.sh scenario-args: %s"
-                     % (path, why[-1][:300] if why else "status %d" % p.returncode))
+                     % (path, why[-1][:300] if why[-1] else "status %d" % p.returncode))
     text = p.stdout.decode("utf-8", "replace")
     if text and not text.endswith("\n"):
         raise Refuse("scripts/pins.sh scenario-args gave %s a last line with no newline (cut short)" % path)

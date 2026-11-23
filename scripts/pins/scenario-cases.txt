@@ -54,3 +54,5 @@ refuse	set  timedemo 1
 refuse	set timedemo "1"
 refuse	set timedemo 1;quit
 refuse	# a comment the format does not have
+refuse	set timedemo 1	
+refuse	set timedemo	1
