@@ -264,8 +264,9 @@ mk_standin() {
 	cat > "$1" << 'EOF'
 #!/bin/sh
 d=${PROBE_DIR:?}
-echo $$ > "$d/child.pid"
-sh -c 'echo $$ > "$1/gc.pid"; while [ -e "$1/flag" ]; do sleep 0.1; done' gc "$d" &
+t=${PROBE_TAG:-}
+echo $$ > "$d/${t}child.pid"
+sh -c 'echo $$ > "$1/$2gc.pid"; while [ -e "$1/flag" ]; do sleep 0.1; done' gc "$d" "$t" &
 while [ -e "$d/flag" ]; do sleep 0.1; done
 wait
 EOF
@@ -361,12 +362,101 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$@" < /dev/null > "$_p_d/log" 2>&1 &
 	_p_root=
 }
 
+# probe_late <root>: ios-sim's second signal. A fake xcrun lists, creates a
+# device and hangs in "simctl bootstatus" (the stand-in); TERM ends the
+# script, and its cleanup's late bounded "simctl shutdown" hangs too (the
+# stand-in again, its pid files tagged late-). A second TERM then comes in
+# that late call. One line: the caller's exit, the late child's and
+# grandchild's state once it has exited, and whether its scratch directory
+# is left
+probe_late() {
+	_p_d=$W/p-ios-sim-late-$(basename "$1")
+	rm -rf "$_p_d"
+	mkdir -p "$_p_d/bin" "$_p_d/tmp" || return 1
+	: > "$_p_d/flag"
+	mk_standin "$_p_d/bin/standin"
+	cat > "$_p_d/bin/xcrun" << 'EOF'
+#!/bin/sh
+d=${PROBE_DIR:?}
+u=11111111-2222-3333-4444-555555555555
+case ${2:-} in
+list)
+	case ${3:-} in
+	devices)
+		if [ -e "$d/created" ]; then echo "{\"devices\": {\"r\": [{\"udid\": \"$u\", \"name\": \"probe\"}]}}"
+		else echo '{"devices": {"r": [{"udid": "00000000-0000-0000-0000-000000000000", "name": "other"}]}}'; fi ;;
+	devicetypes) echo '{"devicetypes": [{"name": "iPhone 17", "identifier": "probe.type"}]}' ;;
+	runtimes) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "probe.rt"}]}' ;;
+	*) exit 1 ;;
+	esac ;;
+create) : > "$d/created"; echo "$u" ;;
+bootstatus) exec "$d/bin/standin" ;;
+shutdown) PROBE_TAG=late- exec "$d/bin/standin" ;;
+*) exit 1 ;;
+esac
+EOF
+	cat > "$_p_d/bin/make" << 'EOF'
+#!/bin/sh
+for a; do case $a in IOS_ROOT=*) r=${a#IOS_ROOT=} ;; esac; done
+mkdir -p "$r/Quake2.app" && printf '#!/bin/sh\nexit 0\n' > "$r/Quake2.app/quake2" && chmod +x "$r/Quake2.app/quake2" || exit 1
+printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.example.probe</string></dict></plist>' > "$r/Quake2.app/Info.plist"
+EOF
+	chmod +x "$_p_d/bin/xcrun" "$_p_d/bin/make"
+	PROBE_DIR=$_p_d python3 -I -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])' env PATH="$_p_d/bin:$PATH" TMPDIR="$_p_d/tmp" \
+		/bin/bash "$1/scripts/ios-sim.sh" smoke --out "$_p_d/out" < /dev/null > "$_p_d/log" 2>&1 &
+	_p_c=$!
+	_p_n=0
+	while [ ! -s "$_p_d/gc.pid" ] && [ "$_p_n" -lt 600 ]; do
+		sleep 0.1
+		_p_n=$((_p_n + 1))
+	done
+	[ -s "$_p_d/gc.pid" ] && kill -s TERM "$_p_c"
+	_p_n=0
+	while [ ! -s "$_p_d/late-gc.pid" ] && [ "$_p_n" -lt 600 ]; do
+		sleep 0.1
+		_p_n=$((_p_n + 1))
+	done
+	if [ ! -s "$_p_d/late-gc.pid" ]; then
+		echo "ios-sim late: the late call did not start ($(tail -n 1 "$_p_d/log"))"
+		rm -f "$_p_d/flag"
+		kill -s TERM "$_p_c" 2> /dev/null
+		wait "$_p_c" 2> /dev/null
+		return 1
+	fi
+	kill -s TERM "$_p_c"
+	_p_n=0
+	_p_h=
+	while kill -0 "$_p_c" 2> /dev/null && [ "$_p_n" -lt 600 ]; do
+		sleep 0.1
+		_p_n=$((_p_n + 1))
+	done
+	if kill -0 "$_p_c" 2> /dev/null; then
+		_p_h=" (hung: killed by the probe)"
+		kill -s KILL "$_p_c"
+	fi
+	_p_rc=0
+	wait "$_p_c" 2> /dev/null || _p_rc=$?
+	_p_t=removed
+	[ -z "$(ls -A "$_p_d/tmp")" ] || _p_t=left
+	printf 'ios-sim late: caller exit %s%s; child %s; grandchild %s; scratch %s\n' "$_p_rc" "$_p_h" \
+		"$(verdict "$_p_d/late-child.pid")" "$(verdict "$_p_d/late-gc.pid")" "$_p_t"
+	rm -f "$_p_d/flag"
+	_p_n=0
+	while { [ "$(verdict "$_p_d/late-child.pid")" = runs ] || [ "$(verdict "$_p_d/late-gc.pid")" = runs ]; } && [ "$_p_n" -lt 100 ]; do
+		sleep 0.1
+		_p_n=$((_p_n + 1))
+	done
+}
+
 probe() {
 	for _pc in pins ios-sim ios-device; do
 		for _pk in term int kill wall; do
 			probe_one "$1" "$_pc" "$_pk"
 		done
 	done
+	probe_late "$1"
 }
 
 case ${1:-} in
@@ -542,6 +632,10 @@ for c in pins ios-sim ios-device; do
 	printf '%s\n' "$pout" | grep -E "^$c kill: caller exit 137; child runs; grandchild runs$" > /dev/null ||
 		{ echo "$me: FAIL: probe $c kill: the stand-ins outlive a KILL of the caller"; fails="$fails probe-$c-kill"; }
 done
+# a second signal in ios-sim's late cleanup call stops that call too, and
+# the scratch directory still goes (FIX131)
+printf '%s\n' "$pout" | grep -E "^ios-sim late: caller exit [1-9][0-9]*; child gone; grandchild gone; scratch removed$" > /dev/null ||
+	{ echo "$me: FAIL: probe ios-sim late: a second signal in cleanup's late call must leave nothing running and no scratch"; fails="$fails probe-ios-sim-late"; }
 
 if [ -n "$fails" ]; then
 	echo "$me: failed:$fails"

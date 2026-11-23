@@ -246,7 +246,8 @@ on_signal()
 	exit "$1"
 }
 # bench_undefer calls it with a signal that came while a command started
-bench_on_signal() { on_signal "$1"; }
+# (late_signal in cleanup's late calls)
+bench_on_signal() { if [ -n "${late:-}" ]; then late_signal; else on_signal "$1"; fi; }
 
 # ---- selftest: the smoke against a fake xcrun and make -------------------
 
@@ -1131,6 +1132,25 @@ case "$out/" in "$repo/"*) die "--out must be outside the checkout ($repo), not 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ios-sim.XXXXXX") || die "no scratch directory"
 udid=
 lpid=
+late=
+# late_signal: the INT, TERM and HUP trap while cleanup's own bounded calls
+# run (a second signal): the bounded call it cut short is stopped with its
+# whole group, the scratch directory goes, and the script ends; the device
+# is left, and said. A signal while bench_spawn starts that call is kept
+# for bench_undefer, which calls it again once the pid is stored
+late_signal()
+{
+	if bench_deferred 1; then return 0; fi
+	trap '' INT TERM HUP
+	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then
+		bench_stop_group "$BENCH_BOUNDED_PID" 5 "${BENCH_BOUNDED_REAPED:-}" ||
+			echo "ios-sim: could not tell whether pid $BENCH_BOUNDED_PID is still the command this script started; it may still run" >&2
+		BENCH_BOUNDED_PID=
+	fi
+	[ -z "$udid" ] || echo "ios-sim: a second signal in cleanup: the device $udid is left; delete it with: xcrun simctl delete $udid" >&2
+	rm -rf "${tmp:?}"
+	exit 1
+}
 cleanup()
 {
 	# a second signal must not cut a group stop short (as pins.sh and ios-device.sh do)
@@ -1145,10 +1165,12 @@ cleanup()
 		stop_spawned "$lpid"
 		lpid=
 	fi
-	# those stops are done: the dispositions back, since a command started
-	# while INT, TERM and HUP are ignored inherits that, and the bounded
-	# calls below could then never stop it with TERM (only with SIGKILL)
-	trap - INT TERM HUP
+	# those stops are done: INT, TERM and HUP caught again (late_signal),
+	# not ignored, since a command started while they are ignored inherits
+	# that, and the bounded calls below could then never stop it with TERM
+	# (only with SIGKILL); a caught one is the default in the command
+	late=1
+	trap late_signal INT TERM HUP
 	if [ -n "$udid" ]; then
 		# a run that stopped early still says what its launcher did (its exit status is already a failure)
 		[ -z "$launcher_booted" ] || launcher_report || true
