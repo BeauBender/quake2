@@ -283,12 +283,23 @@ drop() { awk -v u="$1" '$1 != u' "$st/devices" > "$st/devices.new" && mv "$st/de
 # hang <seconds>: this call hangs: it becomes a sleep whose command line, unique to its pid, is in
 # hang.cmd, written before hang.pid, so that the selftest signals that pid only while it still runs it
 hang() { echo "sleep $1.$$" > "$st/hang.cmd"; echo $$ > "$st/hang.pid"; exec sleep "$1.$$"; }
-# decoy <seconds>: a sleep the selftest starts that is not the hung call, in a process group of its own;
-# its command line, unique to this call's pid, is in decoy.cmd and its pid in decoy.pid, and hang.pid
-# names it next, so that the selftest's check of the hung call must leave it running (FIX171)
+# decoy: fakedecoy, a stand-in the selftest starts that is not the hung call, alive until the case
+# releases it (FIX189). It is in a process group of its own from the fork on: with job control, bash
+# sets the child's group in the parent too, before $! is known, so a stop of the hung call's group can
+# never reach it (decoy.pgid holds the group read then). It is named only once its traps are set
+# (decoy.ready): its command line, unique to this call's pid, in decoy.cmd and its pid in decoy.pid; and
+# hang.pid names it next, so that the selftest's check of the hung call must leave it running (FIX171).
+# FAKE_DECOY=term, a mutant, then sends it a TERM
 decoy() {
-	python3 -I -c 'import os, sys; os.setpgid(0, 0); os.execvp(sys.argv[1], sys.argv[1:])' sleep "$1.$$" < /dev/null > /dev/null 2>&1 &
-	echo "sleep $1.$$" > "$st/decoy.cmd"; echo $! > "$st/decoy.pid"
+	local w=0 dpid
+	set -m
+	/bin/bash "${0%/*}/fakedecoy" "decoy.$$" < /dev/null > /dev/null 2>&1 &
+	dpid=$!
+	set +m
+	ps -o pgid= -p "$dpid" | tr -d ' ' > "$st/decoy.pgid"
+	while [ ! -e "$st/decoy.ready" ] && [ "$w" -lt 300 ]; do sleep 0.05; w=$((w + 1)); done
+	echo "/bin/bash ${0%/*}/fakedecoy decoy.$$" > "$st/decoy.cmd"; echo "$dpid" > "$st/decoy.pid"
+	[ "${FAKE_DECOY:-}" != term ] || kill -TERM "$dpid" # bounded-run: allowed: selftest: the term mutant signals the decoy the fake started
 }
 case ${1:-} in
 list)
@@ -296,7 +307,7 @@ list)
 	devices)
 		case $sc in
 		hang) hang 30 ;;
-		hangdecoy) [ -e "$st/decoy.pid" ] || { decoy 40; echo "sleep 30.$$" > "$st/hang.cmd"; cat "$st/decoy.pid" > "$st/hang.pid"; } ;;
+		hangdecoy) [ -e "$st/decoy.pid" ] || { decoy; echo "sleep 30.$$" > "$st/hang.cmd"; cat "$st/decoy.pid" > "$st/hang.pid"; } ;;
 		samename) grep -q '^55555555-' "$st/devices" || printf '%s\n' "55555555-5555-5555-5555-555555555555 yq2-ios-sim-$PPID" >> "$st/devices" ;;
 		empty) exit 0 ;;
 		listfail) echo "fake xcrun: CoreSimulatorService is not running" >&2; exit 1 ;;
@@ -394,7 +405,7 @@ spawn)
 		restart) [ "$n" -gt 1 ] && lp=200 ;;
 		bootcrash) lp=200; ls=-11 ;;
 		hang1) [ "$n" -eq 1 ] && { hang 180; } ;;
-		hang1decoy) [ "$n" -eq 1 ] && { decoy 40; echo "sleep 180.$$" > "$st/hang.cmd"; cat "$st/decoy.pid" > "$st/hang.pid"; exec sleep "180.$$"; } ;;
+		hang1decoy) [ "$n" -eq 1 ] && { decoy; echo "sleep 180.$$" > "$st/hang.cmd"; cat "$st/decoy.pid" > "$st/hang.pid"; exec sleep "180.$$"; } ;;
 		hang2) [ "$n" -gt 1 ] && { hang 180; } ;;
 		qfail) [ "$n" -gt 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		qfailbase) [ "$n" -eq 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
@@ -559,6 +570,32 @@ delete)
 *) exit 1 ;;
 esac
 EOF
+	cat > "${sroot:?}/bin/fakedecoy" <<'EOF'
+#!/bin/bash
+# the decoy of "scripts/ios-sim.sh selftest" (FIX171, FIX189), "fakedecoy decoy.<pid>": not the hung
+# call. It lives until the case releases it (decoy.release in $FAKE_STATE) or its state directory goes,
+# never on a fixed lifetime; a TERM, HUP or INT that ends it is recorded in decoy.sig, and its own end
+# in decoy.end. FAKE_DECOY=early, a mutant, ends it on its own once the fake has named it
+st=${FAKE_STATE:?}
+for s in TERM HUP INT; do trap "echo $s > \"\$st/decoy.sig\"; exit 1" "$s"; done
+: > "$st/decoy.ready"
+n=0
+while [ ! -e "$st/decoy.release" ]; do
+	[ -d "$st" ] || exit 0
+	if [ "${FAKE_DECOY:-}" = early ] && [ -s "$st/decoy.pid" ]; then
+		echo "the early mutant ended it" > "$st/decoy.end"
+		exit 0
+	fi
+	# a selftest that was killed before its release removes no state directory: a cap far past any case
+	n=$((n + 1))
+	if [ "$n" -gt 6000 ]; then
+		echo "its cap of 6000 polls ran out" > "$st/decoy.end"
+		exit 0
+	fi
+	sleep 0.1
+done
+echo released > "$st/decoy.end"
+EOF
 	cat > "${sroot:?}/bin/make" <<'EOF'
 #!/bin/bash
 # the fake make of "scripts/ios-sim.sh selftest": an app with an Info.plist
@@ -659,7 +696,7 @@ EOF
 		t0=$(date +%s)
 		cmd=${ST_CMD:-smoke --out @D@/out}; cmd=${cmd//@D@/$d}
 		# ST_CWD: the directory the script runs in; no pathname expansion of the words of the command
-		( set -f; cd "${ST_CWD:-.}" && bounded "${ST_OUTER:-60}" "${d:?}/run.log" env -u IOS_SIM_SDK -u IOS_SIM_BACKGROUND_APP -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_LAUNCHER PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
+		( set -f; cd "${ST_CWD:-.}" && bounded "${ST_OUTER:-60}" "${d:?}/run.log" env -u IOS_SIM_SDK -u IOS_SIM_BACKGROUND_APP -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_LAUNCHER -u FAKE_DECOY PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
 			bash "$self" $cmd ) || rc=$?
 		t0=$(( $(date +%s) - t0 ))
@@ -723,7 +760,7 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 		mkdir -p "${d:?}/state" || die "cannot create $d"
 		printf '%s\n' "11111111-1111-1111-1111-111111111111 Owner iPhone" \
 			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
-		set -- env -u IOS_SIM_SDK -u IOS_SIM_BACKGROUND_APP -u IOS_SIM_LAUNCHER_CRASH_OK PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO=extra FAKE_LAUNCHER="$launcher" \
+		set -- env -u IOS_SIM_SDK -u IOS_SIM_BACKGROUND_APP -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_DECOY PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO=extra FAKE_LAUNCHER="$launcher" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10
 		if [ "$sig" = INT ]; then
 			"$@" python3 -I -c "$dfl" "${d:?}/intdisp" bash "$self" smoke --out "${d:?}/out" > "${d:?}/run.log" 2>&1 &
@@ -1086,6 +1123,12 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	st_decoy hung-call-decoy
 	st_signal launcher-term-decoy TERM hang1decoy
 	st_decoy launcher-term-decoy
+	# the decoy check tells a signal from an end of its own, and neither from a decoy left alone (FIX189):
+	# two mutants of the fake's decoy, each caught by its own reason
+	st_case hung-call-decoy-term hangdecoy ok "launcher: no crash" 30 FAKE_DECOY=term
+	st_decoy hung-call-decoy-term "which is not the hung call, was signalled (TERM)"
+	st_case hung-call-decoy-early hangdecoy ok "launcher: no crash" 30 FAKE_DECOY=early
+	st_decoy hung-call-decoy-early "ended on its own before the release (the early mutant ended it)"
 	# only this run's device is asked
 	st_has launcher-no-crash-iphone nogrep state/calls "spawn 11111111-"
 	st_has launcher-no-crash-iphone grep state/calls "simctl spawn AAAAAAAA-"
