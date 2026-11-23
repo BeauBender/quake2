@@ -36,11 +36,25 @@
 # longer being that process: it died, by any signal, SIGKILL included.
 # GATE_PARENT is not passed on to the checks. When a check ends, what it
 # left running is ended the same way before the check is counted done.
+#
+# Every one of those stops goes through the bench core's bounded-run
+# primitive (bench/core/common.sh in this script's directory, FIX186): each
+# check is recorded when it starts (bench_spawn_id), so that its group is
+# signalled only while it is still that check's, and bench_stop_groups
+# sends the TERM, waits the grace and sends the KILL. Without the primitive
+# the run fails before any check starts, with status 2.
 set -eu
 me=gate
 # the seconds from SIGTERM to SIGKILL, so that a check's own cleanup trap
 # can finish on a loaded host
 gate_grace=10
+gate_core=$(dirname "$0")/bench/core/common.sh
+if [ ! -r "$gate_core" ]; then
+	echo "$me: cannot read the bounded-run primitive, $gate_core" >&2
+	exit 2
+fi
+# shellcheck source=bench/core/common.sh
+. "$gate_core"
 
 # gate_jobs: GATE_JOBS, else half the CPUs, at least 1
 gate_jobs() {
@@ -64,7 +78,9 @@ gate_in() {
 
 # gate_start <index>: starts check <index>, its output into its own log, as
 # the leader of a process group of its own (job control, set -m, is on for
-# that one command), so that gate_cleanup can end everything it started.
+# that one command), so that gate_cleanup can end everything it started;
+# then records it for the primitive (bench_spawn_id; gate_end records a
+# check that a signal kept from it).
 # Job control also leaves its SIGINT as it was: a check started in the
 # background without it would ignore SIGINT, and so would all it runs.
 gate_start() {
@@ -85,6 +101,7 @@ gate_start() {
 	trap '' TTOU # the scheduler again, once the check has started
 	_grun="$_grun $1:$_gsp:$_gs0"
 	_gnr=$((_gnr + 1))
+	bench_spawn_id "$_gsp" || :
 }
 
 # gate_reap: waits until at least one running check has ended, records the
@@ -104,7 +121,7 @@ gate_reap() {
 			_grr=${_grp#*:}
 			_grpid=${_grr%%:*}
 			_grt0=${_grr#*:}
-			if kill -0 "$_grpid" 2> /dev/null; then # bounded-run: allowed: gate_reap: the gate scheduler polls its checks; it signals none
+			if bench_pid_alive "$_grpid"; then
 				_grk="$_grk $_grp"
 				continue
 			fi
@@ -112,6 +129,7 @@ gate_reap() {
 			wait "$_grpid" || _grst=$?
 			# what it left running in its group
 			gate_end "$_grpid"
+			bench_spawn_forget "$_grpid"
 			printf '%s %s\n' "$_grst" "$(($(date +%s) - _grt0))" > "$_gd/$_grk_i.end"
 			_grd=$((_grd + 1))
 		done
@@ -158,38 +176,21 @@ gate_phase() {
 	while [ "$_gnr" -gt 0 ]; do gate_reap; done
 }
 
-# gate_kill <signal> <group>...: sends <signal> to each of those process
-# groups, every process in it
-gate_kill() {
-	_gks=$1
-	shift
-	for _gkg; do kill -s "$_gks" -- "-$_gkg" 2> /dev/null || :; done
-}
-
-# gate_alive <group>...: some process of one of those groups is still there
-gate_alive() {
-	for _gag; do
-		if kill -0 -- "-$_gag" 2> /dev/null; then return 0; fi # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186
-	done
-	return 1
-}
-
 # gate_parent <pid>: this script's parent is still <pid> (ps fails: it is not)
 gate_parent() {
 	case " $(ps -o ppid= -p "$$" 2> /dev/null) " in *" $1 "*) return 0 ;; esac
 	return 1
 }
 
-# gate_end <group>...: ends those process groups, every process in them:
-# TERM, up to gate_grace s for them to end, then KILL
+# gate_end <group>...: ends those process groups of checks, every process
+# in them: TERM to all, up to gate_grace s for them to end, then KILL to
+# what is left, all through the primitive (bench_stop_groups, with "group":
+# a check's own pid is not waited for here). A group is there while it has
+# a member (bench_group_alive). A check that a signal kept from its record
+# in gate_start is recorded here first.
 gate_end() {
-	gate_kill TERM "$@"
-	_gew=0
-	while [ "$_gew" -lt $((gate_grace * 5)) ] && gate_alive "$@"; do
-		sleep 0.2 2> /dev/null || sleep 1
-		_gew=$((_gew + 1))
-	done
-	gate_kill KILL "$@"
+	for _gep; do bench_spawned "$_gep" || bench_spawn_id "$_gep" || :; done
+	bench_stop_groups "$gate_grace" group "$@" || :
 }
 
 # gate_cleanup: on the way out (a signal, an error, the parent gone), ends

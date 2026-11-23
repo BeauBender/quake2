@@ -509,43 +509,84 @@ bench_untold() {
 # 2 when it could not tell and so may have left the command running (only
 # a command that led no group: bench_signal_group). Its standard error is
 # /dev/null (the shell's notice of a job killed by a signal names an
-# internal path), all but that line.
+# internal path), all but that line. It is bench_stop_groups for one pid.
 bench_stop_group() {
-	_sg_p=$1
-	_sg_g=${2:-${BENCH_STOP_GRACE:-10}}
-	_sg_o=${3:-}
-	case $_sg_p in
-	'' | 0 | 1 | *[!0-9]*) return 0 ;;
-	esac
-	_sg_r=0
-	bench_signal_group TERM "$_sg_p" "$_sg_o" || _sg_r=$?
-	case $_sg_r in
-	1) return 0 ;;
-	2)
-		bench_untold "$_sg_p" 2>&8
-		return 2
-		;;
-	esac
-	bench_signal_group CONT "$_sg_p" "$_sg_o" || true
+	bench_stop_groups "${2:-${BENCH_STOP_GRACE:-10}}" "${3:-}" "$1"
+}
+
+# bench_stop_groups <grace> <how> <pid>...: bench_stop_group (above) for
+# every <pid> at once, and the one TERM, grace and KILL code of the core
+# (FIX186): TERM and CONT to each, one grace of <grace> seconds for all of
+# them, KILL to each one that is left, up to 2 s for all to go, then the
+# reap of each (none with <how> "group"; otherwise <how> is empty). So each
+# gets its TERM once, and the last its KILL as soon as the first. A pid that
+# is empty, 0, 1 or not a number is skipped. Returns 2 when this shell could
+# not tell for one of them (that one is left as bench_stop_group leaves
+# it), else 0. The gate's scheduler (scripts/gate-checks.sh) stops its
+# checks' process groups through it, each recorded at its start with
+# bench_spawn_id.
+bench_stop_groups() {
+	_sg_g=$1 _sg_o=$2
+	shift 2
+	_sg_l= _sg_rv=0
+	for _sg_p; do
+		case $_sg_p in
+		'' | 0 | 1 | *[!0-9]*) continue ;;
+		esac
+		_sg_r=0
+		bench_signal_group TERM "$_sg_p" "$_sg_o" || _sg_r=$?
+		case $_sg_r in
+		0)
+			bench_signal_group CONT "$_sg_p" "$_sg_o" || true
+			_sg_l="$_sg_l $_sg_p"
+			;;
+		2)
+			bench_untold "$_sg_p" 2>&8
+			_sg_rv=2
+			;;
+		esac
+	done
+	[ -n "$_sg_l" ] || return "$_sg_rv"
 	_sg_end=$(($(date +%s) + _sg_g))
-	while bench_group_alive "$_sg_p" "$_sg_o" && [ "$(date +%s)" -le "$_sg_end" ]; do
+	# shellcheck disable=SC2086 # a list of pids
+	while bench_groups_alive "$_sg_o" $_sg_l && [ "$(date +%s)" -le "$_sg_end" ]; do
 		bench_nap 0.1
 	done
-	if bench_group_alive "$_sg_p" "$_sg_o"; then
-		_sg_r=0
-		bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?
-		if [ "$_sg_r" -eq 2 ]; then
-			bench_untold "$_sg_p" 2>&8
-			return 2
+	_sg_k=
+	for _sg_p in $_sg_l; do
+		if bench_group_alive "$_sg_p" "$_sg_o"; then
+			_sg_r=0
+			bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?
+			if [ "$_sg_r" -eq 2 ]; then
+				bench_untold "$_sg_p" 2>&8
+				_sg_rv=2
+				continue
+			fi
 		fi
-		_sg_n=0
-		while bench_group_alive "$_sg_p" "$_sg_o" && [ "$_sg_n" -lt 20 ]; do
-			bench_nap 0.1
-			_sg_n=$((_sg_n + 1))
-		done
+		_sg_k="$_sg_k $_sg_p"
+	done
+	_sg_n=0
+	# shellcheck disable=SC2086
+	while bench_groups_alive "$_sg_o" $_sg_k && [ "$_sg_n" -lt 20 ]; do
+		bench_nap 0.1
+		_sg_n=$((_sg_n + 1))
+	done
+	if [ "$_sg_o" != group ]; then
+		for _sg_p in $_sg_k; do wait "$_sg_p" || true; done
 	fi
-	[ "$_sg_o" = group ] || wait "$_sg_p" || true
+	return "$_sg_rv"
 } 8>&2 2> /dev/null
+
+# bench_groups_alive <how> <pid>...: bench_group_alive, with <how>, for at
+# least one of them
+bench_groups_alive() {
+	_gs_o=$1
+	shift
+	for _gs_p; do
+		if bench_group_alive "$_gs_p" "$_gs_o"; then return 0; fi
+	done
+	return 1
+}
 
 # bench_watch <pid> <end> <cap>: polls the command bench_spawn started as
 # <pid> until it exits (0), it is stopped (2: state T, a stop signal, or

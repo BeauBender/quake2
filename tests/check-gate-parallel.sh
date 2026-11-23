@@ -53,6 +53,17 @@
 #   watchfork the same for test.sh's start of the lock watcher, under the
 #             lock, and the scheduler's own standard error reaches test.sh's;
 #   leave    what a passing check leaves running is gone after the run;
+#   stop      the disposition probe of the gate's stop (FIX186, through the
+#             bounded-run primitive): a check and its grandchild, each held
+#             by a flag file and each writing every signal it gets to a
+#             record file of its own; SIGTERM, SIGINT and SIGHUP to the
+#             scheduler (status 143, 130, 129), and its own end once the
+#             check's flag is gone (status 0, the grandchild stopped): both
+#             get SIGTERM and are gone. Both ignoring SIGTERM: SIGKILL ends
+#             them, no sooner than the 10 s grace. The scheduler started
+#             with SIGINT ignored (as merge-gate.sh starts the gate): SIGINT
+#             then SIGTERM give status 143, both stopped (no SIGINT when it
+#             is ignored here);
 #   intskip   interrupt, testsh and sigs, run by this self-test started
 #             with SIGINT ignored, each say what they skip and pass.
 # Then each case is shown failing against at least one mutant of the
@@ -138,6 +149,10 @@ skipint() { say "SIGINT is ignored where this check runs, so $1 is skipped"; }
 # <the check's pid> <the scheduler's pid>". Mode probe logs how SIGINT,
 # SIGQUIT, SIGHUP, SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU reach the check.
 mkdir "${tmp:?}/bin" "${tmp:?}/shim" "${tmp:?}/make"
+# the scheduler sources the bounded-run primitive from bench/core/ in its
+# own directory (FIX186): its mutants are written to $tmp, so it is there too
+mkdir -p "${tmp:?}/bench/core"
+cp "$top/scripts/bench/core/common.sh" "${tmp:?}/bench/core/common.sh"
 cat > "${tmp:?}/fake" << 'EOF'
 #!/bin/sh
 n=${0##*/}
@@ -211,6 +226,27 @@ kill) kill -KILL $$ ;;
 esac
 exit "$status"
 EOF
+# The stand-in of the stop case: stand <who> <dir> [ignore] writes its pid
+# to <dir>/<who>.pid and lives while <dir>/<who>.flag exists; every SIGTERM,
+# SIGINT or SIGHUP it gets is a line in <dir>/<who>.sig, after which it
+# exits (with "ignore" it goes on after a SIGTERM); its end by the flag is
+# the line "end" there. The check (who=check) starts the grandchild (gc).
+cat > "${tmp:?}/stand" << 'EOF'
+#!/bin/sh
+who=$1 r=$2 ign=${3:-}
+for s in TERM INT HUP; do
+	if [ "$s" = TERM ] && [ -n "$ign" ]; then
+		trap "echo $s >> \"\$r/$who.sig\"" "$s"
+	else
+		trap "echo $s >> \"\$r/$who.sig\"; exit 1" "$s"
+	fi
+done
+if [ "$who" = check ]; then "$0" gc "$r" "$ign" & fi
+echo "$$" > "$r/$who.pid"
+while [ -e "$r/$who.flag" ]; do sleep 0.1; done
+echo end >> "$r/$who.sig"
+EOF
+chmod +x "${tmp:?}/stand"
 # shims: cat that cannot read a log; sysctl that prints $GP_NCPU (or fails
 # when it is "fail"); nproc that fails
 printf '%s\n' '#!/bin/sh' 'case $* in *.log) echo "cat: cannot read" >&2; exit 1 ;; esac' 'exec /bin/cat "$@"' > "${tmp:?}/shim/cat"
@@ -705,6 +741,8 @@ gtree() {
 	mkdir "${_gtd:?}/tree" "${_gtd:?}/tree/scripts" "${_gtd:?}/tree/tests"
 	cp "$_gtf" "$_gtd/tree/scripts/test.sh"
 	cp "$SCHED" "$_gtd/tree/scripts/gate-checks.sh"
+	mkdir -p "${_gtd:?}/tree/scripts/bench/core"
+	cp "$(dirname "$SCHED")/bench/core/common.sh" "$_gtd/tree/scripts/bench/core/common.sh"
 	chmod +x "$_gtd/tree/scripts/test.sh" "$_gtd/tree/scripts/gate-checks.sh"
 	spec "$_gtd" a "$@"
 	for _tn in $(sed -n -e 's/^gate_first="\(.*\)"$/\1/p' -e 's/^gate_serial="\(.*\)"$/\1/p' "$_gtf") check-z.sh; do
@@ -1314,6 +1352,85 @@ c_leave() {
 	[ "$rc" -eq 0 ] && [ "$(status "$d" a)" = ok ] || { say "leave: status $rc, want 0, and check-a.sh passed"; return 1; }
 }
 
+# stop_one <signal> <status> [ignore] [intign]: one run of the stop case
+# (see the top of this file) on a check-a.sh stand-in, GATE_JOBS=1. Once
+# both stand-ins have written their pids, the scheduler gets <signal>
+# ("none": the check's flag is removed instead; "INTTERM": SIGINT, then
+# SIGTERM); it must end with <status> within 60 s, and both stand-ins must
+# be gone within 2 s more. Then both flags go, so a stand-in a broken run
+# left ends by itself.
+stop_one() {
+	_od=$(newcase)
+	_or=$_od/rec
+	mkdir "${_or:?}"
+	: > "$_or/check.flag"
+	: > "$_or/gc.flag"
+	printf '%s\n' '#!/bin/sh' 'exec "$GP_STAND" check "$GP_REC" $GP_IGN' > "$_od/check-a.sh"
+	chmod +x "$_od/check-a.sh"
+	_ow=
+	[ -z "${4:-}" ] || _ow='trap "" INT;'
+	launch "$_od" env GATE_JOBS=1 GP_STAND="$tmp/stand" GP_REC="$_or" GP_IGN="${3:-}" TMPDIR="$_od/td" \
+		sh -c "$_ow"' exec sh "$@"' sh "$SCHED" "" "" "$_od/check-a.sh"
+	_obad=
+	_on=0
+	while [ ! -s "$_or/check.pid" ] || [ ! -s "$_or/gc.pid" ]; do
+		if [ "$_on" -ge 300 ] || ! kill -0 "$_lp" 2> /dev/null; then
+			_obad="the stand-ins did not start"
+			break
+		fi
+		sleep 0.2
+		_on=$((_on + 1))
+	done
+	_ot0=$(date +%s)
+	if [ -z "$_obad" ]; then
+		case $1 in
+		none) rm -f "$_or/check.flag" ;;
+		INTTERM)
+			kill -s INT "$_lp" 2> /dev/null || :
+			kill -s TERM "$_lp" 2> /dev/null || :
+			;;
+		*) kill -s "$1" "$_lp" 2> /dev/null || : ;;
+		esac
+	fi
+	_ors=0
+	lwait 60 || _ors=$?
+	_ot=$(($(date +%s) - _ot0))
+	_ocp=$(cat "$_or/check.pid" 2> /dev/null || :)
+	_ogp=$(cat "$_or/gc.pid" 2> /dev/null || :)
+	_on=0
+	while [ "$_on" -lt 10 ] && { { [ -n "$_ocp" ] && ! dead "$_ocp"; } || { [ -n "$_ogp" ] && ! dead "$_ogp"; }; }; do
+		sleep 0.2
+		_on=$((_on + 1))
+	done
+	_oleft=
+	[ -z "$_ocp" ] || dead "$_ocp" || _oleft="$_oleft check"
+	[ -z "$_ogp" ] || dead "$_ogp" || _oleft="$_oleft grandchild"
+	_ocs=$(tr '\n' ' ' < "$_or/check.sig" 2> /dev/null || :)
+	_ogs=$(tr '\n' ' ' < "$_or/gc.sig" 2> /dev/null || :)
+	rm -f "$_or/check.flag" "$_or/gc.flag"
+	say "stop: ${1}${3:+ (both ignore SIGTERM)}${4:+ (SIGINT ignored at the start)}: status $_ors, check got: ${_ocs:-nothing}, grandchild got: ${_ogs:-nothing}, left:${_oleft:- none}, $_ot s"
+	[ -z "$_obad" ] || { say "stop $1: $_obad"; return 1; }
+	[ "$_ors" -eq "$2" ] || { say "stop $1: status $_ors, want $2"; return 1; }
+	[ -z "$_oleft" ] || { say "stop $1: left running:$_oleft"; return 1; }
+	if [ "$1" = none ]; then _owant='end '; else _owant='TERM '; fi
+	[ "$_ocs" = "$_owant" ] || { say "stop $1: the check got '$_ocs', want '$_owant'"; return 1; }
+	[ "$_ogs" = 'TERM ' ] || { say "stop $1: the grandchild got '$_ogs', want 'TERM '"; return 1; }
+	if [ -n "${3:-}" ] && [ "$_ot" -lt 10 ]; then
+		say "stop $1: the stand-ins that ignore SIGTERM were killed after $_ot s, before the 10 s grace"
+		return 1
+	fi
+	return 0
+}
+c_stop() {
+	_ol="TERM:143 INT:130 HUP:129 none:0"
+	[ -n "$INT_OK" ] || { skipint "stop's SIGINT"; _ol="TERM:143 HUP:129 none:0"; }
+	for _oc in $_ol; do
+		stop_one "${_oc%:*}" "${_oc#*:}" || return 1
+	done
+	stop_one TERM 143 ignore || return 1
+	stop_one INTTERM 143 "" intign
+}
+
 # intskip: interrupt, testsh and sigs, run by this self-test (or $SELF)
 # alone (GP_ONLY), started with SIGINT ignored: each says what it skips,
 # none fails, and the run passes
@@ -1366,7 +1483,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave intskip ttyself"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave stop intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
@@ -1434,16 +1551,32 @@ mutant no-checks errors 'if [ $# -eq 0 ]; then' 'if false; then'
 # case's own scratch and does not exist, so every write fails there
 mutant no-scratch errors '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX") ||' '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX" || echo "${TMPDIR:?}/gate.none") ||'
 mutant guard-off guard 'if [ "$_gnext" -le "$_gn" ]; then' 'if false; then'
-mutant group-kill-dropped interrupt 'kill -s "$_gks" -- "-$_gkg"' 'kill -s "$_gks" -- "$_gkg"'
 mutant no-process-group interrupt '	set -m' '	:'
-mutant no-kill-after-grace interrupt '	gate_kill KILL "$@"' '	:'
 mutant grace-3s interrupt 'gate_grace=10' 'gate_grace=3'
+mutant grace-3s-stop stop 'gate_grace=10' 'gate_grace=3'
+mutant no-stop stop '	bench_stop_groups "$gate_grace" group "$@" || :' '	:'
 mutant no-parent-check kgrp 'if [ -n "$_gparent" ] && ! gate_parent "$_gparent"; then' 'if false; then'
 mutant no-end-at-exit leave '			gate_end "$_grpid"' '			:'
 intmut mutant int-passes interrupt "trap 'exit 130' INT" "trap 'exit 0' INT"
 mutant term-goes-on interrupt1 "trap 'exit 143' TERM" "trap ':' TERM"
 mutant term-passes interrupt1 "trap 'exit 143' TERM" "trap 'exit 0' TERM"
 mutant hup-passes interrupt1 "trap 'exit 129' HUP" "trap 'exit 0' HUP"
+
+# mutants of the bounded-run primitive the scheduler sources (FIX186):
+# cmutant <name> <case> <old> <new>, the scheduler as it is beside it
+cmutant() {
+	_cm=$tmp/cm-$1
+	mkdir -p "${_cm:?}/bench/core"
+	cp "$real" "$_cm/gate-checks.sh"
+	lit "$top/scripts/bench/core/common.sh" "$3" "$4" > "$_cm/bench/core/common.sh" ||
+		{ bad "mutant $1 does not apply to scripts/bench/core/common.sh"; return 0; }
+	SCHED=$_cm/gate-checks.sh quiet=1
+	if "c_$2"; then bad "mutant $1 was not caught by case $2"; else mutants=$((mutants + 1)); fi
+	SCHED=$real quiet=0
+}
+cmutant group-kill-dropped interrupt 'kill -s "$1" -- "-$2" 2> /dev/null' 'kill -s "$1" -- "$2" 2> /dev/null'
+cmutant no-kill-after-grace interrupt 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
+cmutant no-kill-after-grace-stop stop 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
 
 # mutants of scripts/test.sh: wmut <name> <case> <old> <new>
 wmut() {
@@ -1489,6 +1622,8 @@ smut() {
 	_smc=$2
 	mkdir "${_sm:?}" "${_sm:?}/tests" "${_sm:?}/scripts"
 	cp "$top/scripts/test.sh" "$top/scripts/gate-checks.sh" "$_sm/scripts/"
+	mkdir -p "${_sm:?}/scripts/bench/core"
+	cp "$top/scripts/bench/core/common.sh" "$_sm/scripts/bench/core/common.sh"
 	lit "$top/tests/check-gate-parallel.sh" "$3" "$4" "smut " > "$_sm/tests/check-gate-parallel.sh" ||
 		{ bad "mutant $1 does not apply to this self-test"; return 0; }
 	shift 4

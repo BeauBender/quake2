@@ -108,8 +108,6 @@ scripts/bench/core/common.sh the primitive: a group still has a member
 scripts/bench/core/common.sh the primitive: bench_signal_group, to the group
 scripts/bench/core/common.sh the primitive: bench_signal_group, to the pid
 scripts/bench/core/lock.sh the lock: its holder group still has a member; it signals none
-scripts/gate-checks.sh gate_reap: the gate scheduler polls its checks; it signals none
-scripts/gate-checks.sh gate_alive: the group test of gate_end, card FIX186
 scripts/test.sh the gate parent watch: it polls the caller, and sends TERM only
 scripts/ios-sim.sh selftest: the fake xcrun terminate, only the app it started
 scripts/ios-sim.sh selftest: ends the fake hung call it checked
@@ -784,16 +782,16 @@ kill -9 "$$" # bounded-run: allowed: borrowed
 mutant marker-one-more scripts/gate-checks.sh 'does not pin: one more' '' '
 kill -0 "$$" # bounded-run: allowed: one more
 '
-mutant marker-reason-twice scripts/gate-checks.sh 'is on 2 lines' '' '
-kill -0 "$$" # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186
+mutant marker-reason-twice scripts/bench/core/lock.sh 'is on 2 lines' '' '
+kill -0 "$$" # bounded-run: allowed: the lock: its holder group still has a member; it signals none
 '
-mutant marker-one-less scripts/gate-checks.sh 'and no line carries it' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' ''
-mutant marker-moved scripts/gate-checks.sh 'no rule refuses' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' '' 'gate_alive() {' 'gate_alive() { # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186'
+mutant marker-one-less scripts/bench/core/lock.sh 'and no line carries it' ' # bounded-run: allowed: the lock: its holder group still has a member; it signals none' ''
+mutant marker-moved scripts/bench/core/lock.sh 'no rule refuses' ' # bounded-run: allowed: the lock: its holder group still has a member; it signals none' '' '	bench_pid_alive "$_lv_c" && return 0' '	bench_pid_alive "$_lv_c" && return 0 # bounded-run: allowed: the lock: its holder group still has a member; it signals none'
 mutant marker-joined scripts/ios-device.sh 'a marker covers one' 'if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal
 				kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: ends the script under test that hung' 'if kill -0 "$spid" 2>/dev/null; then kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: the script under test outlived the signal' '' '
 kill -9 "$$" # bounded-run: allowed: selftest: ends the script under test that hung
 '
-mutant marker-appended scripts/gate-checks.sh 'a marker covers one' 'if kill -0 -- "-$_gag" 2> /dev/null; then return 0; fi #' 'if kill -0 -- "-$_gag" 2> /dev/null; then kill -9 -- "-$_gag"; return 0; fi #'
+mutant marker-appended scripts/bench/core/lock.sh 'a marker covers one' 'kill -0 -- "-$_lv_c" 2> /dev/null #' 'kill -0 -- "-$_lv_c" 2> /dev/null && kill -9 -- "-$_lv_c" #'
 mutant marker-in-echo scripts/gate-checks.sh 'followed by a quote' 'gate_end() {' 'gate_end() {
 	kill -9 "$	" 2>/dev/null; echo "# bounded-run: allowed: x"'
 # the source rule
