@@ -43,10 +43,12 @@ record below shows it: three runs of `rtprimary-world` give the same 23 frames b
   buffer's order, so it traces at most 16 shadow rays of at most 5 intersections each, whatever the map
   holds (round 0 traced every light in range: up to 2048 a pixel). The intensity is packed at most
   `RM_RTDIR_MAX_INTENSITY` (16384): qrad3 bounds no light value (`rm_rtlights.c` takes any finite one, as
-  `CreateDirectLights` does) and its falloff is linear, so a light reaches as far as its intensity; a map's
-  points lie within +-4096 on each axis (`MSG_WriteCoord`, a short of 1/8 units), no two farther apart than
-  8192 x sqrt(3), about 14189, so a light of 16384 already reaches every point of any map, and above it
-  only gets brighter. qrad3's default is 300.
+  `CreateDirectLights` does) and its falloff is linear, so a light reaches as far as its intensity. The
+  +-4096 on each axis is the stock tools' and the network's bound (`MSG_WriteCoord`, a short of 1/8 units),
+  not the BSP's (neither the loader nor `collision.c` holds a vertex to it); within it no two points are
+  farther apart than 8192 x sqrt(3), about 14189, so a light of 16384 already reaches every point of such a
+  map. Above 16384 a light is dimmer than qrad3's wherever it reaches, (16384 - dist) against
+  (intensity - dist), not only shorter-reaching. qrad3's default is 300.
 - **The shadow ray**, one a light in range and pixel: from the surface point offset along its normal
   (TASK57's `mtl_rtao_bias`) to a unit short of the light's origin, against the frame's instance structure
   with `MTL_RTAO_MASK` (the world, the brush entities, the alias models, not the view weapon). Water and
@@ -107,25 +109,44 @@ branch only. Round 0's test counted needles and could not fail its `test_no_ligh
 the lightmap away); that test is gone. Red first: round 0's kernel against the new rule,
 `rm_rtdir.metal: rm_rtdir_direct is not defined once`, `rm_rtdir_test: 363 checks, 8 failed`.
 
-The test builds seven mutants of the real file in memory and requires the rule to refuse each. Each one
+Round 2 closes the shapes that add a texture read after the trace's call. The kernel's parameter list is
+pinned whole (its seven textures, its buffers, its position), as are the whole `const float3 raw = ...;`
+statement and the kernel body's reads: `mat`, `depth`, `normal` and `base`, once each, and no other
+`.read(` (the lightmap's one read stays in `rm_rtdir_fit_sample`). The file may not paste tokens (`##`),
+and its only macros are the eleven count slots. On the host, `test_host_binding` holds `rmb_rtdir.m`'s
+compute textures to the seven known `[ce setTexture:<t> atIndex:<i>];` pairs in `rmb_rtdir_trace`, once
+each, and no other `setTexture` or `setTextures` in the file. A mismatch in whitespace alone still fails,
+and its message ends "(reformatted? the pin is exact)". This is a structural lint against accidental
+regressions, not a parser: a macro from an included header, for one, is outside what it reads. Red first:
+round 1's rule passed the three new kernel mutants, `rm_rtdir_test: 384 checks, 3 failed`.
+
+The test builds ten mutants of the real file in memory and requires the rule to refuse each. Each one
 gives a world pixel the lightmap, and each compiles with `xcrun metal` (written out by hand with
 `RM_RTDIR_MUTANTS=<dir>`):
 
 ```
-mutant add-lm: the lightmap is named outside the fit's sample
+mutant add-lm: the kernel's body reads beyond the material, depth, normal and base
 mutant reuse-sample: the fit's values go somewhere but the frame's sums
-mutant world-from-base: the kernel's raw is not the traced light alone
+mutant world-from-base: the kernel's body reads beyond the material, depth, normal and base
 mutant branch-swap: the world branch is not the traced light's single write
 mutant fit-leak: the kernel's raw is not the traced light alone
 mutant fit-sample-leak: rm_rtdir_fit_sample is not the fit's sample alone
 mutant direct-reads-lm: rm_rtdir_direct reaches a texture or the fit
-rm_rtdir_test: 381 checks, 0 failed
+mutant paste-macro: the file pastes tokens (##)
+mutant new-binding: the kernel's parameters are not its known seven textures and buffers
+mutant lmx: the kernel's parameters are not its known seven textures and buffers
+rm_rtdir_test: 392 checks, 0 failed
 ```
 
 `branch-swap` is the correctness review's (the two branches swapped). `fit-leak` is the spec review's
 `raw += float3(float(fit_lm)) * 0.001f;` in the new shape: `raw` made non-const and the fit's value added
 to it after the sample. `fit-sample-leak` takes `raw` by reference into the fit's sample and adds the
-lightmap there; `direct-reads-lm` hands the lightmap to the trace.
+lightmap there; `direct-reads-lm` hands the lightmap to the trace. `paste-macro` is the correctness
+review's round-1 shape, `#define RM_CAT(a, b) a##b` and `+ RM_CAT(l, m).read(px).rgb` after the trace's
+call; `new-binding` adds a parameter `q [[texture(7)]]` and `+ q.read(px).rgb`, and its host half,
+`[ce setTexture:lm atIndex:7];` in `rmb_rtdir.m` (which compiles), is refused by `test_host_binding`, as
+is the same binding through `setTextures:withRange:`; `lmx` is the spec review's, the same with
+`lmx [[texture(7)]]`.
 
 **No GPU run of the kernel.** No harness in `tests/check-ref-metal.sh` runs a shader on the GPU against
 fixture textures: the device probe (`tests/metal/rmb_cs_probe.m`) drives the colour space and the MetalFX
@@ -198,6 +219,9 @@ cap left out, 0 brighter than 16384 held to it)`, and every one of the 686 frame
 (`521201 in range, 521201 shadow rays (1.70 a world pixel), 489574 lit, 0 pixels past 16 lights, fit
 376127/258792`). The pass's GPU time read 2.6 ms there against 2.2 ms in round 0, in a window that was not
 held quiet; it is information, not a measurement (decision 0014).
+
+**Round 2** (the kernel and host pins, the clamp's comment) changes the host test, a header comment and
+this runbook only. `rm_rtdir.metal` and `rmb_rtdir.m` are as in round 1, so no record was re-run.
 
 No frame was looked at by the agent; the frames stay in a local store outside the repository.
 

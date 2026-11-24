@@ -22,7 +22,8 @@
  * Metal and no game data. The mode's switch (RT-primary only), qrad3's
  * falloff and cone, what a shadow ray does at a face, the light the
  * resolve reads and its clamps, the kernel's text for the no-lightmap rule
- * with seven mutants it must refuse (test_no_lightmap_kernel), the fit's
+ * with ten mutants it must refuse (test_no_lightmap_kernel) and the host's
+ * bindings for it (test_host_binding), the fit's
  * samples, the fit itself and the frame it is taken from, the fixed
  * exposure, the lights a pixel takes past the cap, the lights' packing
  * and its intensity clamp, the style table, the view and the lines. Run
@@ -285,6 +286,106 @@ find_fn(const char *text, const char *head, fn_t *f)
 	return f->nbody != 0;
 }
 
+/* text[0, len) with its spaces, tabs and newlines taken out, in out; its length */
+static size_t
+squeeze(const char *text, size_t len, char *out, size_t cap)
+{
+	size_t i, o = 0;
+
+	for (i = 0; (i < len) && text[i] && (o + 1 < cap); i++)
+	{
+		if ((text[i] != ' ') && (text[i] != '\t') && (text[i] != '\n') && (text[i] != '\r'))
+		{
+			out[o++] = text[i];
+		}
+	}
+
+	out[o] = 0;
+	return o;
+}
+
+/* a pin's verdict: it holds, the text differs, or the text differs in its whitespace alone */
+enum { PIN_OK, PIN_BROKEN, PIN_SPACE };
+
+/* the rule's message, told that a whitespace-only mismatch is still one */
+#define PIN_WHY(r, why) (((r) == PIN_SPACE) ? why " (reformatted? the pin is exact)" : why)
+
+/* needle in text[0, len) exactly n times; PIN_SPACE when it is there n times once both lose their whitespace */
+static int
+pin_count(const char *text, size_t len, const char *needle, int n)
+{
+	static char st[65536], sn[4096];
+	size_t lt, ln;
+
+	if (count_in(text, len, needle) == n)
+	{
+		return PIN_OK;
+	}
+
+	lt = squeeze(text, len, st, sizeof(st));
+	ln = squeeze(needle, strlen(needle), sn, sizeof(sn));
+	return (ln && (count_in(st, lt, sn) == n)) ? PIN_SPACE : PIN_BROKEN;
+}
+
+/* text[0, len) is pin exactly; PIN_SPACE when the two differ in their whitespace alone */
+static int
+pin_is(const char *text, size_t len, const char *pin)
+{
+	static char st[65536], sp[65536];
+	size_t lt, lp;
+
+	if ((len == strlen(pin)) && !strncmp(text, pin, len))
+	{
+		return PIN_OK;
+	}
+
+	lt = squeeze(text, len, st, sizeof(st));
+	lp = squeeze(pin, strlen(pin), sp, sizeof(sp));
+	return ((lt == lp) && !memcmp(st, sp, lt)) ? PIN_SPACE : PIN_BROKEN;
+}
+
+/* the worse of two verdicts */
+static int
+pin_and(int a, int b)
+{
+	return (a == PIN_BROKEN) || (b == PIN_BROKEN) ? PIN_BROKEN : ((a == PIN_SPACE) || (b == PIN_SPACE) ? PIN_SPACE : PIN_OK);
+}
+
+/* the kernel's parameters, whole: seven textures, the six buffers it reads and its position */
+#define KERNEL_PARAMS \
+	"(depth2d<float, access::read> depth [[texture(0)]],\n" \
+	"\t\ttexture2d<float, access::read> normal [[texture(1)]],\n" \
+	"\t\ttexture2d<uint, access::read> mat [[texture(2)]],\n" \
+	"\t\ttexture2d<float, access::read> lm [[texture(3)]],\n" \
+	"\t\ttexture2d<float, access::read> base [[texture(4)]],\n" \
+	"\t\ttexture2d<float, access::write> vis_out [[texture(5)]],\n" \
+	"\t\ttexture2d<float, access::write> light_out [[texture(6)]],\n" \
+	"\t\tconstant rm_rtdir_view &v [[buffer(0)]],\n" \
+	"\t\tconstant packed_float3 *styles [[buffer(1)]],\n" \
+	"\t\tinstance_acceleration_structure ias [[buffer(2)]],\n" \
+	"\t\tdevice const uint *inst [[buffer(3)]],\n" \
+	"\t\tdevice const uchar *tmat [[buffer(4)]],\n" \
+	"\t\tconstant uint &ntris [[buffer(5)]],\n" \
+	"\t\tdevice atomic_uint *counts [[buffer(6)]],\n" \
+	"\t\tdevice const rm_rtdir_light *lights [[buffer(9)]],\n" \
+	"\t\tuint2 px [[thread_position_in_grid]])"
+
+/* the traced light, the whole statement */
+#define KERNEL_RAW \
+	"const float3 raw = world ? rm_rtdir_direct(v, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), styles, ias,\n" \
+	"\t\t\tinst, tmat, ntris, lights, t) : float3(0.0f);"
+
+/* the kernel body's reads, each once and no other: the material, depth and normal, and base on a pixel not traced */
+static const char *const kernel_reads[] = { "mat.read(px)", "depth.read(px)", "normal.read(px)", "base.read(px)" };
+
+/* the file's macros, each once and no other (the counts' slots) */
+static const char *const kernel_defines[] = {
+	"#define RM_RTDIR_C_WORLD 0\n", "#define RM_RTDIR_C_INRANGE 1\n", "#define RM_RTDIR_C_RAYS 2\n",
+	"#define RM_RTDIR_C_LIT 3\n", "#define RM_RTDIR_C_FIT_LM 4\n", "#define RM_RTDIR_C_FIT_RAW 5\n",
+	"#define RM_RTDIR_C_FIT_N 6\n", "#define RM_RTDIR_C_INRANGE_HI 7\n", "#define RM_RTDIR_C_RAYS_HI 8\n",
+	"#define RM_RTDIR_C_LIT_HI 9\n", "#define RM_RTDIR_C_CAPPED 10\n",
+};
+
 #define KERNEL_WORLD_BRANCH \
 	"\t\tif (world)\n" \
 	"\t\t{\n" \
@@ -327,12 +428,53 @@ kernel_broken(const char *src)
 {
 	static char text[65536];
 	fn_t k, dir, fit, out;
+	size_t i;
+	int r;
 
 	strip_comments(src, text, sizeof(text));
+
+	/* no name is built out of others, and no macro but the counts' slots stands for anything */
+	if (count_in(text, strlen(text), "##"))
+	{
+		return "the file pastes tokens (##)";
+	}
+
+	r = (count_in(text, strlen(text), "#define") == (int)(sizeof(kernel_defines) / sizeof(kernel_defines[0]))) ?
+		PIN_OK : PIN_BROKEN;
+
+	for (i = 0; i < sizeof(kernel_defines) / sizeof(kernel_defines[0]); i++)
+	{
+		r = pin_and(r, pin_count(text, strlen(text), kernel_defines[i], 1));
+	}
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "the file defines a macro beyond the counts' slots");
+	}
 
 	if (!find_fn(text, "kernel void\nrm_rtdir_trace(", &k))
 	{
 		return "the kernel rm_rtdir_trace is not defined once";
+	}
+
+	/* the kernel's inputs: the seven textures and the buffers it has, no other */
+	if ((r = pin_is(k.params, k.nparams, KERNEL_PARAMS)) != PIN_OK)
+	{
+		return PIN_WHY(r, "the kernel's parameters are not its known seven textures and buffers");
+	}
+
+	/* what the kernel's body reads: the four known reads, once each, and no other */
+	r = (count_in(k.body, k.nbody, ".read(") == (int)(sizeof(kernel_reads) / sizeof(kernel_reads[0]))) ? PIN_OK :
+		PIN_BROKEN;
+
+	for (i = 0; i < sizeof(kernel_reads) / sizeof(kernel_reads[0]); i++)
+	{
+		r = pin_and(r, pin_count(k.body, k.nbody, kernel_reads[i], 1));
+	}
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "the kernel's body reads beyond the material, depth, normal and base");
 	}
 
 	if (!find_fn(text, "static float3\nrm_rtdir_direct(", &dir))
@@ -366,21 +508,28 @@ kernel_broken(const char *src)
 		return "the lightmap is named outside the fit's sample";
 	}
 
-	if (strncmp(fit.params, "(texture2d<float, access::read> lm, uint2 px, float3 raw)", fit.nparams) ||
-		(fit.nbody != strlen(KERNEL_FIT_SAMPLE)) || strncmp(fit.body, KERNEL_FIT_SAMPLE, fit.nbody))
+	r = pin_and(pin_is(fit.params, fit.nparams, "(texture2d<float, access::read> lm, uint2 px, float3 raw)"),
+		pin_is(fit.body, fit.nbody, KERNEL_FIT_SAMPLE));
+
+	if (r != PIN_OK)
 	{
-		return "rm_rtdir_fit_sample is not the fit's sample alone";
+		return PIN_WHY(r, "rm_rtdir_fit_sample is not the fit's sample alone");
 	}
 
-	if (strncmp(out.params, "(float3 raw, float exposure)", out.nparams) || (out.nbody != strlen(KERNEL_OUT)) ||
-		strncmp(out.body, KERNEL_OUT, out.nbody))
+	r = pin_and(pin_is(out.params, out.nparams, "(float3 raw, float exposure)"), pin_is(out.body, out.nbody, KERNEL_OUT));
+
+	if (r != PIN_OK)
 	{
-		return "rm_rtdir_out is not mtl_rtdir_light of the traced light";
+		return PIN_WHY(r, "rm_rtdir_out is not mtl_rtdir_light of the traced light");
 	}
 
-	/* raw: defined const from the trace, named by the fit's sample and the world's write, nowhere else */
-	if ((count_in(k.body, k.nbody, "const float3 raw = world ? rm_rtdir_direct(") != 1) ||
-		(words_in(k.body, k.nbody, "raw") != 3))
+	/* raw: defined const from the trace, the whole statement, named by the fit's sample and the world's write, nowhere else */
+	if ((r = pin_count(k.body, k.nbody, KERNEL_RAW, 1)) != PIN_OK)
+	{
+		return PIN_WHY(r, "the kernel's raw is not the traced light alone");
+	}
+
+	if (words_in(k.body, k.nbody, "raw") != 3)
 	{
 		return "the kernel's raw is not the traced light alone";
 	}
@@ -393,7 +542,12 @@ kernel_broken(const char *src)
 	}
 
 	/* the light out: the world branch from the traced light, base on every other pixel */
-	if ((count_in(k.body, k.nbody, KERNEL_WORLD_BRANCH) != 1) || (count_in(text, strlen(text), "light_out.write(") != 2) ||
+	if ((r = pin_count(k.body, k.nbody, KERNEL_WORLD_BRANCH, 1)) != PIN_OK)
+	{
+		return PIN_WHY(r, "the world branch is not the traced light's single write");
+	}
+
+	if ((count_in(text, strlen(text), "light_out.write(") != 2) ||
 		(words_in(k.body, k.nbody, "base") != 1) || (words_in(text, strlen(text), "base") != 2))
 	{
 		return "the world branch is not the traced light's single write";
@@ -434,7 +588,13 @@ mutate(const char *src, const char *from, const char *to, char *out, size_t cap)
  * (branch-swap, the correctness review's), the fit's value added into
  * raw after the sample (fit-leak, the spec review's), the fit's sample
  * taking raw by reference and adding the lightmap to it (fit-sample-leak),
- * and the trace reading the lightmap (direct-reads-lm).
+ * the trace reading the lightmap (direct-reads-lm), and three that add
+ * a texture read after the trace's call: the lightmap's name pasted
+ * together by a macro (paste-macro, the correctness review's), and a new
+ * texture parameter, q (new-binding, whose host half test_host_binding
+ * refuses) or lmx (the spec review's). The kernel's parameters, its
+ * body's reads, its traced light's statement and the file's macros are
+ * pinned whole for them.
  */
 static void
 test_no_lightmap_kernel(void)
@@ -471,6 +631,16 @@ test_no_lightmap_kernel(void)
 			"device const rm_rtdir_light *lights, thread rm_rtdir_tally &t, texture2d<float, access::read> lm)" },
 			{ "\tfloat3 raw = float3(0.0f);\n", "\tfloat3 raw = lm.read(uint2(0)).rgb;\n" },
 			{ "lights, t) : float3(0.0f);", "lights, t, lm) : float3(0.0f);" } } },
+		{ "paste-macro", { { "kernel void\nrm_rtdir_trace(", "#define RM_CAT(a, b) a##b\nkernel void\nrm_rtdir_trace(" },
+			{ "lights, t) : float3(0.0f);", "lights, t) + RM_CAT(l, m).read(px).rgb : float3(0.0f);" } } },
+		{ "new-binding", { { "\t\ttexture2d<float, access::write> light_out [[texture(6)]],\n",
+			"\t\ttexture2d<float, access::write> light_out [[texture(6)]],\n"
+			"\t\ttexture2d<float, access::read> q [[texture(7)]],\n" },
+			{ "lights, t) : float3(0.0f);", "lights, t) + q.read(px).rgb : float3(0.0f);" } } },
+		{ "lmx", { { "\t\ttexture2d<float, access::read> base [[texture(4)]],\n",
+			"\t\ttexture2d<float, access::read> base [[texture(4)]],\n"
+			"\t\ttexture2d<float, access::read> lmx [[texture(7)]],\n" },
+			{ "lights, t) : float3(0.0f);", "lights, t) + lmx.read(px).rgb : float3(0.0f);" } } },
 	};
 
 	CHECK(f != NULL);
@@ -533,6 +703,124 @@ test_no_lightmap_kernel(void)
 
 		CHECK(applied && (why != NULL));
 	}
+
+	/* the spec review's wrap of the world's write: refused, and the message says the pin is exact */
+	CHECK(mutate(src, "light_out.write(rm_rtdir_out(raw, v.exposure), px);",
+		"light_out.write(rm_rtdir_out(raw, v.exposure),\n\t\t\t\tpx);", m, sizeof(m)));
+	why = kernel_broken(m);
+	CHECK(why && strstr(why, "reformatted? the pin is exact"));
+}
+
+/* the direct pass's texture bindings in rmb_rtdir.m, (texture, index) as the kernel's parameters take them */
+static const char *const host_bindings[] = {
+	"[ce setTexture:depth atIndex:0];", "[ce setTexture:normal atIndex:1];", "[ce setTexture:material atIndex:2];",
+	"[ce setTexture:lm atIndex:3];", "[ce setTexture:base atIndex:4];", "[ce setTexture:t_vis atIndex:5];",
+	"[ce setTexture:t_light atIndex:6];",
+};
+
+/*
+ * The host half of the rule, in rmb_rtdir.m's text (src) with its
+ * comments taken out: the file binds a compute texture only in
+ * rmb_rtdir_trace, the seven known (texture, index) pairs, each once, and
+ * none else (setTexture or setTextures anywhere). NULL when it holds,
+ * else the rule broken.
+ */
+static const char *
+binding_broken(const char *src)
+{
+	static char text[65536];
+	const size_t n = sizeof(host_bindings) / sizeof(host_bindings[0]);
+	fn_t tr;
+	size_t i;
+	int r;
+
+	strip_comments(src, text, sizeof(text));
+
+	if (!find_fn(text, "static id<MTLTexture>\nrmb_rtdir_trace(", &tr))
+	{
+		return "rmb_rtdir_trace is not defined once";
+	}
+
+	r = ((count_in(text, strlen(text), "setTexture") == (int)n) && (count_in(tr.body, tr.nbody, "setTexture") == (int)n)) ?
+		PIN_OK : PIN_BROKEN;
+
+	for (i = 0; i < n; i++)
+	{
+		r = pin_and(r, pin_count(tr.body, tr.nbody, host_bindings[i], 1));
+	}
+
+	return (r == PIN_OK) ? NULL : PIN_WHY(r, "the direct pass binds a texture beyond its known seven");
+}
+
+/* a file of the tree, read whole into buf; 0 when it cannot be */
+static int
+read_file(const char *path, char *buf, size_t cap)
+{
+	FILE *f = fopen(path, "rb");
+	size_t len;
+	int ok;
+
+	if (!f)
+	{
+		return 0;
+	}
+
+	len = fread(buf, 1, cap - 1, f);
+	ok = !ferror(f) && (len < cap - 1);
+	fclose(f);
+	buf[len] = 0;
+	return ok;
+}
+
+/*
+ * rmb_rtdir.m binds the kernel's textures, and the host half of the
+ * new-binding mutant (the lightmap bound again, at a new index, for a new
+ * kernel parameter) breaks it, as does a binding through setTextures.
+ * A binding re-indented is still refused, and says so.
+ */
+static void
+test_host_binding(void)
+{
+	static char src[65536], m[65536 + 1024];
+	static const struct
+	{
+		const char *name, *from, *to;
+	} mutants[] = {
+		{ "new-binding", "\t\t[ce setTexture:t_light atIndex:6];\n",
+			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTexture:lm atIndex:7];\n" },
+		{ "new-binding-range", "\t\t[ce setTexture:t_light atIndex:6];\n",
+			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTextures:&lm withRange:NSMakeRange(7, 1)];\n" },
+	};
+	const char *why;
+	int i;
+
+	CHECK(read_file("src/client/refresh/metal/rmb_rtdir.m", src, sizeof(src)));
+	why = binding_broken(src);
+
+	if (why)
+	{
+		printf("rmb_rtdir.m: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+
+	for (i = 0; i < (int)(sizeof(mutants) / sizeof(mutants[0])); i++)
+	{
+		const int applied = mutate(src, mutants[i].from, mutants[i].to, m, sizeof(m));
+
+		why = applied ? binding_broken(m) : NULL;
+
+		if (!applied || !why)
+		{
+			printf("host mutant %s: %s\n", mutants[i].name, applied ? "passes the binding check" : "does not apply");
+		}
+
+		CHECK(applied && (why != NULL));
+	}
+
+	CHECK(mutate(src, "[ce setTexture:lm atIndex:3];", "[ce setTexture:lm  atIndex:3];", m, sizeof(m)));
+	why = binding_broken(m);
+	CHECK(why && strstr(why, "reformatted? the pin is exact"));
 }
 
 /* the fit's samples: the channel mean, clamped to QMAX, in 1/64 steps; sums exact whatever the order */
@@ -856,6 +1144,7 @@ main(void)
 	test_at();
 	test_light();
 	test_no_lightmap_kernel();
+	test_host_binding();
 	test_q();
 	test_fit();
 	test_fit_latest();

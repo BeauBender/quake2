@@ -102,12 +102,15 @@ typedef struct
  * The intensity a light is packed with, at most. qrad3 bounds no light
  * value (rm_rtlights.c takes any finite one, as CreateDirectLights does),
  * and its falloff is linear, (intensity - dist): a light reaches as far
- * as its intensity. A Quake II map's points lie within +-4096 units on
- * each axis (the protocol's coordinate, MSG_WriteCoord in
- * src/common/movemsg.c, a short of 1/8 units), so no two are farther apart
- * than 8192 x sqrt(3), about 14189: a light of 16384 reaches every point
- * of any map already. Above it a light gets no further, only brighter;
- * holding it here keeps the sum of RM_RTL_MAX_LIGHTS lights finite.
+ * as its intensity. The +-4096 units on each axis are the stock tools'
+ * and the network's bound (the protocol's coordinate, MSG_WriteCoord in
+ * src/common/movemsg.c, a short of 1/8 units), not the BSP's: neither the
+ * BSP loader nor collision.c holds a vertex to it. Within it no two points
+ * are farther apart than 8192 x sqrt(3), about 14189, so a light of 16384
+ * reaches every point of such a map already. Above 16384 a light is
+ * dimmer than qrad3's wherever it reaches, (16384 - dist) against
+ * (intensity - dist), not only shorter-reaching; holding it here keeps
+ * the sum of RM_RTL_MAX_LIGHTS lights finite.
  * qrad3's default is 300 (RM_RTL_DEFAULT_LIGHT).
  */
 #define RM_RTDIR_MAX_INTENSITY 16384.0f
