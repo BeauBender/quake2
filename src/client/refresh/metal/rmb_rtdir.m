@@ -205,7 +205,8 @@ rmb_rtdir_set_lights(const rm_rtdir_light_t *l, long n)
 
 	nlights = 0;
 
-	if (!dir_open || (n < 0) || (n > RM_RTL_MAX_LIGHTS) || ((n > 0) && !l))
+	/* the map's lights and its emissive faces (TASK188 slice 2) */
+	if (!dir_open || (n < 0) || (n > RM_RTDIR_MAX_UPLOAD) || ((n > 0) && !l))
 	{
 		return 0;
 	}

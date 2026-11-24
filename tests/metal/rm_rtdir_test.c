@@ -371,6 +371,12 @@ pin_and(int a, int b)
 	"\t\tuint2 px [[thread_position_in_grid]])"
 
 /* the traced light, the whole statement */
+/* rm_rtdir_direct's parameter list, whole (TASK188 slice 2): no texture, no buffer but the scene's and the lights */
+#define DIRECT_PARAMS \
+	"(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_float3 *styles,\n" \
+	"\t\tinstance_acceleration_structure ias, device const uint *inst, device const uchar *tmat, uint ntris,\n" \
+	"\t\tdevice const rm_rtdir_light *lights, thread rm_rtdir_tally &t)"
+
 #define KERNEL_RAW \
 	"const float3 raw = world ? rm_rtdir_direct(v, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), styles, ias,\n" \
 	"\t\t\tinst, tmat, ntris, lights, t) : float3(0.0f);"
@@ -490,6 +496,28 @@ kernel_broken(const char *src)
 	if (!find_fn(text, "static float4\nrm_rtdir_out(", &out))
 	{
 		return "rm_rtdir_out is not defined once";
+	}
+
+	/*
+	 * TASK188 slice 2: the point lights and the emissive faces come in one
+	 * buffer, read twice (the loop's record and the kept one's), through the
+	 * reach test and the dispatch, and nothing else enters the trace: its
+	 * parameters are pinned whole.
+	 */
+	if ((r = pin_is(dir.params, dir.nparams, DIRECT_PARAMS)) != PIN_OK)
+	{
+		return PIN_WHY(r, "rm_rtdir_direct's parameters are not the view, the point, the styles, the scene and the lights");
+	}
+
+	r = pin_and(pin_count(dir.body, dir.nbody, "const rm_rtdir_light l = lights[i];", 1),
+		pin_count(dir.body, dir.nbody, "const rm_rtdir_light l = lights[k.i[j]];", 1));
+	r = pin_and(r, pin_count(dir.body, dir.nbody, "if (!mtl_rtdir_reach(l.pos.w, dist, l.spot.w))", 1));
+	r = pin_and(r, pin_count(dir.body, dir.nbody,
+		"s = mtl_rtdir_contrib(l.pos.w, dist, dot(n, dir), -dot(dir, l.spot.xyz), l.spot.w);", 1));
+
+	if ((r != PIN_OK) || (count_in(dir.body, dir.nbody, "lights[") != 2) || (words_in(dir.body, dir.nbody, "lights") != 2))
+	{
+		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN, "rm_rtdir_direct's lights are not the buffer's two reads, its reach and its dispatch");
 	}
 
 	/* the traced light: no texture in reach */
@@ -637,6 +665,14 @@ test_no_lightmap_kernel(void)
 			"\t\ttexture2d<float, access::write> light_out [[texture(6)]],\n"
 			"\t\ttexture2d<float, access::read> q [[texture(7)]],\n" },
 			{ "lights, t) : float3(0.0f);", "lights, t) + q.read(px).rgb : float3(0.0f);" } } },
+		{ "emit-buffer", { { "device const rm_rtdir_light *lights, thread rm_rtdir_tally &t)",
+			"device const rm_rtdir_light *lights, thread rm_rtdir_tally &t, device const float4 *lmc)" },
+			{ "\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]);\n",
+				"\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]) + lmc[0].rgb;\n" },
+			{ "lights, t) : float3(0.0f);", "lights, t, (device const float4 *)inst) : float3(0.0f);" } } },
+		{ "emit-third-read", { { "\tfor (uint j = 0; j < k.n; j++)\n",
+			"\traw += lights[v.nlights].color.rgb;\n\tfor (uint j = 0; j < k.n; j++)\n" } } },
+		{ "emit-bypass", { { "if (!mtl_rtdir_reach(l.pos.w, dist, l.spot.w))", "if (!(dist > 0.0f))" } } },
 		{ "lmx", { { "\t\ttexture2d<float, access::read> base [[texture(4)]],\n",
 			"\t\ttexture2d<float, access::read> base [[texture(4)]],\n"
 			"\t\ttexture2d<float, access::read> lmx [[texture(7)]],\n" },
@@ -749,7 +785,21 @@ binding_broken(const char *src)
 		r = pin_and(r, pin_count(tr.body, tr.nbody, host_bindings[i], 1));
 	}
 
-	return (r == PIN_OK) ? NULL : PIN_WHY(r, "the direct pass binds a texture beyond its known seven");
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "the direct pass binds a texture beyond its known seven");
+	}
+
+	/* TASK188 slice 2: the lights and the emissive faces in one buffer, bound once at the kernel's index 9 */
+	r = pin_and(pin_count(tr.body, tr.nbody, "[ce setBuffer:lights offset:0 atIndex:9];", 1),
+		pin_count(text, strlen(text), "(n > RM_RTDIR_MAX_UPLOAD)", 1));
+
+	if ((r != PIN_OK) || (count_in(text, strlen(text), "atIndex:9]") != 1))
+	{
+		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN, "the lights are not one buffer at index 9 of the upload's cap");
+	}
+
+	return NULL;
 }
 
 /* a file of the tree, read whole into buf; 0 when it cannot be */
@@ -790,6 +840,9 @@ test_host_binding(void)
 			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTexture:lm atIndex:7];\n" },
 		{ "new-binding-range", "\t\t[ce setTexture:t_light atIndex:6];\n",
 			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTextures:&lm withRange:NSMakeRange(7, 1)];\n" },
+		{ "lights-cap", "(n > RM_RTDIR_MAX_UPLOAD)", "(n > RM_RTL_MAX_LIGHTS)" },
+		{ "lights-twice", "\t\t[ce setBuffer:lights offset:0 atIndex:9];\n",
+			"\t\t[ce setBuffer:lights offset:0 atIndex:9];\n\t\t[ce setBuffer:counts offset:0 atIndex:9];\n" },
 	};
 	const char *why;
 	int i;
@@ -1120,6 +1173,293 @@ test_view_lines(void)
 	CHECK(rm_rtdir_map_format("maps/base1.bsp", &p, line, 10) == 0 && line[0] == 0);
 }
 
+/*
+ * TASK188 slice 2, the emissive faces: qrad3's emit_surface falloff
+ * (intensity / dist^2 x both cosines), the range its cut gives, and the
+ * dispatch the kernel calls for every light of the buffer.
+ */
+static void
+test_emit_scale(void)
+{
+	/* 1e6 at 100 units, both cosines 1: 100; each cosine scales it */
+	CHECK(near(mtl_rtdir_emit_scale(1e6f, 100, 1, 1), 100, 1e-3));
+	CHECK(near(mtl_rtdir_emit_scale(1e6f, 100, 0.5f, 1), 50, 1e-3));
+	CHECK(near(mtl_rtdir_emit_scale(1e6f, 100, 1, 0.5f), 50, 1e-3));
+	CHECK(near(mtl_rtdir_emit_scale(1e6f, 200, 1, 1), 25, 1e-3));
+	/* behind the face, or the face behind the point: nothing (qrad3's 0.001) */
+	CHECK(mtl_rtdir_emit_scale(1e6f, 100, 1, MTL_RTDIR_MIN_DOT) == 0);
+	CHECK(mtl_rtdir_emit_scale(1e6f, 100, 1, -1) == 0);
+	CHECK(mtl_rtdir_emit_scale(1e6f, 100, MTL_RTDIR_MIN_DOT, 1) == 0);
+	/* the range: sqrt(intensity / MTL_RTDIR_EMIT_CUT), 1000 for 1e6 */
+	CHECK(mtl_rtdir_emit_scale(1e6f, 1000, 1, 1) > 0);
+	CHECK(mtl_rtdir_emit_scale(1e6f, 1001, 1, 1) == 0);
+	CHECK(mtl_rtdir_reach(1e6f, 1000, MTL_RTDIR_EMITTER) && !mtl_rtdir_reach(1e6f, 1001, MTL_RTDIR_EMITTER));
+	/* a point light's reach is its intensity, as slice 1's cheap test */
+	CHECK(mtl_rtdir_reach(300, 299, MTL_RTDIR_NOSPOT) && !mtl_rtdir_reach(300, 300, MTL_RTDIR_NOSPOT));
+	CHECK(mtl_rtdir_reach(300, 299, 0.9f) && !mtl_rtdir_reach(300, 0, MTL_RTDIR_NOSPOT));
+	CHECK(!mtl_rtdir_reach(NAN, 10, MTL_RTDIR_EMITTER) && !mtl_rtdir_reach(1e6f, NAN, MTL_RTDIR_EMITTER));
+	/* not a number, or at the face's own point */
+	CHECK(mtl_rtdir_emit_scale(NAN, 100, 1, 1) == 0 && mtl_rtdir_emit_scale(1e6f, NAN, 1, 1) == 0);
+	CHECK(mtl_rtdir_emit_scale(1e6f, 100, NAN, 1) == 0 && mtl_rtdir_emit_scale(1e6f, 100, 1, NAN) == 0);
+	CHECK(mtl_rtdir_emit_scale(1e6f, 0, 1, 1) == 0);
+	/* a point a hair from the face is finite: the distance is taken as at least 1, as qrad3 does */
+	CHECK(isfinite(mtl_rtdir_emit_scale(1e6f, 1e-20f, 1, 1)) && near(mtl_rtdir_emit_scale(1e6f, 1e-20f, 1, 1), 1e6, 1e-3));
+	CHECK(isfinite(mtl_rtdir_emit_scale(16384.0f * 16384.0f, 1e-20f, 1, 1)));
+	CHECK(near(mtl_rtdir_emit_scale(1e6f, 0.5f, 1, 1), 1e6, 1e-3));
+	/* the dispatch: the marker picks the face's falloff, any other cone the point's */
+	CHECK(mtl_rtdir_contrib(1e6f, 100, 1, 1, MTL_RTDIR_EMITTER) == mtl_rtdir_emit_scale(1e6f, 100, 1, 1));
+	CHECK(mtl_rtdir_contrib(300, 100, 1, 0, MTL_RTDIR_NOSPOT) == mtl_rtdir_scale(300, 100, 1, 0, MTL_RTDIR_NOSPOT));
+	CHECK(mtl_rtdir_contrib(300, 100, 1, 0.5f, 0.9f) == 0);
+	/* a face's direction word is its normal: a point behind it (facedot below 0) is not lit, whatever the range */
+	CHECK(mtl_rtdir_contrib(1e6f, 100, 1, -0.5f, MTL_RTDIR_EMITTER) == 0);
+}
+
+/* the colour, the choice qrad3 makes (RM_RTDIR_EMIT_QRAD3_COLOUR, RM_RTDIR_EMIT_UNREAD) */
+static void
+test_reflectivity(void)
+{
+	const float bright[3] = { 0.8f, 0.6f, 0.2f }, dim[3] = { 0.4f, 0.2f, 0.1f }, bad[3] = { NAN, -1, 0.3f };
+	float r[3];
+
+	/* a largest channel of 0.5 or more: the mean as it is */
+	rm_rtdir_reflectivity(bright, 1, r);
+	CHECK(near(r[0], 0.8, 1e-6) && near(r[1], 0.6, 1e-6) && near(r[2], 0.2, 1e-6));
+	/* under 0.5: doubled, as CalcTextureReflectivity scales the dim textures up */
+	rm_rtdir_reflectivity(dim, 1, r);
+	CHECK(near(r[0], 0.8, 1e-6) && near(r[1], 0.4, 1e-6) && near(r[2], 0.2, 1e-6));
+	/* a texture qrad3 cannot read: 0, it lights nothing */
+	rm_rtdir_reflectivity(bright, 0, r);
+	CHECK((r[0] == RM_RTDIR_EMIT_UNREAD) && (r[1] == RM_RTDIR_EMIT_UNREAD) && (r[2] == RM_RTDIR_EMIT_UNREAD));
+	CHECK(RM_RTDIR_EMIT_UNREAD == 0.0f);
+	/* not a number or below 0: 0; the rest doubled by the largest left, 0.3 */
+	rm_rtdir_reflectivity(bad, 1, r);
+	CHECK((r[0] == 0) && (r[1] == 0) && near(r[2], 0.6, 1e-6));
+}
+
+/* a 64 x 32 face in the z = 100 plane facing down, its points 4 floats apart as the world's vertices */
+static const float face_pts[4][4] = { { 0, 0, 100, 1 }, { 64, 0, 100, 1 }, { 64, 32, 100, 1 }, { 0, 32, 100, 1 } };
+
+static void
+face_init(rm_rtdir_face_t *f)
+{
+	f->pts = &face_pts[0][0];
+	f->stride = 4;
+	f->n = 4;
+	f->normal[0] = 0;
+	f->normal[1] = 0;
+	f->normal[2] = -1;
+}
+
+/* one face as qrad3's emit_surface patch */
+static void
+test_emitter(void)
+{
+	const float white[3] = { 1, 1, 1 }, orange[3] = { 1, 0.5f, 0 }, faint[3] = { 0.125f, 0.125f, 0.125f };
+	rm_rtdir_face_t f;
+	rm_rtdir_light_t l;
+	int cl = -1;
+
+	face_init(&f);
+	memset(&l, 0, sizeof(l));
+	CHECK(rm_rtdir_emitter(&f, 300, white, &l, &cl) == RM_RTDIR_EMIT_KEPT && cl == 0);
+	/* the points' mean a unit in front, the face's normal, the marker, style 0 */
+	CHECK(near(l.pos[0], 32, 1e-4) && near(l.pos[1], 16, 1e-4) && near(l.pos[2], 99, 1e-4));
+	CHECK((l.spot[0] == 0) && (l.spot[1] == 0) && (l.spot[2] == -1) && (l.spot[3] == MTL_RTDIR_EMITTER));
+	CHECK(l.color[3] == 0);
+	/* value x max(refl) x area x direct_scale: 300 x 1 x 2048 x 0.4 */
+	CHECK(near(l.pos[3], 300.0 * 2048.0 * 0.4, 1e-1));
+	CHECK(near(l.color[0], 1, 1e-6) && near(l.color[1], 1, 1e-6) && near(l.color[2], 1, 1e-6));
+
+	/* a coloured texture: the light refl x refl / max, normalized, so orange's green is a quarter */
+	CHECK(rm_rtdir_emitter(&f, 300, orange, &l, &cl) == RM_RTDIR_EMIT_KEPT);
+	CHECK(near(l.color[0], 1, 1e-6) && near(l.color[1], 0.25, 1e-6) && (l.color[2] == 0));
+	CHECK(near(l.pos[3], 300.0 * 2048.0 * 0.4, 1e-1));
+
+	/* below qrad3's DIRECT_LIGHT (3) in every channel: no direct light; an unread texture (0) likewise */
+	CHECK(rm_rtdir_emitter(&f, 23, faint, &l, &cl) == RM_RTDIR_EMIT_DIM);
+	CHECK(rm_rtdir_emitter(&f, 24, faint, &l, &cl) == RM_RTDIR_EMIT_KEPT);
+	{
+		const float zero[3] = { 0, 0, 0 };
+
+		CHECK(rm_rtdir_emitter(&f, 300, zero, &l, &cl) == RM_RTDIR_EMIT_DIM);
+	}
+
+	/* the intensity cap: a huge value is held to it and counted */
+	CHECK(rm_rtdir_emitter(&f, 2000000000, white, &l, &cl) == RM_RTDIR_EMIT_KEPT && cl == 1);
+	CHECK(l.pos[3] == RM_RTDIR_MAX_EMIT_INTENSITY && isfinite(l.pos[3]));
+
+	/* shapeless: too few points, too many, a line, a bad normal, a value not above 0 */
+	f.n = 2;
+	CHECK(rm_rtdir_emitter(&f, 300, white, &l, &cl) == RM_RTDIR_EMIT_SHAPELESS);
+	f.n = RM_RTDIR_EMIT_MAXPTS + 1;
+	CHECK(rm_rtdir_emitter(&f, 300, white, &l, &cl) == RM_RTDIR_EMIT_SHAPELESS);
+	{
+		static const float line[3][3] = { { 0, 0, 0 }, { 1, 0, 0 }, { 2, 0, 0 } };
+		rm_rtdir_face_t g = { &line[0][0], 3, 3, { 0, 0, 1 } };
+
+		CHECK(rm_rtdir_emitter(&g, 300, white, &l, &cl) == RM_RTDIR_EMIT_SHAPELESS);
+	}
+	{
+		static const float huge[3][3] = { { 0, 0, 0 }, { 3e38f, 0, 0 }, { 3e38f, 3e38f, 0 } };
+		rm_rtdir_face_t g = { &huge[0][0], 3, 3, { 0, 0, 1 } };
+
+		/* the points' mean overflows no float (the sums are doubles); the area is finite: held to the cap */
+		CHECK(rm_rtdir_emitter(&g, 300, white, &l, &cl) == RM_RTDIR_EMIT_KEPT && cl == 1 && isfinite(l.pos[0]));
+	}
+	face_init(&f);
+	f.normal[2] = -2;
+	CHECK(rm_rtdir_emitter(&f, 300, white, &l, &cl) == RM_RTDIR_EMIT_SHAPELESS);
+	f.normal[2] = NAN;
+	CHECK(rm_rtdir_emitter(&f, 300, white, &l, &cl) == RM_RTDIR_EMIT_SHAPELESS);
+	face_init(&f);
+	CHECK(rm_rtdir_emitter(&f, 0, white, &l, &cl) == RM_RTDIR_EMIT_SHAPELESS);
+	CHECK(rm_rtdir_emitter(NULL, 300, white, &l, &cl) == RM_RTDIR_EMIT_SHAPELESS);
+
+	/* lit as the kernel lights it: a floor point 100 below the centre gets intensity / 99^2 */
+	CHECK(rm_rtdir_emitter(&f, 300, white, &l, &cl) == RM_RTDIR_EMIT_KEPT);
+	{
+		const float s = mtl_rtdir_contrib(l.pos[3], 99, 1, -(0 * l.spot[0] + 0 * l.spot[1] + 1 * l.spot[2]), l.spot[3]);
+
+		CHECK(near(s, 300.0 * 2048.0 * 0.4 / (99.0 * 99.0), 1e-2));
+	}
+}
+
+/* the world's faces for test_pack_emitters: face 7 is a submodel's, the others the test face */
+static int
+face_of(void *ctx, long face, rm_rtdir_face_t *out)
+{
+	(void)ctx;
+
+	if (face == 7)
+	{
+		return 0;
+	}
+
+	face_init(out);
+	return 1;
+}
+
+static void
+test_pack_emitters(void)
+{
+	static rm_rtl_emitters_t e;
+	static rm_rtdir_light_t out[RM_RTDIR_MAX_EMITTERS + 8];
+	rm_rtdir_emitpack_t why;
+	char line[512];
+	long n, i;
+
+	memset(&e, 0, sizeof(e));
+	e.ntex = 3;
+	e.tex[0].read = 1;
+	e.tex[0].mean[0] = e.tex[0].mean[1] = e.tex[0].mean[2] = 0.8f;
+	e.tex[1].read = 0;        /* unread: qrad3's 0, so dim */
+	e.tex[1].mean[0] = e.tex[1].mean[1] = e.tex[1].mean[2] = RM_RTL_UNREAD_GREY;
+	e.tex[2].read = 1;        /* dim: 0.2 doubled to 0.4, value 5: 2 < 3 */
+	e.tex[2].mean[0] = e.tex[2].mean[1] = e.tex[2].mean[2] = 0.2f;
+
+	e.emit[0] = (rm_rtl_emit_t){ 0, 0, 300 };
+	e.emit[1] = (rm_rtl_emit_t){ 1, 1, 300 };
+	e.emit[2] = (rm_rtl_emit_t){ 2, 2, 5 };
+	e.emit[3] = (rm_rtl_emit_t){ 7, 0, 300 };      /* a submodel's face: not the world's */
+	e.emit[4] = (rm_rtl_emit_t){ 4, -1, 300 };     /* past the texture cap: unread */
+	e.emit[5] = (rm_rtl_emit_t){ 5, 0, 200 };
+	e.emit[6] = (rm_rtl_emit_t){ 6, 0, 2000000000 }; /* held to the intensity cap */
+	e.n = 7;
+
+	n = rm_rtdir_pack_emitters(&e, face_of, NULL, out, RM_RTDIR_MAX_EMITTERS, &why);
+	CHECK(n == 3 && why.kept == 3);
+	CHECK(why.bmodel == 1 && why.dim == 3 && why.unread == 2 && why.shapeless == 0 && why.over == 0 && why.clamped == 1);
+	/* in e's order: 300, 200, the cap */
+	CHECK(near(out[0].pos[3], 300.0 * 0.8 * 2048 * 0.4, 1e-1) && near(out[1].pos[3], 200.0 * 0.8 * 2048 * 0.4, 1e-1));
+	CHECK(out[2].pos[3] == RM_RTDIR_MAX_EMIT_INTENSITY);
+
+	/* the same input packs the same records */
+	{
+		static rm_rtdir_light_t again[RM_RTDIR_MAX_EMITTERS + 8];
+
+		CHECK(rm_rtdir_pack_emitters(&e, face_of, NULL, again, RM_RTDIR_MAX_EMITTERS, NULL) == 3 &&
+			!memcmp(out, again, 3 * sizeof(out[0])));
+	}
+
+	/* the cap: past it counted, the first ones kept */
+	for (i = 0; i < RM_RTDIR_MAX_EMITTERS + 5; i++)
+	{
+		e.emit[i] = (rm_rtl_emit_t){ 0, 0, 300 };
+	}
+
+	e.n = RM_RTDIR_MAX_EMITTERS + 5;
+	n = rm_rtdir_pack_emitters(&e, face_of, NULL, out, RM_RTDIR_MAX_EMITTERS, &why);
+	CHECK(n == RM_RTDIR_MAX_EMITTERS && why.over == 5);
+	CHECK(rm_rtdir_pack_emitters(NULL, face_of, NULL, out, RM_RTDIR_MAX_EMITTERS, &why) == 0 && why.kept == 0);
+	CHECK(rm_rtdir_pack_emitters(&e, NULL, NULL, out, RM_RTDIR_MAX_EMITTERS, &why) == 0);
+
+	/* the buffer holds both kinds */
+	CHECK(RM_RTDIR_MAX_UPLOAD == RM_RTL_MAX_LIGHTS + RM_RTDIR_MAX_EMITTERS);
+
+	memset(&why, 0, sizeof(why));
+	why.kept = 214;
+	why.dim = 2;
+	CHECK(rm_rtdir_emit_format("maps/base1.bsp", &why, line, sizeof(line)) == 1);
+	CHECK(!strcmp(line, "ref_metal: rt direct: maps/base1.bsp: 214 emissive faces uploaded (0 not the world's, "
+			"0 shapeless, 2 below qrad3's direct light, 0 of an unread texture, 0 past the cap of 2048 left out, "
+			"0 held to the intensity cap)"));
+	CHECK(rm_rtdir_emit_format("maps/base1.bsp", &why, line, 10) == 0 && line[0] == 0);
+}
+
+/*
+ * The lights a pixel samples are chosen deterministically: with point
+ * lights and emitters in one buffer, the 16 strongest of those in range,
+ * the same set for the same input, summed in the buffer's order. The
+ * selection mtl_rtdir_keep runs per light as the kernel's loop does.
+ */
+static void
+test_mixed_choice(void)
+{
+	mtl_rtdir_keep_t a, b;
+	unsigned i;
+	int same = 1;
+
+	memset(&a, 0, sizeof(a));
+	memset(&b, 0, sizeof(b));
+
+	/* 40 lights: even ones points, odd ones faces, contributions by the kernel's dispatch */
+	for (i = 0; i < 40; i++)
+	{
+		const float s = (i & 1u) ? mtl_rtdir_contrib(4e5f, 50.0f + (float)i, 1, 1, MTL_RTDIR_EMITTER) :
+			mtl_rtdir_contrib(400, 100.0f + (float)i, 1, 0, MTL_RTDIR_NOSPOT);
+
+		if (s > 0)
+		{
+			a = mtl_rtdir_keep(a, i, s);
+			b = mtl_rtdir_keep(b, i, s);
+		}
+	}
+
+	a = mtl_rtdir_keep_order(a);
+	b = mtl_rtdir_keep_order(b);
+	CHECK(a.n == MTL_RTDIR_MAX_TRACED && a.capped);
+
+	for (i = 0; i < a.n; i++)
+	{
+		same = same && (a.i[i] == b.i[i]) && (a.s[i] == b.s[i]) && ((i == 0) || (a.i[i - 1] < a.i[i]));
+	}
+
+	CHECK(same);
+
+	/* the points (400 - d: 300 down to 262) outshine the faces (4e5 / d^2: 154 down to 64): the 16 nearest points */
+	for (i = 0, same = 1; i < a.n; i++)
+	{
+		same = same && (a.i[i] == 2 * i);
+	}
+
+	CHECK(same);
+
+	/* a face near the point beats them all and takes the weakest point's place, the order kept */
+	a = mtl_rtdir_keep(a, 41, mtl_rtdir_contrib(4e5f, 20, 1, 1, MTL_RTDIR_EMITTER));
+	a = mtl_rtdir_keep_order(a);
+	CHECK(a.n == MTL_RTDIR_MAX_TRACED && a.i[MTL_RTDIR_MAX_TRACED - 1] == 41 && a.i[MTL_RTDIR_MAX_TRACED - 2] == 28);
+}
+
 /* the mode itself: RT-primary is chosen where the device traces rays, and reads 0 where it does not */
 static void
 test_mode(void)
@@ -1152,6 +1492,11 @@ main(void)
 	test_pack();
 	test_styles();
 	test_view_lines();
+	test_emit_scale();
+	test_reflectivity();
+	test_emitter();
+	test_pack_emitters();
+	test_mixed_choice();
 	test_mode();
 	printf("rm_rtdir_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

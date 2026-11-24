@@ -1160,6 +1160,91 @@ test_screens_under_retro(void)
 	SetCv("r_rt_ao", "0");
 }
 
+/* TASK188 slice 2: under Ray traced the Ray tracing screen greys the four switches its overlay decides, "set by the
+   presentation", showing the value in use (shadows, sun and AO off, the water on), and the sliders of the three it
+   reads off; the gun shadow and the water's sliders stay live, and no cvar is written. Without ray tracing the
+   mode is not run and the screen is the user's. */
+static void
+test_rt_screen_under_rtprimary(void)
+{
+	static const char *const sw[] = { "shadows", "sun", "ambient occlusion", "water reflections" };
+	static const int shown[] = { 0, 0, 0, 1 };
+	static const char *const off[] = { "sun floor", "sun scale", "AO range", "AO minimum", "AO scale" };
+	static const char *const live[] = { "water reflect", "water ripple", "gun shadow" };
+
+	SetCv("r_presentation", "3");
+	OpenRT("1");
+	SetCv("r_rt_ao", "1");
+	SetCv("r_rt_water", "0");
+	/* the screen again, with the values above (OpenRT would put them back to their defaults) */
+	Open("metal", "7");
+	menu = main_menu;
+	Cursor("ray tracing...");
+	Menu_SelectItem(menu);
+	rt_menu = menu;
+	for (size_t i = 0; i < sizeof(sw) / sizeof(sw[0]); i++)
+	{
+		const menucommon_s *c = RTItem(sw[i]);
+
+		CHECK(RTGreyed(sw[i]) && c->statusbar && !strcmp(c->statusbar, "set by the presentation") &&
+			((menulist_s *)c)->curvalue == shown[i], "%s under Ray traced: greyed %d, shows %d, %s", sw[i],
+			RTGreyed(sw[i]), ((menulist_s *)c)->curvalue, c->statusbar ? c->statusbar : "(none)");
+	}
+	for (size_t i = 0; i < sizeof(off) / sizeof(off[0]); i++)
+	{
+		CHECK(RTGreyed(off[i]) && !strcmp(RTItem(off[i])->statusbar, "set by the presentation"),
+			"%s under Ray traced says %s", off[i], RTItem(off[i])->statusbar);
+	}
+	for (size_t i = 0; i < sizeof(live) / sizeof(live[0]); i++)
+	{
+		CHECK(!RTGreyed(live[i]), "%s greyed under Ray traced", live[i]);
+	}
+
+	/* the tuning screen: the sun's and AO's rows the mode's, the water's live */
+	RTItem("tuning...");
+	Menu_SelectItem(rt_menu);
+	rt_menu = menu;
+	{
+		static const char *const tu_off[] = { "sun elevation", "sun azimuth", "AO rays" };
+
+		for (size_t i = 0; i < sizeof(tu_off) / sizeof(tu_off[0]); i++)
+		{
+			CHECK(RTGreyed(tu_off[i]) && !strcmp(RTItem(tu_off[i])->statusbar, "set by the presentation"),
+				"%s on the tuning screen under Ray traced: greyed %d, %s", tu_off[i], RTGreyed(tu_off[i]),
+				RTItem(tu_off[i])->statusbar);
+		}
+		CHECK(!RTGreyed("water hits") && !RTGreyed("scaler") && !RTGreyed("flat light"),
+			"a tuning row Ray traced leaves alone is greyed");
+	}
+	Open("metal", "7");
+	menu = main_menu;
+	Cursor("ray tracing...");
+	Menu_SelectItem(menu);
+	rt_menu = menu;
+
+	/* reset to defaults writes no row the mode decides */
+	SetCv("r_rt_ao_range", "512");
+	RTItem("reset to defaults");
+	Menu_SelectItem(rt_menu);
+	CHECK(!strcmp(Str("r_rt_ao_range"), "512") && !strcmp(Str("r_rt_ao"), "1") && !strcmp(Str("r_rt_water"), "0") &&
+		Writes("r_rt_ao") == 0 && Writes("r_rt_water") == 0,
+		"reset under Ray traced wrote a greyed row: range %s, ao %s, water %s", Str("r_rt_ao_range"), Str("r_rt_ao"),
+		Str("r_rt_water"));
+
+	/* no ray tracing: the switches are the user's again (greyed for the device, not the mode) */
+	OpenRT("0");
+	CHECK(!RTItem("ambient occlusion")->statusbar ||
+		strcmp(RTItem("ambient occlusion")->statusbar, "set by the presentation"),
+		"AO says set by the presentation without ray tracing");
+
+	SetCv("r_presentation", "0");
+	SetCv("r_rt_ao", "0");
+	SetCv("r_rt_ao_range", "128");
+	OpenRT("1");
+	CHECK(!RTGreyed("ambient occlusion") && strcmp(RTItem("AO range")->statusbar, "set by the presentation"),
+		"stock greys AO for the presentation after Ray traced");
+}
+
 /* TASK183: the ray-tracing screen under a presentation: Enhanced runs the
    effects, so their switches are greyed "set by the presentation" showing on
    and their tuning rows stay live; r_rt_ao is never written. Mode 0 is as before. */
@@ -1627,6 +1712,7 @@ main(void)
 	test_presentation_item();
 	test_rt_screen_under_presentation();
 	test_screens_under_retro();
+	test_rt_screen_under_rtprimary();
 	test_tuning_screen();
 	test_hdr_items();
 	test_colorspace_choice_is_pending();

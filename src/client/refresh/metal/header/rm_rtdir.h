@@ -125,6 +125,112 @@ typedef struct
  */
 long rm_rtdir_pack(const rm_rtl_lights_t *l, rm_rtdir_light_t *out, long cap, rm_rtdir_pack_t *why);
 
+/* ---- the emissive faces as area lights (TASK188 slice 2) ------------------------------- */
+
+/*
+ * The emissive faces packed at most (qrad3 has no cap), after the map's
+ * lights in the buffer; past it an emitter is counted, not kept. The
+ * buffer holds at most RM_RTDIR_MAX_UPLOAD records.
+ */
+#define RM_RTDIR_MAX_EMITTERS 2048
+#define RM_RTDIR_MAX_UPLOAD (RM_RTL_MAX_LIGHTS + RM_RTDIR_MAX_EMITTERS)
+
+/*
+ * An emissive face's intensity, at most: its range is
+ * sqrt(intensity / MTL_RTDIR_EMIT_CUT), so 16384^2 reaches as far as the
+ * strongest point light (RM_RTDIR_MAX_INTENSITY) and the sum stays finite.
+ */
+#define RM_RTDIR_MAX_EMIT_INTENSITY (16384.0f * 16384.0f)
+
+/* qrad3's: a surface light's intensity is its patch's light times its area times this (direct_scale, -direct) */
+#define RM_RTDIR_DIRECT_SCALE 0.4f
+
+/* qrad3's: a patch whose light is below this in every channel sends no direct light (DIRECT_LIGHT) */
+#define RM_RTDIR_DIRECT_LIGHT 3.0f
+
+/* qrad3's: a patch's light sits a unit in front of its face (MakePatchForFace) */
+#define RM_RTDIR_EMIT_OFFSET 1.0f
+
+/*
+ * The emitted colour, the choice TASK187 left open (docs/runbook/TASK188.md).
+ * 1: qrad3's reflectivity (CalcTextureReflectivity), the texel mean,
+ * doubled when its largest channel is under 0.5; 0: TASK187's raw texel
+ * mean. An unread texture reads RM_RTDIR_EMIT_UNREAD: qrad3's 0 (it lights
+ * nothing); TASK187's grey is RM_RTL_UNREAD_GREY.
+ */
+#define RM_RTDIR_EMIT_QRAD3_COLOUR 1
+#define RM_RTDIR_EMIT_UNREAD 0.0f
+
+/* the most points of a face's polygon read; a face with more is counted shapeless */
+#define RM_RTDIR_EMIT_MAXPTS 64
+
+/*
+ * The reflectivity of an emitter's texture (RM_RTDIR_EMIT_QRAD3_COLOUR):
+ * mean (0 to 1 a channel, rm_rtl_tex_t's) when read is not 0, else
+ * RM_RTDIR_EMIT_UNREAD in each channel. A value that is not finite or
+ * below 0 reads 0.
+ */
+void rm_rtdir_reflectivity(const float *mean, int read, float *out);
+
+/* an emissive face's polygon, as the engine side reads it from the world */
+typedef struct
+{
+	const float *pts;   /* the first point's x, y, z; stride floats from one point to the next */
+	int stride;
+	int n;              /* its points */
+	float normal[3];    /* the face's plane normal, flipped for SURF_PLANEBACK */
+} rm_rtdir_face_t;
+
+/* why rm_rtdir_emitter kept a face or not */
+enum
+{
+	RM_RTDIR_EMIT_KEPT = 0,
+	RM_RTDIR_EMIT_SHAPELESS,    /* fewer than 3 or more than RM_RTDIR_EMIT_MAXPTS points, no area, a bad normal or a value not finite */
+	RM_RTDIR_EMIT_DIM           /* below RM_RTDIR_DIRECT_LIGHT in every channel: qrad3 sends no direct light */
+};
+
+/*
+ * One emissive face as an area light, qrad3's emit_surface of its patch
+ * (CreateDirectLights), the face taken whole as one patch: the patch's
+ * light is value x refl x refl / max(refl) (BaseLightForFace, then times
+ * the normalized reflectivity), its colour that light normalized, its
+ * intensity the light's largest channel times the polygon's area times
+ * RM_RTDIR_DIRECT_SCALE, at most RM_RTDIR_MAX_EMIT_INTENSITY (*clamped set
+ * to 1 then), at the points' mean (WindingCenter) plus
+ * RM_RTDIR_EMIT_OFFSET along the normal; style 0 (qrad3's surface lights
+ * have no style); spot the normal and MTL_RTDIR_EMITTER. Returns
+ * RM_RTDIR_EMIT_KEPT with *out written, else why it was left out.
+ */
+int rm_rtdir_emitter(const rm_rtdir_face_t *f, int value, const float *refl, rm_rtdir_light_t *out, int *clamped);
+
+/* what rm_rtdir_pack_emitters left out */
+typedef struct
+{
+	long kept;
+	long bmodel;        /* not a world face: qrad3 lets only the world's faces emit (MakePatchForFace) */
+	long shapeless;     /* RM_RTDIR_EMIT_SHAPELESS */
+	long dim;           /* RM_RTDIR_EMIT_DIM, an unread texture's among them */
+	long unread;        /* kept or not, the emitters whose texture was not read (or past the texture cap) */
+	long over;          /* past cap */
+	long clamped;       /* kept, with the intensity held to RM_RTDIR_MAX_EMIT_INTENSITY */
+} rm_rtdir_emitpack_t;
+
+/* the polygon of face index face of the faces lump: 1 with *out written, 0 when it is not a world face */
+typedef int (*rm_rtdir_face_fn)(void *ctx, long face, rm_rtdir_face_t *out);
+
+/*
+ * The emissive faces of e in the kernel's form (rm_rtdir_emitter), in e's
+ * order, at most cap of them; face gives each one's polygon. Each one's
+ * reflectivity is its texture's (rm_rtdir_reflectivity; a texture past
+ * the cap is unread). Counted in *why, which may be NULL. Returns the
+ * number kept.
+ */
+long rm_rtdir_pack_emitters(const rm_rtl_emitters_t *e, rm_rtdir_face_fn face, void *ctx, rm_rtdir_light_t *out,
+		long cap, rm_rtdir_emitpack_t *why);
+
+/* the emitters' line of the map, once uploaded: 1 when it fits in len; 0 with buf empty otherwise */
+int rm_rtdir_emit_format(const char *map, const rm_rtdir_emitpack_t *p, char *buf, size_t len);
+
 /*
  * The per-frame style table: style s's rgb (refdef lightstyles, 0 to
  * RM_RTL_STYLES - 1) times modulate (r_modulate, as the lightmap takes
