@@ -345,9 +345,10 @@ typedef struct
  * its maps summed with every style at 1, as qrad3 baked them, in the
  * lightmap's bytes. It enters the fit only when that lightmap is neither
  * near black (its brightest channel under RM_RTDIR_FIT_DARK) nor clipped
- * (a channel at RM_RTDIR_FIT_CLIP or more): a dark room that a bright
- * fixture's traced light reaches would pull the ratio down and crush the
- * map, and a clipped luxel holds less than its light. The map's
+ * (a channel of the summed maps at RM_RTDIR_FIT_CLIP or more, the sum the
+ * stock renderer holds to 255 (R_BuildLightMap), so two styles of 130 count as clipped): a dark
+ * room that a bright fixture's traced light reaches would pull the ratio
+ * down and crush the map, and a clipped luxel holds less than its light. The map's
  * exposure is rm_rtdir_fit of the entered samples' sums (mtl_rtdir_q of
  * the lightmap and of the traced light, both over 255), from 1.
  */

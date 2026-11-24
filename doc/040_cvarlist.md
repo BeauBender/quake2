@@ -1274,19 +1274,25 @@ is.
 
 * **r_rt_direct_exposure**: The exposure of the Metal renderer's direct
   light (`r_rt_direct`). `0` (the default) takes the map's fit, made once
-  when the map loads: the sum of the stock lightmap at a sample of the
+  a map, on its first frame under RT-primary, and kept while that map
+  stays loaded (switching `r_rt_direct` or the presentation away and back
+  does not fit it again): the sum of the stock lightmap at a sample of the
   world's luxels (the centres of about 1024 faces and the points half
-  way to their corners, at most 8192, every lightstyle at full), divided
+  way to their corners, at most 8192, spread over the whole face list
+  when there are more, every lightstyle at full), divided
   by the sum of the traced light at the same points (the same choice of
   lights as a pixel's, each shadow ray a line test against the world's
   solid brushes), held between `0.25` and `16`, so the traced map's mean
   light is the stock map's (the lightmap enters this ratio only, never a
-  pixel's own light). A luxel enters only when its lightmap is neither
-  near black (every channel under `16` of `255`) nor clipped (a channel at
-  `255`), and the faces of light fixtures (`SURF_LIGHT`), translucent
+  pixel's own light). A luxel enters only when its lightmap, its styles'
+  maps summed as the stock renderer sums them, is neither
+  near black (every channel under `16` of `255`) nor clipped (a channel of
+  the sum at `255` or more), and the faces of light fixtures (`SURF_LIGHT`), translucent
   faces, sky and water take none, so a dark room lit by a bright fixture
   does not darken the rest of the map. `1` when no luxel enters or no
-  traced light reaches one. Every development view (`r_rt_direct_show`)
+  traced light reaches one, and `1` (with a console line) when the line
+  tests pass 2^26 node visits in the map, so a crafted map cannot stall
+  the frame. Every development view (`r_rt_direct_show`)
   is drawn at the same exposure. A value above `0` is a fixed exposure,
   at most `64`. Saved with the configuration.
 

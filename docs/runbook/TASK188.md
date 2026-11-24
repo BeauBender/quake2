@@ -712,9 +712,10 @@ full bright", `BuildFacelights`); slice 2 left such a face lit only by its neigh
   nothing met, or a triangle past the table read 0. A pixel at a face's edge can read the neighbouring
   triangle, so a fixture's outline can be off by a pixel.
 - **The light.** The word's rgb times style 0 (qrad3 adds it to the style-0 lightmap, which the engine scales
-  by style 0 and `r_modulate`) is added to the traced light before the exposure. The 1023 cap is exact while
-  the exposure is at least 0.25 (the fit's floor): 1023 / 255 x 0.25 is over 1, so a capped channel is white
-  either way. A fixed `r_rt_direct_exposure` under 0.25 dims a channel brighter than 1023.
+  by style 0 and `r_modulate`) is added to the traced light before the exposure. (Superseded: slice 3c
+  states the 1023 cap's condition exactly, `styles[0] x exposure >= 0.2493`, under "The 1023 cap, exactly"
+  below; this slice's wording, exact while the exposure is at least 0.25, left lightstyle 0 and
+  `r_modulate` out.)
 - `r_rt_stats 1` adds the map line `ref_metal: rt direct: <map>: N emissive faces drawn at their own light`.
 - The pass stays one kernel; no new texture. The view is 128 bytes (the dynamic lights' and the table's
   counts, set by the back end).
@@ -859,41 +860,50 @@ looked at by the agent.
 
 The plan (section 4.1) fits the exposure "at map load by comparing the traced direct light with the
 lightmap at a sample of luxels". Slices 1 to 3b fitted it from the frames (slice 3a: the frame three
-before). Now it is fitted once a map, when its lights are uploaded (`RM_RTDir_Lights`, `rm_rtdirscene.c`),
-on the host, and every frame of the map uses it:
+before). Now it is fitted once a map, when its lights are first uploaded (`RM_RTDir_Lights`,
+`rm_rtdirscene.c`, on the map's first RT-primary frame), on the host, and every frame of the map uses it.
+A reopen of the pass on the same map (`r_rt_direct` or the presentation away and back) uploads the lights
+again but keeps the fit; only a new map resets it:
 
 - **The samples** (`RM_RTDir_FitPoints`): of the world model's faces in the faces lump's order, every n-th
-  (n = 1 + faces / 1024), its centre and the points half way from the centre to each corner, at most 8192
-  in all, each with the face's unit normal. A face takes none without a lightmap, or when it is a fixture
-  (`SURF_LIGHT`: qrad3 fills its luxels with its own light, which RT-primary adds through the own-light
-  table and which a lightmap byte clips), translucent, sky or warped. Each point reads the face's
-  lightmap at its nearest luxel (`rm_rtdir_fit_luxel`, held to the face), the face's maps summed with
-  every style at 1, as qrad3 baked them.
+  (n = 1 + faces / 1024), its centre and the points half way from the centre to each corner, each with the
+  face's unit normal. At most 8192 in all: past that, every k-th of those points (`rm_rtdir_fit_every`, k
+  the least that keeps them at 8192), so the samples cover the whole face list; under it, every point. A
+  face takes none (`rm_rtdir_fit_face_ok`) without a lightmap, or when it is a fixture (`SURF_LIGHT`:
+  qrad3 fills its luxels with its own light, which RT-primary adds through the own-light table and which a
+  lightmap byte clips), translucent, sky or warped. Each point reads the face's lightmap at its nearest
+  luxel (`rm_rtdir_fit_st`, the texture axes less the face's `texturemins`, then `rm_rtdir_fit_luxel`,
+  held to the face), the face's maps summed with every style at 1, as qrad3 baked them.
 - **The traced light at a sample** (`rm_rtdir_fit_light`): the kernel's rule run on the host with the
   same header functions (`mtl_rtdir_reach`, `mtl_rtdir_contrib`, `mtl_rtdir_keep`, `mtl_rtdir_keep_rank`,
   `mtl_rtdir_walk`): the 32 strongest lights in range are traced strongest first, and the first 16 that
   reach the point are summed, every style at 1. The shadow ray runs from 1 unit off the face to 1 unit
-  short of the light, and is a line test through the map's tree (`RM_RTDir_Clear`), blocked by a solid
-  leaf, as qrad3 traces; water and glass let it through, as in the kernel. No dynamic light (there is none
+  short of the light, and is a line test through the map's tree (`rm_rtdir_tree_clear` in `rm_rtdir.c`,
+  over `RM_RTDir_Node`, which reads an `mnode_t`), blocked by a solid leaf, as qrad3 traces; water and glass let it through, as in the kernel. No dynamic light (there is none
   at map load) and no own light (a fixture takes no sample).
 - **Which luxels enter** (`rm_rtdir_fit_enters`): a luxel whose brightest channel is under 16 of 255 is
-  near black and is left out, and so is one with a channel at 255 (clipped). In a dark room that a bright
+  near black and is left out, and so is one with a channel at 255 (clipped). Both read the luxel's maps
+  summed, the sum the stock renderer holds to 255, so two styles of 130 count as clipped. In a dark room that a bright
   fixture's traced light reaches, the lightmap reads near black where the trace reads bright, and
   entered, those luxels would pull the ratio to the floor and crush the rest of the map. A clipped luxel
   holds less than its light, so it would pull the same way.
-- **The exposure** (`rm_rtdir_fit_map`): `rm_rtdir_fit` of the entered luxels' sums, each `mtl_rtdir_q` of
-  the lightmap and of the traced light over 255, held between 0.25 and 16, and 1 when no luxel enters or
-  no traced light reaches one. `r_rt_direct_exposure` above 0 still fixes it.
+- **The exposure** (`rm_rtdir_fit_tree`, over `rm_rtdir_fit_map`): `rm_rtdir_fit` of the entered luxels'
+  sums, each `mtl_rtdir_q` of the lightmap and of the traced light over 255, held between 0.25 and 16, and
+  1 when no luxel enters or no traced light reaches one. The line tests visit at most 2^26 nodes in a map
+  (`RM_RTDIR_FIT_VISITS`); past that every line reads blocked, the exposure is 1, and the console says
+  so. `r_rt_direct_exposure` above 0 still fixes it.
 - `r_rt_stats 1` prints the map's line: `ref_metal: rt direct: <map>: exposure fit <e> over <n> luxels of
-  <m> (<d> near black, <c> clipped), <r> lines`.
+  <m> (<d> near black, <c> clipped), <r> lines, <v> node visits, every <k>-th point`.
 
 **Why this way.** The plan's wording, at map load from a sample of luxels, is the only one it allows; the
 choice left was how to trace there. A GPU pass at load would need the acceleration structure built before
 the first frame and a wait for its result, so the exposure would hang on when the scene is ready. The host
 pass is a function of the map's file alone: the same map gives the same exposure on every run, device and
 frame order, with no lag and no reset. The cost is that the line test sees only the world's solid
-brushes, not a door or another brush entity in the scene (the kernel's rays do), and a luxel's light is
-compared at its nearest luxel, not filtered like the G-buffer's.
+brushes, not a door or another brush entity in the scene (the kernel's rays do), a luxel's light is
+compared at its nearest luxel, not filtered like the G-buffer's, and the host's shadow ray starts a fixed
+1 unit off the face, where the kernel's bias grows with the distance from the eye
+(`mtl_rtao_bias(distance(p, eye), bias_k)`): there is no eye at map load.
 
 **The frame-lag code is gone**: `rm_rtdir_fit_lag`, `RM_RTDIR_FIT_LAG`, the back end's `fit` and `fit_reset`
 and its `last_frame`, the lag's `_Static_assert`, and their tests (`test_fit_lag`, `test_fit_lag_runs`) and
@@ -941,7 +951,7 @@ lookup): `rm_rtdir_test: 703 checks, 29 failed`. Green: `rm_rtdir_test: 706 chec
 - `test_fit_luxel`: the nearest luxel, two maps summed, a point past the last column or before the first
   held to the face, a coordinate that is not a number reads luxel 0, no maps or no samples read 0.
 - `test_fit_binding`, the pin of where the fit is taken: `dir_fit` set twice in `rm_rtdirscene.c`, both in
-  `RM_RTDir_Lights` (the reset to 1, then `rm_rtdir_fit_map`), the view's exposure
+  `RM_RTDir_Lights` (the reset to 1, then `rm_rtdir_fit_tree`), the view's exposure
   `rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), dir_fit, &dir_fixed)` once, in `RM_RTDir_View`, and
   no write of the view's exposure and no fit in `rmb_rtdir.m`. Each of its mutants is refused:
 
@@ -966,6 +976,39 @@ fit-luxel-unheld: FAIL tests/metal/rm_rtdir_test.c:1439: out[0] == 10 && out[1] 
 clipped one, `fit-unshadowed` ignores the line test, `fit-walk-unbounded` walks every candidate past the
 16 seen, and `fit-luxel-unheld` reads past the face's last column. The kernel mutants `self-ray-unused`,
 `dlight-dropped` and `self-dropped` compile with `xcrun metal`, as does the kernel.
+
+### The review notes of slice 3c (round 1)
+
+| Note | What changed |
+|---|---|
+| Correctness I1: no test held the line test or the sample picker; four mutants passed | The walk, the face filter and the luxel coordinate are pure functions in `rm_rtdir.c` (`rm_rtdir_tree_clear`, `rm_rtdir_fit_face_ok`, `rm_rtdir_fit_st`); the scene only reads an `mnode_t` into `rm_rtdir_node_t`. Tested on a tree of two nodes and three leaves, and the four mutants are in `tests/check-ref-metal.sh` with four more (below). A move: the code's arithmetic and order are the same. |
+| Correctness N1: the clip test runs on the summed maps | Kept, and stated in `doc/040_cvarlist.md` and the header: the stock renderer sums a luxel's styles and holds the sum to 255 (`R_BuildLightMap`), so the sum is what clips on screen, and a per-map test would let in a luxel whose stock pixel is clipped. |
+| Correctness N2: the fit's cost, run again after every reopen | The fit is kept per map: a reopen uploads the lights again and keeps it, and only a new map resets it (`fit_world`, `fit_map`). The worst case, from the reviewer's numbers: 8192 samples with 4096 lights that all reach each one took 1.151 s of CPU (-O2, on the review's host) for the candidates and their 131072 rays with a line test that does nothing; on top come at most 8192 x 32 = 262144 line tests, now at most 2^26 node visits in all (security N1). It runs on the map's first RT-primary frame, once a map. |
+| Correctness N3: the sample cap leans toward the first faces | Past 8192 points the fit takes every k-th candidate point across the whole face list (`rm_rtdir_fit_every`); under the cap it takes every point, as before. |
+| Correctness N4: slice 3b's 1023-cap sentence | Marked superseded where it stands. |
+| Correctness N5, spec N1: the host ray's fixed bias | Stated in "Why this way". |
+| Security N1: a crafted map can make the fit cost tens of seconds | The line tests stop at 2^26 node visits in a map; past it the exposure is 1, with a console line. Tested with a cap of 3 and of 1. |
+| Spec N2: the stale "lagged fit" mutant comment | It says what the mutant does now. |
+| Spec N4: `face < 0` after the face's address | Tested first. |
+
+Tests at round 1: `rm_rtdir_test: 840 checks, 0 failed`. `test_fit_tree` walks a tree whose root splits at
+x = 0, with a node splitting at y = 0 in front (empty in front, solid behind) and an empty leaf behind: a
+line on one side, into the solid leaf, into empty space, out of the solid leaf across the root, a point at
+exactly 0 (in front), a missing child, a chain of 1024 nodes (reached) and of 1025 (blocked), and the visit
+cap. `test_fit_tree_map` checks the fit over a tree and its 1 past the cap, `test_fit_face` each skipped
+flag, and `test_fit_st` the luxel coordinate at non-zero `texturemins` and the stride. Each scratch mutant
+of `rm_rtdir.c`, red against the test and built by `tests/check-ref-metal.sh`:
+
+```
+leaf-never-solid: rm_rtdir_test: 840 checks, 7 failed
+sides-swapped: rm_rtdir_test: 840 checks, 6 failed
+front-zero-behind: rm_rtdir_test: 840 checks, 1 failed
+depth-cap-off: rm_rtdir_test: 840 checks, 1 failed
+visits-uncapped: rm_rtdir_test: 840 checks, 4 failed
+fixtures-sampled: rm_rtdir_test: 840 checks, 2 failed
+luxel-s-unshifted: rm_rtdir_test: 840 checks, 3 failed
+every-floor: rm_rtdir_test: 840 checks, 34 failed
+```
 
 ### The records are pins (M6, apple9, 640 x 480)
 
