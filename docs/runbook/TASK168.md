@@ -22,6 +22,21 @@ picture does not show shades it in world space. `0` stays as the setting for TAS
   `rtpreset.c` records a preset's values from the cvars; `tests/fixtures/rt-preset/good.cfg` sets `1`
   itself.
 
+## Who sees the new default
+
+- *Archived values persist.* `r_rt_water_hits` is `CVAR_ARCHIVE`: `Cvar_WriteVariables`
+  (`src/common/cvar.c`) writes every archived cvar whatever its value, and `Cvar_Get` on an existing
+  cvar keeps the stored one. A `config.cfg` that already holds `r_rt_water_hits "0"` keeps 0. That
+  covers anyone who ran the Metal RT water or opened the Ray tracing menu, since the menu's
+  `Cvar_Get(c->cvar, c->def, c->flags)` (`videomenu.c`) creates the cvar too. Only a fresh
+  configuration, or one without the cvar, gets `1`.
+- *Presets* (`rtpreset.c`). A preset without the line leaves the current value alone; a preset with an
+  explicit `r_rt_water_hits "0"` loads 0. The A/B "stock" fill and reset-to-defaults use the
+  `rt_tune` default, now `1`.
+- *The one-time refusal line.* Where the world-space kernels cannot be built, the line
+  "r_rt_water_hits 1 refused, its hits shaded as 0's" now prints once for every user with
+  `r_rt_water 1`, not only for those who chose `1`.
+
 ## What each presentation mode reads
 
 `rm_pres_value` has no row for `r_rt_water_hits` in any mode, so every mode reads the user's value,
@@ -83,4 +98,5 @@ the same scenario, made on an earlier main, since the hold has no second build.
 
 ## Checks on the final commit
 
-See the report of the lane; each run was logged.
+`make test`: 562 tests, 0 failed. `check-ref-metal`: ok, 13162 checks. `check-cvar-docs`,
+`check-runbook-index` and `check-doc-links`: ok.
