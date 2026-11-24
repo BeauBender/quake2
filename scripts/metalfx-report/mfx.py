@@ -754,13 +754,15 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
         if why:
             bounded.stop(c, ENGINE_GRACE, pump)
     finally:
-        if c is not None and c.popen.poll() is None:  # an interrupt must not leave the engine running
-            bounded.stop(c, ENGINE_GRACE, pump)
-        if slave >= 0:
-            os.close(slave)
-        os.close(master)
-        with open(log, "wb") as f:
-            f.write(bytes(buf).replace(b"\r\n", b"\n"))
+        try:
+            if c is not None and c.popen.poll() is None:  # an interrupt must not leave the engine running
+                bounded.stop(c, ENGINE_GRACE, pump)
+        finally:  # a signal the stop held is raised as it ends: the pty is closed and the log written still
+            if slave >= 0:
+                os.close(slave)
+            os.close(master)
+            with open(log, "wb") as f:
+                f.write(bytes(buf).replace(b"\r\n", b"\n"))
     if why == "timeout":
         raise RuntimeError("engine run timed out after %ds (%s)" % (timeout, log))
     return status

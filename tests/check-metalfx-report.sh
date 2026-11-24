@@ -835,6 +835,37 @@ limit" "$out"
 
     fi
 
+    # FIX186 slice 2: run_engine's finally closes the pty and writes the log even when its stop
+    # raises a signal it held. The fake engine sends the generator a TERM once it has written its
+    # line, and another on the stop's TERM, which it ignores; ENGINE_GRACE is 1 s here
+    if has engine; then
+    rm -rf "$w/held"; mkdir -p "$w/held"
+    printf '%s\n' '#!/bin/sh' 'trap "kill -s TERM \$PPID" TERM' 'echo engine-ready' 'kill -s TERM $PPID' \
+        'while [ -e "$0.flag" ]; do sleep 0.1; done' > "$w/held/eng"
+    chmod +x "$w/held/eng"; : > "$w/held/eng.flag"
+    python3 -I -c 'import os, signal, sys
+sys.path.insert(0, sys.argv[1])
+import mfx
+def h(s, f):
+    raise SystemExit(143)
+signal.signal(signal.SIGTERM, h)
+class Ctx:
+    bin, cfg = sys.argv[2], None
+mfx.ENGINE_GRACE = 1
+try:
+    mfx.run_engine(Ctx(), [], sys.argv[3], timeout=30, debug=False)
+    print("no exit")
+except SystemExit as e:
+    print("exit %s" % e.code)' "$d" "$w/held/eng" "$w/held/log" < /dev/null > "$w/held/out" 2>&1 &
+    hp=$!
+    n=0; while kill -0 $hp 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
+    rm -f "$w/held/eng.flag"
+    if kill -0 $hp 2>/dev/null; then ko engine-held-log "the run outlived 30 s"; kill -s KILL $hp; fi
+    wait $hp 2>/dev/null
+    grep -qx 'exit 143' "$w/held/out" || ko engine-held-log "the run did not end on its TERM: $(cat "$w/held/out")"
+    grep -qx 'engine-ready' "$w/held/log" 2>/dev/null || ko engine-held-log "no log, or not the engine's line, after a held TERM: $(cat "$w/held/out")"
+    fi
+
     # the structural measure
     if has ssim; then
     out=$("$w/ssim" "$tmp/a.tga" "$tmp/a.tga" 2>&1); want_rc ssim-one 0 $?; want_has ssim-one "ssim=1.000000" "$out"
@@ -915,7 +946,7 @@ mutant() { # name covered-id file(py|c|lib) old new [old new]...: runs in the ba
         case $id in
             git-*|link-*|unwritable|relative|write-link) g=path;;
             plan-*|accepted-*) g=plan;;
-            probe-*|timed-*) g=engine;;
+            probe-*|timed-*|engine-*) g=engine;;
             cfg-*) g=cfg;;
             frames-*|stats-*) g=frames;;
             name-*|crop-*|host-*|ext-*|report-*|load-*) g=report;;
@@ -1073,6 +1104,7 @@ mutant quality-vs-itself e2e-quality py 'diff_frames(ctx, nat[k], fr[k])' 'diff_
 mutant crop-is-native e2e-crop py 'img = nimg if oid == "native" else read_tga(frames_by_index(pins[oid])[mid])' 'img = nimg'
 mutant crop-frame-first e2e-index py 'mid = nkeys[len(nkeys) // 2]' 'mid = nkeys[0]'
 mutant pins-not-in-group e2e-group lib '        os.killpg(c.pid, sig)' '        os.kill(c.pid, sig)'
+mutant engine-log-unguarded engine-held-log py '        finally:  # a signal the stop held is raised as it ends' '        except KeyboardInterrupt:  # a signal the stop held is raised as it ends'
 mutant pins-kill-first e2e-lock lib '        if not signal_group(c, signal.SIGTERM):' '        if not signal_group(c, signal.SIGKILL):'
 mutant stop-wait-unfloored e2e-lock-grace py 'return max(2 * g, g + 5) + 5' 'return 2 * g + 5'
 mutant stop-unheld e2e-lock lib '    held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)

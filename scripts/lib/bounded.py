@@ -19,7 +19,8 @@ probe (pyprobe) runs this file. Standard library only; Python 3.9 (the macOS pyt
 
 Result.how is "exit" (the command exited by itself), "signal" (a signal this helper did not send
 ended it; Result.signal is its number) or "timeout" (this helper stopped it when its time ran out;
-the output is what was read by then, or None). A stop because of the caller's own signal is no
+the output is what it wrote, read once the group is stopped, or None when a process it left behind
+still holds the pipes open after AFTER_KILL seconds). A stop because of the caller's own signal is no
 Result: the exception goes on once the group is stopped.
 
 The group is signalled only while it is the child's. Until the child is reaped its pid, and so the
@@ -43,19 +44,31 @@ import time
 GRACE = 10       # seconds between TERM and KILL, as BENCH_STOP_GRACE's default
 AFTER_KILL = 2   # seconds for the group to go after the KILL, as bench_stop_groups
 POLL = 0.1
+PS = "/bin/ps"
+PS_WAIT = 5      # seconds for ps to answer; past them it is no answer
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 def proc_start(pid):
     """pid's start time (ps -o lstart=, in UTC, its words one blank apart); "" when no process has
-    pid; None when this process cannot tell (pid answers, ps does not)."""
+    pid; None when this process cannot tell (pid answers and ps does not, or ps gave no answer in
+    PS_WAIT seconds)."""
     try:
-        p = subprocess.Popen(["/bin/ps", "-o", "lstart=", "-p", str(pid)], env=dict(os.environ, TZ="UTC0"),
+        p = subprocess.Popen([PS, "-o", "lstart=", "-p", str(pid)], env=dict(os.environ, TZ="UTC0"),
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                              universal_newlines=True)
-        out = p.communicate()[0]
     except OSError:
         out = ""
+    else:
+        try:
+            out = p.communicate(timeout=PS_WAIT)[0]
+        except subprocess.TimeoutExpired:
+            p.terminate()  # ps itself, which starts nothing
+            try:
+                p.communicate(timeout=PS_WAIT)
+            except subprocess.TimeoutExpired:
+                pass
+            return None
     s = " ".join(out.split())
     if s:
         return s
@@ -105,12 +118,10 @@ def spawn(cmd, grace=GRACE, _box=None, **kw):
 def _ours(c):
     """Whether the group with the child's id is still the child's (see the module's text)."""
     s = proc_start(c.pid)
-    if s == "":
-        return True
-    if s is None:
-        return True  # the pid answers and ps does not: as the shell primitive, while no other is seen
     if c.popen.returncode is not None:
-        return False  # reaped: a process that has the pid now is another one
+        return s == ""  # reaped: the group is the child's only while no process has the pid, whatever ps says
+    if s == "" or s is None:
+        return True  # unreaped and the pid gone, or ps gave no answer: the pid cannot be another's yet
     # unreaped, the pid is still the child's unless it was reaped behind Popen's back (another start
     # time); with no start time read at spawn (ps gave none), the unreaped pid is taken as the child's
     return c.start is None or s == c.start
@@ -225,6 +236,11 @@ def run(cmd, timeout=None, grace=GRACE, **kw):
             out = c.popen.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             stop(c, grace)
+            if c.output is None and c.reading:
+                try:  # what was written, read once the group is gone (and the child reaped, if stop could not)
+                    c.output = c.popen.communicate(timeout=AFTER_KILL)
+                except (subprocess.TimeoutExpired, OSError, ValueError):
+                    pass
             o = c.output or (None, None)
             return Result(c.popen.returncode, o[0], o[1], "timeout")
         rc = c.popen.returncode
