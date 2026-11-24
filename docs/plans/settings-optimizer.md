@@ -52,7 +52,7 @@ spaces. The six words and what each one turns:
 | Word | Priority | Cvars turned | Capability (where false: not tried, and the report and menu give the reason) |
 |---|---|---|---|
 | `resolution` | Resolution | `r_metalfx_scale`, the 3D view's internal size under a scaler. The output size (`r_mode`, `r_customwidth`, `r_customheight`) is never changed: it needs a `vid_restart`. | a scaler in `r_metalfx_modes` (bits 2, 4 or 8) |
-| `rt` | Ray-traced effects | the switches `r_rt_shadows`, `r_rt_sun`, `r_rt_ao`, `r_rt_water`, `r_rt_gunshadow`; their cost settings `r_rt_ao_rays`, `r_rt_ao_scale`, `r_rt_water_hits` | `r_rt_available 1` |
+| `rt` | Ray-traced effects | the switches `r_rt_shadows`, `r_rt_sun`, `r_rt_ao`, `r_rt_water`, `r_rt_gunshadow`; their cost settings `r_rt_ao_rays`, `r_rt_ao_scale`, `r_rt_water_hits`. `r_rt_direct`, `r_rt_direct_exposure` and `r_rt_direct_show` (TASK188) are not on the ladder: RT-primary is a presentation, and the search does not turn a presentation (section 4.4). | `r_rt_available 1` |
 | `hdr` | HDR | `r_hdr`. `r_hdr_peak` is the player's and is not turned. | `VidRules_Hdr` enables "HDR" (`VIDHDR_ITEM_ON`): extended range, from `r_hdr_headroom` |
 | `upscale` | AI upscaling (MetalFX) | `r_metalfx` `1` and `2` | the mode's bit in `r_metalfx_modes` (`2` for `1`, `4` for `2`) |
 | `denoise` | Denoising | `r_metalfx 3`, the denoised scaler. `r_rt_denoiser`: to locate (only the menu reads it, `VIDITEM_DENOISER` in `src/client/menu/vidrules.c` and `videomenu.c`; no code creates it until TASK113). `r_rt_temporal`: to locate (no code names it; TASK59, #102). Each is added to the ladder when it lands. | `r_metalfx_modes` bit `8`; for the others, their own capability when they land |
@@ -389,11 +389,13 @@ The reasons:
   restart in a run rebuilds the renderer, drops the MetalFX history and
   reloads the textures, so a trial after it would not be like the others.
 - It is an overlay that sets other rows. `RM_Effect` (`rm_main.c`) passes
-  each value through `rm_pres_value` (`rm_rtgate.c`): Enhanced reads the
-  four ray-traced switches as `1`, and Retro reads every switch and
-  `r_metalfx` as `0` (`doc/040_cvarlist.md`, `r_presentation`). Under
-  either, those rows are not the search's to turn. They are left untried,
-  with the menu's reason, "set by the presentation".
+  each value through `rm_pres_value` (`rm_rtgate.c`), which overlays three
+  tables (`doc/040_cvarlist.md`, `r_presentation`): Enhanced reads the four
+  ray-traced switches as `1`; Retro reads every switch and `r_metalfx` as
+  `0`; and Ray traced (`r_presentation 3`, `pres_rtprimary`) reads
+  `r_rt_direct` as `1`, `r_rt_shadows`, `r_rt_sun` and `r_rt_ao` as `0`,
+  and `r_rt_water` as `1`. The rows in the table of the mode in force are
+  left untried, with the menu's reason, "set by the presentation".
 - It is a look the player chose, not a cost ladder.
 
 `presentation` in `optimize_rank` therefore changes only the report. When
@@ -468,6 +470,12 @@ search tolerates that in two ways:
 
 Every one goes into `doc/040_cvarlist.md` or `doc/050_commands.md`
 (`tests/check-cvar-docs.sh`).
+
+`optimize run [name]` saves through the existing `RTPreset_Save`, with its
+name validation (`RTP_NameOk` and `RTP_Path` in `src/client/menu/rtpreset.c`),
+never through a path of its own. The `optimize_demo` value is passed to demo
+playback as an argument, never into a console string (no `Cbuf_AddText` with
+the cvar's value).
 
 ### 5.2 A run
 
@@ -622,7 +630,7 @@ The question decides TASK205, and only TASK205:
 
 | Stage | Card | Files | Tests | Acceptance |
 |---|---|---|---|---|
-| 1. The search and the command | TASK203 (#695) | `src/client/menu/optsearch.c`, `header/optsearch.h` (new: the pure search); `src/client/menu/optimize.c` (new: the command, the cvars, the trials); `rtpreset.c` and `header/vidrules.h` (publish a given set as B; save a given set); `vidrules.c` (`r_metalfx_scale` as a preset row); `rm_fxscene.c` (`r_metalfx_scale` through `RM_Effect`); `rm_main.c` (`metal_presented`, `metal_rt_cost`); `cl_view.c`, `cl_network.c` (one call each, only while a run is on); `menu.c` (the init beside `RTPreset_Init`); `Makefile` (the client and `TEST_OBJS`, beside `rtpreset.o` and `vidrules.o`, against `tests/unit/stub_client.c`); `doc/040_cvarlist.md`, `doc/050_commands.md`; its runbook | `tests/unit/test_optsearch.c`, `test_optimize.c` (new), `test_rtpreset.c` (the row list), `test_vidrules.c` (the tuning item count grows by one, for the `r_metalfx_scale` row), pins in `tests/pins/unit/`: meeting the target keeps the most of the highest-ranked; missing gives up the lowest first, the dearest step first by the hints; nothing meets gives the closest with its limit line; the first candidate meeting the target ends the run at one round; a `resolution` step below 1 forces `r_metalfx` to 1 and a candidate is looked up by its coupled values; the worked trace of section 4.2 gives its ten rows; a trial passes when `stat <= target`; deterministic run twice; each cap stops with the best so far; warm-up frames are left out; a false capability is never tried and the report says why; cancel and each failure put back B and A/B, and no tuning cvar is written; a preset without the `r_metalfx_scale` line loads as before | the tests first and failing; one manual run on a bare-metal Mac with the report's lines in `docs/runbook/TASK203.md` and A unchanged; every pin unchanged; no frame rate is a criterion |
+| 1. The search and the command | TASK203 (#695) | `src/client/menu/optsearch.c`, `header/optsearch.h` (new: the pure search); `src/client/menu/optimize.c` (new: the command, the cvars, the trials); `rtpreset.c` and `header/vidrules.h` (publish a given set as B; save a given set); `vidrules.c` (`r_metalfx_scale` as a preset row); `rm_fxscene.c` (`r_metalfx_scale` through `RM_Effect`); `rm_main.c` (`metal_presented`, `metal_rt_cost`); `cl_view.c`, `cl_network.c` (one call each, only while a run is on); `menu.c` (the init beside `RTPreset_Init`); `Makefile` (the client and `TEST_OBJS`, beside `rtpreset.o` and `vidrules.o`, against `tests/unit/stub_client.c`); `doc/040_cvarlist.md`, `doc/050_commands.md`; its runbook | `tests/unit/test_optsearch.c`, `test_optimize.c` (new), `test_rtpreset.c` (the row list), `test_vidrules.c` (the tuning item count grows by one, for the `r_metalfx_scale` row), pins in `tests/pins/unit/`: meeting the target keeps the most of the highest-ranked; missing gives up the lowest first, the dearest step first by the hints; nothing meets gives the closest with its limit line; the first candidate meeting the target ends the run at one round; a `resolution` step below 1 forces `r_metalfx` to 1 and a candidate is looked up by its coupled values; the worked trace of section 4.2 gives its ten rows; a trial passes when `stat <= target`; deterministic run twice; each cap stops with the best so far; warm-up frames are left out; a false capability is never tried and the report says why; under each presentation (Enhanced, Retro and Ray traced) the rows of its table are left untried with the reason "set by the presentation", Ray traced's being `r_rt_direct` 1, `r_rt_shadows`, `r_rt_sun` and `r_rt_ao` 0 and `r_rt_water` 1; cancel and each failure put back B and A/B, and no tuning cvar is written; a preset without the `r_metalfx_scale` line loads as before | the tests first and failing; one manual run on a bare-metal Mac with the report's lines in `docs/runbook/TASK203.md` and A unchanged; every pin unchanged; no frame rate is a criterion |
 | 2. The menu | TASK204 (#696) | `src/client/menu/videomenu.c` (the Optimize screen and its entry under Video options); `vidrules.c`, `header/vidrules.h` (its rules) | `tests/unit/test_vidrules.c`: each item's rule; a false capability greys its priority with its reason; another renderer greys every item with "the optimizer turns the Metal renderer's settings"; run greyed during a run, cancel when none; review, save, flip and accept greyed until a result exists; the item count is the same under every renderer and capability | a manual walk on a bare-metal Mac: rank, set a target, run, cancel, run again, review, flip A and B, save under a name, accept; console lines in its runbook, no frames committed; A unchanged before accept |
 | 3. Starting points per device class | TASK205 (#697) | waits on section 9; if the answer is yes: the table in `optsearch.c` or a data file beside it, its source rows here | `tests/unit/test_optsearch.c`: with an entry the search starts from it; without one as before; the same inputs give the same result | the owner's answer recorded in the card and this plan first; nothing greyed or hidden by device class |
 
