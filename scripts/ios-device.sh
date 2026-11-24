@@ -350,7 +350,7 @@ EOF
 	# once: the window in which bash 3.2 drops an INT (between the end of a
 	# command substitution's output and its reap), or a HUP comes before
 	# the command's pid is stored, opened at will
-	local stage_old stage_new stage_s
+	local stage_old stage_new stage_s stage_c
 	stage_old='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null) || return 1'
 	stage_new='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null; _st=$?; exec >&-; if rm "${FAKE_STATE:-/nonexistent}/stage-${2:-stat}" 2> /dev/null; then trap "" INT; : > "$FAKE_STATE/at-ps"; _n=0; while [ ! -e "$FAKE_STATE/sent" ] && [ "$_n" -lt 100 ]; do sleep 0.1; _n=$((_n + 1)); done; fi; exit "$_st") || return 1'
 	stage_s=$(cat "$repo/scripts/bench/core/common.sh") || die "cannot read the primitive"
@@ -359,8 +359,12 @@ EOF
 	*"$stage_old"*) ;;
 	*) die "the stage anchor is not in the primitive" ;;
 	esac
+	# the replacement quoted, so that bash 5.2 (patsub_replacement) does not
+	# read its & as the match; in an assignment, where bash 3.2 drops the
+	# quotes too
+	stage_c=${stage_s/"$stage_old"/"$stage_new"}
 	mkdir -p "$sroot/stagerepo/scripts/bench/core" || die "cannot create the staged repository"
-	cp "$self" "$sroot/stagerepo/scripts/ios-device.sh" && printf '%s\n' "${stage_s/"$stage_old"/$stage_new}" > "$sroot/stagerepo/scripts/bench/core/common.sh" \
+	cp "$self" "$sroot/stagerepo/scripts/ios-device.sh" && printf '%s\n' "$stage_c" > "$sroot/stagerepo/scripts/bench/core/common.sh" \
 		|| die "cannot fill the staged repository"
 	# the scratch root as the script sees it (pwd -P); no message names it
 	sroot_p=$(cd "$sroot" && pwd -P) || die "cannot resolve the scratch root"
@@ -380,7 +384,7 @@ EOF
 		local name=$1 want=$2 text=$3 sc=$4 app=$5 d rc=0 why= a t0 script=$self
 		local -a envs=() args=() appenv=()
 		shift 5
-		while [ $# -gt 0 ] && [ "$1" != -- ]; do envs+=("${1//@P@/$p}"); shift; done
+		while [ $# -gt 0 ] && [ "$1" != -- ]; do a=${1//@P@/"$p"}; envs+=("$a"); shift; done
 		[ $# -gt 0 ] && shift
 		ncase=$((ncase + 1))
 		d=$sroot/case/$name
@@ -389,7 +393,7 @@ EOF
 		if [ "$app" != - ]; then
 			cp -R "$sroot/$app" "${d:?}/Quake2.app" || die "cannot copy $app"
 		fi
-		for a in "$@"; do a=${a//@APP@/$d/Quake2.app}; args+=("${a//@P@/$p}"); done
+		for a in "$@"; do a=${a//@APP@/"$d/Quake2.app"}; a=${a//@P@/"$p"}; args+=("$a"); done
 		if [ -n "${dt_default:-}" ]; then
 			script=$sroot/repo/scripts/ios-device.sh
 		else
@@ -469,7 +473,7 @@ EOF
 		mkdir -p "${d:?}/state" "${d:?}/tmp" || die "cannot create $d"
 		: > "${d:?}/state/calls"
 		cp -R "$sroot/$app" "${d:?}/Quake2.app" || die "cannot copy $app"
-		for a in "$@"; do a=${a//@APP@/$d/Quake2.app}; args+=("${a//@P@/$p}"); done
+		for a in "$@"; do a=${a//@APP@/"$d/Quake2.app"}; a=${a//@P@/"$p"}; args+=("$a"); done
 		if [ -n "$stage" ]; then
 			script=$sroot/stagerepo/scripts/ios-device.sh
 			[ "$stage" = pgid ] && stagenv=(FAKE_STAGE_SPAWN=1)
