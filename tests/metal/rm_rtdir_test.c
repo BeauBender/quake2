@@ -1435,6 +1435,8 @@ test_fit_luxel(void)
 	CHECK(out[0] == 111 && out[1] == 121 && out[2] == 131);
 	rm_rtdir_fit_luxel(s, 1, 2, 2, -3.0f, 9.0f, out);
 	CHECK(out[0] == 4 && out[1] == 5 && out[2] == 6);
+	rm_rtdir_fit_luxel(s, 1, 2, 2, 2.6f, -0.2f, out);
+	CHECK(out[0] == 10 && out[1] == 20 && out[2] == 30);
 	rm_rtdir_fit_luxel(s, 1, 2, 2, NAN, NAN, out);
 	CHECK(out[0] == 1 && out[1] == 2 && out[2] == 3);
 	rm_rtdir_fit_luxel(s, 0, 2, 2, 0, 0, out);
