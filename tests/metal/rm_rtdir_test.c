@@ -83,6 +83,7 @@ test_on(void)
 	CHECK(rm_rtdir_show(1) == RM_RTDIR_SHOW_DIRECT);
 	CHECK(rm_rtdir_show(2.9f) == RM_RTDIR_SHOW_VIS);
 	CHECK(rm_rtdir_show(3) == RM_RTDIR_SHOW_NOSHADOW);
+	CHECK(rm_rtdir_show(4) == RM_RTDIR_SHOW_DLIGHTS && RM_RTDIR_SHOW_MAX == 4);
 	CHECK(rm_rtdir_show(99) == RM_RTDIR_SHOW_MAX);
 	CHECK(rm_rtdir_show(-1) == 0);
 	CHECK(rm_rtdir_show(NAN) == 0);
@@ -124,9 +125,13 @@ test_at(void)
 	CHECK(mtl_rtdir_at(3, MTL_RTDIR_LAYERS) == MTL_RTDIR_AT_SHADOW);
 	CHECK(mtl_rtdir_at(5, MTL_RTDIR_LAYERS) == MTL_RTDIR_AT_SHADOW);
 
+	/* TASK188 slice 3b: a model that carries the dynamic light passes its ray, up to the same layers */
+	CHECK(mtl_rtdir_at(MTL_RTDIR_MAT_CARRIER, 0) == MTL_RTDIR_AT_PASS);
+	CHECK(mtl_rtdir_at(MTL_RTDIR_MAT_CARRIER, MTL_RTDIR_LAYERS) == MTL_RTDIR_AT_SHADOW);
+
 	for (m = 0; m < 256; m++)
 	{
-		if ((m != 3) && (m != 5))
+		if ((m != 3) && (m != 5) && (m != MTL_RTDIR_MAT_CARRIER))
 		{
 			CHECK(mtl_rtdir_at(m, 0) == MTL_RTDIR_AT_SHADOW);
 		}
@@ -368,6 +373,8 @@ pin_and(int a, int b)
 	"\t\tconstant uint &ntris [[buffer(5)]],\n" \
 	"\t\tdevice atomic_uint *counts [[buffer(6)]],\n" \
 	"\t\tdevice const rm_rtdir_light *lights [[buffer(9)]],\n" \
+	"\t\tconstant rm_rtdir_dlight *dl [[buffer(10)]],\n" \
+	"\t\tdevice const uint *self [[buffer(11)]],\n" \
 	"\t\tuint2 px [[thread_position_in_grid]])"
 
 /* the traced light, the whole statement */
@@ -375,11 +382,12 @@ pin_and(int a, int b)
 #define DIRECT_PARAMS \
 	"(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_float3 *styles,\n" \
 	"\t\tinstance_acceleration_structure ias, device const uint *inst, device const uchar *tmat, uint ntris,\n" \
-	"\t\tdevice const rm_rtdir_light *lights, thread rm_rtdir_tally &t)"
+	"\t\tdevice const rm_rtdir_light *lights, constant rm_rtdir_dlight *dl, device const uint *self,\n" \
+	"\t\tthread rm_rtdir_tally &t)"
 
 #define KERNEL_RAW \
 	"const float3 raw = world ? rm_rtdir_direct(v, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), styles, ias,\n" \
-	"\t\t\tinst, tmat, ntris, lights, t) : float3(0.0f);"
+	"\t\t\tinst, tmat, ntris, lights, dl, self, t) : float3(0.0f);"
 
 /* the kernel body's reads, each once and no other: the material, depth and normal, and base on a pixel not traced */
 static const char *const kernel_reads[] = { "mat.read(px)", "depth.read(px)", "normal.read(px)", "base.read(px)" };
@@ -409,7 +417,7 @@ static const char *const kernel_defines[] = {
 	"\n" \
 	"\t\t\tt.rays++;\n" \
 	"\n" \
-	"\t\t\tif ((len > 1.0f) && (rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris) < 0.5f))\n" \
+	"\t\t\tif ((len > 1.0f) && (rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris, 0u) < 0.5f))\n" \
 	"\t\t\t{\n" \
 	"\t\t\t\tcontinue;\n" \
 	"\t\t\t}\n" \
@@ -420,6 +428,62 @@ static const char *const kernel_defines[] = {
 	"\t\tseen++;\n" \
 	"\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]);\n" \
 	"\t}\n"
+
+/*
+ * TASK188 slice 3b: the dynamic lights' term, whole: under its own bound
+ * (mtl_rtdir_dlight_walk), gl1's radius rule (mtl_rtdir_dlight_add), one
+ * shadow ray each that passes the model carrying the light, and its
+ * colour; and the three terms' sum, the dynamic lights alone under view 4
+ */
+#define KERNEL_DYN \
+	"\tfor (uint i = 0; mtl_rtdir_dlight_walk(i, v.ndlights); i++)\n" \
+	"\t{\n" \
+	"\t\tconst rm_rtdir_dlight d = dl[i];\n" \
+	"\t\tconst float a = mtl_rtdir_dlight_add(mtl_rts_v3(p.x, p.y, p.z), mtl_rts_v3(n.x, n.y, n.z),\n" \
+	"\t\t\t\tmtl_rts_v3(d.pos.x, d.pos.y, d.pos.z), d.pos.w);\n" \
+	"\n" \
+	"\t\tif (!(a > 0.0f))\n" \
+	"\t\t{\n" \
+	"\t\t\tcontinue;\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tt.inrange++;\n" \
+	"\n" \
+	"\t\tif (v.show != 3u)\n" \
+	"\t\t{\n" \
+	"\t\t\tconst float3 to = d.pos.xyz - o;\n" \
+	"\t\t\tconst float len = length(to);\n" \
+	"\n" \
+	"\t\t\tt.rays++;\n" \
+	"\n" \
+	"\t\t\tif ((len > 1.0f) &&\n" \
+	"\t\t\t\t(rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris, mtl_rtdir_dlight_bit(i)) < 0.5f))\n" \
+	"\t\t\t{\n" \
+	"\t\t\t\tcontinue;\n" \
+	"\t\t\t}\n" \
+	"\n" \
+	"\t\t\tt.lit++;\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tsum += a * d.color.rgb;\n" \
+	"\t}\n"
+
+#define KERNEL_TERMS \
+	"\t{\n" \
+	"\t\tconst float3 dyn = rm_rtdir_dyn(v, p, n, o, ias, inst, tmat, ntris, dl, t);\n" \
+	"\t\tconst float3 own = rm_rtdir_own(v, p, ias, inst, tmat, ntris, self) * float3(styles[0]);\n" \
+	"\n" \
+	"\t\treturn ((v.show == 4u) ? dyn : (raw + dyn + own)) * MTL_RTDIR_UNIT;\n" \
+	"\t}\n"
+
+/* the own light's lookup: the triangle's word, inside the table, through mtl_rtdir_self */
+#define KERNEL_OWN \
+	"\t\tif (mtl_rtdir_at(m, hop) != MTL_RTDIR_AT_PASS)\n" \
+	"\t\t{\n" \
+	"\t\t\tconst mtl_rgba_t c = mtl_rtdir_self((tri < v.nself) ? self[tri] : 0u);\n" \
+	"\n" \
+	"\t\t\treturn float3(c.r, c.g, c.b);\n" \
+	"\t\t}\n"
 
 #define KERNEL_WORLD_BRANCH \
 	"\t\tif (world)\n" \
@@ -559,12 +623,44 @@ kernel_broken(const char *src)
 	r = pin_and(r, pin_count(dir.body, dir.nbody, "k = mtl_rtdir_keep_rank(k);", 1));
 	r = pin_and(r, pin_count(dir.body, dir.nbody, "t.capped = mtl_rtdir_capped(k, seen);", 1));
 
-	if ((r != PIN_OK) || (count_in(text, strlen(text), "rm_rtdir_seen(") != 2) ||
+	if ((r != PIN_OK) || (count_in(text, strlen(text), "rm_rtdir_seen(") != 3) ||
 		(count_in(dir.body, dir.nbody, "mtl_rtdir_keep(") != 1) ||
 		(count_in(dir.body, dir.nbody, "mtl_rtdir_keep_rank(") != 1) || (words_in(dir.body, dir.nbody, "seen") != 4))
 	{
 		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN,
 			"rm_rtdir_direct's walk is not its candidates traced strongest first, one ray each, under the bound");
+	}
+
+	/*
+	 * TASK188 slice 3b: the dynamic lights' term whole, its walk the one of
+	 * the file, its ray the file's third; the own light's lookup whole; the
+	 * three terms summed once, each function called once
+	 */
+	{
+		fn_t dyn, own;
+
+		if (!find_fn(text, "static float3\nrm_rtdir_dyn(", &dyn) || !find_fn(text, "static float3\nrm_rtdir_own(", &own))
+		{
+			return "rm_rtdir_dyn or rm_rtdir_own is not defined once";
+		}
+
+		r = pin_and(pin_count(dyn.body, dyn.nbody, KERNEL_DYN, 1), pin_count(dir.body, dir.nbody, KERNEL_TERMS, 1));
+
+		if ((r != PIN_OK) || (count_in(text, strlen(text), "mtl_rtdir_dlight_walk(") != 1) ||
+			(count_in(dyn.body, dyn.nbody, "rm_rtdir_seen(") != 1) || (count_in(text, strlen(text), "rm_rtdir_dyn(") != 2) ||
+			(count_in(text, strlen(text), "dl[") != 1))
+		{
+			return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN,
+				"rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound, summed in");
+		}
+
+		r = pin_count(own.body, own.nbody, KERNEL_OWN, 1);
+
+		if ((r != PIN_OK) || (count_in(text, strlen(text), "rm_rtdir_own(") != 2) ||
+			(count_in(text, strlen(text), "mtl_rtdir_self(") != 1) || (count_in(text, strlen(text), "self[") != 1))
+		{
+			return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN, "rm_rtdir_own is not the face's own light from its triangle's word");
+		}
 	}
 
 	/* the traced light: no texture in reach */
@@ -702,35 +798,47 @@ test_no_lightmap_kernel(void)
 			{ "rm_rtdir_fit_sample(texture2d<float, access::read> lm, uint2 px, float3 raw)",
 				"rm_rtdir_fit_sample(texture2d<float, access::read> lm, uint2 px, thread float3 &raw)" },
 			{ "\tconst float4 lms = lm.read(px);\n", "\tconst float4 lms = lm.read(px);\n\traw += lms.rgb;\n" } } },
-		{ "direct-reads-lm", { { "device const rm_rtdir_light *lights, thread rm_rtdir_tally &t)",
-			"device const rm_rtdir_light *lights, thread rm_rtdir_tally &t, texture2d<float, access::read> lm)" },
+		{ "direct-reads-lm", { { "\t\tthread rm_rtdir_tally &t)\n{\n\tconst float3 o",
+			"\t\tthread rm_rtdir_tally &t, texture2d<float, access::read> lm)\n{\n\tconst float3 o" },
 			{ "\tfloat3 raw = float3(0.0f);\n", "\tfloat3 raw = lm.read(uint2(0)).rgb;\n" },
-			{ "lights, t) : float3(0.0f);", "lights, t, lm) : float3(0.0f);" } } },
+			{ "lights, dl, self, t) : float3(0.0f);", "lights, dl, self, t, lm) : float3(0.0f);" } } },
 		{ "paste-macro", { { "kernel void\nrm_rtdir_trace(", "#define RM_CAT(a, b) a##b\nkernel void\nrm_rtdir_trace(" },
-			{ "lights, t) : float3(0.0f);", "lights, t) + RM_CAT(l, m).read(px).rgb : float3(0.0f);" } } },
+			{ "lights, dl, self, t) : float3(0.0f);", "lights, dl, self, t) + RM_CAT(l, m).read(px).rgb : float3(0.0f);" } } },
 		{ "new-binding", { { "\t\ttexture2d<float, access::write> light_out [[texture(6)]],\n",
 			"\t\ttexture2d<float, access::write> light_out [[texture(6)]],\n"
 			"\t\ttexture2d<float, access::read> q [[texture(7)]],\n" },
-			{ "lights, t) : float3(0.0f);", "lights, t) + q.read(px).rgb : float3(0.0f);" } } },
-		{ "emit-buffer", { { "device const rm_rtdir_light *lights, thread rm_rtdir_tally &t)",
-			"device const rm_rtdir_light *lights, thread rm_rtdir_tally &t, device const float4 *lmc)" },
+			{ "lights, dl, self, t) : float3(0.0f);", "lights, dl, self, t) + q.read(px).rgb : float3(0.0f);" } } },
+		{ "emit-buffer", { { "\t\tthread rm_rtdir_tally &t)\n{\n\tconst float3 o",
+			"\t\tthread rm_rtdir_tally &t, device const float4 *lmc)\n{\n\tconst float3 o" },
 			{ "\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]);\n",
 				"\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]) + lmc[0].rgb;\n" },
-			{ "lights, t) : float3(0.0f);", "lights, t, (device const float4 *)inst) : float3(0.0f);" } } },
+			{ "lights, dl, self, t) : float3(0.0f);", "lights, dl, self, t, (device const float4 *)inst) : float3(0.0f);" } } },
 		{ "emit-third-read", { { "\tfor (uint j = 0; mtl_rtdir_walk(j, k.n, seen); j++)\n",
 			"\traw += lights[v.nlights].color.rgb;\n\tfor (uint j = 0; mtl_rtdir_walk(j, k.n, seen); j++)\n" } } },
 		{ "emit-bypass", { { "if (!mtl_rtdir_reach(l.pos.w, dist, l.spot.w))", "if (!(dist > 0.0f))" } } },
 		{ "trace-in-range", { { "\t\tt.inrange++;\n",
-			"\t\tif (rm_rtdir_seen(ray(o, dir, 0.0f, dist - 1.0f), ias, inst, tmat, ntris) < 0.5f)\n"
+			"\t\tif (rm_rtdir_seen(ray(o, dir, 0.0f, dist - 1.0f), ias, inst, tmat, ntris, 0u) < 0.5f)\n"
 			"\t\t{\n\t\t\tcontinue;\n\t\t}\n\n\t\tt.inrange++;\n" } } },
 		{ "walk-unbounded", { { "mtl_rtdir_walk(j, k.n, seen)", "(j < k.n)" } } },
 		{ "seen-before-ray", { { "\t\tseen++;\n\t\traw +=", "\t\traw +=" },
 			{ "\t\tif (v.show != 3u)\n", "\t\tseen++;\n\n\t\tif (v.show != 3u)\n" } } },
-		{ "vis-ignored", { { "ias, inst, tmat, ntris) < 0.5f))", "ias, inst, tmat, ntris) < -1.0f))" } } },
+		{ "vis-ignored", { { "ias, inst, tmat, ntris, 0u) < 0.5f))", "ias, inst, tmat, ntris, 0u) < -1.0f))" } } },
+		/* TASK188 slice 3b: the dynamic lights' term and the emissive faces' own light */
+		{ "dlight-noshadow", { { "\t\t\tif ((len > 1.0f) &&\n\t\t\t\t(rm_rtdir_seen(",
+			"\t\t\tif ((len > 1.0f) && (v.nself == 12345u) &&\n\t\t\t\t(rm_rtdir_seen(" } } },
+		{ "dlight-unbounded", { { "mtl_rtdir_dlight_walk(i, v.ndlights)", "(i < v.ndlights)" } } },
+		{ "dlight-falloff", { { "\t\tconst float a = mtl_rtdir_dlight_add(mtl_rts_v3(p.x, p.y, p.z), mtl_rts_v3(n.x, n.y, n.z),\n"
+			"\t\t\t\tmtl_rts_v3(d.pos.x, d.pos.y, d.pos.z), d.pos.w);\n",
+			"\t\tconst float a = d.pos.w - distance(p, d.pos.xyz);\n" } } },
+		{ "dlight-no-carrier", { { "ntris, mtl_rtdir_dlight_bit(i)) < 0.5f))", "ntris, 0u) < 0.5f))" } } },
+		{ "dlight-dropped", { { "(raw + dyn + own)", "(raw + own)" } } },
+		{ "self-ignored", { { "mtl_rtdir_self((tri < v.nself) ? self[tri] : 0u)", "mtl_rtdir_self(0u)" } } },
+		{ "self-unbounded", { { "mtl_rtdir_self((tri < v.nself) ? self[tri] : 0u)", "mtl_rtdir_self(self[tri])" } } },
+		{ "self-dropped", { { "(raw + dyn + own)", "(raw + dyn)" } } },
 		{ "lmx", { { "\t\ttexture2d<float, access::read> base [[texture(4)]],\n",
 			"\t\ttexture2d<float, access::read> base [[texture(4)]],\n"
 			"\t\ttexture2d<float, access::read> lmx [[texture(7)]],\n" },
-			{ "lights, t) : float3(0.0f);", "lights, t) + lmx.read(px).rgb : float3(0.0f);" } } },
+			{ "lights, dl, self, t) : float3(0.0f);", "lights, dl, self, t) + lmx.read(px).rgb : float3(0.0f);" } } },
 	};
 
 	CHECK(f != NULL);
@@ -853,6 +961,25 @@ binding_broken(const char *src)
 		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN, "the lights are not one buffer at index 9 of the upload's cap");
 	}
 
+	/*
+	 * TASK188 slice 3b: the frame's dynamic lights, every slot of the array
+	 * bound at index 10, their count held to MTL_RTDIR_MAX_DLIGHTS and handed
+	 * to the view; the own-light table at index 11, its count the view's
+	 */
+	r = pin_and(pin_count(tr.body, tr.nbody, "[ce setBytes:dlights length:sizeof(dlights) atIndex:10];", 1),
+		pin_count(tr.body, tr.nbody, "[ce setBuffer:(selftab ? selftab : counts) offset:0 atIndex:11];", 1));
+	r = pin_and(r, pin_count(text, strlen(text), "n = (n > MTL_RTDIR_MAX_DLIGHTS) ? MTL_RTDIR_MAX_DLIGHTS : n;", 1));
+	r = pin_and(r, pin_count(text, strlen(text), "static rm_rtdir_dlight_t dlights[MTL_RTDIR_MAX_DLIGHTS];", 1));
+	r = pin_and(r, pin_count(text, strlen(text), "view.ndlights = ndlights;", 1));
+	r = pin_and(r, pin_count(text, strlen(text), "view.nself = selftab ? (unsigned)nself : 0u;", 1));
+
+	if ((r != PIN_OK) || (count_in(text, strlen(text), "atIndex:10]") != 1) || (count_in(text, strlen(text), "atIndex:11]") != 1) ||
+		(count_in(text, strlen(text), "view.ndlights") != 1) || (count_in(text, strlen(text), "view.nself") != 1))
+	{
+		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN,
+			"the dynamic lights are not the bounded array at index 10, or the own-light table not the one at index 11");
+	}
+
 	return NULL;
 }
 
@@ -897,6 +1024,10 @@ test_host_binding(void)
 		{ "lights-cap", "(n > RM_RTDIR_MAX_UPLOAD)", "(n > RM_RTL_MAX_LIGHTS)" },
 		{ "lights-twice", "\t\t[ce setBuffer:lights offset:0 atIndex:9];\n",
 			"\t\t[ce setBuffer:lights offset:0 atIndex:9];\n\t\t[ce setBuffer:counts offset:0 atIndex:9];\n" },
+		/* TASK188 slice 3b */
+		{ "dlights-cap", "\tn = (n > MTL_RTDIR_MAX_DLIGHTS) ? MTL_RTDIR_MAX_DLIGHTS : n;\n", "" },
+		{ "dlights-count", "\tview.ndlights = ndlights;\n", "\tview.ndlights = 4096;\n" },
+		{ "self-count", "\tview.nself = selftab ? (unsigned)nself : 0u;\n", "\tview.nself = 0xffffffffu;\n" },
 	};
 	const char *why;
 	int i;
@@ -1511,10 +1642,13 @@ test_view_lines(void)
 	rm_rtdir_pack_t p;
 	char line[512];
 
-	CHECK(sizeof(rm_rtdir_view_t) == 112);
+	CHECK(sizeof(rm_rtdir_view_t) == 128);
+	CHECK(sizeof(rm_rtdir_dlight_t) == 32);
 	CHECK(sizeof(rm_rtdir_light_t) == 48);
 	CHECK(rm_rtdir_view(ident, ident, &vp, eye, 4, 2.0f, 7, 2, &v) == 1);
 	CHECK(v.exposure == 2.0f && v.nlights == 7 && v.show == 2 && v.eye[0] == 1 && v.eye[2] == 3 && v.vp[2] == 640);
+	/* the back end's counts, 0 until it sets them */
+	CHECK(v.ndlights == 0 && v.nself == 0);
 	CHECK(rm_rtdir_view(zero, ident, &vp, eye, 4, 2.0f, 7, 2, &v) == 0);
 	CHECK(rm_rtdir_view(ident, ident, &vp, eye, 0, 2.0f, 7, 2, &v) == 0);
 
@@ -1856,6 +1990,237 @@ test_mode(void)
 	CHECK(rm_pres_value(RM_PRES_RETRO, "r_rt_direct", 0) == 0);
 }
 
+/*
+ * TASK188 slice 3b: the dynamic light's falloff (mtl_rtdir_dlight_add, the
+ * kernel's) against the stock rule, gl1's R_AddDynamicLights as the
+ * lightmap takes it (rm_lm_dlight), at the one luxel of a 1 x 1 surface
+ * on the plane z = 0 whose texture axes are the compiler's base axes at
+ * scale 1: the light's height, its offset in the plane and its intensity
+ * at a few radii, the cut at DLIGHT_CUTOFF on both sides, and the values.
+ */
+static void
+test_dlight(void)
+{
+	static const float normal[3] = { 0, 0, 1 }, vecs0[4] = { 1, 0, 0, 0 }, vecs1[4] = { 0, 1, 0, 0 };
+	static const float color[3] = { 1.0f, 0.5f, 0.25f };
+	/* x, y, height, intensity, the add gl1 gives */
+	static const float cases[][5] = {
+		{ 0, 0, 10, 300, 290 },             /* straight above */
+		{ 100, 0, 10, 300, 190 },           /* 100 out in the plane */
+		{ 100, 60, 50, 300, 120 },          /* frad 250, fdist 100 + 60 / 2 */
+		{ -150, 40, 50, 300, 80 },          /* frad 250, fdist 150 + 20 */
+		{ 185, 0, 50, 300, 65 },            /* just inside the radius: 185 < 250 - 64 */
+		{ 186, 0, 50, 300, 0 },             /* at it: nothing */
+		{ 250, 0, 50, 300, 0 },             /* past it */
+		{ 0, 0, 200, 300, 100 },            /* frad 100 */
+		{ 0, 0, 236, 300, 0 },              /* frad 64: fdist 0 is not below 0 */
+		{ 0, 0, 240, 300, 0 },              /* frad 60, under the cutoff */
+		{ 33.7f, -12.2f, 20.5f, 200, 179.5f - 39.0f },  /* fractional: truncated offsets 33 and 12, 33 + 6 */
+		{ 500, 300, 100, 1000, 900 - 650 }, /* a big light: 500 + 300 / 2 */
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+	{
+		float bl[3] = { 0, 0, 0 };
+		const float o[3] = { cases[i][0], cases[i][1], cases[i][2] };
+		const float a = mtl_rtdir_dlight_add(mtl_rts_v3(0, 0, 0), mtl_rts_v3(0, 0, 1), mtl_rts_v3(o[0], o[1], o[2]),
+				cases[i][3]);
+		int k;
+
+		CHECK(rm_lm_dlight(bl, 1, 1, normal, 0, vecs0, vecs1, 0, 0, o, cases[i][3], color) == 1);
+		CHECK(near(a, cases[i][4], 1e-3));
+
+		for (k = 0; k < 3; k++)
+		{
+			CHECK(near(bl[k], a * color[k], 1e-3));
+		}
+	}
+
+	/* behind the plane: gl1 marks the front only, so the kernel adds nothing there */
+	CHECK(mtl_rtdir_dlight_add(mtl_rts_v3(0, 0, 0), mtl_rts_v3(0, 0, 1), mtl_rts_v3(0, 0, -10), 300) == 0.0f);
+	/* the same light on a wall (normal +x), the in-plane offsets on y and z */
+	CHECK(near(mtl_rtdir_dlight_add(mtl_rts_v3(0, 0, 0), mtl_rts_v3(1, 0, 0), mtl_rts_v3(50, 100, 60), 300), 250 - 130, 1e-3));
+	/* a value that is not a number adds nothing */
+	CHECK(!(mtl_rtdir_dlight_add(mtl_rts_v3(0, 0, 0), mtl_rts_v3(0, 0, 1), mtl_rts_v3(0, 0, 10), NAN) > 0.0f));
+
+	/* the record: origin and intensity, the colour; one rm_dlight_ok refuses is not taken */
+	{
+		const float org[3] = { 1, 2, 3 }, bad[3] = { NAN, 0, 0 }, far[3] = { 2e9f, 0, 0 };
+		rm_rtdir_dlight_t d;
+
+		CHECK(rm_rtdir_dlight(org, color, 200, &d) == 1);
+		CHECK(d.pos[0] == 1 && d.pos[2] == 3 && d.pos[3] == 200 && d.color[1] == 0.5f && d.color[3] == 0);
+		CHECK(rm_rtdir_dlight(bad, color, 200, &d) == 0);
+		CHECK(rm_rtdir_dlight(far, color, 200, &d) == 0);
+		CHECK(rm_rtdir_dlight(org, color, INFINITY, &d) == 0);
+		CHECK(rm_rtdir_dlight(NULL, color, 200, &d) == 0);
+	}
+}
+
+/*
+ * The ray bound with N dynamic lights, a host model of the kernel's walks:
+ * with every map light and every dynamic light in range and seen, a pixel
+ * traces its map lights' walk (at most MTL_RTDIR_MAX_RAYS) and one ray a
+ * dynamic light up to MTL_RTDIR_MAX_DLIGHTS, whatever N the view says; the
+ * carried bit of each is its own.
+ */
+static void
+test_dlight_bound(void)
+{
+	static const unsigned ns[] = { 0, 1, 4, 31, 32, 33, 100, 4096, 0xffffffffu };
+	size_t a;
+	unsigned i, bits = 0;
+
+	for (a = 0; a < sizeof(ns) / sizeof(ns[0]); a++)
+	{
+		unsigned rays = 0;
+
+		for (i = 0; mtl_rtdir_dlight_walk(i, ns[a]); i++)
+		{
+			rays++;
+		}
+
+		CHECK(rays == ((ns[a] < MTL_RTDIR_MAX_DLIGHTS) ? ns[a] : MTL_RTDIR_MAX_DLIGHTS));
+	}
+
+	/* the pixel's whole bound: the map's candidates and the dynamic lights */
+	{
+		mtl_rtdir_keep_t k;
+		unsigned j, seen = 0, rays = 0;
+
+		k.n = 0;
+		k.capped = 0;
+
+		for (i = 0; i < 4096; i++)
+		{
+			k = mtl_rtdir_keep(k, i, 1.0f + (float)(i % 7));
+		}
+
+		k = mtl_rtdir_keep_rank(k);
+
+		/* every map light occluded: the walk tries all its candidates */
+		for (j = 0; mtl_rtdir_walk(j, k.n, seen); j++)
+		{
+			rays++;
+		}
+
+		for (i = 0; mtl_rtdir_dlight_walk(i, 4096); i++)
+		{
+			rays++;
+		}
+
+		CHECK(rays == MTL_RTDIR_MAX_RAYS + MTL_RTDIR_MAX_DLIGHTS && rays == 64);
+	}
+
+	for (i = 0; i < MTL_RTDIR_MAX_DLIGHTS; i++)
+	{
+		CHECK(mtl_rtdir_dlight_bit(i) == (1u << i));
+		CHECK(!(bits & mtl_rtdir_dlight_bit(i)));
+		bits |= mtl_rtdir_dlight_bit(i);
+	}
+
+	CHECK(bits == 0xffffffffu && mtl_rtdir_dlight_bit(32) == 0 && mtl_rtdir_dlight_bit(0xffffffffu) == 0);
+	/* the refdef's own bound */
+	CHECK(MTL_RTDIR_MAX_DLIGHTS == RM_MAX_DLIGHTS);
+}
+
+/* the world's faces for test_self: face 3 is a submodel's, the others a test face */
+static int
+self_face(void *ctx, long face, rm_rtdir_face_t *out)
+{
+	(void)ctx;
+
+	if (face == 3)
+	{
+		return 0;
+	}
+
+	face_init(out);
+	return 1;
+}
+
+/*
+ * The emissive faces' own light: qrad3's patch light, its word (rounded,
+ * held to MTL_RTDIR_SELF_MAX, none without MTL_RTDIR_SELF_ON) and the
+ * per-triangle table the kernel looks it up in, over the map's surface
+ * records: an emitter's triangles marked, a dim face's, a submodel's, a
+ * face past the records and one whose record leaves the buffer not.
+ */
+static void
+test_self(void)
+{
+	static rm_rtl_emitters_t e;
+	static const rm_surfrec_t recs[6] = {
+		{ .first_index = 0, .num_indices = 6 }, { .first_index = 6, .num_indices = 9 },
+		{ .first_index = 15, .num_indices = 3 }, { .first_index = 18, .num_indices = 6 },
+		{ .first_index = 24, .num_indices = 3 }, { .first_index = 27, .num_indices = 300 },
+	};
+	const float refl[3] = { 0.8f, 0.4f, 0.2f };
+	unsigned table[10], w;
+	float rgb[3];
+	mtl_rgba_t c;
+	int i;
+
+	/* the patch light: 300 x refl x refl / 0.8 */
+	CHECK(rm_rtdir_patch_light(300, refl, rgb) == 1);
+	CHECK(near(rgb[0], 240, 1e-3) && near(rgb[1], 60, 1e-3) && near(rgb[2], 15, 1e-3));
+	CHECK(rm_rtdir_patch_light(3, refl, rgb) == 0 && rgb[0] == 0 && rgb[2] == 0);   /* 2.4: under DIRECT_LIGHT */
+	CHECK(rm_rtdir_patch_light(0, refl, rgb) == 0);
+
+	/* the word: rounded, held, none without the flag */
+	w = mtl_rtdir_self_pack(240, 60.4f, 15.6f);
+	c = mtl_rtdir_self(w);
+	CHECK((w & MTL_RTDIR_SELF_ON) && c.r == 240 && c.g == 60 && c.b == 16 && c.a == 1);
+	c = mtl_rtdir_self(mtl_rtdir_self_pack(5000, NAN, -3));
+	CHECK(c.r == MTL_RTDIR_SELF_MAX && c.g == 0 && c.b == 0 && c.a == 1);
+	c = mtl_rtdir_self(0);
+	CHECK(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0);
+	c = mtl_rtdir_self(~MTL_RTDIR_SELF_ON);
+	CHECK(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0);
+
+	memset(&e, 0, sizeof(e));
+	e.ntex = 1;
+	e.tex[0].read = 1;
+	e.tex[0].mean[0] = 0.8f;
+	e.tex[0].mean[1] = 0.4f;
+	e.tex[0].mean[2] = 0.2f;
+	e.emit[0] = (rm_rtl_emit_t){ 1, 0, 300 };     /* triangles 2 to 4 */
+	e.emit[1] = (rm_rtl_emit_t){ 2, 0, 3 };       /* dim */
+	e.emit[2] = (rm_rtl_emit_t){ 3, 0, 300 };     /* a submodel's */
+	e.emit[3] = (rm_rtl_emit_t){ 4, 0, 600 };     /* triangle 8 */
+	e.emit[4] = (rm_rtl_emit_t){ 5, 0, 300 };     /* its record leaves the buffer */
+	e.emit[5] = (rm_rtl_emit_t){ 9, 0, 300 };     /* past the records */
+	e.n = 6;
+
+	memset(table, 0xff, sizeof(table));
+	CHECK(rm_rtdir_self_table(&e, self_face, NULL, recs, 6, table, 10) == 2);
+
+	for (i = 0; i < 10; i++)
+	{
+		c = mtl_rtdir_self(table[i]);
+
+		if ((i >= 2) && (i <= 4))
+		{
+			CHECK(c.a == 1 && c.r == 240 && c.g == 60 && c.b == 15);
+		}
+		else if (i == 8)
+		{
+			CHECK(c.a == 1 && c.r == 480 && c.g == 120 && c.b == 30);
+		}
+		else
+		{
+			CHECK(table[i] == 0);
+		}
+	}
+
+	/* no table, and no emitters: every triangle 0 */
+	CHECK(rm_rtdir_self_table(&e, self_face, NULL, recs, 6, NULL, 10) == -1);
+	CHECK(rm_rtdir_self_table(&e, self_face, NULL, recs, 6, table, 0) == -1);
+	memset(table, 0xff, sizeof(table));
+	CHECK(rm_rtdir_self_table(NULL, self_face, NULL, recs, 6, table, 10) == 0 && table[0] == 0 && table[9] == 0);
+}
+
 int
 main(void)
 {
@@ -1880,6 +2245,9 @@ main(void)
 	test_emitter();
 	test_pack_emitters();
 	test_mixed_choice();
+	test_dlight();
+	test_dlight_bound();
+	test_self();
 	test_mode();
 	printf("rm_rtdir_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
