@@ -66,6 +66,15 @@ ko() {
     [ "${VERBOSE:-0}" = 0 ] || echo "$why"
 }
 KO_WHY=
+# stray_why: the ids of the cases KO_WHY gives a reason for that FAILED does not name (FIX186 slice 2, round 3)
+stray_why() {
+    local l id
+    while IFS= read -r l; do
+        case $l in
+            "  failed: "*) id=${l#  failed: }; id=${id%% *}; case $FAILED in *" $id "*) ;; *) printf '%s ' "$id";; esac;;
+        esac
+    done <<< "$KO_WHY"
+}
 want_rc() { [ "$3" -eq "$2" ] || ko "$1" "rc $3, want $2"; }
 want_has() { case $3 in *"$2"*) ;; *) ko "$1" "no '$2' in: $3";; esac; }
 want_not() { case $3 in *"$2"*) ko "$1" "'$2' found";; esac; }
@@ -141,10 +150,10 @@ standin_hit() { local s; sleep 0.1; s=$(ps -o stat= -p "$dp" 2>/dev/null); case 
 decoys= din=
 # decoy_id <how> <pid> <start>: sets dq and dqs, the pid and start time one run of the site is given: the stand-in
 # (dp) read with another start time (other), with none (none), or with its own while ps gives no answer (nops); or
-# <pid> and <start> (own). For each but own, FAILED is kept in df first, and VERBOSE is 0 until decoy_end (the case
+# <pid> and <start> (own). For each but own, FAILED and KO_WHY are kept in df and dk first, and VERBOSE is 0 until decoy_end (the case
 # lines of a run on the stand-in are not the case's).
 decoy_id() {
-    if [ $1 != own ] && [ -z "$din" ]; then din=1; df=$FAILED; dv=${VERBOSE:-0}; VERBOSE=0; fi
+    if [ $1 != own ] && [ -z "$din" ]; then din=1; df=$FAILED; dk=$KO_WHY; dv=${VERBOSE:-0}; VERBOSE=0; fi
     dq=$dp
     case $1 in
         other) dqs='Thu Jan  1 00:00:00 2026';;
@@ -153,11 +162,11 @@ decoy_id() {
         own) dq=$2; dqs=$3;;
     esac
 }
-# decoy_end <how> <case>: after that run, ps is the system's again and FAILED and VERBOSE are what they were (the run judged the
+# decoy_end <how> <case>: after that run, ps is the system's again and FAILED, KO_WHY and VERBOSE are what they were (the run judged the
 # stand-in, not the case); a signal that ended the stand-in fails <case>
 decoy_end() {
     [ $1 != own ] || return 0
-    unset -f ps; FAILED=$df; VERBOSE=$dv; din=
+    unset -f ps; FAILED=$df; KO_WHY=$dk; VERBOSE=$dv; din=
     standin_hit "$2" "$1: a signal went to a process that is not the one read (the stand-in)"
 }
 
@@ -889,6 +898,7 @@ except SystemExit as e:
     if kill -0 $hp 2>/dev/null; then ko engine-held-log "$how: the run outlived 30 s"; kill -s KILL $hp; fi
     wait $hp 2>/dev/null
     grep -qx 'exit 143' "$w/held/out" || ko engine-held-log "$how: the run did not end on its TERM: $(cat "$w/held/out")"
+    if [ "$how" = hold ] && grep -qx unsent "$w/held/out"; then ko engine-held-log "$how: the TERM never landed in the hold window"; fi
     grep -qx 'engine-ready' "$w/held/log" 2>/dev/null || ko engine-held-log "$how: no log, or not the engine's line, after a held TERM: $(cat "$w/held/out")"
     done
     # FIX186 slice 2, round 2: an engine that has exited before spawn returns (spawn's proc_start waits
@@ -970,12 +980,24 @@ for site in group lock; do
     wait $sp 2>/dev/null
 done
 unset -f left
+stray=$(stray_why)
+[ -z "$stray" ] || bad "the reasons name cases that did not fail: $stray(a stand-in's reasons reached the summary)"
 if [ "$FAILED" != " " ]; then bad "assertions failed on the real code:$FAILED"; [ "${VERBOSE:-0}" != 0 ] || printf '%s' "$KO_WHY"; fi
 # the scratch scenarios the generator writes into scripts/pins/scenarios are ignored by git (and the check fails without the rule)
 ign() { grep -qxF '/scripts/pins/scenarios/mfxr-*.cfg' "$1"; }
 ign "$root/.gitignore" || bad "no .gitignore rule for the generator's scratch scenarios"
 printf '/release/\n' > "$tmp/noign"; if ign "$tmp/noign"; then bad "the ignore check passes without the rule"; fi
 [ "${MFX_REAL_ONLY:-0}" = 0 ] || { [ "$fail" -ne 0 ] || echo "check-metalfx-report: real code ok (mutants skipped)"; exit $fail; }
+
+# the check on itself (FIX186 slice 2, round 3): a copy of this file whose decoy_end does not restore KO_WHY must fail the
+# assertion that the reasons name only cases that failed (the decoys on the real code call ko on purpose); the copy runs
+# the groups "run" on the real code only
+if python3 -I "$HELP" mutate "$0" "$tmp/self-mutant.sh" 'cd "$(dirname "$0")''/.."' "cd \"$root\"" 'FAILED=$df; KO_WHY''=$dk; VERBOSE=$dv' 'FAILED=$df; VERBOSE=$dv' > "$tmp/self-mutant.log"; then
+    out=$(MFX_GROUPS=run MFX_REAL_ONLY=1 VERBOSE=0 bash "$tmp/self-mutant.sh" 2>&1); rc=$?
+    { [ $rc -ne 0 ] && case $out in *"the reasons name cases that did not fail: e2e-"*) true;; *) false;; esac; } || bad "decoy-kowhy-kept: the copy that does not restore KO_WHY was not refused (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-300)"
+else
+    bad "decoy-kowhy-kept: $(cat "$tmp/self-mutant.log")"
+fi
 
 # mutants: one change of the line each assertion covers; the covered assertion must fail
 nm=0
