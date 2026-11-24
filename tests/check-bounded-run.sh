@@ -24,6 +24,8 @@
 #           unmarked).
 #   mutants each one literal change to a copy of scripts/ must be refused,
 #           in its own file and for its own rule.
+#   pyprobe the same for the Python helper, scripts/lib/bounded.py, and four
+#           mutants of it, each failing its own case (part 4 below).
 #   probe   the disposition probe, the behavioural proof: each caller runs
 #           a stand-in (a child that starts a grandchild; both live while a
 #           flag file exists, so no verdict depends on the host's speed),
@@ -47,7 +49,11 @@
 # signal.Signals.SIGKILL, from signal import SIGKILL), .kill() (Popen),
 # Signals(9), send_signal(9), and kill or killpg (os.kill, os.killpg) with
 # 9 as the last argument (a trailing comma allowed), through one level of
-# nested parentheses. A liveness test is kill -0, kill -s 0, kill -n 0,
+# nested parentheses; and subprocess.run, call, check_call or check_output
+# with a timeout= on the logical line, whose KILL on the timeout goes to the
+# direct child only (FIX186, slice 2): every Python command with a time
+# limit goes through scripts/lib/bounded.py, which stops its process group
+# TERM first, and whose one KILL is the one marked Python line. A liveness test is kill -0, kill -s 0, kill -n 0,
 # kill -EXIT or kill -s EXIT on a shell line that is not a whole-line
 # comment. A variable signal is kill, pkill or killall whose first argument
 # is a parameter or a command substitution ($ or a backtick), alone or
@@ -75,8 +81,9 @@
 #
 # What the guard does not see, and so does not claim: a variable signal
 # to timeout (timeout -s "$sig"); a liveness test through a
-# function (bench_pid_alive); subprocess.run(..., timeout=), whose KILL is
-# inside Python (rtvar.py, upscale-report/report.py and mfx.py use it);
+# function (bench_pid_alive); a subprocess function imported under another
+# name (from subprocess import run), and Popen.kill() reached through
+# subprocess.run's own cleanup on an exception (a run with no timeout);
 # other languages (Perl, Ruby); Python inside a shell -c string; eval'd or
 # constructed text; a backslash inside the command word (k\ill); gtimeout;
 # a parenthesis inside a Python string, which the join counts. The source
@@ -96,6 +103,8 @@
 #        tests/check-bounded-run.sh guard <root>   the guard alone on <root>
 #        tests/check-bounded-run.sh probe <root>   the probe alone on <root>,
 #                                                  printed, not judged
+#        tests/check-bounded-run.sh pyprobe <root> the Python helper probe
+#                                                  alone, printed, not judged
 # POSIX sh (dash, bash 3.2). Needs python3 (SIGINT reset), perl-free.
 set -u
 LC_ALL=C
@@ -614,10 +623,12 @@ probe() {
 # <ignore> records its pid once its grandchild has recorded its own; each
 # writes every TERM it gets to its own record file (child.rec, gc.rec), and
 # both live while <dir>/flag exists. With <ignore> 1 a TERM is recorded and
-# ignored, so only a KILL ends them before the flag goes.
+# ignored, so only a KILL ends them before the flag goes. Neither holds the
+# probe's output open (a stand-in left running would hold its reader).
 mk_pystandin() {
 	cat > "$1" << 'EOF'
 #!/bin/sh
+exec > /dev/null 2>&1
 d=$1 ig=$2
 if [ "$ig" = 1 ]; then trap 'echo TERM >> "$d/child.rec"' TERM; else trap 'echo TERM >> "$d/child.rec"; exit 143' TERM; fi
 sh -c 'd=$1 ig=$2
@@ -1098,10 +1109,10 @@ if [ -n "$yj" ]; then
 	printf '%s\n' "$yj" | sed "s/^/$me: FAIL: pyprobe: /"
 	fails="$fails pyprobe"
 fi
-pymutant group-dropped py-timeout '		os.killpg(c.pid, sig)' '		os.kill(c.pid, sig)'
-pymutant never-kills py-ignore '			signal_group(c, signal.SIGKILL)  # bounded-run' '			pass  # bounded-run'
-pymutant identity-unchecked py-recycled '	return c.popen.returncode is None and s == c.start' '	return True'
-pymutant caller-term-unhandled py-caller-TERM '				old[s] = signal.signal(s, _raise_exit)' '				pass'
+pymutant group-dropped py-timeout '        os.killpg(c.pid, sig)' '        os.kill(c.pid, sig)'
+pymutant never-kills py-ignore '            signal_group(c, signal.SIGKILL)  # bounded-run' '            pass  # bounded-run'
+pymutant identity-unchecked py-recycled '    return c.popen.returncode is None and s == c.start' '    return True'
+pymutant caller-term-unhandled py-caller-TERM '                old[s] = signal.signal(s, _raise_exit)' '                pass'
 
 if [ -n "$fails" ]; then
 	echo "$me: failed:$fails"
