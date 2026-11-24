@@ -475,6 +475,9 @@ EOF
 	esac
 	_p_root=$1 _p_who=$2 _p_case=$3
 	shift 3
+	# int-spawn: the record of the first spawn (its pgid read) is staged
+	# before the caller starts (FIX192, round 2)
+	[ "$_p_case" != int-spawn ] || : > "$_p_d/stage-pgid"
 	# SIGINT back to the default first: a background job of this shell starts with it ignored
 	PROBE_DIR=$_p_d python3 -I -c 'import os, signal, sys
 signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -500,6 +503,17 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$@" < /dev/null > "$_p_d/log" 2>&1 &
 		# a root made by stage_root: the next ps read of the watch closes
 		# its output and lingers until the INT is sent (FIX192)
 		: > "$_p_d/stage-stat"
+		_p_n=0
+		while [ ! -e "$_p_d/at-ps" ] && [ "$_p_n" -lt 100 ]; do
+			sleep 0.1
+			_p_n=$((_p_n + 1))
+		done
+		[ -e "$_p_d/at-ps" ] || _p_w=" (the staged window did not open)"
+		kill -s INT "$_p_c"
+		: > "$_p_d/sent"
+		;;
+	int-spawn)
+		# the spawn's ps read, staged above, lingers once ps has answered
 		_p_n=0
 		while [ ! -e "$_p_d/at-ps" ] && [ "$_p_n" -lt 100 ]; do
 			sleep 0.1
@@ -1274,6 +1288,84 @@ if stage_root "$W/stage-fg" '		bench_poll bench_watch_read "$_bw_p" "$_bw_s" || 
 else
 	echo "$me: FAIL: mutant watch-foreground-ps does not apply"
 	fails="$fails watch-foreground-ps"
+fi
+
+# an INT in the spawn's record (FIX192, round 2): bench_spawn_id's ps read,
+# staged, closes its output and lingers; the INT comes then, in the window
+# bench_undefer covers. It must reach the trap, which bench_undefer then
+# acts on. The mutant puts the spawn's ps read back in the foreground (a
+# command substitution in this shell); the same case must then hang (its
+# bound cut to 10 s)
+if stage_root "$W/stage"; then
+	sout=$(probe_one "$W/stage" ios-device int-spawn)
+	printf '%s\n' "$sout" | sed "s/^/$me: probe: /"
+	printf '%s\n' "$sout" | grep -E "^ios-device int-spawn: caller exit [1-9][0-9]*; child gone; grandchild gone$" > /dev/null ||
+		{ echo "$me: FAIL: probe ios-device int-spawn: an INT in the spawn's ps read must stop the caller and leave nothing running"; fails="$fails probe-ios-device-int-spawn"; }
+else
+	echo "$me: FAIL: probe ios-device int-spawn: the stage does not apply"
+	fails="$fails probe-ios-device-int-spawn"
+fi
+if stage_root "$W/stage-sp" '		if bench_poll_line bench_spawn_read "$1" && [ -n "$BENCH_POLL_LINE" ]; then' '		if bench_proc_read "$1" pgid && BENCH_POLL_LINE="$BENCH_PS_F|$BENCH_PS_START"; then'; then
+	mout=$(PROBE_HANG=100 probe_one "$W/stage-sp" ios-device int-spawn)
+	case $mout in
+	"ios-device int-spawn: caller exit 137 (hung: killed by the probe); "*) echo "$me: mutant spawn-foreground-ps: refused ($mout)" ;;
+	*)
+		echo "$me: FAIL: mutant spawn-foreground-ps (the spawn's ps read in a command substitution) passed the int-spawn case: $mout"
+		fails="$fails spawn-foreground-ps"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant spawn-foreground-ps does not apply"
+	fails="$fails spawn-foreground-ps"
+fi
+
+# a trap that runs in a bare nap prints its lines (FIX192, round 2): with fd
+# 8 closed, a TERM in bench_nap runs the caller's trap and its EXIT trap,
+# and both lines reach standard error. The mutant puts the nap's /dev/null
+# back on the bench_poll call, which then covers the wait the trap runs in
+nap_trap() {
+	_nt_d=$W/nap-$(basename "$1")
+	rm -rf "$_nt_d"
+	mkdir -p "$_nt_d" || return 1
+	cat > "$_nt_d/nap.sh" << 'EOF'
+. "$1/scripts/bench/core/common.sh"
+exec 8>&-
+on_signal() { bench_deferred 143 || :; echo "on_signal: stopping" >&2; exit 143; }
+trap on_signal TERM
+trap 'echo "cleanup ran" >&2' EXIT
+: > "$2/started"
+bench_nap 5
+echo "nap returned" >&2
+EOF
+	/bin/bash "$_nt_d/nap.sh" "$1" "$_nt_d" 2> "$_nt_d/err" &
+	_nt_p=$!
+	_nt_n=0
+	while [ ! -e "$_nt_d/started" ] && [ "$_nt_n" -lt 100 ]; do
+		sleep 0.1
+		_nt_n=$((_nt_n + 1))
+	done
+	sleep 0.5
+	kill -s TERM "$_nt_p"
+	_nt_rc=0
+	wait "$_nt_p" || _nt_rc=$?
+	printf 'nap trap: exit %s; stderr [%s]\n' "$_nt_rc" "$(tr '\n' '|' < "$_nt_d/err")"
+}
+nout=$(nap_trap "$here")
+echo "$me: $nout"
+[ "$nout" = "nap trap: exit 143; stderr [on_signal: stopping|cleanup ran|]" ] ||
+	{ echo "$me: FAIL: nap trap: a trap in a bare nap must print its lines and its EXIT trap's to standard error"; fails="$fails nap-trap"; }
+if stage_root "$W/stage-nap" '	bench_poll bench_sleep_quiet "${1:-1}" || _bn_st=$?' '	bench_poll sleep "${1:-1}" 2> /dev/null || _bn_st=$?'; then
+	mout=$(nap_trap "$W/stage-nap")
+	case $mout in
+	"nap trap: exit 143; stderr []") echo "$me: mutant nap-quiet-wait: refused ($mout)" ;;
+	*)
+		echo "$me: FAIL: mutant nap-quiet-wait (the nap's /dev/null on the bench_poll call) passed the nap trap case: $mout"
+		fails="$fails nap-quiet-wait"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant nap-quiet-wait does not apply"
+	fails="$fails nap-quiet-wait"
 fi
 
 # 4. the Python helper's probe (scripts/lib/bounded.py): TERM first to the
