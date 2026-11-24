@@ -50,7 +50,10 @@ static int checks, failures;
 		} \
 	} while (0)
 
-/* the order: the direct light (it replaces the lightmap), the shadows, the AO, then the sun (it adds to the AO's light), the water last (it reads the resolve) */
+/*
+ * the order: the direct light (it replaces the lightmap), the shadows, the AO, then the sun (it adds to the
+ * AO's light), the water last (it reads the resolve)
+ */
 static void
 test_order(void)
 {
