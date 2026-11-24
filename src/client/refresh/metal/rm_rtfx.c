@@ -37,10 +37,12 @@
 #include "header/rm_rtaoscene.h"
 #include "header/rm_rtsunscene.h"
 #include "header/rm_rtwaterscene.h"
+#include "header/rm_rtdirscene.h"
 #include "header/rm_rtshadow.h"
 #include "header/rm_rtao.h"
 #include "header/rm_rtsun.h"
 #include "header/rm_rtwater.h"
+#include "header/rm_rtdir.h"
 
 #ifdef RM_RTFX_HOST
 #include "rm_rtfx_host.h"
@@ -100,9 +102,15 @@ static const rm_rtfx_t rm_rtfx[RM_RTFX_COUNT] = {
 		FX(rmb_rtw_fx_mark), NULL, NULL, NULL, FX(rmb_rtw_fx_post), FX(rmb_rtw_fx_forward), FX(rmb_rtw_fx_bind),
 		FX(rmb_rtw_view_end)
 	},
+	[RM_RTFX_DIRECT] = {
+		"direct", "r_rt_direct",
+		FX(RM_RTDir_Init), FX(RM_RTDir_Shutdown), FX(RM_RTDir_Wanted), FX(RM_RTDir_Frame), FX(RM_RTDir_Active),
+		FX(RM_RTDir_ShowOnly), FX(RM_RTDir_View),
+		NULL, FX(rmb_rtdir_fx_trace), NULL, FX(rmb_rtdir_fx_show), NULL, NULL, NULL, NULL
+	},
 };
 
-const int rm_rtfx_order[RM_RTFX_COUNT] = { RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER };
+const int rm_rtfx_order[RM_RTFX_COUNT] = { RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER };
 
 /* the k-th row of the order */
 #define ROW(k) (&rm_rtfx[rm_rtfx_order[k]])

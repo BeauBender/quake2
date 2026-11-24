@@ -428,8 +428,12 @@ test_pres_decide(void)
 	CHECK(rm_pres_decide(2, RM_RTG_RENDER, &why) == RM_PRES_RETRO && why == RM_PRES_WHY_OK);
 	CHECK(rm_pres_decide(2.5f, RM_RTG_NONE, &why) == RM_PRES_RETRO && why == RM_PRES_WHY_OK);
 	CHECK(rm_pres_decide(2, RM_RTG_NONE, NULL) == RM_PRES_RETRO);
-	CHECK(rm_pres_decide(3, RM_RTG_NONE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
-	CHECK(rm_pres_decide(3, RM_RTG_RENDER, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
+	/* TASK188: RT-primary wherever the device traces rays (decision 0014), stock with the reason elsewhere */
+	CHECK(rm_pres_decide(3, RM_RTG_NONE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NORT);
+	CHECK(rm_pres_decide(3, RM_RTG_RENDER, &why) == RM_PRES_RTPRIMARY && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(3, RM_RTG_COMPUTE, &why) == RM_PRES_RTPRIMARY && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(3.5f, RM_RTG_COMPUTE, &why) == RM_PRES_RTPRIMARY && why == RM_PRES_WHY_OK);
+	CHECK(rm_pres_decide(4, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
 	CHECK(rm_pres_decide(-1, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
 	CHECK(rm_pres_decide(1e30f, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
 	CHECK(rm_pres_decide(NAN, RM_RTG_COMPUTE, &why) == RM_PRES_STOCK && why == RM_PRES_WHY_NOTBUILT);
@@ -484,8 +488,29 @@ test_pres_overlay(void)
 				CHECK(rm_pres_value(RM_PRES_RETRO, name, users[j]) == (off ? 0.0f : users[j]));
 			}
 
-			/* the mode of a later slice decides nothing in this one */
-			CHECK(rm_pres_value(RM_PRES_RTPRIMARY, name, users[j]) == users[j]);
+			/* RT-primary (TASK188): its direct light and the water on, the layers it replaces off */
+			{
+				float want = users[j];
+
+				if (!strcmp(name, "r_rt_direct") || !strcmp(name, "r_rt_water"))
+				{
+					want = 1.0f;
+				}
+				else if (!strcmp(name, "r_rt_shadows") || !strcmp(name, "r_rt_sun") || !strcmp(name, "r_rt_ao"))
+				{
+					want = 0.0f;
+				}
+
+				CHECK(rm_pres_value(RM_PRES_RTPRIMARY, name, users[j]) == want);
+			}
+
+			/* every mode but RT-primary reads the user's r_rt_direct, which runs nothing outside it */
+			if (!strcmp(name, "r_rt_direct"))
+			{
+				CHECK(rm_pres_value(RM_PRES_STOCK, name, users[j]) == users[j]);
+				CHECK(rm_pres_value(RM_PRES_ENHANCED, name, users[j]) == users[j]);
+				CHECK(rm_pres_value(RM_PRES_RETRO, name, users[j]) == users[j]);
+			}
 		}
 	}
 
@@ -539,6 +564,10 @@ test_pres_format(void)
 			"ref_metal: presentation: stock; r_presentation 2 (retro) reads 0: not in this build"));
 	CHECK(pres_is(2, RM_PRES_RETRO, RM_PRES_WHY_OK,
 			"ref_metal: presentation: retro (r_presentation 2): the 3D view in RGB565 with the 4 x 4 dither, r_retro_filter and r_retro_gamma read each frame; r_rt_shadows, r_rt_sun, r_rt_ao, r_rt_water, r_rt_gunshadow and r_metalfx read 0"));
+	CHECK(pres_is(3, RM_PRES_RTPRIMARY, RM_PRES_WHY_OK,
+			"ref_metal: presentation: ray traced (r_presentation 3): the lightmap off at the visible world surface, the direct light of the map's lights in its place; r_rt_direct and r_rt_water read 1, r_rt_shadows, r_rt_sun and r_rt_ao read 0"));
+	CHECK(pres_is(3, RM_PRES_STOCK, RM_PRES_WHY_NORT,
+			"ref_metal: presentation: stock; r_presentation 3 (ray traced) reads 0: no ray tracing on this device"));
 	CHECK(pres_is(7, RM_PRES_STOCK, RM_PRES_WHY_NOTBUILT,
 			"ref_metal: presentation: stock; r_presentation 7 reads 0: not in this build"));
 	CHECK(!rm_pres_format(1, RM_PRES_ENHANCED, RM_PRES_WHY_OK, small, sizeof(small)) && small[0] == '\0');

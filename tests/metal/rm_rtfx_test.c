@@ -50,11 +50,11 @@ static int checks, failures;
 		} \
 	} while (0)
 
-/* the order: the shadows, the AO, then the sun (it adds to the AO's light), the water last (it reads the resolve) */
+/* the order: the direct light (it replaces the lightmap), the shadows, the AO, then the sun (it adds to the AO's light), the water last (it reads the resolve) */
 static void
 test_order(void)
 {
-	static const int want[RM_RTFX_COUNT] = { RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER };
+	static const int want[RM_RTFX_COUNT] = { RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER };
 	int seen[RM_RTFX_COUNT];
 	int k;
 
@@ -81,8 +81,8 @@ test_order(void)
 static void
 test_rows(void)
 {
-	static const char *const name[RM_RTFX_COUNT] = { "shadows", "ao", "sun", "water" };
-	static const char *const sw[RM_RTFX_COUNT] = { "r_rt_shadows", "r_rt_ao", "r_rt_sun", "r_rt_water" };
+	static const char *const name[RM_RTFX_COUNT] = { "shadows", "ao", "sun", "water", "direct" };
+	static const char *const sw[RM_RTFX_COUNT] = { "r_rt_shadows", "r_rt_ao", "r_rt_sun", "r_rt_water", "r_rt_direct" };
 	int id;
 
 	for (id = 0; id < RM_RTFX_COUNT; id++)
@@ -211,8 +211,8 @@ called(int line, const char *want)
 static void
 asks(const char *entry, int (*walk)(void))
 {
-	static const char *const name[RM_RTFX_COUNT] = { "shadows", "ao", "sun", "water" };
-	char want[256], yes[64];
+	static const char *const name[RM_RTFX_COUNT] = { "direct", "shadows", "ao", "sun", "water" };
+	char want[256], yes[96];
 	int k, i;
 
 	for (k = -1; k < RM_RTFX_COUNT; k++)
@@ -231,15 +231,15 @@ asks(const char *entry, int (*walk)(void))
 	}
 
 	/* every row says yes: the first only */
-	snprintf(yes, sizeof(yes), "shadows:%s ao:%s sun:%s water:%s", entry, entry, entry, entry);
-	snprintf(want, sizeof(want), "shadows:%s", entry);
+	snprintf(yes, sizeof(yes), "direct:%s shadows:%s ao:%s sun:%s water:%s", entry, entry, entry, entry, entry);
+	snprintf(want, sizeof(want), "direct:%s", entry);
 	said(yes);
 	CHECK(walk() == 1);
 	CALLED(want);
 }
 
 /*
- * Every walk calls the rows' entries in the order (shadows, AO, sun,
+ * Every walk calls the rows' entries in the order (direct, shadows, AO, sun,
  * water) and never one the table leaves NULL: the log holds exactly the
  * entries the table names. resolve and forward stop at the first entry
  * that draws; when none does they say no, and the caller takes the stock
@@ -255,7 +255,7 @@ test_walks(void)
 
 	said("");
 	rm_rtfx_trace(NULL);
-	CALLED("shadows:trace ao:trace sun:trace");
+	CALLED("direct:trace shadows:trace ao:trace sun:trace");
 
 	said("");
 	CHECK(rm_rtfx_resolve(NULL) == 0);
@@ -267,7 +267,7 @@ test_walks(void)
 
 	said("");
 	rm_rtfx_show(NULL);
-	CALLED("ao:show sun:show");
+	CALLED("direct:show ao:show sun:show");
 
 	said("");
 	rm_rtfx_post(NULL);
@@ -292,19 +292,19 @@ test_walks(void)
 	/* the scene's */
 	said("");
 	rm_rtfx_init(NULL);
-	CALLED("shadows:init ao:init sun:init water:init");
+	CALLED("direct:init shadows:init ao:init sun:init water:init");
 
 	said("");
 	rm_rtfx_shutdown();
-	CALLED("shadows:shutdown ao:shutdown sun:shutdown water:shutdown");
+	CALLED("direct:shutdown shadows:shutdown ao:shutdown sun:shutdown water:shutdown");
 
 	said("");
 	rm_rtfx_frame(NULL, 0);
-	CALLED("shadows:frame ao:frame sun:frame water:frame");
+	CALLED("direct:frame shadows:frame ao:frame sun:frame water:frame");
 
 	said("");
 	rm_rtfx_view(NULL);
-	CALLED("shadows:view ao:view sun:view water:view");
+	CALLED("direct:view shadows:view ao:view sun:view water:view");
 
 	asks("wanted", rm_rtfx_wanted);
 	asks("active", rm_rtfx_active);
