@@ -235,9 +235,9 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 			/* the fit's samples: the lightmap enters the frame's sums, never this pixel's light */
 			if (((px.x % MTL_RTDIR_FIT_STEP) == 0u) && ((px.y % MTL_RTDIR_FIT_STEP) == 0u))
 			{
-				const float4 s = lm.read(px);
+				const float4 lms = lm.read(px);
 
-				fit_lm = mtl_rtdir_q(s.r, s.g, s.b);
+				fit_lm = mtl_rtdir_q(lms.r, lms.g, lms.b);
 				fit_raw = mtl_rtdir_q(raw.r, raw.g, raw.b);
 				fit_n = 1u;
 			}

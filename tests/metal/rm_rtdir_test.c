@@ -171,6 +171,59 @@ test_no_lightmap(void)
 	CHECK(near(a.r, 0.45, 1e-6));
 }
 
+/* the occurrences of needle in text */
+static int
+count(const char *text, const char *needle)
+{
+	int n = 0;
+	const char *p = text;
+
+	while ((p = strstr(p, needle)) != NULL)
+	{
+		n++;
+		p += strlen(needle);
+	}
+
+	return n;
+}
+
+/*
+ * The same invariant in the kernel's text: the lightmap texture is read
+ * once, inside the fit's sample, and what it read goes into the fit's sum
+ * and nowhere else; a world pixel's light is mtl_rtdir_light of the
+ * traced sum. A kernel that adds the lightmap back (a second lm.read, the
+ * sample's channels used again, or the world written from base) fails.
+ */
+static void
+test_no_lightmap_kernel(void)
+{
+	static char text[65536];
+	FILE *f = fopen("src/client/refresh/metal/rm_rtdir.metal", "rb");
+	size_t len;
+
+	CHECK(f != NULL);
+
+	if (!f)
+	{
+		return;
+	}
+
+	len = fread(text, 1, sizeof(text) - 1, f);
+	CHECK(!ferror(f) && (len < sizeof(text) - 1));
+	fclose(f);
+	text[len] = 0;
+
+	CHECK(count(text, "lm.read(") == 1);
+	CHECK(count(text, "const float4 lms = lm.read(px);") == 1);
+	CHECK(count(text, "lms") == 4);
+	CHECK(count(text, "fit_lm = mtl_rtdir_q(lms.r, lms.g, lms.b);") == 1);
+	CHECK(count(text, "const mtl_rgba_t c = mtl_rtdir_light(raw.r, raw.g, raw.b, v.exposure);") == 1);
+	CHECK(count(text, "base.read(") == 1 && count(text, "light_out.write(base.read(px), px);") == 1);
+	CHECK(count(text, "light_out.write(") == 2);
+	CHECK(count(text, "for (int layer = 0; layer <= MTL_RTDIR_LAYERS; layer++)") == 1);
+	CHECK(count(text, "if (mtl_rtdir_at(m, layer) != MTL_RTDIR_AT_PASS)") == 1);
+}
+
 /* the fit's samples: the channel mean, clamped to QMAX, in 1/64 steps; sums exact whatever the order */
 static void
 test_q(void)
@@ -369,6 +422,7 @@ main(void)
 	test_at();
 	test_light();
 	test_no_lightmap();
+	test_no_lightmap_kernel();
 	test_q();
 	test_fit();
 	test_pack();
