@@ -33,6 +33,10 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+# the bounded-run primitive for Python (FIX186): every command with a time limit, and every stop of
+# one, goes through it
+sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
+import bounded  # noqa: E402
 
 RESULT_COLS = [
     "option", "scenario", "status", "cvars", "fps_runs", "load_runs", "gpu_frame_ms_runs",
@@ -529,9 +533,10 @@ class CfgGuard:
                 pass
 
 
-def sh(cmd, cwd=None, env=None, timeout=None):
+def sh(cmd, cwd=None, env=None):
+    """A short command with no time limit (one with a limit is sh_group)."""
     p = subprocess.run(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       universal_newlines=True, timeout=timeout)
+                       universal_newlines=True)
     return p.returncode, p.stdout
 
 
@@ -593,56 +598,23 @@ def lock_stop_wait(env=None):
     return max(2 * g, g + 5) + 5
 
 
-STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-
-
-def stop_group(p, wait):
-    """Stops the process group p leads: TERM to the group, up to <wait> seconds for p to end (its
-    output read meanwhile), then KILL to the group. A second SIGINT, SIGTERM or SIGHUP meanwhile is held
-    until the stop is over, so it cannot cut the wait short."""
-    held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
-    try:
-        try:
-            os.killpg(p.pid, signal.SIGTERM)
-        except OSError:
-            pass
-        ended = False
-        try:
-            p.communicate(timeout=wait)
-            ended = True
-        except Exception:  # the wait ran out (or the pipe failed): KILL
-            pass
-        try:
-            os.killpg(p.pid, signal.SIGKILL) # bounded-run: allowed: stop_group, the Python group watchdog: TERM first, KILL after the wait
-        except OSError:
-            pass
-        if not ended:
-            try:
-                p.communicate(timeout=5)  # bounded: a process that left the group may hold the pipe
-            except Exception:
-                pass
-    finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, held)
-
-
 def sh_group(cmd, cwd=None, env=None, timeout=None):
-    """Like sh(), with the command in a process group of its own, which is stopped (stop_group) on
-    any way out: a SIGTERM/SIGHUP (SystemExit from the handler), Ctrl-C or the timeout. TERM first,
-    KILL only after lock_stop_wait. Under this run's own hold of the host lock, scripts/pins.sh passes
+    """Like sh(), with the command in a process group of its own (bounded.run), which is stopped
+    (bounded.stop) on any way out: a SIGTERM/SIGHUP (SystemExit from the handler), Ctrl-C or the
+    timeout, which then raises subprocess.TimeoutExpired once the group is stopped. TERM to the group
+    first, KILL to what is left only after lock_stop_wait; a second SIGINT, SIGTERM or SIGHUP meanwhile
+    is held until the stop is over, so it cannot cut the wait short. Under this run's own hold of the host lock, scripts/pins.sh passes
     straight through and is the command itself. Without it, pins.sh runs itself under the lock
     (scripts/bench/bench.sh lock run), so the command's pid is the lock shell, and the run under it,
     the engine included, is in a process group of the lock's own, which only the lock shell's TERM trap
     stops before it frees the lock: a KILL first would end the lock shell alone and leave that run
     going, the lock held. So a command that starts the engine (scripts/pins.sh) leaves nothing
     running."""
-    p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         universal_newlines=True, start_new_session=True)
-    try:
-        out, _ = p.communicate(timeout=timeout)
-    except BaseException:
-        stop_group(p, lock_stop_wait(env))
-        raise
-    return p.returncode, out
+    r = bounded.run(cmd, timeout=timeout, grace=lock_stop_wait(env), cwd=cwd, env=env, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, universal_newlines=True)
+    if r.how == "timeout":
+        raise subprocess.TimeoutExpired(cmd, timeout, output=r.stdout)
+    return r.returncode, r.stdout
 
 
 def load1():
@@ -709,11 +681,14 @@ def engine_args(ctx, scenario_sets, extra_sets, tail, write=False):
     return a
 
 
+ENGINE_GRACE = 5  # the seconds run_engine gives a stopped engine between TERM and KILL
+
+
 def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=True):
     """Run the engine in the foreground, its console in log. With until (a regex),
     the engine, which does not quit after a demo, is ended once the log matches it
-    (only the process started here is signalled). Returns the exit status, or None
-    when ended by this function."""
+    (its process group, through bounded.stop: TERM first, KILL after 5 s). Returns the
+    exit status, or None when ended by this function."""
     env = dict(os.environ)
     env.pop("MTL_DEBUG_LAYER", None)
     if debug:
@@ -724,12 +699,25 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
     master, slave = pty.openpty()
     buf = bytearray()
     status, why = None, None
-    p = None
+    c = None
+
+    def pump(t):  # the console read while a stop waits, so that the engine never blocks on a full pty
+        try:
+            if select.select([master], [], [], t)[0]:
+                data = os.read(master, 65536)
+                if data:
+                    buf.extend(data)
+                    return
+        except OSError:
+            pass
+        time.sleep(t)
     try:
         if ctx.cfg is not None:
             ctx.cfg.clear()  # the run starts from the engine's defaults, not from what the last run saved
-        p = subprocess.Popen([ctx.bin] + args, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=slave,
-                             stderr=slave, close_fds=True)
+        # a session (and so a process group) of its own; the pty is not made its controlling terminal
+        c = bounded.spawn([ctx.bin] + args, ENGINE_GRACE, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                          stdout=slave, stderr=slave, close_fds=True)
+        p = c.popen
         os.close(slave)
         slave = -1
         t0 = time.time()
@@ -764,16 +752,10 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
                 why = "timeout"
                 break
         if why:
-            p.terminate()
-            try:
-                p.wait(5)
-            except subprocess.TimeoutExpired:
-                p.kill() # bounded-run: allowed: run_engine, the pty run: KILL after terminate and 5 s
-                p.wait()
+            bounded.stop(c, ENGINE_GRACE, pump)
     finally:
-        if p is not None and p.poll() is None:  # an interrupt must not leave the engine running
-            p.kill() # bounded-run: allowed: run_engine, the pty run: an interrupt must not leave the engine running
-            p.wait()
+        if c is not None and c.popen.poll() is None:  # an interrupt must not leave the engine running
+            bounded.stop(c, ENGINE_GRACE, pump)
         if slave >= 0:
             os.close(slave)
         os.close(master)
@@ -850,13 +832,13 @@ def parse_scenario(path):
     `<cvar> <value>` are each refused, never skipped. CVAR_RE and VALUE_RE (no "/") restrict further."""
     reader = os.path.join(ROOT, "scripts", "pins.sh")
     try:
-        p = subprocess.run(["/bin/bash", reader, "scenario-args", path], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=SCENARIO_READ_SECONDS)
-    except subprocess.TimeoutExpired:
-        raise Refuse("the scenario %s cannot be read: scripts/pins.sh scenario-args did not answer within %d s"
-                     % (path, SCENARIO_READ_SECONDS))
+        p = bounded.run(["/bin/bash", reader, "scenario-args", path], timeout=SCENARIO_READ_SECONDS,
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except (OSError, subprocess.SubprocessError) as e:
         raise Refuse("the scenario %s cannot be read: scripts/pins.sh scenario-args did not run (%s)" % (path, e))
+    if p.how == "timeout":
+        raise Refuse("the scenario %s cannot be read: scripts/pins.sh scenario-args did not answer within %d s"
+                     % (path, SCENARIO_READ_SECONDS))
     if p.returncode != 0:
         why = p.stderr.decode("utf-8", "replace").strip().split("\n")
         raise Refuse("the scenario %s is refused by scripts/pins.sh scenario-args: %s"

@@ -264,8 +264,10 @@ chmod +x "$tmp/pins-stub" "$tmp/pins-stub-locked" "$tmp/eng-lockseen"
 INTDFL='import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.executable, [sys.executable, "-I"] + sys.argv[1:])'
 # a tree copy for the generator: its own scripts/pins/scenarios and a stub scripts/pins.sh, so that a run
 # writes and deletes nothing in the caller's checkout
-mktree() { # <tree> <mfx.py>
-    mkdir -p "$1/scripts/metalfx-report" "$1/scripts/pins" || return 1
+mktree() { # <tree> <mfx.py>: the generator imports the Python bounded-run primitive (scripts/lib/bounded.py) of its
+    # own tree, copied from the tree <mfx.py> is in, so that a mutant of it reaches every tree made from its generator
+    mkdir -p "$1/scripts/metalfx-report" "$1/scripts/pins" "$1/scripts/lib" || return 1
+    cp "$(dirname "$2")/../lib/bounded.py" "$1/scripts/lib/" || return 1
     cp "$SRC/options.tsv" "$1/scripts/metalfx-report/"; cp "$2" "$1/scripts/metalfx-report/mfx.py"
     cp -R "$root/scripts/pins/scenarios" "$1/scripts/pins/scenarios"; cp "$tmp/pins-stub" "$1/scripts/pins.sh"
 }
@@ -890,7 +892,8 @@ printf '/release/\n' > "$tmp/noign"; if ign "$tmp/noign"; then bad "the ignore c
 
 # mutants: one change of the line each assertion covers; the covered assertion must fail
 nm=0
-mutant() { # name covered-id file(py|c) old new [old new]...: runs in the background, result in $tmp/res-<name>
+mutant() { # name covered-id file(py|c|lib) old new [old new]...: runs in the background, result in $tmp/res-<name>
+    # (lib: the tree's copy of scripts/lib/bounded.py, which the generator imports, is the one changed)
     local name=$1 id=$2 kind=$3; shift 3
     case " ${MFX_MUTANTS:-} " in "  "|*" $name "*) ;; *) return;; esac  # MFX_MUTANTS="a b": only these (while iterating)
     nm=$((nm+1))
@@ -902,6 +905,8 @@ mutant() { # name covered-id file(py|c) old new [old new]...: runs in the backgr
         mkdir -p "$mdir/w"; mktree "$mdir" "$SRC/mfx.py"
         if [ "$kind" = py ]; then
             python3 -I "$HELP" mutate "$SRC/mfx.py" "$sub/mfx.py" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
+        elif [ "$kind" = lib ]; then
+            python3 -I "$HELP" mutate "$root/scripts/lib/bounded.py" "$mdir/scripts/lib/bounded.py" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
         else
             python3 -I "$HELP" mutate "$SRC/ssim.c" "$mdir/ssim.c" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
             ssrc="$mdir/ssim.c"
@@ -1067,17 +1072,21 @@ mutant lock-fails-open run-lock-bin py 'raise Refuse("another run holds %s (%s),
 mutant quality-vs-itself e2e-quality py 'diff_frames(ctx, nat[k], fr[k])' 'diff_frames(ctx, nat[k], nat[k])'
 mutant crop-is-native e2e-crop py 'img = nimg if oid == "native" else read_tga(frames_by_index(pins[oid])[mid])' 'img = nimg'
 mutant crop-frame-first e2e-index py 'mid = nkeys[len(nkeys) // 2]' 'mid = nkeys[0]'
-mutant pins-not-in-group e2e-group py 'os.killpg(p.pid, signal.SIGTERM)' 'p.terminate()' 'os.killpg(p.pid, signal.SIGKILL)' 'p.kill()'
-mutant pins-kill-first e2e-lock py 'os.killpg(p.pid, signal.SIGTERM)' 'os.killpg(p.pid, signal.SIGKILL)'
+mutant pins-not-in-group e2e-group lib '        os.killpg(c.pid, sig)' '        os.kill(c.pid, sig)'
+mutant pins-kill-first e2e-lock lib '        if not signal_group(c, signal.SIGTERM):' '        if not signal_group(c, signal.SIGKILL):'
 mutant stop-wait-unfloored e2e-lock-grace py 'return max(2 * g, g + 5) + 5' 'return 2 * g + 5'
-mutant stop-unheld e2e-lock py 'held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)' 'held = signal.pthread_sigmask(signal.SIG_BLOCK, [])'
+mutant stop-unheld e2e-lock lib '    held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    try:
+        if not signal_group' '    held = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    try:
+        if not signal_group'
 mutant stop-wait-leading-zero e2e-lock-grace py 're.match(r"(0|[1-9][0-9]{0,8})\Z", g)' 're.match(r"[0-9]{1,9}\Z", g)'
 mutant stop-wait-cap9 e2e-lock-grace py 're.match(r"(0|[1-9][0-9]{0,8})\Z", g)' 're.match(r"(0|[1-9][0-9]*)\Z", g)'
 mutant stop-wait-outlives-lock e2e-lock py 'if LOCK_HELD:' 'if False:'
 mutant lock-self-off e2e-lock-wait py 'os.execv("/bin/sh", cmd)' 'off = "mutant"'
 mutant lock-lc-all-lost e2e-lock-wait py 'lc = ["LC_ALL=" + e["LC_ALL"]] if "LC_ALL" in e else ["-u", "LC_ALL"]' 'lc = []'
 mutant lock-off-silent e2e-lock-off py 'print("metalfx-report: the host lock is off: " + off, file=sys.stderr)' 'pass'
-mutant pins-no-group e2e-group py 'rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)' 'rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)'
+mutant pins-no-group e2e-group py 'rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)' 'rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env)'
 
 wait
 for r in "$tmp"/res-*; do
