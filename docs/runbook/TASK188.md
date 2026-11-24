@@ -38,17 +38,34 @@ record below shows it: three runs of `rtprimary-world` give the same 23 frames b
   refdef's rgb times `r_modulate` as the lightmap takes it. The sum is in the lightmap's units (a byte of
   255 reads 1), so it is what the direct part of a qrad3 lightmap holds, before the 196 clamp and without
   the bounces and the surface lights.
+- **The bounds on a pixel's work.** A pixel with more than `MTL_RTDIR_MAX_TRACED` (16) lights in range
+  takes the 16 strongest (the largest `(intensity - dist) x N.L`, `mtl_rtdir_keep`), summed in the
+  buffer's order, so it traces at most 16 shadow rays of at most 5 intersections each, whatever the map
+  holds (round 0 traced every light in range: up to 2048 a pixel). The intensity is packed at most
+  `RM_RTDIR_MAX_INTENSITY` (16384): qrad3 bounds no light value (`rm_rtlights.c` takes any finite one, as
+  `CreateDirectLights` does) and its falloff is linear, so a light reaches as far as its intensity; a map's
+  points lie within +-4096 on each axis (`MSG_WriteCoord`, a short of 1/8 units), no two farther apart than
+  8192 x sqrt(3), about 14189, so a light of 16384 already reaches every point of any map, and above it
+  only gets brighter. qrad3's default is 300.
 - **The shadow ray**, one a light in range and pixel: from the surface point offset along its normal
   (TASK57's `mtl_rtao_bias`) to a unit short of the light's origin, against the frame's instance structure
   with `MTL_RTAO_MASK` (the world, the brush entities, the alias models, not the view weapon). Water and
   translucent faces let it through, up to four of them; any other face shadows, the sky's included.
-- **The lightmap never lights the pixel it is on** (the plan's section 6, item 5). The kernel reads the
-  stylized lightmap once, in the exposure fit's sample, which feeds only the frame's sum. A world pixel's
-  light is `mtl_rtdir_light(raw, exposure)`, which has no lightmap argument; every other pixel keeps the
-  light it had, bit for bit.
+- **The lightmap never lights the pixel it is on** (the plan's section 6, item 5), by the kernel's
+  structure. `rm_rtdir_direct` computes the traced light and takes no texture. The kernel keeps it in a
+  `const float3 raw`. `rm_rtdir_fit_sample(lm, px, raw)` is the one read of the lightmap: it takes `raw` by
+  value and returns the two quantized values the frame's sums take. The world branch is
+  `light_out.write(rm_rtdir_out(raw, v.exposure), px);`, `rm_rtdir_out` being `mtl_rtdir_light` of the
+  traced light alone; only the other branch writes `base`, so every other pixel keeps the light it had,
+  bit for bit.
 - **The exposure, the stated rule.** `exposure = sum of the stock lightmap / sum of the traced light` over
-  the same sampled world pixels (every fourth pixel a row and a column) of the latest completed frame,
-  clamped to 0.25 to 16; 1 at a map's first frame and kept while no traced light reaches a sample. Each
+  the same sampled world pixels (every fourth pixel a row and a column) of the latest completed frame of
+  the map, clamped to 0.25 to 16; 1 at a map's first frame and kept while no traced light reaches a
+  sample. The back end hands over the frames completed since the last read in slot order;
+  `rm_rtdir_fit_latest` applies the one with the largest frame number only, and ignores every frame at or
+  before the map's reset (`RM_RTDir_Lights` records the last frame traced before it), so the old map's
+  frames still in flight do not overwrite the reset to 1. Round 0 applied them all in slot order, the
+  last one winning, which could be an older frame or the old map's. Each
   sample is the channel mean, clamped to 16, in steps of 1/64, so the sums are integers, exact in any
   order, and cannot wrap below 8K. So the traced frame's mean light is the stock frame's.
   `r_rt_direct_exposure` above 0 is a fixed exposure instead (plan: "the owner may prefer a fixed
@@ -59,9 +76,11 @@ record below shows it: three runs of `rtprimary-world` give the same 23 frames b
 - **The data** (`rm_rtdata.c`) is gathered at map load under RT-primary as well as under `r_rt_stats`,
   read through `RM_RTD_Lights`. A spotlight whose target is missing is left out (qrad3 leaves its normal at
   zero, so it lights nothing), as are lights of intensity 0 or less.
-- **Lines.** `r_rt_stats 1`: `ref_metal: rt direct: <map>: N lights uploaded (...)`. `r_rt_stats 2`, a frame:
-  world pixels, lights in range, shadow rays, rays that reached their light, the fit's sums, the exposure
-  and the pass's GPU time.
+- **Lines.** `r_rt_stats 1`: `ref_metal: rt direct: <map>: N lights uploaded (...)`, with the lights held to
+  the intensity cap. `r_rt_stats 2`, a frame: world pixels, lights in range, shadow rays, rays that reached
+  their light, the pixels past the 16 lights, the fit's sums, the exposure and the pass's GPU time. The
+  lights in range, the rays and the lit ones are counted in 64 bits on the GPU (a low and a high word,
+  the carry added when the low word wraps), so they do not wrap at 4K with hundreds of lights a pixel.
 
 New cvars: `r_rt_direct` (the effect switch, default 0, read 1 by the mode), `r_rt_direct_exposure` and
 `r_rt_direct_show`, in `doc/040_cvarlist.md` and classified in `rm_rtgate.c`. New scenarios:
@@ -72,17 +91,59 @@ recorded against `ref_metal` itself once the owner accepts the look, PM11).
 
 `tests/metal/rm_rtdir_test.c` (in `tests/check-ref-metal.sh`, with ASAN and UBSAN): the mode's switch under
 each presentation, qrad3's falloff and cone, the shadow ray's step, the light and its clamps, the fit's
-samples and their order-free sums, the fit and the fixed exposure, the packing (a missing target, dark
-lights, the cap), the style table, the view and the lines; and the kernel's text for the no-lightmap
-invariant. Red first: before `rm_pres_decide` chose the mode, `rm_rtdir_test: 355 checks, 5 failed`.
-Then three mutants of `rm_rtdir.metal` that add the lightmap back, each failing:
+samples and their order-free sums, the fit, the frame it is taken from and the fixed exposure, the lights
+a pixel takes past the cap, the packing (a missing target, dark lights, the cap, the intensity clamp),
+the style table, the view and the lines; and the kernel's text for the no-lightmap invariant. Red first:
+before `rm_pres_decide` chose the mode, `rm_rtdir_test: 355 checks, 5 failed`.
+
+**The no-lightmap rule** (`kernel_broken`, over `rm_rtdir.metal` with its comments taken out) holds the
+structure above: `rm_rtdir_direct` has no texture parameter and no `.read(`, `lm`, `base` or `fit` in its
+body; the word `lm` occurs four times (the kernel's parameter, its one use in
+`rm_rtdir_fit_sample(lm, px, raw)`, the fit's parameter and its `lm.read(px)`); `rm_rtdir_fit_sample` and
+`rm_rtdir_out` are pinned whole; the kernel names `raw` three times (its const definition from
+`rm_rtdir_direct`, the fit's call, the world's write) and `fit` three (its definition and the two
+`simd_sum`s); the world branch is pinned whole, and `base` occurs in the kernel's parameter and the other
+branch only. Round 0's test counted needles and could not fail its `test_no_lightmap` (its helper threw
+the lightmap away); that test is gone. Red first: round 0's kernel against the new rule,
+`rm_rtdir.metal: rm_rtdir_direct is not defined once`, `rm_rtdir_test: 363 checks, 8 failed`.
+
+The test builds seven mutants of the real file in memory and requires the rule to refuse each. Each one
+gives a world pixel the lightmap, and each compiles with `xcrun metal` (written out by hand with
+`RM_RTDIR_MUTANTS=<dir>`):
 
 ```
-real: rm_rtdir_test: 366 checks, 0 failed
-add-lm: FAIL tests/metal/rm_rtdir_test.c:216: count(text, "lm.read(") == 1 rm_rtdir_test: 366 checks, 1 failed
-reuse-sample: FAIL tests/metal/rm_rtdir_test.c:218: count(text, "lms") == 4 rm_rtdir_test: 366 checks, 1 failed
-world-from-base: FAIL tests/metal/rm_rtdir_test.c:221: count(text, "base.read(") == 1 && count(text, "light_out.write(base.read(px), px);") == 1 rm_rtdir_test: 366 checks, 1 failed
+mutant add-lm: the lightmap is named outside the fit's sample
+mutant reuse-sample: the fit's values go somewhere but the frame's sums
+mutant world-from-base: the kernel's raw is not the traced light alone
+mutant branch-swap: the world branch is not the traced light's single write
+mutant fit-leak: the kernel's raw is not the traced light alone
+mutant fit-sample-leak: rm_rtdir_fit_sample is not the fit's sample alone
+mutant direct-reads-lm: rm_rtdir_direct reaches a texture or the fit
+rm_rtdir_test: 381 checks, 0 failed
 ```
+
+`branch-swap` is the correctness review's (the two branches swapped). `fit-leak` is the spec review's
+`raw += float3(float(fit_lm)) * 0.001f;` in the new shape: `raw` made non-const and the fit's value added
+to it after the sample. `fit-sample-leak` takes `raw` by reference into the fit's sample and adds the
+lightmap there; `direct-reads-lm` hands the lightmap to the trace.
+
+**No GPU run of the kernel.** No harness in `tests/check-ref-metal.sh` runs a shader on the GPU against
+fixture textures: the device probe (`tests/metal/rmb_cs_probe.m`) drives the colour space and the MetalFX
+scalers with no shader library, and the build step compiles the library without running it. The kernel
+would also need an instance acceleration structure bound. So the rule is held by the kernel's text and structure
+above, not by a pixel read back from the GPU.
+
+**The fit's frame** (`test_fit_latest`): frames `{6, 5}` in that order, and `{5, 6}`, give frame 6's fit;
+an entry at or before the reset gives 1, and the new map's first completed frame is then applied. Red
+first, with `rm_rtdir_fit_latest` written as round 0 behaved (every entry in the order given):
+`FAIL tests/metal/rm_rtdir_test.c:606: near(rm_rtdir_fit_latest(s, 2, &after, 1), 3.0, 1e-6) && (after == 6)`,
+`rm_rtdir_test: 381 checks, 8 failed`.
+
+**The intensity clamp** (`test_pack`): lights of `1e30` and `3.4e38` pack as 16384 and are counted. Red
+first, with the clamp taken out: `FAIL tests/metal/rm_rtdir_test.c:759: out[0].pos[3] ==
+RM_RTDIR_MAX_INTENSITY && out[1].pos[3] == RM_RTDIR_MAX_INTENSITY`, `rm_rtdir_test: 381 checks, 1 failed`.
+**The cap** (`test_keep`, on `mtl_rtdir_keep`, which the kernel runs): 16 lights kept in order; a weaker
+or equal one past the cap dropped; a stronger one replaces the weakest; of 2048 rising lights the last 16.
 
 `rm_rtgate_test` and `rm_rtfx_test` follow the mode, the overlay, the fifth effect switch and the new order.
 
@@ -128,6 +189,16 @@ frames' hashes, `000b429ec38e`; `rtprimary-direct` `dd451ee5650d`, `rtprimary-vi
 `rtprimary-noshadow` `6495fa432ad0`, each the same twice. The fit reads earlier frames, so a run whose
 frames completed in another order could differ in its first frames; none did here.
 
+**Round 1** (the kernel's new structure, the cap, the intensity clamp, the 64-bit counts and the fit's
+frame, at `c18902fd`): the four records give the same hashes, `000b429ec38e`, `dd451ee5650d`,
+`be8d223522ca` and `6495fa432ad0`, so every frame is byte-identical to round 0's. Neither bound bites on
+`demo1.dm2`: the map line reads `248 lights uploaded (0 dark, 0 spotlights without a target, 0 past the
+cap left out, 0 brighter than 16384 held to it)`, and every one of the 686 frame lines of the
+`r_rt_stats 2` run reads `0 pixels past 16 lights`; frame 18 reads as in round 0
+(`521201 in range, 521201 shadow rays (1.70 a world pixel), 489574 lit, 0 pixels past 16 lights, fit
+376127/258792`). The pass's GPU time read 2.6 ms there against 2.2 ms in round 0, in a window that was not
+held quiet; it is information, not a measurement (decision 0014).
+
 No frame was looked at by the agent; the frames stay in a local store outside the repository.
 
 ## Stock is unchanged
@@ -166,6 +237,8 @@ at `PINS_EVERY=7`. Compared by the hash of the frames' sha256s:
   owner picks from frames, and a fit that leaves out the near-black parts slice 2 will light.
 - **The menu**: under RT-primary the Ray tracing screen does not yet grey the rows the mode decides ("set by
   the presentation"), as it does for Enhanced and Retro; the mode itself is greyed "awaiting review".
+- **The water reflections** (`rmb_rtwater.m`) still shade the reflected world from the lightmap array
+  under RT-primary: that is a water pixel's light, not a world pixel's, and is slice 2 or PM7.
 - **TASK187's open choices** stand as they were (empty values, a short `_color`, a fractional `_style`); a
   spotlight with a missing target now lights nothing, as in qrad3.
 - Sky light, the sun and the bounce (PM7), the denoiser and the MetalFX scaler through the overlay (PM8, where

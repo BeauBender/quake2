@@ -1240,17 +1240,22 @@ is.
   times the light's colour and lightstyle (and `r_modulate`), each light
   with one shadow ray through the ray-tracing scene (water and glass let
   it through, up to four of them), in the lightmap's units, in place of
-  the lightmap. A spotlight lights only inside its cone; one whose target
+  the lightmap. A pixel with more than 16 lights in range takes the 16
+  strongest, so it traces at most 16 shadow rays, and a light's
+  intensity is held to `16384`, which already reaches every point of a
+  map. A spotlight lights only inside its cone; one whose target
   is missing lights nothing, as in qrad3. Under every other presentation
   it does nothing at any value. Forced to `0` on a device without ray
   tracing. `r_rt_stats 1` prints the map's line of lights uploaded,
   `r_rt_stats 2` a line a frame (world pixels, lights in range, shadow
-  rays, rays that reached their light, the exposure fit's sums and the
-  exposure). Default `0`; not saved with the configuration.
+  rays, rays that reached their light, the pixels past the 16 lights,
+  the exposure fit's sums and the exposure). Default `0`; not saved with
+  the configuration.
 
 * **r_rt_direct_exposure**: The exposure of the Metal renderer's direct
   light (`r_rt_direct`). `0` (the default) takes the fit: the sum of the
-  stock lightmap over the world pixels of a completed frame, every fourth
+  stock lightmap over the world pixels of the latest completed frame of
+  the map, every fourth
   pixel a row and a column, divided by the sum of the traced light over
   the same pixels, held between `0.25` and `16`, so the traced frame's
   mean light is the stock frame's (the lightmap enters this ratio only,
