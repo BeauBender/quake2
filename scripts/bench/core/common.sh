@@ -681,11 +681,12 @@ bench_groups_alive() {
 # command, before the first poll or at any later one, is refused: a line,
 # and status 4 (2 is a stopped command). Its standard error is
 # /dev/null (the shell's job notices), all but that line.
-# Every step of a poll, the ps read, the until test, the clock and the
-# nap, runs through bench_poll (FIX192): while it watches, this shell waits
-# for no foreground command or command substitution, so a signal runs its
-# trap at once, whatever the poll is doing. The until test so runs in a
-# subshell: it is a test, and nothing it sets is kept. A poll ended by a
+# Every step of a poll of its own, the ps read, the clock and the nap,
+# runs through bench_poll (FIX192): it waits for no foreground command or
+# command substitution of its own, so a signal runs the trap at once,
+# whatever the poll is doing. The until test is the caller's, and runs in
+# this shell as before (what it sets is kept, and it may unset itself): a
+# foreground command in it keeps bash 3.2's window. A poll ended by a
 # signal (status above 128) is read as no answer, and the next poll asks
 # again.
 bench_watch() {
@@ -726,7 +727,7 @@ bench_watch() {
 				bench_note "bench_watch: the until test $_bw_until is not defined" 2>&8
 				return 4
 			}
-			if bench_poll "$_bw_until"; then return 3; fi
+			if "$_bw_until"; then return 3; fi
 		fi
 		if [ -n "$_bw_end" ] && bench_poll bench_past "$_bw_end"; then
 			return 1
