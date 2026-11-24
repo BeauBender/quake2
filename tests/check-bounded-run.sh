@@ -130,6 +130,7 @@ scripts/ios-sim.sh selftest: ends the fake hung launcher read it checked
 scripts/ios-sim.sh selftest: a hung launcher read ps cannot name
 scripts/ios-sim.sh selftest: ends the decoy it checked
 scripts/ios-sim.sh selftest: a decoy ps cannot name
+scripts/ios-sim.sh selftest: the term mutant signals the decoy the fake started
 scripts/ios-sim.sh selftest: waits for a wrongly sent signal to show
 scripts/ios-sim.sh selftest: the stale pid must still run
 scripts/ios-sim.sh selftest: ends its own sleep

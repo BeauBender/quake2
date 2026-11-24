@@ -1875,7 +1875,9 @@ override TESTDIR := $(BUILDDIR)/test
 TEST_COVFLAGS :=
 endif
 
-TEST_CFLAGS := -DDEDICATED_ONLY -Wno-unused-result $(TEST_COVFLAGS)
+# YQ2_UNIT_TESTS builds the test-only hooks (Sys_ForgetHomeDir), which
+# no shipped binary holds.
+TEST_CFLAGS := -DDEDICATED_ONLY -DYQ2_UNIT_TESTS -Wno-unused-result $(TEST_COVFLAGS)
 # An undefined-behaviour report ends the test run instead of being printed
 # and passed over. Only the test objects get this, never a shipped binary.
 ifdef UBSAN
