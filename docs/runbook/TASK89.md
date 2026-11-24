@@ -13,7 +13,7 @@ MTL_DEBUG_LAYER=1 scripts/pins.sh record gl1-metal world
 MTL_DEBUG_LAYER=1 scripts/pins.sh record metal world
 scripts/pins.sh compare metal world --ref gl1-metal --threshold 0.005 --bad-threshold 0.001
 # skywater, world-fullbright and hud2d the same; cinematic as in N2 (PINS_DEMO=idlog.cin PINS_EVERY=7)
-make ref_soft && scripts/pins.sh make-demo water   # a demo of 97 to 124 messages
+make ref_soft && scripts/pins.sh make-demo water   # a demo of 96 to 147 messages
 PINS_DEMO=water.dm2 scripts/pins.sh record gl1-metal skywater [--run 2]
 PINS_DEMO=water.dm2 scripts/pins.sh record metal skywater
 PINS_DEMO=water.dm2 scripts/pins.sh compare metal skywater --ref gl1-metal --threshold 0.02 --bad-threshold 0.03

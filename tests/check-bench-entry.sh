@@ -417,6 +417,12 @@ mktree() {
 		;;
 	real) cp -R "$REAL/bench" "${T:?}/scripts/bench" ;;
 	esac
+	# the scheduler sources the bounded-run primitive from beside it
+	# (FIX186), with or without the rest of the bench core
+	if [ ! -f "${T:?}/scripts/bench/core/common.sh" ]; then
+		mkdir -p "${T:?}/scripts/bench/core"
+		cp "$REAL/bench/core/common.sh" "${T:?}/scripts/bench/core/common.sh"
+	fi
 	LOG=${T:?}/log
 	: > "$LOG"
 	export LOG

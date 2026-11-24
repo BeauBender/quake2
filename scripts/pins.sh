@@ -190,8 +190,12 @@
 # when the engine times out (PINS_TIMEOUT) or exits non-zero, or when the
 # demo is missing, cut short, or holds a number of messages outside the
 # script's range (renamed <name>.dm2.failed). A wait is a lower bound on
-# time, so on a busy host each place is held longer, the demo holds more
-# messages and the run fails; make it again. The script copy and pins_make_<name>.log
+# time, so on a busy host each place is held longer and the demo holds more
+# messages. A script may also hold one "// pins: move <low> <high>" line: the
+# run then reads the demo (demo_move) and fails it, the same way, when the last
+# frame message that carries the pmove origin is not on rendered frames <low>
+# to <high> (message index less 5), so the move falls between the captures
+# whatever the host's pace; make it again. The script copy and pins_make_<name>.log
 # are written into that directory too; the run also reads and rewrites
 # config.cfg there, as any portable run without pin capture does. A demo
 # beside the binary adds its checksum to the pin id of every scenario
@@ -1929,7 +1933,8 @@ check_demo_script() {
     local file=$1 name=$2 line n=0 cmd piece known aliases=" " records=0 maps=0 last="" prev="" aname body
     local re_alias='^alias ([a-z0-9_]+) "([a-z0-9_]+(;[a-z0-9_]+)*)"$'
     local re_range='^// pins: messages ([1-9][0-9]{0,8}) ([1-9][0-9]{0,8})$' ranges=0
-    demo_lo=""; demo_hi=""
+    local re_move='^// pins: move ([1-9][0-9]{0,8}) ([1-9][0-9]{0,8})$' moves=0
+    demo_lo=""; demo_hi=""; demo_mlo=""; demo_mhi=""
     known=$(demo_cmds)
     [ -n "$known" ] || die "cannot read the console commands from $root/src"
     while IFS= read -r line || [ -n "$line" ]; do
@@ -1937,9 +1942,15 @@ check_demo_script() {
         case $line in
             '') continue;;
             //*) case $line in *\;*|*\"*) die "$name.cfg line $n: a comment must not hold ; or a quote (the engine splits commands on them): $line";; esac
-                case $line in '// pins:'*)
+                case $line in '// pins: move'*)
+                    [[ $line =~ $re_move ]] ||
+                        die "$name.cfg line $n: a '// pins: move' line must be exactly '// pins: move <low> <high>', two positive integers without a leading zero, single spaces: $line"
+                    [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ] ||
+                        die "$name.cfg line $n: the move window must not end below its start: $line"
+                    moves=$((moves+1)); demo_mlo=${BASH_REMATCH[1]}; demo_mhi=${BASH_REMATCH[2]};;
+                '// pins:'*)
                     [[ $line =~ $re_range ]] ||
-                        die "$name.cfg line $n: a '// pins:' line must be exactly '// pins: messages <low> <high>', two positive integers without a leading zero, single spaces: $line"
+                        die "$name.cfg line $n: a '// pins:' line must be exactly '// pins: messages <low> <high>' or '// pins: move <low> <high>', two positive integers without a leading zero, single spaces: $line"
                     [ "${BASH_REMATCH[1]}" -ge 10 ] && [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ] ||
                         die "$name.cfg line $n: the message range must start at 10 or more and not end below its start: $line"
                     ranges=$((ranges+1)); demo_lo=${BASH_REMATCH[1]}; demo_hi=${BASH_REMATCH[2]};;
@@ -1971,6 +1982,7 @@ check_demo_script() {
     [ "$maps" -eq 1 ] || die "$name.cfg: needs exactly one 'map <map>' line, has $maps"
     [ "$records" -eq 1 ] || die "$name.cfg: needs exactly one 'record $name' line, has $records"
     [ "$ranges" -eq 1 ] || die "$name.cfg: needs exactly one '// pins: messages <low> <high>' line, has $ranges"
+    [ "$moves" -le 1 ] || die "$name.cfg: has $moves '// pins: move <low> <high>' lines, at most one"
     [ "$prev" = stop ] && [ "$last" = quit ] || die "$name.cfg: must end with 'stop', then 'quit'"
 }
 # demo_in_range <messages> <low> <high>: true only when all three are integers
@@ -1988,6 +2000,47 @@ demo_blocks() {
             }
             print "cut"}'
 }
+# demo_move <file>: "<frames> <last> <first z> <last z>" for the frame messages
+# (svc_frame, after any leading print, stufftext or configstring) whose
+# player state carries the pmove origin (PS_M_ORIGIN): how many there are, the
+# index of the last one among the message blocks (0 is the first), and the z
+# of the first and of the last, in 1/8 units. A camera that is teleported once
+# after the first frame gives two such frames, and the last is the move. The
+# demo is read, never the engine's clock, so the result is a property of the
+# demo whatever the pace it was made at. "cut" when the file ends first.
+demo_move() {
+    od -An -v -tu1 "$1" | awk '{for (i = 1; i <= NF; i++) b[nb++] = $i}
+        END {p = 0; c = 0; cnt = 0; last = -1; z1 = ""; z2 = ""
+            while (p + 4 <= nb) {
+                l = b[p] + 256 * b[p+1] + 65536 * b[p+2] + 16777216 * b[p+3]
+                if (l == 4294967295) {print cnt, last, z1, z2; exit}
+                q = p + 4; e = q + l; if (e > nb) break
+                while (q < e && (b[q] == 13 || b[q] == 10 || b[q] == 11)) {
+                    q += (b[q] == 13) ? 3 : ((b[q] == 10) ? 2 : 1)
+                    while (q < e && b[q] != 0) q++
+                    q++
+                }
+                if (q + 16 < e && b[q] == 20) {
+                    q += 10; q += 1 + b[q]
+                    if (q + 3 < e && b[q] == 17) {
+                        fl = b[q+1] + 256 * b[q+2]; r = q + 3
+                        if (fl % 2) r += 1
+                        if (int(fl / 2) % 2 && r + 5 < e) {
+                            z = b[r+4] + 256 * b[r+5]; if (z >= 32768) z -= 65536
+                            if (cnt == 0) z1 = z
+                            z2 = z; last = c; cnt++
+                        }
+                    }
+                }
+                p = e; c++
+            }
+            print "cut"}'
+}
+# demo_move_ok <frames> <last> <low> <high>: true when there are two origin
+# frames and the last, at message index <last>, falls on rendered frame
+# <last> - 5 (a demo of N messages renders N - 5 frames) within <low> to
+# <high>; a comparison that errors is false, never a pass
+demo_move_ok() { [ "$1" -ge 2 ] && [ $(($2 - 5)) -ge "$3" ] && [ $(($2 - 5)) -le "$4" ]; }
 # check_demo_place <physical dir> <file>: make-demo writes <file> into <dir>
 # (the write directory beside the binary, or its demos/, which a link may
 # send elsewhere); that is never inside PINS_BASEDIR, and inside this
@@ -2026,7 +2079,7 @@ cmd_make_demo() {
     local script="$demo_dir/$name.cfg"
     [ -f "$script" ] || die "no demo script $name (see $demo_dir)"
     check_demo_script "$script" "$name"
-    local map lo=$demo_lo hi=$demo_hi; map=$(sed -n 's/^map \([a-z0-9_]*\)$/\1/p' "$script")
+    local map lo=$demo_lo hi=$demo_hi mlo=${demo_mlo:-} mhi=${demo_mhi:-} mv="" mvf=""; map=$(sed -n 's/^map \([a-z0-9_]*\)$/\1/p' "$script")
     [[ $lo =~ ^[1-9][0-9]{0,8}$ ]] && [[ $hi =~ ^[1-9][0-9]{0,8}$ ]] && [ "$lo" -le "$hi" ] ||
         die "$name.cfg: the message range must be two positive integers, low first, got '$lo' and '$hi'"
     [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
@@ -2076,12 +2129,21 @@ cmd_make_demo() {
     elif [ "$blocks" -lt 10 ]; then reason="the demo $demo holds only $blocks messages"
     elif ! demo_in_range "$blocks" "$lo" "$hi"; then
         reason="the demo holds $blocks messages, outside $lo to $hi ($name.cfg): its waits lasted longer than the script means, so a record of it would not capture the frames documented; make it again on a quieter host"
+    elif [ -n "$mlo" ]; then
+        # the move of the camera must fall on rendered frames mlo to mhi, so the captures split around it
+        mv=$(demo_move "$demo"); mvf=$(echo "$mv" | awk '{print $2 - 5}')
+        # shellcheck disable=SC2086
+        set -- $mv
+        if [ "$mv" = cut ] || ! demo_move_ok "${1:-}" "${2:-}" "$mlo" "$mhi" 2>/dev/null; then
+            reason="the move of the camera is not on rendered frames $mlo to $mhi ($name.cfg): ${1:-0} frames with an origin (two wanted), the last on message ${2:--1}, so rendered frame $mvf; the captures at PINS_EVERY 30 would not split around it; make it again"
+        fi
     fi
     if [ -n "$reason" ]; then
         if [ -f "$demo" ]; then mv -f "$demo" "$demo.failed"; fi
         die "$reason (see $log)"
     fi
-    echo "made $demo ($blocks messages, $lo to $hi wanted); record it with PINS_DEMO=$name.dm2"
+    [ -z "$mlo" ] || mvf=", the move on rendered frame $mvf, $mlo to $mhi wanted"
+    echo "made $demo ($blocks messages, $lo to $hi wanted$mvf); record it with PINS_DEMO=$name.dm2"
 }
 
 # ---- selftest -------------------------------------------------------------
@@ -3280,7 +3342,8 @@ st_make_demo_script() { # TASK70: a demo script holds only commands of this tree
     for bad in 'nosuchcmd' 'record other' 'record bad' 'map base2' 'map ../x' 'exec x.cfg' '// a; quit' '// a "b' 'teleport ../x' ' wait' 'wait  ' 'echo "x"' \
         'alias w8 "w2;nosuchcmd"' 'alias w8 "w2; wait"' 'bind x "quit"' 'wait;quit' '// pins: messages 10 20' \
         '// pins: messages 0 999' '// pins: messages 097 124' '// pins: messages  97 124' '// pins: messages 97  124' '// pins: messages 97 124 ' \
-        '// pins: messages 97' '// pins: messages' '// pins: messages  ' '// pins:messages 97 124' '// pins: message 97 124' '// pins: messages 1234567890 1234567891'; do
+        '// pins: messages 97' '// pins: messages' '// pins: messages  ' '// pins:messages 97 124' '// pins: message 97 124' '// pins: messages 1234567890 1234567891' \
+        '// pins: move 40 30' '// pins: move 0 30' '// pins: move 033 57' '// pins: move 33  57' '// pins: move 33' '// pins: move' '// pins: moves 33 57' '// pins: move 33 57 '; do
         printf '%s\n' "$good" | sed 's/^record good$/record bad/' | awk -v b="$bad" '$0 == "teleport 1 -2 3.5" {print b; next} {print}' > "$tmp/ds/bad.cfg"
         if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "demo script line '$bad' must be refused"; return 1; fi
     done
@@ -3297,15 +3360,31 @@ st_make_demo_script() { # TASK70: a demo script holds only commands of this tree
         printf '%s\n' "$good" | sed 's/^record good$/record bad/' | sed "$s" > "$tmp/ds/bad.cfg"
         if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script whose message range is edited by '$s' must be refused"; return 1; fi
     done
+    # the move window: optional, at most one, and set by the check as the message range is
+    printf '%s\n' "$good" | sed 's/^record good$/record bad/' | awk '{print} $0 == "// pins: messages 10 20" {print "// pins: move 3 9"}' > "$tmp/ds/bad.cfg"
+    (check_demo_script "$tmp/ds/bad.cfg" bad; [ "$demo_mlo $demo_mhi" = "3 9" ]) || st_fail "a script with one move line must pass and set its window" || return 1
+    (check_demo_script "$tmp/ds/good.cfg" good; [ -z "$demo_mlo$demo_mhi" ]) || st_fail "a script without a move line has no window" || return 1
+    printf '%s\n' "$good" | sed 's/^record good$/record bad/' | awk '{print} $0 == "// pins: messages 10 20" {print "// pins: move 3 9"; print "// pins: move 3 9"}' > "$tmp/ds/bad.cfg"
+    if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script with two move lines must be refused"; return 1; fi
+    # demo_move_ok: the frame of the move is the index of its message less 5, inside the window, with two origin frames
+    demo_move_ok 2 38 33 57 && demo_move_ok 2 62 33 57 || st_fail "message 38 and 62 (frames 33 and 57) are inside 33 to 57" || return 1
+    for s in '2|37|33|57' '2|63|33|57' '1|40|33|57' '0|-1|33|57' 'x|40|33|57' '2||33|57' '2|40||57'; do
+        IFS='|' read -r m l a b <<< "$s"
+        if demo_move_ok "$m" "$l" "$a" "$b" 2>/dev/null; then st_fail "demo_move_ok must be false for '$s'"; return 1; fi
+    done
+    # the committed water.cfg carries exactly one move line: a script without it would switch the move check off (FIX47)
+    [ "$(grep -c '^// pins: move ' "$root/scripts/pins/demos/water.cfg")" = 1 ] || st_fail "the committed water.cfg must carry exactly one '// pins: move' line" || return 1
+    sed '/^\/\/ pins: move /d' "$root/scripts/pins/demos/water.cfg" > "$tmp/ds/water-nomove.cfg"
+    [ "$(grep -c '^// pins: move ' "$tmp/ds/water-nomove.cfg")" != 1 ] || st_fail "a water.cfg without its move line must fail the assertion" || return 1
     # the range make-demo compares with comes from the check, and is verified again before the engine starts
     (check_demo_script "$tmp/ds/good.cfg" good; [ "$demo_lo $demo_hi" = "10 20" ]) || st_fail "the script check must set the range it accepted" || return 1
-    for s in '97|124' 'x|124' '097|124' '124|97' '0|999' "97 124
+    for s in '96|147' 'x|124' '097|124' '124|97' '0|999' "97 124
 0|124" '|' '97|'; do
         if (demo_dir="$root/scripts/pins/demos"; check_demo_script() { demo_lo=${s%|*}; demo_hi=${s#*|}; }
             PINS_DRYRUN=1 PINS_BASEDIR="$tmp/gd" cmd_make_demo water) >/dev/null 2>&1; then
-            [ "$s" = '97|124' ] && continue
+            [ "$s" = '96|147' ] && continue
             st_fail "make-demo must refuse the message range '$s' before the engine starts"; return 1
-        elif [ "$s" = '97|124' ]; then st_fail "a dry run with the range 97 124 must pass"; return 1
+        elif [ "$s" = '96|147' ]; then st_fail "a dry run with the range 96 147 must pass"; return 1
         fi
     done
     # a comparison that errors is never in range
@@ -3317,14 +3396,38 @@ st_make_demo_script() { # TASK70: a demo script holds only commands of this tree
         if demo_in_range "$m" "$l" "${s##*|}" 2>/dev/null; then st_fail "demo_in_range must be false for '$s'"; return 1; fi
     done
 }
+# st_demo_file <out> <blocks> <first> <move> [prefix]: a demo of <blocks> message
+# blocks of one byte each, but the block at index <first> and the one at <move>
+# are frame messages carrying the pmove origin, z -250 and z -298 (what water
+# records); with a fifth argument the move's block starts with a configstring
+st_demo_file() {
+    local out=$1 n=$2 first=$3 mv=$4 i
+    { for ((i = 0; i < n; i++)); do
+        if [ "$i" = "$mv" ]; then
+            if [ "${5:-}" = print ]; then printf '\030\000\000\000\012\002\000'
+            elif [ -n "${5:-}" ]; then printf '\032\000\000\000\015\001\000a\000'; else printf '\025\000\000\000'; fi
+            printf '\024\000\000\000\000\000\000\000\000\000\001\002\021\002\000\040\015\050\030\260\366'
+        elif [ "$i" = "$first" ]; then
+            printf '\025\000\000\000\024\000\000\000\000\000\000\000\000\000\001\002\021\002\000\040\015\050\030\060\370'
+        else printf '\001\000\000\000x'; fi
+    done; printf '\377\377\377\377'; } > "$out"
+}
 st_make_demo_run() { # TASK70: make-demo passes only with a whole demo, and fails fast on a missing map
-    local ok='for i in $(seq 100); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0'
-    local rep t0 d="$tmp/baseq2/demos/water.dm2"
+    local rep t0 d="$tmp/baseq2/demos/water.dm2" ok mvr
+    st_demo_file "$tmp/demo-ok.bin" 100 6 41
+    ok='cp "'$tmp'/demo-ok.bin" "$f"; exit 0'
+    # the demo helper and demo_move agree: two origin frames, the last at message 41, z -250 then -298 (in 1/8 units)
+    [ "$(demo_move "$tmp/demo-ok.bin")" = "2 41 -2000 -2384" ] || st_fail "demo_move must read two origin frames, the last at 41: $(demo_move "$tmp/demo-ok.bin")" || return 1
+    st_demo_file "$tmp/demo-pre.bin" 100 6 41 prefix
+    [ "$(demo_move "$tmp/demo-pre.bin")" = "2 41 -2000 -2384" ] || st_fail "demo_move must read a frame behind a configstring: $(demo_move "$tmp/demo-pre.bin")" || return 1
+    # a print (svc_print, level, empty string) in front of the frame: the skip of 2 bytes then the NUL must land on the frame
+    st_demo_file "$tmp/demo-print.bin" 100 6 41 print
+    [ "$(demo_move "$tmp/demo-print.bin")" = "2 41 -2000 -2384" ] || st_fail "demo_move must read a frame behind a print: $(demo_move "$tmp/demo-print.bin")" || return 1
     rm -rf "$tmp/baseq2"
     fake_demo_engine "$tmp/fake-demo" "$ok"
     rep=$(PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo" cmd_make_demo water 2>&1) || st_fail "make-demo must pass with a whole demo: $rep" || return 1
     [ -f "$d" ] && [ ! -f "$tmp/baseq2/pins_make_water.cfg" ] || st_fail "the demo must be left and the script copy removed" || return 1
-    case $rep in *"(100 messages, 97 to 124 wanted)"*"PINS_DEMO=water.dm2"*) ;; *) st_fail "make-demo must report the demo and how to record it: $rep"; return 1;; esac
+    case $rep in *"(100 messages, 96 to 147 wanted, the move on rendered frame 36, 33 to 57 wanted)"*"PINS_DEMO=water.dm2"*) ;; *) st_fail "make-demo must report the demo and how to record it: $rep"; return 1;; esac
     echo keep >> "$d"
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo" cmd_make_demo water) >/dev/null 2>&1; then st_fail "an existing demo must not be replaced without --replace"; return 1; fi
     grep -q keep "$d" || st_fail "the refused make-demo must leave the demo untouched" || return 1
@@ -3338,17 +3441,29 @@ st_make_demo_run() { # TASK70: make-demo passes only with a whole demo, and fail
     [ $((SECONDS - t0)) -lt 10 ] || st_fail "a missing map must fail at once, not after PINS_TIMEOUT" || return 1
     case $rep in *"map base1 is missing"*) ;; *) st_fail "a missing map must be named: $rep"; return 1;; esac
     local body why
+    # the move on rendered frame 32 and 58 are one frame outside the window, 60 is the third capture; one origin frame is no move
+    st_demo_file "$tmp/demo-m37.bin" 100 6 37; st_demo_file "$tmp/demo-m63.bin" 100 6 63; st_demo_file "$tmp/demo-m65.bin" 120 6 65
+    st_demo_file "$tmp/demo-none.bin" 100 6 -1
     for body in 'exit 0|wrote no demo' \
         'printf "\001\000\000\000x\001\000\000" > "$f"; exit 0|ends before its end marker' \
         'printf "\001\000\000\000x\377\377\377\377" > "$f"; exit 0|holds only 1 messages' \
-        'for i in $(seq 96); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 96 messages, outside 97 to 124' \
-        'for i in $(seq 125); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 125 messages, outside 97 to 124' \
+        'for i in $(seq 95); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 95 messages, outside 96 to 147' \
+        'for i in $(seq 148); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 148 messages, outside 96 to 147' \
+        "cp \"$tmp/demo-m37.bin\" \"\$f\"; exit 0|the move of the camera is not on rendered frames 33 to 57 (water.cfg): 2 frames with an origin (two wanted), the last on message 37, so rendered frame 32" \
+        "cp \"$tmp/demo-m63.bin\" \"\$f\"; exit 0|so rendered frame 58" \
+        "cp \"$tmp/demo-m65.bin\" \"\$f\"; exit 0|so rendered frame 60" \
+        "cp \"$tmp/demo-none.bin\" \"\$f\"; exit 0|1 frames with an origin (two wanted), the last on message 6" \
         "${ok% exit 0} exit 139|status 139"; do
         why=${body##*|}; fake_demo_engine "$tmp/fake-demo-bad" "${body%|*}"
         rep=$( (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo-bad" cmd_make_demo water --replace) 2>&1 ) && { st_fail "make-demo must fail when it $why"; return 1; }
         case $rep in *"$why"*) ;; *) st_fail "make-demo must say it $why: $rep"; return 1;; esac
         [ ! -f "$d" ] || st_fail "a failed make-demo must not leave $d where PINS_DEMO finds it ($why)" || return 1
-        case $why in *outside*) [ -f "$d.failed" ] || st_fail "a demo outside its range must be kept as $d.failed" || return 1;; esac
+        case $why in *outside*|*"rendered frame"*) [ -f "$d.failed" ] || st_fail "a demo outside its range must be kept as $d.failed" || return 1;; esac
+    done
+    # the edges of the window, frames 33 and 57, are accepted
+    for mvr in 38 62; do
+        st_demo_file "$tmp/demo-edge.bin" 100 6 "$mvr"; fake_demo_engine "$tmp/fake-demo-edge" 'cp "'$tmp'/demo-edge.bin" "$f"; exit 0'
+        (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo-edge" cmd_make_demo water --replace) >/dev/null 2>&1 || st_fail "a move on rendered frame $((mvr - 5)) is inside 33 to 57 and must pass" || return 1
     done
     fake_demo_engine "$tmp/fake-demo-hang" 'trap "exit 0" TERM; while :; do sleep 1; done'
     rep=$( (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo-hang" PINS_TIMEOUT=2 cmd_make_demo water --replace) 2>&1 ) && { st_fail "make-demo must fail when the engine hangs"; return 1; }
@@ -3370,7 +3485,8 @@ st_make_demo_place() { # TASK70: the demo is never written into the game data or
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$p/quake2" PINS_DRYRUN=1 cmd_make_demo water) >/dev/null 2>&1; then st_fail "a dangling demos/ link must be refused"; return 1; fi
     # the demo, the script copy or the log as a link: nothing is written through it
     rm "$p/baseq2/demos"; mkdir -p "$p/baseq2/demos" "$tmp/elsewhere"
-    fake_demo_engine "$p/quake2" 'for i in $(seq 100); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0'
+    st_demo_file "$tmp/demo-ok.bin" 100 6 41
+    fake_demo_engine "$p/quake2" 'cp "'$tmp'/demo-ok.bin" "$f"; exit 0'
     (PINS_BASEDIR="$tmp/gd" PINS_BIN="$p/quake2" cmd_make_demo water --replace) >/dev/null 2>&1 || st_fail "make-demo must pass beside a plain demos/" || return 1
     for f in demos/water.dm2 demos/water.dm2.failed pins_make_water.cfg pins_make_water.log; do
         echo x > "$tmp/elsewhere/x"; rm -f "$p/baseq2/$f"; ln -s "$tmp/elsewhere/x" "$p/baseq2/$f"
@@ -3391,7 +3507,7 @@ st_make_demo_place() { # TASK70: the demo is never written into the game data or
     rm "$r/release/baseq2/demos"
 }
 st_make_demo_case() { # TASK70: a place spelled in another letter case is the same place
-    local rep c="$tmp/case" ok='for i in $(seq 100); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0'
+    local rep c="$tmp/case" ok='cp "'$tmp'/demo-ok.bin" "$f"; exit 0'; st_demo_file "$tmp/demo-ok.bin" 100 6 41
     mkdir -p "$c/GDCASE/baseq2/demos" "$c/GDCASE/bin" "$c/e3/baseq2"
     if [ ! -d "$c/gdcase" ]; then echo "       make_demo_case: $c is on a case-sensitive volume, skipped"; return 0; fi
     # the reviewers' fixtures: demos/ linked into the game data under another spelling, then no link
