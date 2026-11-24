@@ -954,12 +954,11 @@ print("status %s" % mfx.run_engine(Ctx(), [], sys.argv[3], timeout=30, debug=Fal
     grep -qx 'engine-done' "$w/gone/log" 2>/dev/null || ko engine-exit-log "no log, or not the engine's line, from an engine that exited before spawn returned: $out"
     # FIX191: what run_engine reads after the engine exits ends within ENGINE_DRAIN however long a writer that left the
     # engine's session (its own setsid) keeps writing to the pty. The writer ends on state: when its write fails
-    # (the master closed) or when the stop file appears; the check makes the file after 15 s at the latest and stops
-    # the writer by the pid it wrote, so it is never left running. ENGINE_DRAIN is 1 s here: the two reads take 2 s
-    # at most, and the run must end within 6 s, with the engine's own line in the log
+    # (the master closed) or when the stop file appears; the check makes the file after 15 s at the latest, so it is
+    # never left running, and sends it no signal (FIX193: by then its pid may no longer be its). ENGINE_DRAIN is 1 s
+    # here: the two reads take 2 s at most, and the run must end within 10 s, with the engine's own line in the log
     rm -rf "$w/esc"; mkdir -p "$w/esc"
-    printf '%s\n' 'import os, sys, time' 'os.setsid()' 'open(sys.argv[1] + ".pid", "w").write(str(os.getpid()))' \
-        'open(sys.argv[1] + ".up", "w").close()' \
+    printf '%s\n' 'import os, sys, time' 'os.setsid()' 'open(sys.argv[1] + ".up", "w").close()' \
         'while not os.path.exists(sys.argv[1] + ".stop"):' '    try:' '        os.write(1, b"escaped-writer\n")' \
         '    except OSError:' '        break' '    time.sleep(0.02)' > "$w/esc/writer.py"
     printf '%s\n' '#!/bin/sh' 'echo engine-ready' 'python3 -I "$0.py" "$0" &' \
@@ -978,8 +977,7 @@ open(sys.argv[2] + ".done", "w").write("status %s in %.1f\n" % (st, time.monoton
     n=0; while [ ! -e "$w/esc/eng.done" ] && [ $n -lt 150 ]; do sleep 0.1; n=$((n+1)); done
     : > "$w/esc/eng.stop"
     wait $ep 2>/dev/null
-    [ -z "$(cat "$w/esc/eng.pid" 2>/dev/null)" ] || kill -s KILL "$(cat "$w/esc/eng.pid")" 2>/dev/null
-    awk -v s="$(sed -n 's/.* in \([0-9.]*\)$/\1/p' "$w/esc/eng.done" 2>/dev/null)" 'BEGIN { exit !(s != "" && s < 6.0) }' || ko engine-escaped-log "the run did not end within its bound with a writer outside the engine's session: $(cat "$w/esc/eng.done" 2>/dev/null) $(cat "$w/esc/out")"
+    awk -v s="$(sed -n 's/.* in \([0-9.]*\)$/\1/p' "$w/esc/eng.done" 2>/dev/null)" 'BEGIN { exit !(s != "" && s < 10.0) }' || ko engine-escaped-log "the run did not end within its bound with a writer outside the engine's session: $(cat "$w/esc/eng.done" 2>/dev/null) $(cat "$w/esc/out")"
     grep -qx 'engine-ready' "$w/esc/log" 2>/dev/null || ko engine-escaped-log "no log, or not the engine's line, with an escaped writer"
     fi
 
