@@ -56,6 +56,8 @@ cvar_t *r_norefresh;
 cvar_t *r_vsync;
 cvar_t *vid_fullscreen;
 cvar_t *metal_stats;
+/* TASK203: optimize_state (the client's, read only here) and metal_presented, the frames presented while a run is on */
+static cvar_t *rm_optimize_state, *metal_presented;
 static cvar_t *metal_rate_start;   /* seconds after the first frame ended at which the presented-rate window begins (TASK161) */
 static mtl_rate_t rm_rate;
 static double rm_rate_start;       /* metal_rate_start, read once in RI_Init, as the shim reads it (TASK161) */
@@ -379,6 +381,9 @@ R_Register(void)
 	r_vsync = ri.Cvar_Get("r_vsync", "1", CVAR_ARCHIVE);
 	vid_fullscreen = ri.Cvar_Get("vid_fullscreen", "0", CVAR_ARCHIVE);
 	metal_stats = ri.Cvar_Get("metal_stats", "0", 0);
+	/* the settings optimizer (TASK203): its run state, the client's; and the frames presented, written only during a run */
+	rm_optimize_state = ri.Cvar_Get("optimize_state", "0", 0);
+	metal_presented = ri.Cvar_Get("metal_presented", "0", 0);
 	metal_rate_start = ri.Cvar_Get("metal_rate_start", "1", 0);
 	r_presentation = ri.Cvar_Get("r_presentation", "0", CVAR_ARCHIVE);
 	r_retro_filter = ri.Cvar_Get("r_retro_filter", "0", CVAR_ARCHIVE);
@@ -1444,6 +1449,17 @@ RI_EndFrame(void)
 			mtl_rate_frame(&rm_rate, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), frames - no_drawable,
 				rm_rate_start);
 		}
+	}
+
+	/* while the settings optimizer runs, the frames presented since the renderer started (TASK203); never otherwise */
+	if (rm_optimize_state && rm_optimize_state->value && metal_presented)
+	{
+		unsigned long frames, no_drawable;
+		char text[32];
+
+		rmb_rate_counts(&frames, &no_drawable);
+		snprintf(text, sizeof(text), "%lu", frames - no_drawable);
+		ri.Cvar_Set("metal_presented", text);
 	}
 }
 
