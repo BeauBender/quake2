@@ -471,7 +471,8 @@ static const char *const kernel_defines[] = {
 #define KERNEL_TERMS \
 	"\t{\n" \
 	"\t\tconst float3 dyn = rm_rtdir_dyn(v, p, n, o, ias, inst, tmat, ntris, dl, t);\n" \
-	"\t\tconst float3 own = rm_rtdir_own(v, p, ias, inst, tmat, ntris, self) * float3(styles[0]);\n" \
+	"\t\tconst float3 own = ((v.show == 3u) || (v.show == 4u)) ? float3(0.0f) :\n" \
+	"\t\t\t\trm_rtdir_own(v, p, ias, inst, tmat, ntris, self) * float3(styles[0]);\n" \
 	"\n" \
 	"\t\treturn ((v.show == 4u) ? dyn : (raw + dyn + own)) * MTL_RTDIR_UNIT;\n" \
 	"\t}\n"
@@ -644,14 +645,20 @@ kernel_broken(const char *src)
 			return "rm_rtdir_dyn or rm_rtdir_own is not defined once";
 		}
 
-		r = pin_and(pin_count(dyn.body, dyn.nbody, KERNEL_DYN, 1), pin_count(dir.body, dir.nbody, KERNEL_TERMS, 1));
+		r = pin_count(dyn.body, dyn.nbody, KERNEL_DYN, 1);
 
 		if ((r != PIN_OK) || (count_in(text, strlen(text), "mtl_rtdir_dlight_walk(") != 1) ||
 			(count_in(dyn.body, dyn.nbody, "rm_rtdir_seen(") != 1) || (count_in(text, strlen(text), "rm_rtdir_dyn(") != 2) ||
 			(count_in(text, strlen(text), "dl[") != 1))
 		{
 			return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN,
-				"rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound, summed in");
+				"rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound");
+		}
+
+		/* TASK188 slice 3c: the sum a check of its own, so a mutant of it is refused for its own reason */
+		if ((r = pin_count(dir.body, dir.nbody, KERNEL_TERMS, 1)) != PIN_OK)
+		{
+			return PIN_WHY(r, "rm_rtdir_direct does not sum its three terms once (the own light's ray not under views 3 and 4)");
 		}
 
 		r = pin_count(own.body, own.nbody, KERNEL_OWN, 1);
@@ -836,6 +843,8 @@ test_no_lightmap_kernel(void)
 		{ "self-ignored", { { "mtl_rtdir_self((tri < v.nself) ? self[tri] : 0u)", "mtl_rtdir_self(0u)" } } },
 		{ "self-unbounded", { { "mtl_rtdir_self((tri < v.nself) ? self[tri] : 0u)", "mtl_rtdir_self(self[tri])" } } },
 		{ "self-dropped", { { "(raw + dyn + own)", "(raw + dyn)" } } },
+		/* TASK188 slice 3c: the own light's eye ray cast where it is not used (views 3 and 4) */
+		{ "self-ray-unused", { { "((v.show == 3u) || (v.show == 4u)) ? float3(0.0f) :", "(v.show == 99u) ? float3(0.0f) :" } } },
 		{ "lmx", { { "\t\ttexture2d<float, access::read> base [[texture(4)]],\n",
 			"\t\ttexture2d<float, access::read> base [[texture(4)]],\n"
 			"\t\ttexture2d<float, access::read> lmx [[texture(7)]],\n" },
