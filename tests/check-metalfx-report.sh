@@ -1233,7 +1233,9 @@ mutant quality-vs-itself e2e-quality py 'diff_frames(ctx, nat[k], fr[k])' 'diff_
 mutant crop-is-native e2e-crop py 'img = nimg if oid == "native" else read_tga(frames_by_index(pins[oid])[mid])' 'img = nimg'
 mutant crop-frame-first e2e-index py 'mid = nkeys[len(nkeys) // 2]' 'mid = nkeys[0]'
 mutant pins-not-in-group e2e-group lib '        os.killpg(c.pid, sig)' '        os.kill(c.pid, sig)'
-mutant engine-leftover-unbounded engine-escaped-log py 'while time.monotonic() < left_end and select.select([master], [], [], 0.2)[0]:' 'while select.select([master], [], [], 0.2)[0]:'
+mutant engine-leftover-unbounded engine-escaped-log py 'while time.monotonic() < left_end and select.select(
+                            [master], [], [], max(0, min(0.2, left_end - time.monotonic())))[0]:' 'while select.select([master], [], [], 0.2)[0]:'
+mutant engine-read-unheld engine-held-log py "take()  # the engine's console, read and kept with the stop signals held (FIX193)" 'buf.extend(os.read(master, 65536))  # the read and append without the stop signals held'
 mutant engine-drain-dropped engine-held-log py 'while time.monotonic() < end and select.select([master], [], [], 0)[0]:' 'while False:'
 mutant engine-slave-closed-early engine-exit-log py '        p = c.popen
 ' '        p = c.popen
