@@ -1111,7 +1111,7 @@ if [ -n "$yj" ]; then
 fi
 pymutant group-dropped py-timeout '        os.killpg(c.pid, sig)' '        os.kill(c.pid, sig)'
 pymutant never-kills py-ignore '            signal_group(c, signal.SIGKILL)  # bounded-run' '            pass  # bounded-run'
-pymutant identity-unchecked py-recycled '    return c.popen.returncode is None and s == c.start' '    return True'
+pymutant identity-unchecked py-recycled '    return c.start is None or s == c.start' '    return True'
 pymutant caller-term-unhandled py-caller-TERM '                old[s] = signal.signal(s, _raise_exit)' '                pass'
 
 if [ -n "$fails" ]; then

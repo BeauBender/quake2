@@ -109,7 +109,11 @@ def _ours(c):
         return True
     if s is None:
         return True  # the pid answers and ps does not: as the shell primitive, while no other is seen
-    return c.popen.returncode is None and s == c.start
+    if c.popen.returncode is not None:
+        return False  # reaped: a process that has the pid now is another one
+    # unreaped, the pid is still the child's unless it was reaped behind Popen's back (another start
+    # time); with no start time read at spawn (ps gave none), the unreaped pid is taken as the child's
+    return c.start is None or s == c.start
 
 
 def signal_group(c, sig):
