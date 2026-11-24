@@ -159,4 +159,21 @@ const char *OptSearch_Line(const optsearch_t *s, int i);
 /* a candidate as "name=value" changes from the first candidate, in buf */
 void OptSearch_Describe(const optsearch_t *s, const optcand_t *c, char *buf, size_t len);
 
+/*
+ * optimize.c (TASK203): the optimize command and the optimize_* cvars.
+ * Optimize_Frame is called for each timedemo frame (cl_view.c) and
+ * Optimize_DemoEnd at a disconnect (cl_network.c); both return at once
+ * when no run is on. A demo name for optimize_demo: NULL when it may be
+ * played, else why not (as CL_DownloadFilter refuses: "..", a leading
+ * '.' or '/', ':', '\', and any character a console line could split on).
+ */
+void Optimize_Init(void);
+void Optimize_Frame(void);
+void Optimize_DemoEnd(void);
+int Optimize_Running(void);
+const char *Optimize_DemoError(const char *demo);
+/* the tests: the time of a frame, and what plays a demo and checks that it exists (NULL: the engine's) */
+void Optimize_FrameAt(long long us);
+void Optimize_SetHooks(void (*play)(const char *demo), int (*exists)(const char *demo));
+
 #endif

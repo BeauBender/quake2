@@ -26,6 +26,7 @@
 
 #include "header/client.h"
 #include "../client/sound/header/local.h"
+#include "menu/header/optsearch.h"
 
 void CL_ParseStatusMessage(void);
 
@@ -382,6 +383,9 @@ CL_Disconnect(void)
 					cl.timedemo_frames * 1000.0 / time);
 		}
 	}
+
+	/* the settings optimizer's trial ends here, only while a run is on (TASK203) */
+	Optimize_DemoEnd();
 
 	VectorClear(cl.refdef.blend);
 
