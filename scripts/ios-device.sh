@@ -98,7 +98,7 @@ usage()
 # bench_stop_group run a command in its own process group and stop that
 # whole group, by the identity recorded when it started. The command bounded
 # runs is BENCH_BOUNDED_PID while it runs: the timeout and the EXIT, INT,
-# TERM and QUIT handling end it, so the script never leaves it running.
+# TERM, QUIT and HUP handling end it, so the script never leaves it running.
 [ -r "$repo/scripts/bench/core/common.sh" ] || die "no bounded-run primitive at scripts/bench/core/common.sh"
 . "$repo/scripts/bench/core/common.sh"
 exec 8>&-
@@ -136,12 +136,12 @@ bounded()
 	return $status
 }
 
-# on_signal <status>: the INT, TERM and QUIT trap: the running command's
-# group is ended first (grace 2 s), then the script exits <status>
+# on_signal <status>: the INT, TERM, QUIT and HUP trap: the running
+# command's group is ended first (grace 2 s), then the script exits <status>
 on_signal()
 {
 	if bench_deferred "$1"; then return 0; fi
-	trap '' INT TERM QUIT
+	trap '' INT TERM QUIT HUP
 	stop_child 2
 	exit "$1"
 }
@@ -742,7 +742,7 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/ios-device.XXXXXX") || die "no scratch director
 chmod 700 "${tmp:?}" || die "cannot make the scratch directory private"
 # on any exit: the running command ended first, then a sign that did not
 # finish undone, then the scratch directory removed; INT, TERM and QUIT
-# exit 1 (bash runs no EXIT trap for an untrapped QUIT)
+# exit 1 (bash runs no EXIT trap for an untrapped QUIT), HUP 129
 unsign=
 cleanup()
 {
@@ -755,6 +755,10 @@ cleanup()
 }
 trap cleanup EXIT
 trap 'on_signal 1' INT TERM QUIT
+# HUP is trapped too, so one that comes while a command starts is kept for
+# bench_undefer, which stops it (FIX192); it exits 129, as an untrapped HUP
+# did through the EXIT cleanup
+trap 'on_signal 129' HUP
 
 if [ "$mode" = sign ]; then
 	plat=$(plutil -extract CFBundleSupportedPlatforms.0 raw -o - "$app/Info.plist" 2>/dev/null) || plat=
