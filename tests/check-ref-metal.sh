@@ -19,6 +19,11 @@
 #     shadows (rm_rtshadow.c and common/mtl_rts_math.h, RT3, TASK55),
 #     tests/metal/rm_rtao_test.c, the pure part of the ambient occlusion
 #     (rm_rtao.c and common/mtl_rtao_math.h, RT5, TASK57),
+#     tests/metal/rm_rttemporal_test.c, the temporal accumulation's rule,
+#     blend and resets (rm_rttemporal.c and common/mtl_rtt_math.h, RT7,
+#     TASK59), with mutants of both files it must fail and a pin of the
+#     AO kernel's call to the rule with two mutants (the reset dropped, a
+#     material compared with itself),
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
@@ -255,6 +260,80 @@ else
 	case $ao in *", 0 failed") ;; *) bad "tests/metal/rm_rtao_test.c printed no result line"; ao="";; esac
 fi
 seg 5 "; AO ${ao:-host test}"
+
+# the temporal accumulation (RT7, TASK59 slice 1): rm_rttemporal.c and common/mtl_rtt_math.h, the
+# rejection rule, the blend and the resets; then the same test against mutants of those two files
+# and of the kernel's call, each of which must fail it, while the real files pass.
+rtt=""
+rtt_tree() { # <dir>: a copy of the test and the two files, laid out as the test includes them
+	rm -rf "${1:?}"
+	mkdir -p "$1/src/client/refresh/metal/header" "$1/src/client/refresh/metal/common" "$1/tests/metal"
+	cp "$rm_dir/header/rm_rttemporal.h" "$1/src/client/refresh/metal/header/"
+	cp "$rm_dir/common/mtl_rtt_math.h" "$1/src/client/refresh/metal/common/"
+	cp "$rm_dir/rm_rttemporal.c" "$1/src/client/refresh/metal/"
+	cp tests/metal/rm_rttemporal_test.c "$1/tests/metal/"
+}
+rtt_run() { # <tree>: 0 when the tree's test builds and passes
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags -o "$1/t" "$1/tests/metal/rm_rttemporal_test.c" "$1/src/client/refresh/metal/rm_rttemporal.c" -lm \
+		> "${tmp:?}/cc.out" 2>&1 && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
+}
+rtt_tree "${tmp:?}/rtt"
+if ! rtt_run "${tmp:?}/rtt"; then
+	cat "${tmp:?}/cc.out" "${tmp:?}/out"
+	bad "tests/metal/rm_rttemporal_test.c fails on the real files"
+else
+	rtt=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rttemporal_test: //')
+	case $rtt in *", 0 failed") ;; *) bad "tests/metal/rm_rttemporal_test.c printed no result line"; rtt="";; esac
+fi
+# the mutants: a rejection reason dropped (material, lights, depth, off screen), the view's reset
+# ignored, the frame without an accumulated view not resetting, a map load not resetting
+rtt_mutants=0
+for m in mat lights depth off reset frameend mapload; do
+	rtt_tree "${tmp:?}/rttm"
+	h=${tmp:?}/rttm/src/client/refresh/metal/common/mtl_rtt_math.h
+	c=${tmp:?}/rttm/src/client/refresh/metal/rm_rttemporal.c
+	case $m in
+		mat) sed 's/if (mat != hmat)/if (0)/' "$rm_dir/common/mtl_rtt_math.h" > "$h" ;;
+		lights) sed 's/if (lights != hlights)/if (0)/' "$rm_dir/common/mtl_rtt_math.h" > "$h" ;;
+		depth) sed 's/if (!mtl_rtt_depth_ok(dist, hdist, move))/if (0)/' "$rm_dir/common/mtl_rtt_math.h" > "$h" ;;
+		off) sed 's/return r | MTL_RTT_REJ_OFF;/r |= 0;/' "$rm_dir/common/mtl_rtt_math.h" > "$h" ;;
+		reset) sed 's/r |= MTL_RTT_REJ_RESET;/r |= 0;/' "$rm_dir/common/mtl_rtt_math.h" > "$h" ;;
+		frameend) sed 's/st->valid = 0;/st->valid = 1;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		mapload) sed 's/memset(st, 0, sizeof(\*st));/st->drew = 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+	esac
+	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$h" && cmp -s "$rm_dir/rm_rttemporal.c" "$c"; then
+		bad "the temporal mutant ($m) changed nothing"
+	elif rtt_run "${tmp:?}/rttm"; then
+		bad "tests/metal/rm_rttemporal_test.c passes the temporal mutant ($m)"
+	else
+		rtt_mutants=$((rtt_mutants + 1))
+	fi
+done
+# the kernel's call to the rule, as pinned: every reason's inputs and the view's reset passed on
+rtt_call='mtl_rtt_reject(t.reset, r.ok, dist, h.y, t.move, m, hm, 0u, 0u, h.w)'
+rtt_pin() { # <file>: 0 when rm_rtao_temporal's body calls the rule exactly as pinned
+	awk '/^rm_rtao_temporal\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$1" | tr -s ' \t' '  ' |
+		grep -qF "$rtt_call"
+}
+rtt_kmut=0
+if ! rtt_pin "$rm_dir/rm_rtao.metal"; then
+	bad "rm_rtao.metal: rm_rtao_temporal does not call $rtt_call"
+fi
+for m in noreset samemat; do
+	case $m in
+		noreset) sed 's/mtl_rtt_reject(t\.reset,/mtl_rtt_reject(0u,/' "$rm_dir/rm_rtao.metal" ;;
+		samemat) sed 's/t\.move, m, hm,/t.move, m, m,/' "$rm_dir/rm_rtao.metal" ;;
+	esac > "${tmp:?}/rtt-kernel.metal"
+	if cmp -s "$rm_dir/rm_rtao.metal" "${tmp:?}/rtt-kernel.metal"; then
+		bad "the temporal kernel mutant ($m) changed nothing"
+	elif rtt_pin "${tmp:?}/rtt-kernel.metal"; then
+		bad "the temporal kernel pin passes the mutant ($m)"
+	else
+		rtt_kmut=$((rtt_kmut + 1))
+	fi
+done
+seg 5.5 "; temporal ${rtt:-host test}, $rtt_mutants rule mutants and $rtt_kmut kernel mutants refused"
 
 # the pure part of the water reflections (RT6, TASK58): rm_rtwater.c and common/mtl_rtw_math.h, with
 # rm_rtshadow.c for the view's inverse, rm_rt.c for the instances the rays test and rm_pure.c for gl1's warp
@@ -941,7 +1020,9 @@ kcall_mutant() {
 kcall_mutants=0 kcall_pairs=0
 for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm_rtw_trace mtl_rtw_choose" \
 	"rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_ws_next" "rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_choose_ws" \
-	"rm_rtwater.metal rm_rtw_ss_at mtl_rtw_choose" "rm_rtwater.metal rm_rtw_trace rm_rtw_ss_at"; do
+	"rm_rtwater.metal rm_rtw_ss_at mtl_rtw_choose" "rm_rtwater.metal rm_rtw_trace rm_rtw_ss_at" \
+	"rm_rtao.metal rm_rtao_temporal mtl_rtt_reproject" "rm_rtao.metal rm_rtao_temporal mtl_rtt_reject" \
+	"rm_rtao.metal rm_rtao_temporal mtl_rtt_blend" "rm_rtao.metal rm_rtao_temporal mtl_rtt_count"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
 	set -- $pair
 	f=$rm_dir/$1 kn=$2 hp=$3
