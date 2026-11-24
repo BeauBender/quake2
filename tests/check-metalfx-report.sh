@@ -56,7 +56,25 @@ SRC="$root/scripts/metalfx-report"
 fail=0
 FAILED=" "
 bad() { echo "check-metalfx-report: $*"; fail=1; }
-ko() { FAILED="$FAILED$1 "; [ "${VERBOSE:-0}" = 0 ] || echo "  failed: $1 ($(printf '%s' "$2" | tr '\n' ' ' | cut -c1-160))"; }
+# ko <id> <reason>: the case failed; the reason is kept in KO_WHY, which the summary of the real code
+# prints, so that a failure in CI says why (FIX186 slice 2, round 2), and with VERBOSE=1 shown at once
+ko() {
+    local why
+    why="  failed: $1 ($(printf '%s' "$2" | tr '\n' ' ' | cut -c1-160))"
+    FAILED="$FAILED$1 "; KO_WHY="$KO_WHY$why
+"
+    [ "${VERBOSE:-0}" = 0 ] || echo "$why"
+}
+KO_WHY=
+# stray_why: the ids of the cases KO_WHY gives a reason for that FAILED does not name (FIX186 slice 2, round 3)
+stray_why() {
+    local l id
+    while IFS= read -r l; do
+        case $l in
+            "  failed: "*) id=${l#  failed: }; id=${id%% *}; case $FAILED in *" $id "*) ;; *) printf '%s ' "$id";; esac;;
+        esac
+    done <<< "$KO_WHY"
+}
 want_rc() { [ "$3" -eq "$2" ] || ko "$1" "rc $3, want $2"; }
 want_has() { case $3 in *"$2"*) ;; *) ko "$1" "no '$2' in: $3";; esac; }
 want_not() { case $3 in *"$2"*) ko "$1" "'$2' found";; esac; }
@@ -132,10 +150,10 @@ standin_hit() { local s; sleep 0.1; s=$(ps -o stat= -p "$dp" 2>/dev/null); case 
 decoys= din=
 # decoy_id <how> <pid> <start>: sets dq and dqs, the pid and start time one run of the site is given: the stand-in
 # (dp) read with another start time (other), with none (none), or with its own while ps gives no answer (nops); or
-# <pid> and <start> (own). For each but own, FAILED is kept in df first, and VERBOSE is 0 until decoy_end (the case
+# <pid> and <start> (own). For each but own, FAILED and KO_WHY are kept in df and dk first, and VERBOSE is 0 until decoy_end (the case
 # lines of a run on the stand-in are not the case's).
 decoy_id() {
-    if [ $1 != own ] && [ -z "$din" ]; then din=1; df=$FAILED; dv=${VERBOSE:-0}; VERBOSE=0; fi
+    if [ $1 != own ] && [ -z "$din" ]; then din=1; df=$FAILED; dk=$KO_WHY; dv=${VERBOSE:-0}; VERBOSE=0; fi
     dq=$dp
     case $1 in
         other) dqs='Thu Jan  1 00:00:00 2026';;
@@ -144,11 +162,11 @@ decoy_id() {
         own) dq=$2; dqs=$3;;
     esac
 }
-# decoy_end <how> <case>: after that run, ps is the system's again and FAILED and VERBOSE are what they were (the run judged the
+# decoy_end <how> <case>: after that run, ps is the system's again and FAILED, KO_WHY and VERBOSE are what they were (the run judged the
 # stand-in, not the case); a signal that ended the stand-in fails <case>
 decoy_end() {
     [ $1 != own ] || return 0
-    unset -f ps; FAILED=$df; VERBOSE=$dv; din=
+    unset -f ps; FAILED=$df; KO_WHY=$dk; VERBOSE=$dv; din=
     standin_hit "$2" "$1: a signal went to a process that is not the one read (the stand-in)"
 }
 
@@ -264,8 +282,10 @@ chmod +x "$tmp/pins-stub" "$tmp/pins-stub-locked" "$tmp/eng-lockseen"
 INTDFL='import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.executable, [sys.executable, "-I"] + sys.argv[1:])'
 # a tree copy for the generator: its own scripts/pins/scenarios and a stub scripts/pins.sh, so that a run
 # writes and deletes nothing in the caller's checkout
-mktree() { # <tree> <mfx.py>
-    mkdir -p "$1/scripts/metalfx-report" "$1/scripts/pins" || return 1
+mktree() { # <tree> <mfx.py>: the generator imports the Python bounded-run primitive (scripts/lib/bounded.py) of its
+    # own tree, copied from the tree <mfx.py> is in, so that a mutant of it reaches every tree made from its generator
+    mkdir -p "$1/scripts/metalfx-report" "$1/scripts/pins" "$1/scripts/lib" || return 1
+    cp "$(dirname "$2")/../lib/bounded.py" "$1/scripts/lib/" || return 1
     cp "$SRC/options.tsv" "$1/scripts/metalfx-report/"; cp "$2" "$1/scripts/metalfx-report/mfx.py"
     cp -R "$root/scripts/pins/scenarios" "$1/scripts/pins/scenarios"; cp "$tmp/pins-stub" "$1/scripts/pins.sh"
 }
@@ -833,6 +853,85 @@ limit" "$out"
 
     fi
 
+    # FIX186 slice 2: run_engine's finally closes the pty and writes the log even when its stop
+    # raises a signal it held. The fake engine sends the generator a TERM once it has written its
+    # line, and another on the stop's TERM, which it ignores; ENGINE_GRACE is 1 s here. FIX186 slice 2,
+    # round 2: where that first TERM lands is the runner's speed, so the case runs twice: "hold" lands it
+    # in spawn's hold window, every time (spawn's proc_start waits until the engine says it has sent it),
+    # before run_engine has read anything, and "free" leaves it to the runner. Either way the status is
+    # the TERM's and the log has the engine's line, which the drain in run_engine's finally reads
+    if has engine; then
+    for how in hold free; do
+    rm -rf "$w/held"; mkdir -p "$w/held"
+    printf '%s\n' '#!/bin/sh' 'trap "kill -s TERM \$PPID" TERM' 'echo engine-ready' 'kill -s TERM $PPID' ': > "$0.sent"' \
+        'while [ -e "$0.flag" ]; do sleep 0.1; done' > "$w/held/eng"
+    chmod +x "$w/held/eng"; : > "$w/held/eng.flag"
+    python3 -I -c 'import os, signal, sys, time
+sys.path.insert(0, sys.argv[1])
+import mfx
+def h(s, f):
+    raise SystemExit(143)
+signal.signal(signal.SIGTERM, h)
+class Ctx:
+    bin, cfg = sys.argv[2], None
+mfx.ENGINE_GRACE = 1
+real = mfx.bounded.proc_start
+first = [sys.argv[4] == "hold"]
+def held_start(pid):  # spawn calls it inside its hold window: there it waits for the engine TERM
+    if first[0]:
+        first[0] = False
+        end = time.monotonic() + 10
+        while not os.path.exists(sys.argv[2] + ".sent") and time.monotonic() < end:
+            time.sleep(0.02)
+        if not os.path.exists(sys.argv[2] + ".sent"):
+            print("unsent")
+    return real(pid)
+mfx.bounded.proc_start = held_start
+try:
+    mfx.run_engine(Ctx(), [], sys.argv[3], timeout=30, debug=False)
+    print("no exit")
+except SystemExit as e:
+    print("exit %s" % e.code)' "$d" "$w/held/eng" "$w/held/log" $how < /dev/null > "$w/held/out" 2>&1 &
+    hp=$!
+    n=0; while kill -0 $hp 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
+    rm -f "$w/held/eng.flag"
+    if kill -0 $hp 2>/dev/null; then ko engine-held-log "$how: the run outlived 30 s"; kill -s KILL $hp; fi
+    wait $hp 2>/dev/null
+    grep -qx 'exit 143' "$w/held/out" || ko engine-held-log "$how: the run did not end on its TERM: $(cat "$w/held/out")"
+    if [ "$how" = hold ] && grep -qx unsent "$w/held/out"; then ko engine-held-log "$how: the TERM never landed in the hold window"; fi
+    grep -qx 'engine-ready' "$w/held/log" 2>/dev/null || ko engine-held-log "$how: no log, or not the engine's line, after a held TERM: $(cat "$w/held/out")"
+    done
+    # FIX186 slice 2, round 2: an engine that has exited before spawn returns (spawn's proc_start waits
+    # until it is a zombie, so its side of the pty is closed) still has its line in the log: run_engine
+    # keeps its copy of the slave open until it has read the pty, since the last close of a slave drops
+    # what the master has not read
+    rm -rf "$w/gone"; mkdir -p "$w/gone"
+    printf '%s\n' '#!/bin/sh' 'echo engine-done' > "$w/gone/eng"; chmod +x "$w/gone/eng"
+    out=$(python3 -I -c 'import subprocess, sys, time
+sys.path.insert(0, sys.argv[1])
+import mfx
+class Ctx:
+    bin, cfg = sys.argv[2], None
+real = mfx.bounded.proc_start
+first = [True]
+def gone_start(pid):  # spawn calls it before it returns: there it waits for the engine to have exited
+    if first[0]:
+        first[0] = False
+        end = time.monotonic() + 10
+        while time.monotonic() < end:
+            st = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+            if st.startswith("Z") or st == "":
+                break
+            time.sleep(0.02)
+        else:
+            print("not exited")
+    return real(pid)
+mfx.bounded.proc_start = gone_start
+print("status %s" % mfx.run_engine(Ctx(), [], sys.argv[3], timeout=30, debug=False))' "$d" "$w/gone/eng" "$w/gone/log" < /dev/null 2>&1)
+    [ "$out" = "status 0" ] || ko engine-exit-log "the run of an engine that exited at once: $out"
+    grep -qx 'engine-done' "$w/gone/log" 2>/dev/null || ko engine-exit-log "no log, or not the engine's line, from an engine that exited before spawn returned: $out"
+    fi
+
     # the structural measure
     if has ssim; then
     out=$("$w/ssim" "$tmp/a.tga" "$tmp/a.tga" 2>&1); want_rc ssim-one 0 $?; want_has ssim-one "ssim=1.000000" "$out"
@@ -849,7 +948,7 @@ limit" "$out"
 }
 
 # the real code
-FAILED=" "
+FAILED=" "; KO_WHY=
 mkdir "$tmp/real-run"; mktree "$tmp/real-tree" "$SRC/mfx.py" || exit 1
 decoys="other none nops"
 assertions "$tmp/real-tree/scripts/metalfx-report" "$SRC/ssim.c" "$tmp/real-run" "${MFX_GROUPS:-}"  # MFX_GROUPS="lock": only these (while iterating)
@@ -881,16 +980,29 @@ for site in group lock; do
     wait $sp 2>/dev/null
 done
 unset -f left
-if [ "$FAILED" != " " ]; then bad "assertions failed on the real code:$FAILED"; fi
+stray=$(stray_why)
+[ -z "$stray" ] || bad "the reasons name cases that did not fail: $stray(a stand-in's reasons reached the summary)"
+if [ "$FAILED" != " " ]; then bad "assertions failed on the real code:$FAILED"; [ "${VERBOSE:-0}" != 0 ] || printf '%s' "$KO_WHY"; fi
 # the scratch scenarios the generator writes into scripts/pins/scenarios are ignored by git (and the check fails without the rule)
 ign() { grep -qxF '/scripts/pins/scenarios/mfxr-*.cfg' "$1"; }
 ign "$root/.gitignore" || bad "no .gitignore rule for the generator's scratch scenarios"
 printf '/release/\n' > "$tmp/noign"; if ign "$tmp/noign"; then bad "the ignore check passes without the rule"; fi
 [ "${MFX_REAL_ONLY:-0}" = 0 ] || { [ "$fail" -ne 0 ] || echo "check-metalfx-report: real code ok (mutants skipped)"; exit $fail; }
 
+# the check on itself (FIX186 slice 2, round 3): a copy of this file whose decoy_end does not restore KO_WHY must fail the
+# assertion that the reasons name only cases that failed (the decoys on the real code call ko on purpose); the copy runs
+# the groups "run" on the real code only
+if python3 -I "$HELP" mutate "$0" "$tmp/self-mutant.sh" 'cd "$(dirname "$0")''/.."' "cd \"$root\"" 'FAILED=$df; KO_WHY''=$dk; VERBOSE=$dv' 'FAILED=$df; VERBOSE=$dv' > "$tmp/self-mutant.log"; then
+    out=$(MFX_GROUPS=run MFX_REAL_ONLY=1 VERBOSE=0 bash "$tmp/self-mutant.sh" 2>&1); rc=$?
+    { [ $rc -ne 0 ] && case $out in *"the reasons name cases that did not fail: e2e-"*) true;; *) false;; esac; } || bad "decoy-kowhy-kept: the copy that does not restore KO_WHY was not refused (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-300)"
+else
+    bad "decoy-kowhy-kept: $(cat "$tmp/self-mutant.log")"
+fi
+
 # mutants: one change of the line each assertion covers; the covered assertion must fail
 nm=0
-mutant() { # name covered-id file(py|c) old new [old new]...: runs in the background, result in $tmp/res-<name>
+mutant() { # name covered-id file(py|c|lib) old new [old new]...: runs in the background, result in $tmp/res-<name>
+    # (lib: the tree's copy of scripts/lib/bounded.py, which the generator imports, is the one changed)
     local name=$1 id=$2 kind=$3; shift 3
     case " ${MFX_MUTANTS:-} " in "  "|*" $name "*) ;; *) return;; esac  # MFX_MUTANTS="a b": only these (while iterating)
     nm=$((nm+1))
@@ -902,6 +1014,8 @@ mutant() { # name covered-id file(py|c) old new [old new]...: runs in the backgr
         mkdir -p "$mdir/w"; mktree "$mdir" "$SRC/mfx.py"
         if [ "$kind" = py ]; then
             python3 -I "$HELP" mutate "$SRC/mfx.py" "$sub/mfx.py" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
+        elif [ "$kind" = lib ]; then
+            python3 -I "$HELP" mutate "$root/scripts/lib/bounded.py" "$mdir/scripts/lib/bounded.py" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
         else
             python3 -I "$HELP" mutate "$SRC/ssim.c" "$mdir/ssim.c" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
             ssrc="$mdir/ssim.c"
@@ -910,7 +1024,7 @@ mutant() { # name covered-id file(py|c) old new [old new]...: runs in the backgr
         case $id in
             git-*|link-*|unwritable|relative|write-link) g=path;;
             plan-*|accepted-*) g=plan;;
-            probe-*|timed-*) g=engine;;
+            probe-*|timed-*|engine-*) g=engine;;
             cfg-*) g=cfg;;
             frames-*|stats-*) g=frames;;
             name-*|crop-*|host-*|ext-*|report-*|load-*) g=report;;
@@ -1067,17 +1181,28 @@ mutant lock-fails-open run-lock-bin py 'raise Refuse("another run holds %s (%s),
 mutant quality-vs-itself e2e-quality py 'diff_frames(ctx, nat[k], fr[k])' 'diff_frames(ctx, nat[k], nat[k])'
 mutant crop-is-native e2e-crop py 'img = nimg if oid == "native" else read_tga(frames_by_index(pins[oid])[mid])' 'img = nimg'
 mutant crop-frame-first e2e-index py 'mid = nkeys[len(nkeys) // 2]' 'mid = nkeys[0]'
-mutant pins-not-in-group e2e-group py 'os.killpg(p.pid, signal.SIGTERM)' 'p.terminate()' 'os.killpg(p.pid, signal.SIGKILL)' 'p.kill()'
-mutant pins-kill-first e2e-lock py 'os.killpg(p.pid, signal.SIGTERM)' 'os.killpg(p.pid, signal.SIGKILL)'
+mutant pins-not-in-group e2e-group lib '        os.killpg(c.pid, sig)' '        os.kill(c.pid, sig)'
+mutant engine-drain-dropped engine-held-log py 'while time.monotonic() < end and select.select([master], [], [], 0)[0]:' 'while False:'
+mutant engine-slave-closed-early engine-exit-log py '        p = c.popen
+' '        p = c.popen
+        os.close(slave)
+        slave = -1
+'
+mutant engine-log-unguarded engine-held-log py '        finally:  # a signal the stop held is raised as it ends' '        except KeyboardInterrupt:  # a signal the stop held is raised as it ends'
+mutant pins-kill-first e2e-lock lib '        if not signal_group(c, signal.SIGTERM):' '        if not signal_group(c, signal.SIGKILL):'
 mutant stop-wait-unfloored e2e-lock-grace py 'return max(2 * g, g + 5) + 5' 'return 2 * g + 5'
-mutant stop-unheld e2e-lock py 'held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)' 'held = signal.pthread_sigmask(signal.SIG_BLOCK, [])'
+mutant stop-unheld e2e-lock lib '    held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    try:
+        if not signal_group' '    held = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    try:
+        if not signal_group'
 mutant stop-wait-leading-zero e2e-lock-grace py 're.match(r"(0|[1-9][0-9]{0,8})\Z", g)' 're.match(r"[0-9]{1,9}\Z", g)'
 mutant stop-wait-cap9 e2e-lock-grace py 're.match(r"(0|[1-9][0-9]{0,8})\Z", g)' 're.match(r"(0|[1-9][0-9]*)\Z", g)'
 mutant stop-wait-outlives-lock e2e-lock py 'if LOCK_HELD:' 'if False:'
 mutant lock-self-off e2e-lock-wait py 'os.execv("/bin/sh", cmd)' 'off = "mutant"'
 mutant lock-lc-all-lost e2e-lock-wait py 'lc = ["LC_ALL=" + e["LC_ALL"]] if "LC_ALL" in e else ["-u", "LC_ALL"]' 'lc = []'
 mutant lock-off-silent e2e-lock-off py 'print("metalfx-report: the host lock is off: " + off, file=sys.stderr)' 'pass'
-mutant pins-no-group e2e-group py 'rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)' 'rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)'
+mutant pins-no-group e2e-group py 'rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)' 'rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env)'
 
 wait
 for r in "$tmp"/res-*; do

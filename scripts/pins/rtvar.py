@@ -30,6 +30,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(1, os.path.join(ROOT, "scripts", "metalfx-report"))
 import evidence as ev  # noqa: E402
 import mfx  # noqa: E402  (check_out_path, sh_group, git_env)
+import bounded  # noqa: E402  (scripts/lib, on the path mfx put it on: the bounded-run primitive, FIX186)
 
 PINS = os.path.join(ROOT, "scripts", "pins.sh")
 MFX = os.path.join(ROOT, "scripts", "metalfx-report", "mfx.py")
@@ -558,6 +559,8 @@ def cmd_selftest(a):
                      os.path.join(tree, "scripts", "bench", "core"))
         shutil.copy2(os.path.join(ROOT, "scripts", "rt-variations.sh"), os.path.join(tree, "scripts"))
         shutil.copy2(MFX, os.path.join(tree, "scripts", "metalfx-report"))
+        os.makedirs(os.path.join(tree, "scripts", "lib"))  # the Python bounded-run primitive mfx.py imports
+        shutil.copy2(os.path.join(ROOT, "scripts", "lib", "bounded.py"), os.path.join(tree, "scripts", "lib"))
         for f in ("framediff.c", "evidence.py", "rtvar.py"):
             shutil.copy2(os.path.join(HERE, f), os.path.join(tree, "scripts", "pins"))
         shutil.copytree(SCEN_DIR, os.path.join(tree, "scripts", "pins", "scenarios"),
@@ -604,8 +607,10 @@ def cmd_selftest(a):
         tool = os.path.join(tree, "scripts", "rt-variations.sh")
 
         def run(args, e=env):
-            p = subprocess.run(["/bin/bash", tool, "run", "--file", tfile] + args, env=e, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, universal_newlines=True, timeout=600)
+            p = bounded.run(["/bin/bash", tool, "run", "--file", tfile] + args, timeout=600, env=e,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+            if p.how == "timeout":
+                raise subprocess.TimeoutExpired(tool, 600)
             return p.returncode, p.stdout
 
         def calls():

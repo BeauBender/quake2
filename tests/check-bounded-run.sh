@@ -24,6 +24,8 @@
 #           unmarked).
 #   mutants each one literal change to a copy of scripts/ must be refused,
 #           in its own file and for its own rule.
+#   pyprobe the same for the Python helper, scripts/lib/bounded.py, and ten
+#           mutants of it, each failing its own case (part 4 below).
 #   probe   the disposition probe, the behavioural proof: each caller runs
 #           a stand-in (a child that starts a grandchild; both live while a
 #           flag file exists, so no verdict depends on the host's speed),
@@ -47,7 +49,11 @@
 # signal.Signals.SIGKILL, from signal import SIGKILL), .kill() (Popen),
 # Signals(9), send_signal(9), and kill or killpg (os.kill, os.killpg) with
 # 9 as the last argument (a trailing comma allowed), through one level of
-# nested parentheses. A liveness test is kill -0, kill -s 0, kill -n 0,
+# nested parentheses; and subprocess.run, call, check_call or check_output
+# with a timeout= on the logical line, whose KILL on the timeout goes to the
+# direct child only (FIX186, slice 2): every Python command with a time
+# limit goes through scripts/lib/bounded.py, which stops its process group
+# TERM first, and whose one KILL is the one marked Python line. A liveness test is kill -0, kill -s 0, kill -n 0,
 # kill -EXIT or kill -s EXIT on a shell line that is not a whole-line
 # comment. A variable signal is kill, pkill or killall whose first argument
 # is a parameter or a command substitution ($ or a backtick), alone or
@@ -75,8 +81,9 @@
 #
 # What the guard does not see, and so does not claim: a variable signal
 # to timeout (timeout -s "$sig"); a liveness test through a
-# function (bench_pid_alive); subprocess.run(..., timeout=), whose KILL is
-# inside Python (rtvar.py, upscale-report/report.py and mfx.py use it);
+# function (bench_pid_alive); a subprocess function imported under another
+# name (from subprocess import run), and Popen.kill() reached through
+# subprocess.run's own cleanup on an exception (a run with no timeout);
 # other languages (Perl, Ruby); Python inside a shell -c string; eval'd or
 # constructed text; a backslash inside the command word (k\ill); gtimeout;
 # a parenthesis inside a Python string, which the join counts. The source
@@ -96,6 +103,8 @@
 #        tests/check-bounded-run.sh guard <root>   the guard alone on <root>
 #        tests/check-bounded-run.sh probe <root>   the probe alone on <root>,
 #                                                  printed, not judged
+#        tests/check-bounded-run.sh pyprobe <root> the Python helper probe
+#                                                  alone, printed, not judged
 # POSIX sh (dash, bash 3.2). Needs python3 (SIGINT reset), perl-free.
 set -u
 LC_ALL=C
@@ -141,9 +150,7 @@ scripts/ios-device.sh selftest: the script under test outlived the signal
 scripts/ios-device.sh selftest: ends the script under test that hung
 scripts/ios-device.sh selftest: the fake hanging step outlived the script
 scripts/ios-device.sh selftest: ends the fake hanging step
-scripts/metalfx-report/mfx.py stop_group, the Python group watchdog: TERM first, KILL after the wait
-scripts/metalfx-report/mfx.py run_engine, the pty run: KILL after terminate and 5 s
-scripts/metalfx-report/mfx.py run_engine, the pty run: an interrupt must not leave the engine running
+scripts/lib/bounded.py the helper: stop, the KILL after the grace
 '
 
 W=
@@ -187,6 +194,8 @@ scan_file() {
 		PY3 = "signals[ \t]*\\([ \t]*0*9[ \t]*,?[ \t]*\\)"
 		PY4 = "send_signal[ \t]*\\([^)0-9]*0*9[ \t]*,?[ \t]*\\)"
 		PY5 = "(^|[^a-z0-9_])kill(pg)?[ \t]*\\(([^()]|\\([^()]*\\))*,[ \t]*0*9[ \t]*,?[ \t]*\\)"
+		# a subprocess call with a timeout: on the timeout it KILLs the direct child only
+		PY6 = "(^|[^a-z0-9_])subprocess[ \t]*\\.[ \t]*(run|call|check_call|check_output)[ \t]*\\(.*(^|[^a-z0-9_])timeout[ \t]*="
 		BDEF = "(^|[;&|(){}])[ \t]*bench_[A-Za-z0-9_]*[ \t]*\\(\\)"
 		LIT = "\"\\$[A-Za-z_][A-Za-z0-9_]*/scripts/bench/core/common\\.sh\""
 		hn = 0; hi = 0; lost = 0; acc = ""; depth = 0
@@ -226,7 +235,7 @@ scan_file() {
 				R[t]++
 				RL[t] = ln
 				nw = count(lower(substr(line, 1, RSTART - 1)), WORDRE)
-				if (py) nw += count(lower(substr(line, 1, RSTART - 1)), PY1) + count(lower(substr(line, 1, RSTART - 1)), PY2) + count(lower(substr(line, 1, RSTART - 1)), PY3) + count(lower(substr(line, 1, RSTART - 1)), PY4) + count(lower(substr(line, 1, RSTART - 1)), PY5)
+				if (py) nw += count(lower(substr(line, 1, RSTART - 1)), PY1) + count(lower(substr(line, 1, RSTART - 1)), PY2) + count(lower(substr(line, 1, RSTART - 1)), PY3) + count(lower(substr(line, 1, RSTART - 1)), PY4) + count(lower(substr(line, 1, RSTART - 1)), PY5) + count(lower(substr(line, 1, RSTART - 1)), PY6)
 				if (nw > 1) printf "%s:%d: a marked line with %d kill, pkill, killall or timeout words or Python KILL forms (a marker covers one)\n", rel, ln, nw
 			}
 		}
@@ -234,6 +243,7 @@ scan_file() {
 		if (lc ~ KILLRE || lc ~ TOSRE || lc ~ TOKRE) say("a KILL outside the bounded-run primitive", ln)
 		else if (py && (lc ~ PY1 || lc ~ PY2 || lc ~ PY3 || lc ~ PY4 || lc ~ PY5))
 			say("a KILL outside the bounded-run primitive", ln)
+		if (py && lc ~ PY6) say("a subprocess call with a timeout outside the bounded-run primitive (its KILL goes to the direct child only; use scripts/lib/bounded.py)", ln)
 		if (!py && (lc ~ VARSIG1 || lc ~ VARSIG2)) say("a signal named through a variable outside the bounded-run primitive (it can hold KILL)", ln)
 		if (!py && line !~ /^[ \t]*#/ && lc ~ ZERORE) say("a kill -0 liveness test outside the bounded-run primitive (the shape of a polling loop)", ln)
 		if (caller && lc ~ ANYRE) say("a caller that sends a signal itself, not through the primitive", ln)
@@ -607,6 +617,295 @@ probe() {
 	probe_late "$1"
 }
 
+# ---- the Python helper's disposition probe (FIX186, slice 2) -------------
+
+# mk_pystandin <file>: the stand-in of the Python probe: stand-in <dir>
+# <ignore> records its pid once its grandchild has recorded its own; each
+# writes every TERM it gets to its own record file (child.rec, gc.rec), and
+# both live while <dir>/flag exists. With <ignore> 1 a TERM is recorded and
+# ignored, so only a KILL ends them before the flag goes. Neither holds the
+# probe's output open (a stand-in left running would hold its reader).
+mk_pystandin() {
+	cat > "$1" << 'EOF'
+#!/bin/sh
+exec > /dev/null 2>&1
+d=$1 ig=$2
+if [ "$ig" = 1 ]; then trap 'echo TERM >> "$d/child.rec"' TERM; else trap 'echo TERM >> "$d/child.rec"; exit 143' TERM; fi
+sh -c 'd=$1 ig=$2
+if [ "$ig" = 1 ]; then trap "echo TERM >> \"\$d/gc.rec\"" TERM; else trap "echo TERM >> \"\$d/gc.rec\"; exit 143" TERM; fi
+echo $$ > "$d/gc.pid"
+while [ -e "$d/flag" ]; do sleep 0.1; done' gc "$d" "$ig" &
+while [ ! -s "$d/gc.pid" ]; do sleep 0.05; done
+echo $$ > "$d/child.pid"
+while [ -e "$d/flag" ]; do sleep 0.1; done
+wait
+EOF
+	chmod +x "$1"
+}
+
+# mk_pyprobe <file>: the probe's Python side, run as python3 -I <file>
+# <root> <dir> <case>, which imports <root>/scripts/lib/bounded.py as the
+# callers do. Cases: timeout and ignore (bounded.run past its timeout, the
+# stand-in acting on TERM or ignoring it), recycled (the identity check: a
+# child whose recorded start time is not its own, as a recycled pid would
+# be, gets nothing), reaped (a reaped child whose pid another process now
+# holds, with ps failing, gets nothing), spawnwin (a SIGTERM to this process
+# between the fork and the record), nostart (no start time read at spawn:
+# the unreaped child is still stopped), partial (a timeout's Result holds
+# what was written), pshang (a ps that does not answer is no answer, within
+# PS_WAIT), kinds (a normal exit and a signal told apart), caller
+# (bounded.run with a long timeout, for the shell to signal this process).
+mk_pyprobe() {
+	cat > "$1" << 'EOF'
+import os, sys, time
+root, d, case = sys.argv[1:4]
+sys.path.insert(0, os.path.join(root, "scripts", "lib"))
+import bounded  # noqa: E402
+st = os.path.join(d, "standin")
+
+
+def started():
+    n = 0
+    while not (os.path.exists(os.path.join(d, "child.pid")) and os.path.getsize(os.path.join(d, "child.pid"))) and n < 600:
+        time.sleep(0.1)
+        n += 1
+
+
+if case in ("timeout", "ignore"):
+    t = 3
+    t0 = time.monotonic()
+    r = bounded.run([st, d, "1" if case == "ignore" else "0"], timeout=t, grace=1 if case == "ignore" else 10)
+    print("how %s, stop took %d s" % (r.how, int(time.monotonic() - t0 - t)))
+elif case == "recycled":
+    # its output not this probe's: the stand-ins outlive this process until the shell removes the flag
+    c = bounded.spawn([st, d, "0"], stdout=bounded.subprocess.DEVNULL, stderr=bounded.subprocess.DEVNULL)
+    started()
+    c.start = "Thu Jan 1 00:00:00 1970"  # a start time that is not the child's: the pid is another process's
+    print("stop sent %s" % bounded.stop(c, grace=1))
+elif case == "reaped":
+    # a reaped child whose pid a stand-in (a session leader of this probe's own) now holds, and ps
+    # failing: the pid is another process's, whatever ps says, so nothing is sent
+    c = bounded.spawn(["true"])
+    c.popen.wait()
+    other = bounded.subprocess.Popen([st, d, "0"], start_new_session=True, stdin=bounded.subprocess.DEVNULL,
+                                     stdout=bounded.subprocess.DEVNULL, stderr=bounded.subprocess.DEVNULL)
+    started()
+    c.pid = other.pid  # as a recycled pid would be
+    real = bounded.subprocess.Popen
+
+    def failing(args, *a, **k):
+        if args and args[0] == getattr(bounded, "PS", "/bin/ps"):
+            raise BlockingIOError(35, "Resource temporarily unavailable")
+        return real(args, *a, **k)
+    bounded.subprocess.Popen = failing
+    print("stop sent %s" % bounded.stop(c, grace=1))
+elif case == "spawnwin":
+    # this probe's own SIGTERM, sent once from the window between the fork and the record (once the
+    # stand-ins have started): held until the child is recorded, and then it stops the group
+    orig = bounded.proc_start
+    once = []
+
+    def term_in_window(pid):
+        if not once:
+            once.append(1)
+            started()
+            os.kill(os.getpid(), bounded.signal.SIGTERM)
+        return orig(pid)
+    bounded.proc_start = term_in_window
+    try:
+        bounded.run([st, d, "0"], timeout=60)
+        print("status none")
+    except SystemExit as e:
+        print("status %s" % e.code)
+elif case == "nostart":
+    # ps gave no start time at spawn: the unreaped pid is still the child's
+    c = bounded.spawn([st, d, "0"], stdout=bounded.subprocess.DEVNULL, stderr=bounded.subprocess.DEVNULL)
+    started()
+    c.start = None
+    print("stop sent %s" % bounded.stop(c, grace=1))
+elif case == "partial":
+    # what the command wrote before its timeout is in the Result
+    r = bounded.run(["sh", "-c", 'echo out; echo err >&2; while [ -e "$1/flag" ]; do sleep 0.1; done', "sh", d],
+                    timeout=1, grace=2, capture_output=True, text=True)
+    print("how %s, stdout %r, stderr %r" % (r.how, r.stdout, r.stderr))
+elif case == "pshang":
+    # a ps that does not answer (a stand-in that waits while the flag exists) is no answer, in a
+    # bounded time
+    fake = os.path.join(d, "fakeps")
+    with open(fake, "w") as f:
+        f.write('#!/bin/sh\nwhile [ -e "%s/flag" ]; do sleep 0.1; done\n' % d)
+    os.chmod(fake, 0o755)
+    bounded.PS = fake
+    bounded.PS_WAIT = 1
+    t0 = time.monotonic()
+    s = bounded.proc_start(os.getpid())
+    print("start %r in %d s" % (s, int(time.monotonic() - t0)))
+elif case == "kinds":
+    a = bounded.run(["sh", "-c", "exit 3"])
+    b = bounded.run(["sh", "-c", "kill -USR1 $$"])
+    print("exit %s %s, signal %s %s" % (a.returncode, a.how, b.signal, b.how))
+elif case == "caller":
+    bounded.run([st, d, "0"], timeout=600)
+EOF
+}
+
+# pyverdict <dir>: "child got: <its record>, grandchild got: <its record>, left: <what runs>"
+pyverdict() {
+	_pv_c=$(tr '\n' ' ' 2> /dev/null < "$1/child.rec")
+	_pv_g=$(tr '\n' ' ' 2> /dev/null < "$1/gc.rec")
+	_pv_l=
+	[ "$(verdict "$1/child.pid")" != runs ] || _pv_l="$_pv_l child"
+	[ "$(verdict "$1/gc.pid")" != runs ] || _pv_l="$_pv_l grandchild"
+	printf 'child got: %s, grandchild got: %s, left:%s' "${_pv_c:-nothing}" "${_pv_g:-nothing}" "${_pv_l:- none}"
+}
+
+# pyend <dir>: the flag goes, and the stand-ins end by themselves
+pyend() {
+	rm -f "$1/flag"
+	_pe_n=0
+	while { [ "$(verdict "$1/child.pid")" = runs ] || [ "$(verdict "$1/gc.pid")" = runs ]; } && [ "$_pe_n" -lt 100 ]; do
+		sleep 0.1
+		_pe_n=$((_pe_n + 1))
+	done
+}
+
+# pyprobe_one <root> <case> [<signal>]: one line for the case
+pyprobe_one() {
+	_y_d=$W/y-$2${3:+-$3}-$(basename "$1")
+	rm -rf "$_y_d"
+	mkdir -p "$_y_d" || return 1
+	: > "$_y_d/flag"
+	mk_pystandin "$_y_d/standin"
+	mk_pyprobe "$_y_d/probe.py"
+	if [ "$2" != caller ]; then
+		# bounded as the caller branch: a probe that outlives 60 s is reported hung, its flag
+		# removed (so the stand-ins, and a wait on them, end), and KILLed if it still runs
+		python3 -I "$_y_d/probe.py" "$1" "$_y_d" "$2" < /dev/null > "$_y_d/log" 2>&1 &
+		_y_c=$!
+		_y_n=0
+		while kill -0 "$_y_c" 2> /dev/null && [ "$_y_n" -lt 600 ]; do
+			sleep 0.1
+			_y_n=$((_y_n + 1))
+		done
+		if kill -0 "$_y_c" 2> /dev/null; then
+			_y_v=$(pyverdict "$_y_d")
+			rm -f "$_y_d/flag"
+			_y_n=0
+			while kill -0 "$_y_c" 2> /dev/null && [ "$_y_n" -lt 100 ]; do
+				sleep 0.1
+				_y_n=$((_y_n + 1))
+			done
+			! kill -0 "$_y_c" 2> /dev/null || kill -s KILL "$_y_c"
+			wait "$_y_c" 2> /dev/null
+			printf 'py %s: hung (the probe outlived 60 s, its flag removed), %s\n' "$2" "$_y_v"
+		else
+			wait "$_y_c" 2> /dev/null
+			printf 'py %s: %s, %s\n' "$2" "$(tail -n 1 "$_y_d/log")" "$(pyverdict "$_y_d")"
+		fi
+		pyend "$_y_d"
+		return 0
+	fi
+	# SIGINT back to the default first: a background job of this shell starts with it ignored
+	python3 -I -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execv(sys.executable, [sys.executable, "-I"] + sys.argv[1:])' "$_y_d/probe.py" "$1" "$_y_d" caller < /dev/null > "$_y_d/log" 2>&1 &
+	_y_c=$!
+	_y_n=0
+	while [ ! -s "$_y_d/child.pid" ] && [ "$_y_n" -lt 600 ]; do
+		sleep 0.1
+		_y_n=$((_y_n + 1))
+	done
+	kill -s "$3" "$_y_c"
+	_y_n=0
+	while kill -0 "$_y_c" 2> /dev/null && [ "$_y_n" -lt 600 ]; do
+		sleep 0.1
+		_y_n=$((_y_n + 1))
+	done
+	_y_h=
+	if kill -0 "$_y_c" 2> /dev/null; then
+		_y_h=" (hung: killed by the probe)"
+		kill -s KILL "$_y_c"
+	fi
+	_y_rc=0
+	wait "$_y_c" 2> /dev/null || _y_rc=$?
+	printf 'py caller %s: status %s%s, %s\n' "$3" "$_y_rc" "$_y_h" "$(pyverdict "$_y_d")"
+	pyend "$_y_d"
+}
+
+PYCASES='timeout ignore recycled reaped spawnwin nostart partial pshang kinds caller-TERM caller-INT'
+
+# pyprobe <root> [<cases>]: the cases (all of PYCASES by default), one line each
+pyprobe() {
+	for _yc in ${2:-$PYCASES}; do
+		case $_yc in
+		caller-*) pyprobe_one "$1" caller "${_yc#caller-}" ;;
+		*) pyprobe_one "$1" "$_yc" ;;
+		esac
+	done
+}
+
+# pyjudge <probe output>: the names of the cases it fails, each with its reason
+pyjudge() {
+	printf '%s\n' "$1" | grep -E '^py timeout: how timeout, stop took [0-4] s, child got: TERM , grandchild got: TERM , left: none$' > /dev/null ||
+		echo "py-timeout(the child and its grandchild must both get TERM first and be gone once the run times out)"
+	printf '%s\n' "$1" | grep -E '^py ignore: how timeout, stop took [1-4] s, child got: TERM , grandchild got: TERM , left: none$' > /dev/null ||
+		echo "py-ignore(a child and grandchild that ignore TERM must get KILL after the grace)"
+	printf '%s\n' "$1" | grep -E '^py recycled: stop sent False, child got: nothing, grandchild got: nothing, left: child grandchild$' > /dev/null ||
+		echo "py-recycled(a pid that is not the child's must get no signal)"
+	printf '%s\n' "$1" | grep -E '^py reaped: stop sent False, child got: nothing, grandchild got: nothing, left: child grandchild$' > /dev/null ||
+		echo "py-reaped(a reaped child's pid held by another process must get no signal, though ps gives nothing)"
+	printf '%s\n' "$1" | grep -E '^py spawnwin: status 143, child got: TERM , grandchild got: TERM , left: none$' > /dev/null ||
+		echo "py-spawnwin(a SIGTERM between the fork and the record must be held, then stop the group, TERM first)"
+	printf '%s\n' "$1" | grep -E '^py nostart: stop sent True, child got: TERM , grandchild got: TERM , left: none$' > /dev/null ||
+		echo "py-nostart(an unreaped child whose start time ps did not give at spawn must still be stopped)"
+	printf '%s\n' "$1" | grep -E "^py partial: how timeout, stdout 'out\\\\n', stderr 'err\\\\n', " > /dev/null ||
+		echo "py-partial(the output written before a timeout must be in the Result)"
+	printf '%s\n' "$1" | grep -E '^py pshang: start None in [0-3] s, ' > /dev/null ||
+		echo "py-pshang(a ps that does not answer must be no answer, within its bound)"
+	printf '%s\n' "$1" | grep -E '^py kinds: exit 3 exit, signal 30 signal, ' > /dev/null ||
+		echo "py-kinds(a normal exit and a signal must be told apart)"
+	printf '%s\n' "$1" | grep -E '^py caller TERM: status 143, child got: TERM , grandchild got: TERM , left: none$' > /dev/null ||
+		echo "py-caller-TERM(a SIGTERM to the caller must stop the group, TERM first)"
+	printf '%s\n' "$1" | grep -E '^py caller INT: status 130, child got: TERM , grandchild got: TERM , left: none$' > /dev/null ||
+		echo "py-caller-INT(a SIGINT to the caller must stop the group, TERM first)"
+}
+
+# pymutant <name> <expected case> <old> <new> [only | <cases>]: a copy of
+# the helper with one change; the probe must fail <expected case> on it.
+# With "only", every case runs and <expected case> must be the one it fails;
+# with <cases>, only those run (a mutant that hangs costs each case 60 s).
+pymutant() {
+	_pm_only=
+	_pm_cases=
+	case ${5:-} in
+	'') ;;
+	only) _pm_only=1 ;;
+	*) _pm_cases=$5 ;;
+	esac
+	_pm_d=$W/pm-$1
+	rm -rf "$_pm_d"
+	mkdir -p "$_pm_d/scripts/lib" || { fails="$fails $1"; return; }
+	python3 -I -c 'import sys
+s = open(sys.argv[1]).read()
+if s.count(sys.argv[3]) != 1: sys.exit("the mutant does not apply: %d" % s.count(sys.argv[3]))
+open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))' "$here/scripts/lib/bounded.py" "$_pm_d/scripts/lib/bounded.py" "$3" "$4" ||
+		{ echo "$me: FAIL: pymutant $1 does not apply"; fails="$fails $1"; return; }
+	_pm_o=$(pyprobe "$_pm_d" "$_pm_cases")
+	_pm_j=$(pyjudge "$_pm_o")
+	if [ -n "$_pm_only" ] && [ "$(printf '%s\n' "$_pm_j" | grep -c .)" != 1 ]; then
+		echo "$me: FAIL: pymutant $1 fails more than $2: $(printf '%s\n' "$_pm_j" | tr '\n' ' ')"
+		fails="$fails $1"
+		return
+	fi
+	case $_pm_j in
+	*"$2("*) echo "$me: pymutant $1: refused ($(printf '%s\n' "$_pm_j" | grep -F "$2(" | head -n 1); $(printf '%s\n' "$_pm_o" | grep -F "py $(printf '%s' "${2#py-}" | tr '-' ' '):" | head -n 1))" ;;
+	*)
+		echo "$me: FAIL: pymutant $1 passed $2: $(printf '%s\n' "$_pm_o" | tr '\n' ' ')"
+		fails="$fails $1"
+		;;
+	esac
+}
+
 case ${1:-} in
 guard)
 	guard "${2:?usage: $0 guard <root>}"
@@ -616,9 +915,13 @@ probe)
 	probe "${2:?usage: $0 probe <root>}"
 	exit 0
 	;;
+pyprobe)
+	pyprobe "${2:?usage: $0 pyprobe <root>}"
+	exit 0
+	;;
 '') ;;
 *)
-	echo "usage: $0 [guard <root> | probe <root>]" >&2
+	echo "usage: $0 [guard <root> | probe <root> | pyprobe <root>]" >&2
 	exit 2
 	;;
 esac
@@ -708,9 +1011,9 @@ timeout -k 2 5 true
 mutant py-from-import scripts/metalfx-report/mfx.py "$K" 'def parse_scenario(path):
 ' 'from signal import SIGKILL
 def parse_scenario(path):
-' 'def stop_group(p, wait):
-' 'def stop_group(p, wait):
-    os.killpg(p.pid, SIGKILL)
+' 'def sh_group(cmd, cwd=None, env=None, timeout=None):
+' 'def sh_group(cmd, cwd=None, env=None, timeout=None):
+    os.killpg(os.getpid(), SIGKILL)
 '
 mutant py-signals-enum scripts/pins/rtvar.py "$K" '' '
 X = signal.Signals.SIGKILL
@@ -769,6 +1072,22 @@ mutant py-kill-comment-in-parens scripts/metalfx-report/mfx.py "$K" '' '
 os.kill(os.getpid(),
     # why
     9)
+'
+# FIX186 slice 2: a caller left on a raw subprocess call with a timeout
+# (its KILL, inside Python, goes to the direct child only)
+P='a subprocess call with a timeout'
+mutant py-run-timeout scripts/upscale-report/report.py "$P" '' '
+p = subprocess.run(["true"], capture_output=True,
+                   timeout=10)
+'
+mutant py-check-output-timeout scripts/pins/rtvar.py "$P" '' '
+out = subprocess.check_output(["true"], timeout=5)
+'
+mutant py-run-timeout-mfx scripts/metalfx-report/mfx.py "$P" '' '
+subprocess.run(["true"], timeout=SCENARIO_READ_SECONDS)
+'
+mutant py-run-timeout-helper scripts/lib/bounded.py "$P" '' '
+subprocess.run(["true"], timeout=1)
 '
 # FIX186: a TERM-then-KILL through a variable signal, in each spelling
 V='a signal named through a variable'
@@ -892,8 +1211,36 @@ done
 printf '%s\n' "$pout" | grep -E "^ios-sim late: caller exit [1-9][0-9]*; child gone; grandchild gone; scratch removed$" > /dev/null ||
 	{ echo "$me: FAIL: probe ios-sim late: a second signal in cleanup's late call must leave nothing running and no scratch"; fails="$fails probe-ios-sim-late"; }
 
+# 4. the Python helper's probe (scripts/lib/bounded.py): TERM first to the
+# group on a timeout and on the caller's own TERM or INT, KILL after the
+# grace to what ignores TERM, nothing to a pid that is not the child's
+# (unreaped with another start time, or reaped and held by another process),
+# a signal in the spawn window held, a timeout's output kept and a ps that
+# hangs bounded; then its mutants, each failing its own case (the three
+# marked only fail no other; the last three run their own case alone, each
+# hanging up to the probe's 60 s bound without the fix)
+yout=$(pyprobe "$here")
+printf '%s\n' "$yout" | sed "s/^/$me: pyprobe: /"
+yj=$(pyjudge "$yout")
+if [ -n "$yj" ]; then
+	printf '%s\n' "$yj" | sed "s/^/$me: FAIL: pyprobe: /"
+	fails="$fails pyprobe"
+fi
+pymutant group-dropped py-timeout '        os.killpg(c.pid, sig)' '        os.kill(c.pid, sig)'
+pymutant never-kills py-ignore '            signal_group(c, signal.SIGKILL)  # bounded-run' '            pass  # bounded-run'
+pymutant identity-unchecked py-recycled '    return c.start is None or s == c.start' '    return True'
+pymutant caller-term-unhandled py-caller-TERM '                old[s] = signal.signal(s, _raise_exit)' '                pass'
+pymutant reaped-ps-trusted py-reaped '        return s == ""  # reaped' '        return s in ("", None)  # reaped' only
+pymutant spawn-unheld py-spawnwin '    held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    c = None' '    held = signal.pthread_sigmask(signal.SIG_BLOCK, ())
+    c = None' only
+pymutant nostart-refused py-nostart '    return c.start is None or s == c.start' '    return s == c.start' only
+pymutant partial-unread py-partial '                    c.output = c.popen.communicate(timeout=AFTER_KILL)' '                    pass' partial
+pymutant ps-unbounded py-pshang 'out = p.communicate(timeout=PS_WAIT)[0]' 'out = p.communicate()[0]' pshang
+pymutant run-unbounded py-timeout '            out = c.popen.communicate(timeout=timeout)' '            out = c.popen.communicate()' timeout
+
 if [ -n "$fails" ]; then
 	echo "$me: failed:$fails"
 	exit 1
 fi
-echo "$me: ok (guard, $nmut mutants refused, probe)"
+echo "$me: ok (guard, $nmut mutants refused, probe, pyprobe and its 10 mutants)"

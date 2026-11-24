@@ -64,8 +64,19 @@
 #             with SIGINT ignored (as merge-gate.sh starts the gate): SIGINT
 #             then SIGTERM give status 143, both stopped (no SIGINT when it
 #             is ignored here). A check that has stopped itself (SIGSTOP)
-#             acts on the SIGTERM at once, well inside the grace: the gate
+#             acts on the SIGTERM at once, inside 8 s (less than the
+#             grace; whole seconds, and 10 or more without it): the gate
 #             sends SIGCONT after it;
+#   drop      two checks end in one poll while a third runs (FIX186, slice
+#             2): the first leaves nothing, the second a child that ignores
+#             SIGTERM, so its stop waits the grace; a SIGTERM to the
+#             scheduler in that grace still ends the running check and its
+#             grandchild (status 143), and nothing the stop on the way out
+#             does names the first check's pid again: it left the running
+#             list (gate_drop) before its record went (a ps shim logs every
+#             pid the scheduler asks about);
+#   dropabsent gate_drop of an entry that is not in the running list leaves
+#             the list as it is, and of one that is takes it out;
 #   stopnoerr the scheduler itself started with its standard error closed:
 #             what a passing check left running (its flag-held grandchild)
 #             is gone after the run, and so are a check and its grandchild
@@ -1369,7 +1380,8 @@ c_leave() {
 # be gone within 2 s more. <how> "nostderr" starts the scheduler with its
 # standard error closed; "stopped" has the check stop itself (SIGSTOP), and
 # the signal goes only once ps shows it stopped (T): the run must then end
-# within 5 s, half the grace. Then both flags go (and a check left stopped
+# within 8 s, less than the grace (it counts whole seconds; without the
+# SIGCONT the run takes 10 s or more). Then both flags go (and a check left stopped
 # gets SIGCONT), so a stand-in a broken run left ends by itself.
 stop_one() {
 	_od=$(newcase)
@@ -1452,8 +1464,8 @@ stop_one() {
 		say "stop $1: the stand-ins that ignore SIGTERM were killed after $_ot s, before the 10 s grace"
 		return 1
 	fi
-	if [ -n "$_ostp" ] && [ "$_ot" -ge 5 ]; then
-		say "stop $1: the check that stopped itself ended only after $_ot s, not within 5 s (no SIGCONT after its SIGTERM)"
+	if [ -n "$_ostp" ] && [ "$_ot" -ge 8 ]; then
+		say "stop $1: the check that stopped itself ended only after $_ot s, not within 8 s (no SIGCONT after its SIGTERM)"
 		return 1
 	fi
 	return 0
@@ -1474,6 +1486,89 @@ c_stop() {
 c_stopnoerr() {
 	stop_one none 0 "" "" nostderr || return 1
 	stop_one TERM 143 "" "" nostderr
+}
+
+# drop: see the top of this file. check-a.sh (x) starts a child that
+# ignores SIGTERM and exits: its stop waits the grace, and in it check-b.sh
+# (the first of the two) and check-c.sh (the second, which leaves a child,
+# b, that ignores SIGTERM) end, once x's child has its SIGTERM; so the next
+# poll finds both ended. check-d.sh is the stop case's stand-in (a check and
+# its grandchild). The scheduler gets SIGTERM once b's child has its first
+# SIGTERM, which is in the second check's grace; a line in the ps log marks
+# that point.
+c_drop() {
+	_pd=$(newcase)
+	_pr=$_pd/rec
+	mkdir "${_pr:?}" "${_pd:?}/psl"
+	: > "$_pr/check.flag"
+	: > "$_pr/gc.flag"
+	: > "$_pr/x.flag"
+	: > "$_pr/b.flag"
+	: > "$_pd/ps.log"
+	printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*" >> "$GP_PSLOG"' 'exec /bin/ps "$@"' > "$_pd/psl/ps"
+	# waitfor <file>: up to 60 s for it to be there
+	_pw='waitfor() { n=0; while [ ! -e "$1" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done; }'
+	printf '%s\n' '#!/bin/sh' "$_pw" '"$GP_STAND" x "$GP_REC" ignore &' 'waitfor "$GP_REC/x.pid"' > "$_pd/check-a.sh"
+	printf '%s\n' '#!/bin/sh' "$_pw" 'echo "$$" > "$GP_REC/first.pid"' 'waitfor "$GP_REC/x.sig"' > "$_pd/check-b.sh"
+	printf '%s\n' '#!/bin/sh' "$_pw" '"$GP_STAND" b "$GP_REC" ignore &' 'waitfor "$GP_REC/b.pid"' 'waitfor "$GP_REC/x.sig"' > "$_pd/check-c.sh"
+	printf '%s\n' '#!/bin/sh' 'exec "$GP_STAND" check "$GP_REC"' > "$_pd/check-d.sh"
+	chmod +x "$_pd/psl/ps" "$_pd/check-a.sh" "$_pd/check-b.sh" "$_pd/check-c.sh" "$_pd/check-d.sh"
+	launch "$_pd" env GATE_JOBS=4 PATH="$_pd/psl:$PATH" GP_PSLOG="$_pd/ps.log" GP_STAND="$tmp/stand" GP_REC="$_pr" TMPDIR="$_pd/td" \
+		sh "$SCHED" "" "" "$_pd/check-a.sh" "$_pd/check-b.sh" "$_pd/check-c.sh" "$_pd/check-d.sh"
+	_pbad=
+	_pn=0
+	while [ ! -s "$_pr/b.sig" ]; do
+		if [ "$_pn" -ge 300 ] || ! kill -0 "$_lp" 2> /dev/null; then
+			_pbad="the second check's child never got its SIGTERM"
+			break
+		fi
+		sleep 0.2
+		_pn=$((_pn + 1))
+	done
+	if [ -z "$_pbad" ]; then
+		echo '-- SIGTERM to the scheduler --' >> "$_pd/ps.log"
+		kill -s TERM "$_lp" 2> /dev/null || :
+	fi
+	_prs=0
+	lwait 60 || _prs=$?
+	_pcp=$(cat "$_pr/check.pid" 2> /dev/null || :)
+	_pgp=$(cat "$_pr/gc.pid" 2> /dev/null || :)
+	_pfp=$(cat "$_pr/first.pid" 2> /dev/null || :)
+	_pn=0
+	while [ "$_pn" -lt 10 ] && { { [ -n "$_pcp" ] && ! dead "$_pcp"; } || { [ -n "$_pgp" ] && ! dead "$_pgp"; }; }; do
+		sleep 0.2
+		_pn=$((_pn + 1))
+	done
+	_pleft=
+	[ -z "$_pcp" ] || dead "$_pcp" || _pleft="$_pleft check"
+	[ -z "$_pgp" ] || dead "$_pgp" || _pleft="$_pleft grandchild"
+	_pcs=$({ tr '\n' ' ' < "$_pr/check.sig"; } 2> /dev/null || :)
+	_pgs=$({ tr '\n' ' ' < "$_pr/gc.sig"; } 2> /dev/null || :)
+	# the ps calls that name the first check's pid, before and after the mark
+	_pbef=$(awk -v p="$_pfp" '/^-- SIGTERM/ { exit } $NF == p { n++ } END { print n + 0 }' "$_pd/ps.log")
+	_paft=$(awk -v p="$_pfp" 'm && $NF == p { n++ } /^-- SIGTERM/ { m = 1 } END { print n + 0 }' "$_pd/ps.log")
+	rm -f "$_pr/check.flag" "$_pr/gc.flag" "$_pr/x.flag" "$_pr/b.flag"
+	say "drop: status $_prs, running check got: ${_pcs:-nothing}, grandchild got: ${_pgs:-nothing}, left:${_pleft:- none}, ps calls on the first check's pid before the SIGTERM $_pbef, after it $_paft"
+	[ -z "$_pbad" ] || { say "drop: $_pbad"; return 1; }
+	[ -n "$_pfp" ] || { say "drop: the first check wrote no pid"; return 1; }
+	[ "$_prs" -eq 143 ] || { say "drop: status $_prs, want 143"; return 1; }
+	[ -z "$_pleft" ] || { say "drop: left running:$_pleft"; return 1; }
+	[ "$_pcs" = 'TERM ' ] && [ "$_pgs" = 'TERM ' ] || { say "drop: the running check and its grandchild must each get one SIGTERM"; return 1; }
+	[ "$_pbef" -gt 0 ] || { say "drop: the ps shim saw no call on the first check's pid (the shim is not in use)"; return 1; }
+	[ "$_paft" -eq 0 ] || { say "drop: the stop on the way out asked about the first check's pid again ($_paft ps calls): it was still in the running list after its record went"; return 1; }
+}
+# dropabsent: gate_drop, taken from the scheduler, on a list of two entries
+c_dropabsent() {
+	_pa=$(sed -n '/^gate_drop() {$/,/^}$/p' "$SCHED")
+	_pao=$(sh -c "$_pa"'
+_grun=" 1:11:5 2:12:5"
+gate_drop 3:13:5
+set -- $_grun
+printf "%s|" "$*"
+gate_drop 1:11:5
+set -- $_grun
+printf "%s\n" "$*"' 2>&1)
+	[ "$_pao" = '1:11:5 2:12:5|2:12:5' ] || { say "dropabsent: an absent entry must leave the list as it is, and a present one go: got $_pao, want 1:11:5 2:12:5|2:12:5"; return 1; }
 }
 
 # intskip: interrupt, testsh and sigs, run by this self-test (or $SELF)
@@ -1528,7 +1623,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave stop stopnoerr intskip ttyself"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave stop stopnoerr drop dropabsent intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
@@ -1624,6 +1719,11 @@ cmutant group-kill-dropped interrupt 'kill -s "$1" -- "-$2" 2> /dev/null' 'kill 
 cmutant no-kill-after-grace interrupt 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
 cmutant no-kill-after-grace-stop stop 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
 cmutant no-cont stop 'bench_signal_group CONT "$_sg_p" "$_sg_o" || true' ':'
+# gate_drop (FIX186, slice 2): emptied, the first of two checks ended in one
+# poll is still in the running list when a signal comes in the second's
+# grace; absent-entry guard dropped, an absent entry doubles the list
+mutant drop-emptied drop '	_grun="${_gdr%% "$1" *} ${_gdr#* "$1" }"' '	:'
+mutant drop-absent-doubles dropabsent '	case " $_grun " in *" $1 "*) ;; *) return 0 ;; esac' '	:'
 
 # mutants of scripts/test.sh: wmut <name> <case> <old> <new>
 wmut() {

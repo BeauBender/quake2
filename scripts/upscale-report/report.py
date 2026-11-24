@@ -29,6 +29,11 @@ import subprocess
 import sys
 import time
 
+# the bounded-run primitive for Python (FIX186): a command with a time limit is stopped with its
+# process group, TERM first
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+import bounded  # noqa: E402
+
 BACKENDS = ("scale2x", "metalfx", "vt")
 
 # The fixed list: output names looked for first, in this order; a name a
@@ -143,10 +148,10 @@ def load():
 def sysinfo():
     def run(cmd):
         try:
-            return subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=10).stdout.strip()
+            r = bounded.run(cmd, timeout=10, capture_output=True, text=True)
         except (OSError, subprocess.SubprocessError):
             return "?"
+        return "?" if r.how == "timeout" else r.stdout.strip()
     return {
         "model": run(["sysctl", "-n", "hw.model"]),
         "chip": run(["sysctl", "-n", "machdep.cpu.brand_string"]),
@@ -161,9 +166,10 @@ def engine_run(eng, game, args, basedir, renderer, bound, log=None):
            "+set", "vid_fullscreen", "0", "+set", "s_initsound", "0"] + args + ["+quit"]
     t0 = time.monotonic()
     try:
-        p = subprocess.run(cmd, cwd=eng, capture_output=True, text=True,
-                           errors="replace", timeout=bound)
-    except subprocess.TimeoutExpired:
+        p = bounded.run(cmd, timeout=bound, cwd=eng, capture_output=True, text=True, errors="replace")
+    except OSError as e:
+        die("an engine run did not start (%s): %s" % (e, " ".join(args)), 1)
+    if p.how == "timeout":
         die("an engine run outlived its %d s bound: %s" % (bound, " ".join(args)), 1)
     wall = time.monotonic() - t0
     if log:
