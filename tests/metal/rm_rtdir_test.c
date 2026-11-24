@@ -1202,6 +1202,10 @@ test_emit_scale(void)
 	CHECK(mtl_rtdir_emit_scale(NAN, 100, 1, 1) == 0 && mtl_rtdir_emit_scale(1e6f, NAN, 1, 1) == 0);
 	CHECK(mtl_rtdir_emit_scale(1e6f, 100, NAN, 1) == 0 && mtl_rtdir_emit_scale(1e6f, 100, 1, NAN) == 0);
 	CHECK(mtl_rtdir_emit_scale(1e6f, 0, 1, 1) == 0);
+	/* a point a hair from the face is finite: the distance is taken as at least 1, as qrad3 does */
+	CHECK(isfinite(mtl_rtdir_emit_scale(1e6f, 1e-20f, 1, 1)) && near(mtl_rtdir_emit_scale(1e6f, 1e-20f, 1, 1), 1e6, 1e-3));
+	CHECK(isfinite(mtl_rtdir_emit_scale(16384.0f * 16384.0f, 1e-20f, 1, 1)));
+	CHECK(near(mtl_rtdir_emit_scale(1e6f, 0.5f, 1, 1), 1e6, 1e-3));
 	/* the dispatch: the marker picks the face's falloff, any other cone the point's */
 	CHECK(mtl_rtdir_contrib(1e6f, 100, 1, 1, MTL_RTDIR_EMITTER) == mtl_rtdir_emit_scale(1e6f, 100, 1, 1));
 	CHECK(mtl_rtdir_contrib(300, 100, 1, 0, MTL_RTDIR_NOSPOT) == mtl_rtdir_scale(300, 100, 1, 0, MTL_RTDIR_NOSPOT));

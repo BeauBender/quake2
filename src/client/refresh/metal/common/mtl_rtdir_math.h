@@ -187,7 +187,8 @@ mtl_rtdir_scale(float intensity, float dist, float ndotl, float spotdot, float s
  * normal (the point is in front of the face). 0 when either cosine is at
  * most MTL_RTDIR_MIN_DOT, when the point is out of the face's range
  * (intensity / dist^2 below MTL_RTDIR_EMIT_CUT), and for any value that
- * is not a number.
+ * is not a number. A distance under 1 unit counts as 1 (qrad3's), so the
+ * result is finite.
  */
 static inline float
 mtl_rtdir_emit_scale(float intensity, float dist, float ndotl, float facedot)
@@ -198,6 +199,12 @@ mtl_rtdir_emit_scale(float intensity, float dist, float ndotl, float facedot)
 		!(dist * dist * MTL_RTDIR_EMIT_CUT <= intensity))
 	{
 		return 0.0f;
+	}
+
+	/* qrad3 takes a distance under 1 unit as 1, which also keeps the quotient finite */
+	if (dist < 1.0f)
+	{
+		dist = 1.0f;
 	}
 
 	s = intensity / (dist * dist) * ndotl * facedot;
