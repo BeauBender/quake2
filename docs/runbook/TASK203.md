@@ -86,11 +86,74 @@ is an acceptance criterion.
 ## Checks
 
 - `make test TEST_ARGS=optsearch`, `TEST_ARGS=optimize`, `TEST_ARGS=rtpreset`: the acceptance tests
-  (`tests/unit/test_optsearch.c`, `test_optimize.c`, `test_rtpreset.c`).
+  (`tests/unit/test_optsearch.c`, `test_optimize.c`, `test_rtpreset.c`); `tests/metal/rm_rt_test.c` (through
+  `tests/check-ref-metal.sh`) for `rm_rt_cost_format`.
 - `tests/check-cvar-docs.sh`: every new cvar and the command documented.
+- `tests/check-ref-metal.sh`: it failed on round 0 (`preset-to-table.sh refused badname.cfg without naming
+  its line`). The cause was the new `r_metalfx_scale` row: `vidrules.c` holds 20 tuning cvars, and
+  `scripts/rt/preset-to-table.sh` stopped at "expected 19" (exit 2) on every preset before reading a line.
+  Its count is 20 now; the check is unchanged.
 - The stock `metal` pins (`world`, `hud2d`, `rt-water`) unchanged.
+
+## Proofs (round 1, the owner's data, one hold, commit `74286ec7`)
+
+- *The unit suite*: `make test`, 590 tests, 0 failed. `make ref_metal` and `make` build;
+  `check-ref-metal`, `check-cvar-docs`, `check-runbook-index` and `check-doc-links` pass.
+- *The stock `metal` pins*, recorded on this branch and compared with the stored base at the default
+  thresholds, as TASK168 did (`pins.sh compare metal <s> --ref metal --ref-id <base>`):
+
+| Scenario | Base | Frames | Result |
+|---|---|---|---|
+| `world` | TASK168's head | 23 | 0 failed, worst 0 (byte-identical) |
+| `hud2d` | TASK168's head | 23 | 0 failed, worst 0 |
+| `rt-water` (`water.dm2`) | the main before TASK168 (`r_rt_water_hits 0`, as this branch) | 4 | 0 failed, worst 0 |
+
+  `rt-water` is compared with the record before TASK168 because this branch was cut before it, so its
+  default is still `r_rt_water_hits 0`; the second stored record of that main is incomplete and was not
+  used.
 
 ## A manual run
 
-A bounded run on real data: `optimize run` with the defaults but `optimize_rounds 4`. Its report lines are
-recorded here when the run is made on a bare-metal Mac; A (the tuning cvars) is compared before and after.
+Two bounded runs on real data (`demo1.dm2`, 640 x 480 window, Metal, `optimize_rounds 4`), each through
+the bounded-run primitive and stopped once the run ended. The report lines as printed:
+
+With the defaults (`optimize_target 60`):
+
+```
+target: p95 <= 16.7 ms; 4 rounds, 300 s
+hdr: not tried: the display's headroom is unavailable
+presentation: not turned (Stock; r_presentation needs a vid_restart)
+trial 1: the first candidate: stat 9.2 ms, mean 8.3 ms, p95 9.2 ms, presented 120.3 fps: meets
+trial 1 meets the target: nothing is given up
+result: trial 1, 9.2 ms meets 16.7 ms: the first candidate
+optimize: the result is saved as preset optimized
+optimize: B is preset optimized; rt_ab flips; rt_preset load optimized keeps it
+```
+
+With `optimize_target 200`, which nothing meets:
+
+```
+target: p95 <= 5.0 ms; 4 rounds, 300 s
+hdr: not tried: the display's headroom is unavailable
+presentation: not turned (Stock; r_presentation needs a vid_restart)
+trial 1: the first candidate: stat 9.2 ms, mean 8.3 ms, p95 9.2 ms, presented 120.3 fps: misses
+trial 2: r_metalfx 2: stat 9.2 ms, mean 8.3 ms, p95 9.2 ms, presented 120.2 fps: misses
+  denoise at its cheapest still misses: it stays there
+trial 3: r_metalfx 0: stat 9.2 ms, mean 8.3 ms, p95 9.2 ms, presented 120.3 fps: misses
+  upscale at its cheapest still misses: it stays there
+trial 4: r_metalfx 1, r_metalfx_scale 0.34: stat 9.1 ms, mean 8.3 ms, p95 9.1 ms, presented 120.2 fps: misses
+  resolution at its cheapest still misses: it stays there
+the round cap ended the search
+closest: 9.1 ms against 5.0 ms (trial 4: r_metalfx 1, r_metalfx_scale 0.34)
+limit: hdr not tried: the display's headroom is unavailable
+optimize: the closest result is saved as preset optimized
+optimize: B is preset optimized; rt_ab flips; rt_preset load optimized keeps it
+```
+
+What they show: the probe and the trials play, the round cap ends the search, the result or the closest is
+saved and made B. That no tuning cvar (A) is written is checked by the unit tests on every frame of a
+run, not by these runs. Every trial's mean is 8.3 ms, the 120 Hz display's interval, with
+`r_vsync 1`: the timedemo is bound by the present rate here, so these runs say nothing about the cost of
+the settings. The `limit:` line names `hdr` rather than the present rate because the presented rate equals
+the rendered one; the present-rate limit only fires when they differ. Measuring with `r_vsync 0` is the
+next run's to make, and is outside this card.
