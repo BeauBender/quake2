@@ -682,6 +682,7 @@ def engine_args(ctx, scenario_sets, extra_sets, tail, write=False):
 
 
 ENGINE_GRACE = 5  # the seconds run_engine gives a stopped engine between TERM and KILL
+ENGINE_DRAIN = 2  # the most seconds run_engine reads what the pty still holds before it closes it
 
 
 def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=True):
@@ -718,8 +719,8 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
         c = bounded.spawn([ctx.bin] + args, ENGINE_GRACE, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                           stdout=slave, stderr=slave, close_fds=True)
         p = c.popen
-        os.close(slave)
-        slave = -1
+        # the slave stays open here until the end: the last close of a pty's slave drops what the master
+        # has not read yet (FIX186), so an engine that exits before this point would lose its console
         t0 = time.time()
         matched_at = None
         while True:
@@ -758,11 +759,22 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
             if c is not None and c.popen.poll() is None:  # an interrupt must not leave the engine running
                 bounded.stop(c, ENGINE_GRACE, pump)
         finally:  # a signal the stop held is raised as it ends: the pty is closed and the log written still
-            if slave >= 0:
-                os.close(slave)
-            os.close(master)
-            with open(log, "wb") as f:
-                f.write(bytes(buf).replace(b"\r\n", b"\n"))
+            try:  # what the pty still holds (a TERM in spawn's hold window comes before any read), read
+                # before the slave closes, non-blocking and for at most ENGINE_DRAIN seconds
+                end = time.monotonic() + ENGINE_DRAIN
+                while time.monotonic() < end and select.select([master], [], [], 0)[0]:
+                    data = os.read(master, 65536)
+                    if not data:
+                        break
+                    buf.extend(data)
+            except OSError:
+                pass
+            finally:
+                if slave >= 0:
+                    os.close(slave)
+                os.close(master)
+                with open(log, "wb") as f:
+                    f.write(bytes(buf).replace(b"\r\n", b"\n"))
     if why == "timeout":
         raise RuntimeError("engine run timed out after %ds (%s)" % (timeout, log))
     return status
