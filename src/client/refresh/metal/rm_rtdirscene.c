@@ -22,8 +22,8 @@
  * which the mode's overlay reads 1, r_rt_direct_exposure and the
  * development view r_rt_direct_show), the map's lights (TASK187's light
  * entities, rm_rtdata.c) and after them its emissive faces as qrad3's
- * surface lights (TASK188 slice 2), uploaded once a map (the back end
- * fits the exposure at a fixed lag, slice 3), the frame's decision (with it the view
+ * surface lights (TASK188 slice 2), uploaded once a map, with the map's
+ * exposure fitted then from a sample of its luxels (slice 3c), the frame's decision (with it the view
  * takes the G-buffer path), the view and the style table handed to the
  * back end before the raster, and the r_rt_stats lines. Under any
  * presentation but RT-primary nothing here builds or allocates anything.
@@ -58,6 +58,7 @@ static const rm_world_t *dir_world; /* the map whose lights are uploaded */
 static char dir_map[MAX_QPATH];     /* its model name (a new map's buffers may take the old one's address) */
 static long dir_nlights;            /* the records uploaded: the lights, then the emissive faces */
 static int dir_fixed;               /* the frame's exposure is r_rt_direct_exposure's */
+static float dir_fit;               /* the map's exposure, fitted at its load (TASK188 slice 3c, rm_rtdir_fit_map) */
 
 void
 RM_RTDir_Init(const rmb_caps_t *caps)
@@ -133,6 +134,118 @@ RM_RTDir_Face(void *ctx, long face, rm_rtdir_face_t *out)
 	return 1;
 }
 
+/* the deepest the fit's line test walks the map's tree; past it a line counts as blocked */
+#define RM_RTDIR_FIT_DEPTH 1024
+
+/* 1 when the segment a to b crosses no solid leaf of the tree under node (the world's line test, as R_RecursiveLightPoint walks) */
+static int
+RM_RTDir_ClearNode(const mnode_t *node, const float *a, const float *b, int depth)
+{
+	float front, back, frac, mid[3];
+	int side, k;
+
+	if (!node || (depth > RM_RTDIR_FIT_DEPTH))
+	{
+		return 0;
+	}
+
+	if (node->contents != CONTENTS_NODE)
+	{
+		return !(node->contents & CONTENTS_SOLID);
+	}
+
+	front = DotProduct(a, node->plane->normal) - node->plane->dist;
+	back = DotProduct(b, node->plane->normal) - node->plane->dist;
+	side = front < 0;
+
+	if ((back < 0) == side)
+	{
+		return RM_RTDir_ClearNode(node->children[side], a, b, depth + 1);
+	}
+
+	frac = front / (front - back);
+
+	for (k = 0; k < 3; k++)
+	{
+		mid[k] = a[k] + (b[k] - a[k]) * frac;
+	}
+
+	return RM_RTDir_ClearNode(node->children[side], a, mid, depth + 1) &&
+		RM_RTDir_ClearNode(node->children[!side], mid, b, depth + 1);
+}
+
+/* the exposure fit's shadow ray (rm_rtdir_clear_fn): the world's solid leaves alone, as qrad3 traces */
+static int
+RM_RTDir_Clear(void *ctx, const float *a, const float *b)
+{
+	const model_t *wm = ctx;
+
+	return RM_RTDir_ClearNode(wm->nodes, a, b, 0);
+}
+
+/*
+ * TASK188 slice 3c: the exposure fit's samples, at most cap: of every
+ * n-th world face (about RM_RTDIR_FIT_FACES of them) that has a
+ * lightmap and is not a fixture (SURF_LIGHT, whose own luxels qrad3 fills
+ * with its own light) nor translucent, its centre and the points half way
+ * from it to each corner, each with the face's lightmap at its luxel
+ * (rm_rtdir_fit_luxel, every style at 1). In the face's order, so the
+ * samples are a function of the map alone.
+ */
+static long
+RM_RTDir_FitPoints(const model_t *wm, rm_rtdir_fitpt_t *pts, long cap)
+{
+	long first = 0, num = wm->numsurfaces, face, stride, n = 0;
+
+	if (wm->numsubmodels > 0)
+	{
+		first = wm->submodels[0].firstmodelsurface;
+		num = wm->submodels[0].nummodelsurfaces;
+	}
+
+	stride = 1 + num / RM_RTDIR_FIT_FACES;
+
+	for (face = first; (face < first + num) && (face < wm->numsurfaces) && (n < cap); face += stride)
+	{
+		const msurface_t *fa = &wm->surfaces[face];
+		const mtexinfo_t *tex = fa->texinfo;
+		rm_rtdir_face_t f;
+		float c[3] = { 0, 0, 0 };
+		int smax, tmax, v, k;
+
+		if ((face < 0) || !fa->samples || !tex || (tex->flags & (SURF_LIGHT | SURF_TRANS33 | SURF_TRANS66 | SURF_SKY | SURF_WARP)) ||
+			!rm_lm_size(fa->extents[0], fa->extents[1], &smax, &tmax) || !RM_RTDir_Face((void *)wm, face, &f) || (f.n < 3))
+		{
+			continue;
+		}
+
+		for (v = 0; v < f.n; v++)
+		{
+			for (k = 0; k < 3; k++)
+			{
+				c[k] += f.pts[v * f.stride + k] / (float)f.n;
+			}
+		}
+
+		for (v = -1; (v < f.n) && (n < cap); v++)
+		{
+			rm_rtdir_fitpt_t *p = &pts[n++];
+
+			for (k = 0; k < 3; k++)
+			{
+				p->pos[k] = (v < 0) ? c[k] : 0.5f * (c[k] + f.pts[v * f.stride + k]);
+				p->normal[k] = f.normal[k];
+			}
+
+			rm_rtdir_fit_luxel(fa->samples, rm_lm_nummaps(fa->styles), smax, tmax,
+					(DotProduct(p->pos, tex->vecs[0]) + tex->vecs[0][3] - fa->texturemins[0]) / 16.0f,
+					(DotProduct(p->pos, tex->vecs[1]) + tex->vecs[1][3] - fa->texturemins[1]) / 16.0f, p->lm);
+		}
+	}
+
+	return n;
+}
+
 /* the map's lights and emissive faces into the back end's buffer, once a map (and after the pass opened again) */
 static void
 RM_RTDir_Lights(void)
@@ -152,6 +265,7 @@ RM_RTDir_Lights(void)
 
 	dir_world = wm->world;
 	Q_strlcpy(dir_map, wm->name, sizeof(dir_map));
+	dir_fit = 1.0f;
 	memset(&why, 0, sizeof(why));
 	memset(&ewhy, 0, sizeof(ewhy));
 
@@ -172,6 +286,22 @@ RM_RTDir_Lights(void)
 	{
 		R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: the lights cannot be uploaded; none\n", wm->name);
 		dir_nlights = nemit = 0;
+	}
+
+	/* TASK188 slice 3c: the map's exposure, once at its load, from a sample of its luxels (rm_rtdir_fit_map) */
+	{
+		rm_rtdir_fitpt_t *pts = malloc(RM_RTDIR_FIT_POINTS * sizeof(*pts));
+		const long npts = (pts && wm->nodes) ? RM_RTDir_FitPoints(wm, pts, RM_RTDIR_FIT_POINTS) : 0;
+		rm_rtdir_mapfit_t f;
+
+		dir_fit = rm_rtdir_fit_map(dir_lights, dir_nlights + nemit, pts, npts, RM_RTDir_Clear, (void *)wm, &f);
+		free(pts);
+
+		if (r_rt_stats_ref && r_rt_stats_ref->value)
+		{
+			R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: exposure fit %.4f over %lu luxels of %ld (%lu near black, "
+					"%lu clipped), %lu lines\n", wm->name, (double)dir_fit, f.n, npts, f.dark, f.clipped, f.rays);
+		}
 	}
 
 	if (r_rt_stats_ref && r_rt_stats_ref->value)
@@ -278,7 +408,7 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 		return;
 	}
 
-	/* the lines of the frames completed since; the fit is the back end's, at a fixed lag (rm_rtdir_fit_lag) */
+	/* the lines of the frames completed since */
 	n = rmb_rtdir_stats(st, RMB_FRAMES_IN_FLIGHT);
 
 	for (i = 0; i < n; i++)
@@ -352,8 +482,8 @@ RM_RTDir_View(const rm_view_t *view)
 
 		rmb_rtdir_set_dlights(dl, k);
 	}
-	/* r_rt_direct_exposure's, else 0: the back end then takes its fit at the lag, at the trace */
-	exposure = rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), 0.0f, &dir_fixed);
+	/* r_rt_direct_exposure's, else the map's fit (TASK188 slice 3c) */
+	exposure = rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), dir_fit, &dir_fixed);
 
 	RM_GB_TargetSize(&w, &h);
 

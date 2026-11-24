@@ -464,36 +464,185 @@ rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long samples,
 int
 rm_rtdir_fit_enters(const float *lm)
 {
-	(void)lm;
-	return 1;
+	float most = 0.0f;
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		if (!isfinite(lm[k]) || (lm[k] >= RM_RTDIR_FIT_CLIP))
+		{
+			return 0;
+		}
+
+		most = (lm[k] > most) ? lm[k] : most;
+	}
+
+	return most >= RM_RTDIR_FIT_DARK;
 }
 
 void
 rm_rtdir_fit_light(const rm_rtdir_light_t *l, long n, const float *p, const float *nrm, rm_rtdir_clear_fn clear,
 		void *ctx, float *out, unsigned long *rays)
 {
-	(void)l; (void)n; (void)p; (void)nrm; (void)clear; (void)ctx; (void)rays;
+	mtl_rtdir_keep_t k;
+	float o[3];
+	unsigned seen = 0, j;
+	long i;
+	int c;
+
 	out[0] = out[1] = out[2] = 0.0f;
+	k.n = 0;
+	k.capped = 0;
+
+	for (c = 0; c < 3; c++)
+	{
+		o[c] = p[c] + nrm[c] * RM_RTDIR_FIT_BIAS;
+	}
+
+	/* the kernel's first loop: the candidates among the lights in range and facing */
+	for (i = 0; l && (i < n); i++)
+	{
+		const float dv[3] = { l[i].pos[0] - p[0], l[i].pos[1] - p[1], l[i].pos[2] - p[2] };
+		const float dist = sqrtf(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
+		float s, nl = 0.0f, sd = 0.0f;
+
+		if (!mtl_rtdir_reach(l[i].pos[3], dist, l[i].spot[3]))
+		{
+			continue;
+		}
+
+		for (c = 0; c < 3; c++)
+		{
+			nl += nrm[c] * dv[c] / dist;
+			sd -= dv[c] / dist * l[i].spot[c];
+		}
+
+		s = mtl_rtdir_contrib(l[i].pos[3], dist, nl, sd, l[i].spot[3]);
+
+		if (s > 0.0f)
+		{
+			k = mtl_rtdir_keep(k, (unsigned)i, s);
+		}
+	}
+
+	k = mtl_rtdir_keep_rank(k);
+
+	/* its second: strongest first, one line each, until MTL_RTDIR_MAX_TRACED clear */
+	for (j = 0; mtl_rtdir_walk(j, k.n, seen); j++)
+	{
+		const rm_rtdir_light_t *li = &l[k.i[j]];
+		const float to[3] = { li->pos[0] - o[0], li->pos[1] - o[1], li->pos[2] - o[2] };
+		const float len = sqrtf(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
+		float end[3];
+
+		for (c = 0; c < 3; c++)
+		{
+			end[c] = (len > 0.0f) ? o[c] + to[c] * ((len - 1.0f) / len) : o[c];
+		}
+
+		if (rays)
+		{
+			(*rays)++;
+		}
+
+		if ((len > 1.0f) && !clear(ctx, o, end))
+		{
+			continue;
+		}
+
+		seen++;
+
+		for (c = 0; c < 3; c++)
+		{
+			out[c] += k.s[j] * li->color[c];
+		}
+	}
 }
 
 float
 rm_rtdir_fit_map(const rm_rtdir_light_t *l, long n, const rm_rtdir_fitpt_t *pts, long npts, rm_rtdir_clear_fn clear,
 		void *ctx, rm_rtdir_mapfit_t *out)
 {
-	(void)l; (void)n; (void)pts; (void)npts; (void)clear; (void)ctx;
+	rm_rtdir_mapfit_t f;
+	long i;
+
+	memset(&f, 0, sizeof(f));
+
+	for (i = 0; pts && clear && (i < npts); i++)
+	{
+		const float *lm = pts[i].lm;
+		float raw[3];
+
+		if (!rm_rtdir_fit_enters(lm))
+		{
+			int clipped = 0, c;
+
+			for (c = 0; c < 3; c++)
+			{
+				clipped |= isfinite(lm[c]) && (lm[c] >= RM_RTDIR_FIT_CLIP);
+			}
+
+			if (clipped)
+			{
+				f.clipped++;
+			}
+			else
+			{
+				f.dark++;
+			}
+
+			continue;
+		}
+
+		rm_rtdir_fit_light(l, n, pts[i].pos, pts[i].normal, clear, ctx, raw, &f.rays);
+		f.lm += mtl_rtdir_q(lm[0] * MTL_RTDIR_UNIT, lm[1] * MTL_RTDIR_UNIT, lm[2] * MTL_RTDIR_UNIT);
+		f.raw += mtl_rtdir_q(raw[0] * MTL_RTDIR_UNIT, raw[1] * MTL_RTDIR_UNIT, raw[2] * MTL_RTDIR_UNIT);
+		f.n++;
+	}
+
+	f.exposure = rm_rtdir_fit(f.lm, f.raw, f.n, 1.0f);
+
 	if (out)
 	{
-		memset(out, 0, sizeof(*out));
-		out->exposure = 1.0f;
+		*out = f;
 	}
-	return 1.0f;
+
+	return f.exposure;
 }
 
 void
 rm_rtdir_fit_luxel(const unsigned char *samples, int nummaps, int smax, int tmax, float s, float t, float *out)
 {
-	(void)samples; (void)nummaps; (void)smax; (void)tmax; (void)s; (void)t;
+	const float half = 0.5f;
+	int i = 0, j = 0, m, c;
+
 	out[0] = out[1] = out[2] = 0.0f;
+
+	if (!samples || (nummaps < 1) || (smax < 1) || (tmax < 1))
+	{
+		return;
+	}
+
+	/* the nearest luxel, held to the face; a coordinate that is not a number reads luxel 0 */
+	if (s + half > 0.0f)
+	{
+		i = (s + half < (float)smax) ? (int)(s + half) : smax - 1;
+	}
+
+	if (t + half > 0.0f)
+	{
+		j = (t + half < (float)tmax) ? (int)(t + half) : tmax - 1;
+	}
+
+	for (m = 0; m < nummaps; m++)
+	{
+		const unsigned char *x = samples + ((size_t)m * smax * tmax + (size_t)j * smax + i) * 3;
+
+		for (c = 0; c < 3; c++)
+		{
+			out[c] += x[c];
+		}
+	}
 }
 
 float

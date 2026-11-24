@@ -972,7 +972,8 @@ binding_broken(const char *src)
 	r = pin_and(r, pin_count(text, strlen(text), "n = (n > MTL_RTDIR_MAX_DLIGHTS) ? MTL_RTDIR_MAX_DLIGHTS : n;", 1));
 	r = pin_and(r, pin_count(text, strlen(text), "static rm_rtdir_dlight_t dlights[MTL_RTDIR_MAX_DLIGHTS];", 1));
 	r = pin_and(r, pin_count(text, strlen(text), "view.ndlights = ndlights;", 1));
-	r = pin_and(r, pin_count(text, strlen(text), "view.nself = selftab ? (unsigned)nself : 0u;", 1));
+	/* TASK188 slice 3c: the table's count taken at the encode, beside its binding, whatever the order of the calls before */
+	r = pin_and(r, pin_count(tr.body, tr.nbody, "view.nself = selftab ? (unsigned)nself : 0u;", 1));
 
 	if ((r != PIN_OK) || (count_in(text, strlen(text), "atIndex:10]") != 1) || (count_in(text, strlen(text), "atIndex:11]") != 1) ||
 		(count_in(text, strlen(text), "view.ndlights") != 1) || (count_in(text, strlen(text), "view.nself") != 1))
@@ -1029,6 +1030,8 @@ test_host_binding(void)
 		{ "dlights-cap", "\tn = (n > MTL_RTDIR_MAX_DLIGHTS) ? MTL_RTDIR_MAX_DLIGHTS : n;\n", "" },
 		{ "dlights-count", "\tview.ndlights = ndlights;\n", "\tview.ndlights = 4096;\n" },
 		{ "self-count", "\tview.nself = selftab ? (unsigned)nself : 0u;\n", "\tview.nself = 0xffffffffu;\n" },
+		/* TASK188 slice 3c: the table's count not taken at the encode */
+		{ "self-count-early", "\t\tview.nself = selftab ? (unsigned)nself : 0u;\n", "" },
 	};
 	const char *why;
 	int i;
@@ -1307,21 +1310,20 @@ test_fit_light(void)
 	rm_rtdir_fit_light(l, 1, p, n, fit_clear, NULL, out, NULL);
 	CHECK(near(out[0], 100, 1e-3));
 
-	/* the bound: 64 visible lights sum the 16 strongest in 16 rays; 64 behind a wall, 32 rays and nothing */
+	/* the bound: 64 visible lights at one place sum the 16 strongest in 16 rays; behind a wall, 32 rays and nothing */
 	for (i = 0; i < 64; i++)
 	{
-		fit_point_light(&l[i], (float)i, 0, 100, 300 + (float)i);
+		fit_point_light(&l[i], 0, 0, 100, 300 + (float)i);
 	}
 
 	rays = 0;
 	rm_rtdir_fit_light(l, 64, p, n, fit_clear, NULL, out, &rays);
 	CHECK(rays == MTL_RTDIR_MAX_TRACED);
 
+	/* each (300 + i - 100) x 1, the 16 strongest the last 16 */
 	for (i = 48; i < 64; i++)
 	{
-		const double d = sqrt((double)i * i + 100.0 * 100.0);
-
-		want += (300.0 + i - d) * (100.0 / d);
+		want += 200.0 + i;
 	}
 
 	CHECK(near(out[0], want, 1e-2));
