@@ -461,17 +461,39 @@ rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long samples,
 	return (e > RM_RTDIR_FIT_MAX) ? RM_RTDIR_FIT_MAX : (float)e;
 }
 
-float
-rm_rtdir_fit_lag(const rm_rtdir_stats_t *lagged, unsigned long frame, unsigned long reset, float prev)
+int
+rm_rtdir_fit_enters(const float *lm)
 {
-	/* only the frame exactly the lag behind, of this map: a slot whose last frame did not trace holds an older one */
-	if (!lagged || (frame <= RM_RTDIR_FIT_LAG) || (lagged->frame != frame - RM_RTDIR_FIT_LAG) ||
-		(lagged->frame <= reset))
-	{
-		return prev;
-	}
+	(void)lm;
+	return 1;
+}
 
-	return rm_rtdir_fit(lagged->fit_lm, lagged->fit_raw, lagged->fit_n, prev);
+void
+rm_rtdir_fit_light(const rm_rtdir_light_t *l, long n, const float *p, const float *nrm, rm_rtdir_clear_fn clear,
+		void *ctx, float *out, unsigned long *rays)
+{
+	(void)l; (void)n; (void)p; (void)nrm; (void)clear; (void)ctx; (void)rays;
+	out[0] = out[1] = out[2] = 0.0f;
+}
+
+float
+rm_rtdir_fit_map(const rm_rtdir_light_t *l, long n, const rm_rtdir_fitpt_t *pts, long npts, rm_rtdir_clear_fn clear,
+		void *ctx, rm_rtdir_mapfit_t *out)
+{
+	(void)l; (void)n; (void)pts; (void)npts; (void)clear; (void)ctx;
+	if (out)
+	{
+		memset(out, 0, sizeof(*out));
+		out->exposure = 1.0f;
+	}
+	return 1.0f;
+}
+
+void
+rm_rtdir_fit_luxel(const unsigned char *samples, int nummaps, int smax, int tmax, float s, float t, float *out)
+{
+	(void)samples; (void)nummaps; (void)smax; (void)tmax; (void)s; (void)t;
+	out[0] = out[1] = out[2] = 0.0f;
 }
 
 float

@@ -285,13 +285,11 @@ int rm_rtdir_emit_format(const char *map, const rm_rtdir_emitpack_t *p, char *bu
 void rm_rtdir_styles(const float (*styles)[3], int n, float modulate, float *out);
 
 /*
- * The exposure fit, the stated rule of this slice: the ratio of the
- * lightmap's sum to the raw direct light's sum over the same sampled
- * world pixels (every MTL_RTDIR_FIT_STEP-th pixel a row and a column, of
- * one completed frame), so the traced frame's mean light is the stock
- * frame's; clamped to RM_RTDIR_FIT_MIN to RM_RTDIR_FIT_MAX. prev, the
- * exposure in use (1 at a map's first frame), when there is no sample or
- * the raw sum is 0 (no light reaches a sampled pixel).
+ * The exposure fit's ratio: the lightmap's sum to the traced light's sum
+ * over the same samples (TASK188 slice 3c: a map's luxels,
+ * rm_rtdir_fit_map), so the traced map's mean light is the stock map's;
+ * clamped to RM_RTDIR_FIT_MIN to RM_RTDIR_FIT_MAX. prev when there is no
+ * sample or the traced sum is 0 (no light reaches a sample).
  */
 float rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long samples, float prev);
 
@@ -308,7 +306,7 @@ typedef struct
 	float vp[4];        /* the view's viewport at the render size */
 	float eye[4];       /* the view's origin */
 	float bias_k;       /* mtl_rtao_bias's k */
-	float exposure;     /* r_rt_direct_exposure's, else 0 for the back end's fit at the lag (rm_rtdir_fit_lag) */
+	float exposure;     /* r_rt_direct_exposure's, else the map's fit (rm_rtdir_fit_map) */
 	unsigned nlights;   /* the lights in the buffer */
 	unsigned show;      /* rm_rtdir_show */
 	unsigned ndlights;  /* the frame's dynamic lights (the back end's, rmb_rtdir_set_dlights), 0 from rm_rtdir_view */
@@ -341,21 +339,72 @@ typedef struct
 } rm_rtdir_stats_t;
 
 /*
- * TASK188 slice 3: the exposure fit at a fixed lag. The pass's back end
- * keeps RM_RTDIR_FIT_LAG slots (RMB_FRAMES_IN_FLIGHT), frame f in slot
- * f % RM_RTDIR_FIT_LAG, so the slot frame f takes last held frame
- * f - RM_RTDIR_FIT_LAG, which the frame semaphore has seen complete
- * before frame f began. lagged is that slot's record (its frame and the
- * fit's sums; NULL for none). Its fit (rm_rtdir_fit, from prev) is frame
- * f's exposure when lagged->frame is exactly f - RM_RTDIR_FIT_LAG and
- * after reset (the last frame traced before the map's lights were set);
- * else prev, the exposure in use, is kept. So a frame's exposure follows
- * from the frames traced before it, never from the order in which they
- * completed.
+ * TASK188 slice 3c: the exposure fit at map load, from a sample of
+ * luxels (docs/plans/presentation-modes.md section 4.1). A sample is a
+ * point on a world face, its unit normal, and the face's lightmap there:
+ * its maps summed with every style at 1, as qrad3 baked them, in the
+ * lightmap's bytes. It enters the fit only when that lightmap is neither
+ * near black (its brightest channel under RM_RTDIR_FIT_DARK) nor clipped
+ * (a channel at RM_RTDIR_FIT_CLIP or more): a dark room that a bright
+ * fixture's traced light reaches would pull the ratio down and crush the
+ * map, and a clipped luxel holds less than its light. The map's
+ * exposure is rm_rtdir_fit of the entered samples' sums (mtl_rtdir_q of
+ * the lightmap and of the traced light, both over 255), from 1.
  */
-#define RM_RTDIR_FIT_LAG 3
+#define RM_RTDIR_FIT_DARK 16.0f
+#define RM_RTDIR_FIT_CLIP 255.0f
 
-float rm_rtdir_fit_lag(const rm_rtdir_stats_t *lagged, unsigned long frame, unsigned long reset, float prev);
+/* the samples a map's fit takes, at most; the faces it takes them from, about (every n-th face past this) */
+#define RM_RTDIR_FIT_POINTS 8192
+#define RM_RTDIR_FIT_FACES 1024
+
+/* a sample's start is this far off its face along the normal; its ray stops a unit short of the light, as the kernel's */
+#define RM_RTDIR_FIT_BIAS 1.0f
+
+typedef struct
+{
+	float pos[3];
+	float normal[3];    /* unit, toward the side the face is seen from */
+	float lm[3];        /* the lightmap there, every style at 1, in bytes */
+} rm_rtdir_fitpt_t;
+
+/* 1 when nothing solid lies between a and b (a world line test) */
+typedef int (*rm_rtdir_clear_fn)(void *ctx, const float *a, const float *b);
+
+typedef struct
+{
+	unsigned long lm, raw;  /* the entered samples' sums (mtl_rtdir_q) */
+	unsigned long n;        /* the samples entered */
+	unsigned long dark;     /* left out: near black */
+	unsigned long clipped;  /* left out: clipped */
+	unsigned long rays;     /* the lines tested */
+	float exposure;
+} rm_rtdir_mapfit_t;
+
+/* 1 when a sample of lightmap lm (3 bytes' worth, every style at 1) enters the fit; 0 near black, clipped or not a number */
+int rm_rtdir_fit_enters(const float *lm);
+
+/*
+ * The traced light at p (unit normal n), every style at 1, in the
+ * lightmap's units, into out[3]: the kernel's rule (rm_rtdir_direct) on
+ * the host, the MTL_RTDIR_MAX_RAYS strongest candidates traced strongest
+ * first, the first MTL_RTDIR_MAX_TRACED that clear reaches summed, with
+ * clear as the shadow ray. No dynamic light (none at map load) and no
+ * own light (a fixture's faces take no sample). Its rays added to *rays.
+ */
+void rm_rtdir_fit_light(const rm_rtdir_light_t *l, long n, const float *p, const float *nrm, rm_rtdir_clear_fn clear,
+		void *ctx, float *out, unsigned long *rays);
+
+/* the map's exposure over npts samples (rm_rtdir_fit_enters, rm_rtdir_fit_light); 1 with none entered; out may be NULL */
+float rm_rtdir_fit_map(const rm_rtdir_light_t *l, long n, const rm_rtdir_fitpt_t *pts, long npts, rm_rtdir_clear_fn clear,
+		void *ctx, rm_rtdir_mapfit_t *out);
+
+/*
+ * A face's lightmap at the luxel nearest the texture coordinates (s, t)
+ * (its texturemins taken off, in luxels of 16 units), its nummaps maps of
+ * smax by tmax luxels summed into out[3]: the luxel held to the face.
+ */
+void rm_rtdir_fit_luxel(const unsigned char *samples, int nummaps, int smax, int tmax, float s, float t, float *out);
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
 int rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *buf, size_t len);
@@ -371,10 +420,7 @@ int rmb_rtdir_open(char *err, size_t errlen);
 /* releases the pipelines, the outputs, the lights and the counters */
 void rmb_rtdir_close(void);
 
-/*
- * the map's lights (copied into a buffer the frames read); 1, or 0 when it cannot be made (n 0 keeps none); the
- * exposure fit starts again at 1, from the frames encoded after this call (rm_rtdir_fit_lag's reset)
- */
+/* the map's lights (copied into a buffer the frames read); 1, or 0 when it cannot be made (n 0 keeps none) */
 int rmb_rtdir_set_lights(const rm_rtdir_light_t *l, long n);
 
 /* TASK188 slice 3b: the map's per-triangle table (rm_rtdir_self_table); 1, or 0 when it cannot be made (n 0 keeps none) */

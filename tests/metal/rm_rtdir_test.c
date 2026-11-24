@@ -1062,114 +1062,6 @@ test_host_binding(void)
 	CHECK(why && strstr(why, "reformatted? the pin is exact"));
 }
 
-/*
- * TASK188 slice 3, the back end's half of the fixed lag, in rmb_rtdir.m's
- * text (src) with its comments taken out. In rmb_rtdir_trace the fit is
- * taken once from the slot's sums, and before the statement that clears
- * them; the view's exposure is replaced by it only when it is not above 0
- * (r_rt_direct_exposure's value is kept); and rmb_rtdir_set_lights sets
- * fit_reset to the last frame, once. NULL when it holds, else the rule
- * broken.
- */
-static const char *
-fit_lag_broken(const char *src)
-{
-	static char text[65536], sq[65536];
-	const char *fitp, *clearp;
-	fn_t tr, sl;
-
-	strip_comments(src, text, sizeof(text));
-
-	if (!find_fn(text, "static id<MTLTexture>\nrmb_rtdir_trace(", &tr) || !find_fn(text, "int\nrmb_rtdir_set_lights(", &sl))
-	{
-		return "rmb_rtdir_trace or rmb_rtdir_set_lights is not defined once";
-	}
-
-	if (pin_count(tr.body, tr.nbody, "fit = rm_rtdir_fit_lag(&lag, fno, fit_reset, fit);", 1) != PIN_OK)
-	{
-		return "the lagged fit is not taken once in rmb_rtdir_trace";
-	}
-
-	fitp = strstr(tr.body, "fit = rm_rtdir_fit_lag(");
-	clearp = strstr(tr.body, "memset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS");
-
-	if (!fitp || !clearp || (fitp > clearp))
-	{
-		return "the slot's sums are not read before they are cleared";
-	}
-
-	squeeze(tr.body, tr.nbody, sq, sizeof(sq));
-
-	if ((count_in(sq, strlen(sq), "view.exposure=fit;") != 1) ||
-		(count_in(sq, strlen(sq), "if(!(view.exposure>0.0f)){view.exposure=fit;}") != 1))
-	{
-		return "the view's exposure is not replaced by the fit only when it is not above 0";
-	}
-
-	if ((count_in(text, strlen(text), "fit_reset = last_frame;") != 1) || (count_in(sl.body, sl.nbody, "fit_reset = last_frame;") != 1))
-	{
-		return "fit_reset is not set to last_frame once, in rmb_rtdir_set_lights";
-	}
-
-	return NULL;
-}
-
-/* the fit-lag pin holds on the real file, and each mutant of it is refused */
-static void
-test_fit_lag_binding(void)
-{
-	static const char clear[] = "\t\tmemset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));\n";
-	static char src[65536], m[65536 + 1024], m2[65536 + 1024];
-	static const struct
-	{
-		const char *name, *from, *to, *from2, *to2;
-	} mutants[] = {
-		/* the clear before the fit (the two statements swapped): it reads sums of 0 and the exposure stays 1 */
-		{ "memset-first", "\t\t{\n\t\t\tconst uint32_t *c = (const uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS;",
-			"\t\tmemset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));\n"
-			"\t\t{\n\t\t\tconst uint32_t *c = (const uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS;",
-			"\t\t}\n\n\t\tmemset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));\n",
-			"\t\t}\n" },
-		/* the map's reset dropped: a new map is fitted from the old map's frame still in its slot */
-		{ "reset-dropped", "\tfit_reset = last_frame;\n", "", NULL, NULL },
-		/* the fit always replaces r_rt_direct_exposure's value */
-		{ "exposure-always", "if (!(view.exposure > 0.0f))", "if (1)", NULL, NULL },
-	};
-	const char *why;
-	int i;
-
-	CHECK(read_file("src/client/refresh/metal/rmb_rtdir.m", src, sizeof(src)));
-	CHECK(strstr(src, clear) != NULL);
-	why = fit_lag_broken(src);
-
-	if (why)
-	{
-		printf("rmb_rtdir.m: %s\n", why);
-	}
-
-	CHECK(why == NULL);
-
-	for (i = 0; i < (int)(sizeof(mutants) / sizeof(mutants[0])); i++)
-	{
-		int applied = mutate(src, mutants[i].from, mutants[i].to, m, sizeof(m));
-
-		if (applied && mutants[i].from2)
-		{
-			applied = mutate(m, mutants[i].from2, mutants[i].to2, m2, sizeof(m2));
-			memcpy(m, m2, sizeof(m));
-		}
-
-		why = applied ? fit_lag_broken(m) : NULL;
-
-		if (!applied || !why)
-		{
-			printf("fit-lag mutant %s: %s\n", mutants[i].name, applied ? "passes the fit-lag check" : "does not apply");
-		}
-
-		CHECK(applied && (why != NULL));
-	}
-}
-
 /* the fit's samples: the channel mean, clamped to QMAX, in 1/64 steps; sums exact whatever the order */
 static void
 test_q(void)
@@ -1219,108 +1111,327 @@ test_fit(void)
 }
 
 /*
- * TASK188 slice 3, the exposure at a fixed lag: frame f takes the fit of
- * frame f - RM_RTDIR_FIT_LAG (the last frame of its back-end slot), only
- * when that record is exactly the lag behind and after the map's reset;
- * else the exposure in use is kept.
+ * TASK188 slice 3c, the exposure fit at map load, in the engine's and the
+ * back end's text (scene, back) with their comments taken out: the map's
+ * fit is taken once, in RM_RTDir_Lights, after its reset to 1 there; the
+ * view's exposure is rm_rtdir_exposure of r_rt_direct_exposure and that
+ * fit, once, in RM_RTDir_View; and the back end neither fits nor writes
+ * the view's exposure. NULL when it holds, else the rule broken.
  */
-static void
-test_fit_lag(void)
+static const char *
+fit_rule_broken(const char *scene, const char *back)
 {
-	rm_rtdir_stats_t s;
+	static char text[65536], btext[65536], sq[65536];
+	const char *reset, *taken;
+	fn_t li, vi;
 
-	CHECK(RM_RTDIR_FIT_LAG == 3);
-	memset(&s, 0, sizeof(s));
-	s.frame = 7;
-	s.fit_lm = 300;
-	s.fit_raw = 100;
-	s.fit_n = 10;
+	strip_comments(scene, text, sizeof(text));
+	strip_comments(back, btext, sizeof(btext));
 
-	/* exactly the lag behind, after the reset: its fit */
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 0, 1), 3.0, 1e-6));
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 6, 1), 3.0, 1e-6));
+	if (!find_fn(text, "static void\nRM_RTDir_Lights(", &li) || !find_fn(text, "void\nRM_RTDir_View(", &vi))
+	{
+		return "RM_RTDir_Lights or RM_RTDir_View is not defined once";
+	}
 
-	/* a record nearer or older than the lag (a slot whose last frame did not trace): kept */
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG - 1, 0, 1.5f), 1.5, 1e-6));
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG + 1, 0, 1.5f), 1.5, 1e-6));
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + 2 * RM_RTDIR_FIT_LAG, 0, 1.5f), 1.5, 1e-6));
+	reset = strstr(li.body, "dir_fit = 1.0f;");
+	taken = strstr(li.body, "dir_fit = rm_rtdir_fit_map(");
 
-	/* at or before the map's reset (the old map's frame, still in its slot): kept */
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 7, 1), 1.0, 1e-6));
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 9, 1), 1.0, 1e-6));
+	if ((count_in(text, strlen(text), "dir_fit = ") != 2) || (count_in(li.body, li.nbody, "dir_fit = 1.0f;") != 1) ||
+		(count_in(li.body, li.nbody, "dir_fit = rm_rtdir_fit_map(") != 1) || !reset || !taken || (reset > taken))
+	{
+		return "the map's fit is not taken once, in RM_RTDir_Lights, after its reset";
+	}
 
-	/* no record, a slot never used (frame 0), a frame before the lag, no sample: kept */
-	CHECK(near(rm_rtdir_fit_lag(NULL, 10, 0, 2), 2.0, 1e-6));
-	s.frame = 0;
-	CHECK(near(rm_rtdir_fit_lag(&s, RM_RTDIR_FIT_LAG, 0, 2), 2.0, 1e-6));
-	s.frame = 7;
-	CHECK(near(rm_rtdir_fit_lag(&s, 2, 0, 2), 2.0, 1e-6));
-	s.fit_n = 0;
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 0, 2), 2.0, 1e-6));
+	if ((count_in(text, strlen(text), "rm_rtdir_exposure(") != 1) ||
+		(pin_count(vi.body, vi.nbody, "exposure = rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), dir_fit, &dir_fixed);", 1) !=
+			PIN_OK))
+	{
+		return "the view's exposure is not r_rt_direct_exposure's, else the map's fit";
+	}
+
+	squeeze(btext, strlen(btext), sq, sizeof(sq));
+
+	if ((count_in(sq, strlen(sq), "view.exposure=") != 0) || (count_in(sq, strlen(sq), "view.exposure+=") != 0) ||
+		(count_in(sq, strlen(sq), "view.exposure*=") != 0) || (count_in(btext, strlen(btext), "rm_rtdir_fit") != 0))
+	{
+		return "the back end fits or writes the view's exposure";
+	}
+
+	return NULL;
+}
+
+/* the fit-at-load pin holds on the real files, and each mutant of it is refused */
+static void
+test_fit_binding(void)
+{
+	static char scene[65536], back[65536], m[65536 + 1024];
+	static const struct
+	{
+		const char *name, *file, *from, *to;
+	} mutants[] = {
+		/* the fit computed and not used: every map at 1 */
+		{ "fit-ignored", "scene", "r_rt_direct_exposure), dir_fit, &dir_fixed);", "r_rt_direct_exposure), 1.0f, &dir_fixed);" },
+		/* the reset dropped: a map whose fit is not reached keeps the old map's */
+		{ "reset-dropped", "scene", "\tdir_fit = 1.0f;\n", "" },
+		/* a fit again each view */
+		{ "fit-per-view", "scene", "\texposure = rm_rtdir_exposure(",
+			"\tdir_fit = rm_rtdir_fit_map(dir_lights, dir_nlights, NULL, 0, NULL, NULL, NULL);\n\texposure = rm_rtdir_exposure(" },
+		/* the back end overriding the view's exposure (the lagged fit's shape) */
+		{ "back-end-exposure", "back", "\t\t[ce setBytes:&view length:sizeof(view) atIndex:0];",
+			"\t\tview.exposure = 1.0f;\n\t\t[ce setBytes:&view length:sizeof(view) atIndex:0];" },
+	};
+	const char *why;
+	int i;
+
+	CHECK(read_file("src/client/refresh/metal/rm_rtdirscene.c", scene, sizeof(scene)));
+	CHECK(read_file("src/client/refresh/metal/rmb_rtdir.m", back, sizeof(back)));
+	why = fit_rule_broken(scene, back);
+
+	if (why)
+	{
+		printf("the exposure fit: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+
+	for (i = 0; i < (int)(sizeof(mutants) / sizeof(mutants[0])); i++)
+	{
+		const int sc = !strcmp(mutants[i].file, "scene");
+		const int applied = mutate(sc ? scene : back, mutants[i].from, mutants[i].to, m, sizeof(m));
+
+		why = applied ? (sc ? fit_rule_broken(m, back) : fit_rule_broken(scene, m)) : NULL;
+
+		if (!applied || !why)
+		{
+			printf("fit mutant %s: %s\n", mutants[i].name, applied ? "passes the fit check" : "does not apply");
+		}
+
+		CHECK(applied && (why != NULL));
+	}
+}
+
+/* a test's line test: a line that ends at x past fit_wall[0] is blocked; each line's ends recorded */
+static float fit_wall[1] = { 1e30f };
+static float fit_a[3], fit_b[3];
+
+static int
+fit_clear(void *ctx, const float *a, const float *b)
+{
+	(void)ctx;
+	memcpy(fit_a, a, sizeof(fit_a));
+	memcpy(fit_b, b, sizeof(fit_b));
+	return b[0] < fit_wall[0];
+}
+
+static void
+fit_point_light(rm_rtdir_light_t *l, float x, float y, float z, float intensity)
+{
+	memset(l, 0, sizeof(*l));
+	l->pos[0] = x;
+	l->pos[1] = y;
+	l->pos[2] = z;
+	l->pos[3] = intensity;
+	l->color[0] = l->color[1] = l->color[2] = 1.0f;
+	l->spot[3] = MTL_RTDIR_NOSPOT;
+}
+
+static void
+fit_point(rm_rtdir_fitpt_t *p, float x, float lm)
+{
+	memset(p, 0, sizeof(*p));
+	p->pos[0] = x;
+	p->normal[2] = 1.0f;
+	p->lm[0] = p->lm[1] = p->lm[2] = lm;
+}
+
+/* TASK188 slice 3c: which samples enter: not near black, not clipped, a number */
+static void
+test_fit_enters(void)
+{
+	const float in[][3] = { { 20, 10, 5 }, { 16, 0, 0 }, { 0, 0, 16 }, { 254, 254, 254 }, { 100, 254.5f, 3 } };
+	const float out[][3] = { { 15.9f, 15.9f, 15.9f }, { 0, 0, 0 }, { -50, -50, -50 }, { 255, 10, 10 }, { 10, 10, 300 },
+		{ NAN, 50, 50 }, { 50, INFINITY, 50 } };
+	int i;
+
+	CHECK(RM_RTDIR_FIT_DARK == 16.0f && RM_RTDIR_FIT_CLIP == 255.0f);
+
+	for (i = 0; i < (int)(sizeof(in) / sizeof(in[0])); i++)
+	{
+		CHECK(rm_rtdir_fit_enters(in[i]) == 1);
+	}
+
+	for (i = 0; i < (int)(sizeof(out) / sizeof(out[0])); i++)
+	{
+		CHECK(rm_rtdir_fit_enters(out[i]) == 0);
+	}
+}
+
+/* the traced light at a sample: the kernel's rule on the host, with the line test as its shadow ray */
+static void
+test_fit_light(void)
+{
+	static rm_rtdir_light_t l[64];
+	const float p[3] = { 0, 0, 0 }, n[3] = { 0, 0, 1 };
+	float out[3];
+	unsigned long rays = 0;
+	double want = 0;
+	int i;
+
+	/* one point light 100 above, intensity 300: (300 - 100) x 1, its line from 1 off the face to 1 short of the light */
+	fit_point_light(&l[0], 0, 0, 100, 300);
+	l[0].color[1] = 0.5f;
+	fit_wall[0] = 1e30f;
+	rm_rtdir_fit_light(l, 1, p, n, fit_clear, NULL, out, &rays);
+	CHECK(near(out[0], 200, 1e-3) && near(out[1], 100, 1e-3) && near(out[2], 200, 1e-3) && (rays == 1));
+	CHECK(near(fit_a[2], RM_RTDIR_FIT_BIAS, 1e-4) && near(fit_b[2], 99, 1e-3) && near(fit_a[0], 0, 1e-6));
+
+	/* blocked: nothing; out of range or behind: no ray */
+	fit_wall[0] = -1;
+	rays = 0;
+	rm_rtdir_fit_light(l, 1, p, n, fit_clear, NULL, out, &rays);
+	CHECK(out[0] == 0 && out[1] == 0 && out[2] == 0 && (rays == 1));
+	fit_point_light(&l[0], 0, 0, -100, 300);
+	fit_point_light(&l[1], 0, 0, 400, 300);
+	rays = 0;
+	rm_rtdir_fit_light(l, 2, p, n, fit_clear, NULL, out, &rays);
+	CHECK(out[0] == 0 && (rays == 0));
+
+	/* an emissive face 100 above, facing down: intensity / dist^2 */
+	memset(&l[0], 0, sizeof(l[0]));
+	l[0].pos[2] = 100;
+	l[0].pos[3] = 1e6f;
+	l[0].color[0] = l[0].color[1] = l[0].color[2] = 1.0f;
+	l[0].spot[2] = -1;
+	l[0].spot[3] = MTL_RTDIR_EMITTER;
+	fit_wall[0] = 1e30f;
+	rm_rtdir_fit_light(l, 1, p, n, fit_clear, NULL, out, NULL);
+	CHECK(near(out[0], 100, 1e-3));
+
+	/* the bound: 64 visible lights sum the 16 strongest in 16 rays; 64 behind a wall, 32 rays and nothing */
+	for (i = 0; i < 64; i++)
+	{
+		fit_point_light(&l[i], (float)i, 0, 100, 300 + (float)i);
+	}
+
+	rays = 0;
+	rm_rtdir_fit_light(l, 64, p, n, fit_clear, NULL, out, &rays);
+	CHECK(rays == MTL_RTDIR_MAX_TRACED);
+
+	for (i = 48; i < 64; i++)
+	{
+		const double d = sqrt((double)i * i + 100.0 * 100.0);
+
+		want += (300.0 + i - d) * (100.0 / d);
+	}
+
+	CHECK(near(out[0], want, 1e-2));
+	fit_wall[0] = -1;
+	rays = 0;
+	rm_rtdir_fit_light(l, 64, p, n, fit_clear, NULL, out, &rays);
+	CHECK((rays == MTL_RTDIR_MAX_RAYS) && (out[0] == 0));
+	fit_wall[0] = 1e30f;
 }
 
 /*
- * The same: a simulated back end of RM_RTDIR_FIT_LAG slots over 200
- * frames, with a map change at frame 100 and frames that do not trace,
- * fed to rm_rtdir_fit_lag as rmb_rtdir_trace feeds it (the slot's frame
- * and sums, read before the slot is rewritten). It tests the lag's
- * arithmetic and the slot and reset bookkeeping, not completion order:
- * the back end's own text is pinned by test_fit_lag_binding, and the order
- * frames complete in cannot reach the function, which is given only the
- * slot's record.
+ * The map's exposure: a known luxel set and its ratio; an all-dark map
+ * reads 1; a lit room beside a dark one that a very bright fixture
+ * reaches keeps the lit room's ratio (the dark luxels and the clipped
+ * one left out), where a fit over every luxel is crushed to the floor.
  */
 static void
-test_fit_lag_runs(void)
+test_fit_map(void)
 {
-	static float first[201];
-	int moved = 0;
+	static rm_rtdir_light_t l[2];
+	static rm_rtdir_fitpt_t pts[32];
+	rm_rtdir_mapfit_t f;
+	int i;
 
+	fit_wall[0] = 1e30f;
+
+	/* the known set: a light of 300 at 100 above; lightmap 100 and 200 where the traced light is 200 */
+	fit_point_light(&l[0], 0, 0, 100, 300);
+	fit_point(&pts[0], 0, 100);
+	fit_point(&pts[1], 0, 200);
+	CHECK(mtl_rtdir_q(100 / 255.0f, 100 / 255.0f, 100 / 255.0f) == 25 && mtl_rtdir_q(200 / 255.0f, 200 / 255.0f, 200 / 255.0f) == 50);
+	CHECK(near(rm_rtdir_fit_map(l, 1, pts, 2, fit_clear, NULL, &f), 0.75, 1e-6));
+	CHECK((f.lm == 75) && (f.raw == 100) && (f.n == 2) && (f.dark == 0) && (f.clipped == 0) && (f.rays == 2) &&
+		near(f.exposure, 0.75, 1e-6));
+
+	/* the same with the light behind a wall: no traced light, so 1 */
+	fit_wall[0] = -1;
+	CHECK(near(rm_rtdir_fit_map(l, 1, pts, 2, fit_clear, NULL, &f), 1.0, 1e-6) && (f.n == 2) && (f.raw == 0));
+	fit_wall[0] = 1e30f;
+
+	/* an all-dark map: nothing enters, 1 */
+	for (i = 0; i < 8; i++)
 	{
-		unsigned long slot_frame[RM_RTDIR_FIT_LAG], slot_lm[RM_RTDIR_FIT_LAG], last = 0, reset = 0, f;
-		float fit = 1.0f;
-
-		memset(slot_frame, 0, sizeof(slot_frame));
-		memset(slot_lm, 0, sizeof(slot_lm));
-
-		for (f = 1; f <= 200; f++)
-		{
-			const int k = (int)(f % RM_RTDIR_FIT_LAG);
-			rm_rtdir_stats_t lag;
-
-			/* the map changes before frame 100: its lights set, the reset at the last frame traced */
-			if (f == 100)
-			{
-				fit = 1.0f;
-				reset = last;
-			}
-
-			memset(&lag, 0, sizeof(lag));
-			lag.frame = slot_frame[k];
-			lag.fit_lm = slot_lm[k];
-			lag.fit_raw = 1000;
-			lag.fit_n = 50;
-			fit = rm_rtdir_fit_lag(&lag, f, reset, fit);
-
-			first[f] = fit;
-			moved += (fit != 1.0f);
-
-			/* every seventh frame traces nothing (a menu, a frame skipped): its slot keeps the older frame */
-			if (f % 7)
-			{
-				slot_frame[k] = f;
-				slot_lm[k] = 1000 + 37 * (f % 23);
-				last = f;
-			}
-		}
+		fit_point(&pts[i], (float)i, 5);
 	}
 
-	CHECK(moved > 100);
-	/* the first frames of each map keep 1: nothing is the lag behind them yet, or it is the old map's */
-	CHECK((first[1] == 1.0f) && (first[RM_RTDIR_FIT_LAG] == 1.0f) && (first[100] == 1.0f) && (first[102] == 1.0f));
-	/* frame 4 takes frame 1's fit; frame 10 keeps 9's (frame 7 did not trace); 103 takes 100's, the new map's */
-	CHECK(near(first[RM_RTDIR_FIT_LAG + 1], (1000.0 + 37.0) / 1000.0, 1e-6));
-	CHECK(first[10] == first[9]);
-	CHECK(near(first[103], (1000.0 + 37.0 * (100 % 23)) / 1000.0, 1e-6));
+	CHECK(near(rm_rtdir_fit_map(l, 1, pts, 8, fit_clear, NULL, &f), 1.0, 1e-6) && (f.n == 0) && (f.dark == 8) && (f.rays == 0));
+	CHECK(near(rm_rtdir_fit_map(l, 1, NULL, 0, fit_clear, NULL, NULL), 1.0, 1e-6));
+	CHECK(near(rm_rtdir_fit_map(NULL, 0, pts, 8, fit_clear, NULL, NULL), 1.0, 1e-6));
+
+	/* one very bright fixture: 4 lit luxels (100 / 200 = 0.5), 20 dark ones (4) and 1 clipped one under it */
+	fit_point_light(&l[0], 0, 0, 100, 300);
+	memset(&l[1], 0, sizeof(l[1]));
+	l[1].pos[0] = 10000;
+	l[1].pos[2] = 50;
+	l[1].pos[3] = 1e9f;
+	l[1].color[0] = l[1].color[1] = l[1].color[2] = 1.0f;
+	l[1].spot[2] = -1;
+	l[1].spot[3] = MTL_RTDIR_EMITTER;
+
+	for (i = 0; i < 4; i++)
+	{
+		fit_point(&pts[i], 0, 100);
+	}
+
+	for (i = 4; i < 24; i++)
+	{
+		fit_point(&pts[i], 10000, 4);
+	}
+
+	fit_point(&pts[24], 10000, 255);
+	CHECK(near(rm_rtdir_fit_map(l, 2, pts, 25, fit_clear, NULL, &f), 0.5, 1e-6));
+	CHECK((f.n == 4) && (f.dark == 20) && (f.clipped == 1) && (f.lm == 100) && (f.raw == 200));
+
+	/* the same luxels all entered (each lightmap raised to the floor) take the fixture's light: crushed to the floor */
+	for (i = 4; i < 25; i++)
+	{
+		fit_point(&pts[i], 10000, 16);
+	}
+
+	CHECK(near(rm_rtdir_fit_map(l, 2, pts, 25, fit_clear, NULL, &f), RM_RTDIR_FIT_MIN, 1e-6) && (f.n == 25));
+}
+
+/* a face's lightmap at the nearest luxel, its maps summed, the luxel held to the face */
+static void
+test_fit_luxel(void)
+{
+	/* two maps of 2 x 2 luxels, 3 bytes each */
+	static const unsigned char s[2 * 4 * 3] = {
+		1, 2, 3, 10, 20, 30, 4, 5, 6, 40, 50, 60,
+		100, 100, 100, 101, 101, 101, 102, 102, 102, 103, 103, 103,
+	};
+	float out[3];
+
+	rm_rtdir_fit_luxel(s, 1, 2, 2, 0.4f, 0.6f, out);
+	CHECK(out[0] == 4 && out[1] == 5 && out[2] == 6);
+	rm_rtdir_fit_luxel(s, 2, 2, 2, 0.4f, 0.6f, out);
+	CHECK(out[0] == 106 && out[1] == 107 && out[2] == 108);
+	rm_rtdir_fit_luxel(s, 2, 2, 2, 0.6f, 0.4f, out);
+	CHECK(out[0] == 111 && out[1] == 121 && out[2] == 131);
+	rm_rtdir_fit_luxel(s, 1, 2, 2, -3.0f, 9.0f, out);
+	CHECK(out[0] == 4 && out[1] == 5 && out[2] == 6);
+	rm_rtdir_fit_luxel(s, 1, 2, 2, NAN, NAN, out);
+	CHECK(out[0] == 1 && out[1] == 2 && out[2] == 3);
+	rm_rtdir_fit_luxel(s, 0, 2, 2, 0, 0, out);
+	CHECK(out[0] == 0 && out[1] == 0 && out[2] == 0);
+	rm_rtdir_fit_luxel(NULL, 1, 2, 2, 0, 0, out);
+	CHECK(out[0] == 0);
+	rm_rtdir_fit_luxel(s, 1, 0, 2, 0, 0, out);
+	CHECK(out[0] == 0);
 }
 
 /* a pixel's candidates: all of them up to MTL_RTDIR_MAX_RAYS; past it the strongest; ranked strongest first */
@@ -2231,11 +2342,13 @@ main(void)
 	test_light();
 	test_no_lightmap_kernel();
 	test_host_binding();
-	test_fit_lag_binding();
+	test_fit_binding();
 	test_q();
 	test_fit();
-	test_fit_lag();
-	test_fit_lag_runs();
+	test_fit_enters();
+	test_fit_light();
+	test_fit_map();
+	test_fit_luxel();
 	test_keep();
 	test_visible_choice();
 	test_pack();
