@@ -204,7 +204,7 @@ about 0.1 s of GPU work (section 8, "Levels at the start of a process",
 and finding 4 of its verdicts). The warm-up of each trial covers the
 hypothesis that the level recurs after a map load. Where `r_rt_available`
 is `0` or `rt` is not ranked, the probe still plays (for the warm start),
-and the fixed order of section 4.2 is used.
+and the fixed order of section 4.1 (the `rt` bullet) is used.
 
 ## 4. The search
 
@@ -249,12 +249,16 @@ they may be stock, with nothing to give up; they stay as A, unchanged.
 
 How the resolution and upscaling ladders interact (settled). Drawing at
 full size without a scaler costs more than drawing smaller and scaling,
-so giving up upscaling must never mean "draw at full size":
+so giving up upscaling must never mean "draw at full size". The rule is
+one rule, a coupled move, and not a second ladder:
 
-1. `r_metalfx_scale` matters only with a scaler on. While `resolution` is
-   below `1`, the scaler stays on: `upscale`'s cheapest step is `1`
-   (spatial), not `0`.
-2. `r_metalfx 0` is a step of `upscale` only when `resolution` is at `1`,
+1. A `resolution` step below `1` raises `r_metalfx` to at least `1`
+   (spatial). The coupling is applied when a candidate is built: the
+   candidate's `r_metalfx` is `max(wanted, 1)` whenever its
+   `r_metalfx_scale` is below `1`. The `upscale` priority itself is not
+   changed: it still stands at its own step (say `0`), and the report says
+   "r_metalfx 1: forced on by resolution 0.34".
+2. `r_metalfx 0` is a step of `upscale` only while `resolution` is at `1`,
    or is not ranked and the player's own `r_metalfx_scale` is `1`. There it
    is the cheapest step, since a scaler at full size is all cost.
 3. If `upscale` is not ranked and the player's `r_metalfx` is `0`, the
@@ -266,22 +270,104 @@ so giving up upscaling must never mean "draw at full size":
    its own; the report says so. While `denoise` ranks below `upscale`, its
    `3` to `2` step comes first, as for any lower priority.
 
+Why a coupled move, and not one joint ladder over (`r_metalfx_scale`,
+`r_metalfx`): the player ranks priorities, and a joint ladder would merge
+two of them into one rank, so the player could no longer say "keep the
+upscaler, give up resolution". The coupling keeps both ranks and costs one
+`max`.
+
+How the search treats it. A candidate is identified by the cvar values it
+sets after the coupling, not by the ladder steps that produced it. So:
+
+- The "already measured" lookup keys on the coupled values. A `resolution`
+  step to `0.34` with `upscale` at its `0` step, and the same step with
+  `upscale` at `1`, are one candidate (`r_metalfx_scale 0.34`,
+  `r_metalfx 1`); the second is looked up, not timed.
+- The bisection of a priority walks that priority's own ladder positions;
+  each position is turned into a candidate by the coupling. Two positions
+  that give the same candidate cost one trial. This keeps the bisection
+  monotone: a lower `resolution` position never lowers `r_metalfx` below
+  `1`, so its cost never rises.
+- The coupling never makes `upscale` give up a step it was not asked to.
+  A later `resolution` give-up applies the coupling on top of whatever
+  `upscale` settled on, and if that trial passes, the report shows the
+  forced `r_metalfx 1`.
+
 ### 4.2 Giving up, lowest priority first
 
-From the first candidate, the search takes the lowest-ranked priority that
-still has a step and moves it straight to its cheapest step. One trial:
+The first candidate is the first timed trial. If it meets the target, the
+search ends there: nothing is given up, and the report says so. (The probe
+of section 3.4 plays the same configuration untimed and is not a trial.)
+Otherwise the search takes the lowest-ranked priority that still has a
+step and moves it straight to its cheapest step. One trial:
 
 - If that meets the target, the search bisects that priority's ladder for
   the dearest step that still meets it, one trial per halving.
 - If not, that priority stays at its cheapest and the search moves to the
   next priority up.
 
-So a run costs about one trial per priority plus the logarithm of one
-ladder's length, well inside 10 rounds. A configuration already measured
-is never measured again: the search looks it up. Bisection assumes each
+A configuration already measured is never measured again: the search
+looks it up, by the coupled values (section 4.1). Bisection assumes each
 ladder costs less at each step down. The ladders are built that way, and
 a measurement that breaks it under noise still gives the same decisions
 for the same inputs.
+
+The round count, worked for the default rank (`rt resolution hdr upscale
+denoise presentation`). `presentation` has no step (section 4.4), so five
+priorities can be given up. The `rt` ladder has ten positions (0 to 9):
+the top, `r_rt_water_hits 0`, `r_rt_ao_rays 1`, `r_rt_ao_scale 0.5`,
+`0.33`, then the five switches off; nine steps below the top. A bisection
+for the dearest passing position, when the cheapest is measured and passes,
+takes at most `ceil(log2(n + 1))` trials for `n` unmeasured positions: 4
+for `rt` (9 positions), 2 for `resolution` (3) and `upscale` (2), 1 for
+`hdr` and `denoise` (1 each).
+
+- Best case: the first candidate meets the target. 1 round.
+- Settling on the lowest priority: `denoise` meets it at once. 1 (first) +
+  1 (give up) + 1 (bisect) = 3, leaving 7 for buy-back.
+- Worst case: nothing above `rt` meets it, and `rt` does. 1 (first) + 5
+  (one give-up each for `denoise`, `upscale`, `hdr`, `resolution`, `rt`)
+  + 4 (bisect `rt`) = **10**. That is exactly `optimize_rounds` 10, with no
+  round left for buy-back. Buy-back gets rounds only when the run settles
+  on a lower priority or the bisection ends early. A longer `rt` ladder
+  (the `r_rt_denoiser` and `r_rt_temporal` steps of section 4.1, when they
+  land) pushes the worst case over 10.
+
+So the default can be reached and, with a longer ladder, passed. The cap
+then ends the run with the best so far (section 5.3). If the cap falls
+inside the `rt` bisection, the best so far is the cheapest `rt` position,
+which was measured first and met the target, or the closest configuration
+when nothing met it (section 4.5). The default stays `10`: the worst case
+fits today, and a longer default lengthens the common run without helping
+it. TASK203 may raise it with a reason in its runbook.
+
+Worked trace, default rank, target `p95 <= 16.7 ms`, `rt` ladder as above.
+Each row is one timed trial. The numbers are the example's, not
+measurements.
+
+| # | Candidate | Effective cvars after the coupling | p95 | Result |
+|---|---|---|---|---|
+| 1 | first: every ladder at its top | `r_metalfx 3`, `r_metalfx_scale 1`, `r_hdr 1`, `rt` position 0 | 30.0 | miss |
+| 2 | `denoise` to its cheapest | `r_metalfx 2` | 26.0 | miss, stays |
+| 3 | `upscale` to its cheapest; `resolution` is at `1`, so `0` is allowed | `r_metalfx 0` | 24.0 | miss, stays |
+| 4 | `hdr` to its cheapest | `r_hdr 0` | 22.0 | miss, stays |
+| 5 | `resolution` to its cheapest; `upscale` stands at `0`, so the coupling forces `1` | `r_metalfx_scale 0.34`, `r_metalfx 1` | 18.0 | miss, stays |
+| 6 | `rt` to its cheapest (position 9) | the five switches `0`, cost cvars at their cheapest | 12.0 | meets |
+| 7 | bisect `rt`, position 4 | `r_rt_ao_scale 0.33` and the cheaper cost steps | 15.0 | meets |
+| 8 | bisect `rt`, position 2 | `r_rt_ao_rays 1` | 17.0 | miss |
+| 9 | bisect `rt`, position 3 | `r_rt_ao_scale 0.5` | 16.0 | meets |
+| 10 | buy back `resolution` one step, `0.5`, under `rt` position 3 | `r_metalfx_scale 0.5`, `r_metalfx 1` | 16.5 | meets |
+
+After trial 9 the `rt` bounds meet (2 misses, 3 meets), so the bisection
+used 3 trials and the run is at 9 rounds. Trial 10 is the buy-back of
+section 4.3: it restores the highest-ranked given-up priority below `rt`,
+`resolution`, one step, and keeps it because it meets the target. The cap
+(10) ends the run. The result: `rt` position 3, `resolution` `0.5`,
+`r_metalfx 1` (the `upscale` priority stands at `0`, forced to `1` while
+`resolution` is below `1`, and the report says so), `r_hdr 0`. TASK203's
+tests follow this table: the same inputs give the same ten rows in the
+same order, and a candidate whose coupled values equal an earlier one is
+looked up, not timed.
 
 ### 4.3 Buying back, within the round cap
 
@@ -350,10 +436,14 @@ run it twice on recorded measurements.
 The measurements are not deterministic: they vary from run to run. The
 search tolerates that in two ways:
 
-- **A noise band.** A statistic within the band above the target counts as
-  missing it; there is no "close enough". Two configurations whose
-  statistics differ by less than the band count as equally fast when
-  choosing the best (section 4.5). The band starts at 3 % of the target.
+- **The pass rule.** A trial passes when `stat <= target`, exactly. A
+  statistic above the target misses it, however little: there is no "close
+  enough" and the band does not move the line.
+- **A noise band.** The band is used in two places only: two
+  configurations whose statistics differ by less than the band count as
+  equally fast when choosing the best (section 4.5), and the presented
+  rate is below the rendered rate "by more than the band" in the limit
+  line of section 4.5. The band starts at 3 % of the target.
   TASK203 sets it from a record of its own: the same configuration timed
   three times on one device, written in its runbook. That record is
   information, never an acceptance criterion (decision 0014).
@@ -440,8 +530,14 @@ The optimizer:
   an accept. A preset file is not a setting. `optimize run` replaces only
   the file it names, and the report says when it replaced one.
 
-`r_metalfx_scale` is not a preset row today. TASK203 adds it to the
-preset rows in `vidrules.c` and reads it through `RM_Effect` in `RM_FX_Begin`. A preset without its
+`r_metalfx_scale` is not a preset row today. TASK203 adds it as a row of `rt_tune`
+in `vidrules.c` (the only table besides `rt_controls` that `PresetRow`
+reads; `rt_controls` holds the switches, and the scale is a value like
+`r_metalfx` and `r_hdr`, which are `rt_tune` rows), and reads it through
+`RM_Effect` in `RM_FX_Begin`. A row of `rt_tune` is also an item of the RT
+tuning screen, so the scale becomes a new item there, and
+`VidRules_TuneNum` grows by one: `test_vidrules.c`'s item count and its
+loop over the tuning items change with it (TASK203's tests, section 10). A preset without its
 line loads as before: `RTP_Read` keeps the current value for a row the
 file does not set.
 
@@ -483,7 +579,7 @@ family. What differs comes in through the same capability cvars:
 |---|---|---|
 | `timedemo` on `demo1.dm2`, or a fixed flythrough | `timedemo` on `demo1.dm2` | section 3.1: it exists, draws the same 689 frames every time, and is real play |
 | Presentation: restart into another on the B side, or leave it and report | Leave it; report its effect | section 4.4: a restart breaks trial comparability, the presentation overrides other rows, and it is a look, not a cost |
-| How the resolution and upscaling ladders interact | `r_metalfx 0` is a step only at full size; below full size the cheapest is the spatial scaler | section 4.1: drawing at full size without a scaler costs more than drawing smaller and scaling |
+| How the resolution and upscaling ladders interact | One rule, a coupled move: a `resolution` step below `1` raises `r_metalfx` to at least `1`; candidates are keyed by the coupled values | section 4.1: drawing at full size without a scaler costs more than drawing smaller and scaling, and a joint ladder would merge two ranks |
 | How a higher priority is bought back | Bisect the settled priority, then restore lower priorities one step each, the highest-ranked first, within the caps | sections 4.2 and 4.3 |
 | The command and cvar names | Confirmed, plus `optimize undo`, `optimize_stat`, `optimize_state`, `metal_presented`, `metal_rt_cost` | section 5.1 |
 | The statistic | `optimize_stat`, default `p95` | section 2.2; reversible, one default |
@@ -526,7 +622,7 @@ The question decides TASK205, and only TASK205:
 
 | Stage | Card | Files | Tests | Acceptance |
 |---|---|---|---|---|
-| 1. The search and the command | TASK203 (#695) | `src/client/menu/optsearch.c`, `header/optsearch.h` (new: the pure search); `src/client/menu/optimize.c` (new: the command, the cvars, the trials); `rtpreset.c` and `header/vidrules.h` (publish a given set as B; save a given set); `vidrules.c` (`r_metalfx_scale` as a preset row); `rm_fxscene.c` (`r_metalfx_scale` through `RM_Effect`); `rm_main.c` (`metal_presented`, `metal_rt_cost`); `cl_view.c`, `cl_network.c` (one call each, only while a run is on); `menu.c` (the init beside `RTPreset_Init`); `Makefile` (the client and `TEST_OBJS`, beside `rtpreset.o` and `vidrules.o`, against `tests/unit/stub_client.c`); `doc/040_cvarlist.md`, `doc/050_commands.md`; its runbook | `tests/unit/test_optsearch.c`, `test_optimize.c` (new), `test_rtpreset.c` (the row list), pins in `tests/pins/unit/`: meeting the target keeps the most of the highest-ranked; missing gives up the lowest first, the dearest step first by the hints; nothing meets gives the closest with its limit line; deterministic run twice; each cap stops with the best so far; warm-up frames are left out; a false capability is never tried and the report says why; cancel and each failure put back B and A/B, and no tuning cvar is written; a preset without the `r_metalfx_scale` line loads as before | the tests first and failing; one manual run on a bare-metal Mac with the report's lines in the runbook and A unchanged; every pin unchanged; no frame rate is a criterion |
+| 1. The search and the command | TASK203 (#695) | `src/client/menu/optsearch.c`, `header/optsearch.h` (new: the pure search); `src/client/menu/optimize.c` (new: the command, the cvars, the trials); `rtpreset.c` and `header/vidrules.h` (publish a given set as B; save a given set); `vidrules.c` (`r_metalfx_scale` as a preset row); `rm_fxscene.c` (`r_metalfx_scale` through `RM_Effect`); `rm_main.c` (`metal_presented`, `metal_rt_cost`); `cl_view.c`, `cl_network.c` (one call each, only while a run is on); `menu.c` (the init beside `RTPreset_Init`); `Makefile` (the client and `TEST_OBJS`, beside `rtpreset.o` and `vidrules.o`, against `tests/unit/stub_client.c`); `doc/040_cvarlist.md`, `doc/050_commands.md`; its runbook | `tests/unit/test_optsearch.c`, `test_optimize.c` (new), `test_rtpreset.c` (the row list), `test_vidrules.c` (the tuning item count grows by one, for the `r_metalfx_scale` row), pins in `tests/pins/unit/`: meeting the target keeps the most of the highest-ranked; missing gives up the lowest first, the dearest step first by the hints; nothing meets gives the closest with its limit line; the first candidate meeting the target ends the run at one round; a `resolution` step below 1 forces `r_metalfx` to 1 and a candidate is looked up by its coupled values; the worked trace of section 4.2 gives its ten rows; a trial passes when `stat <= target`; deterministic run twice; each cap stops with the best so far; warm-up frames are left out; a false capability is never tried and the report says why; cancel and each failure put back B and A/B, and no tuning cvar is written; a preset without the `r_metalfx_scale` line loads as before | the tests first and failing; one manual run on a bare-metal Mac with the report's lines in the runbook and A unchanged; every pin unchanged; no frame rate is a criterion |
 | 2. The menu | TASK204 (#696) | `src/client/menu/videomenu.c` (the Optimize screen and its entry under Video options); `vidrules.c`, `header/vidrules.h` (its rules) | `tests/unit/test_vidrules.c`: each item's rule; a false capability greys its priority with its reason; another renderer greys every item with "the optimizer turns the Metal renderer's settings"; run greyed during a run, cancel when none; review, save, flip and accept greyed until a result exists; the item count is the same under every renderer and capability | a manual walk on a bare-metal Mac: rank, set a target, run, cancel, run again, review, flip A and B, save under a name, accept; console lines in its runbook, no frames committed; A unchanged before accept |
 | 3. Starting points per device class | TASK205 (#697) | waits on section 9; if the answer is yes: the table in `optsearch.c` or a data file beside it, its source rows here | `tests/unit/test_optsearch.c`: with an entry the search starts from it; without one as before; the same inputs give the same result | the owner's answer recorded in the card and this plan first; nothing greyed or hidden by device class |
 
