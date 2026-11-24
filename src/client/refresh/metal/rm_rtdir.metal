@@ -17,7 +17,7 @@
  *
  * =======================================================================
  *
- * The shaders of RT-primary's direct light (TASK188, PM6 slices 1 and 2;
+ * The shaders of RT-primary's direct light (TASK188, PM6 slices 1 to 3;
  * docs/plans/presentation-modes.md, section 4.1), linked into
  * ref_metal.metallib beside rm_rtsun.metal:
  *
@@ -170,10 +170,16 @@ struct rm_rtdir_tally
  * The direct light at the world point p of unit normal n, in the
  * lightmap's units: of the lights in range and facing, point lights and
  * emissive faces alike (mtl_rtdir_reach, mtl_rtdir_contrib), the
- * strongest MTL_RTDIR_MAX_TRACED (mtl_rtdir_keep), in the buffer's order, each
- * one's contribution times its colour and style where its shadow ray
- * reaches it (every one under r_rt_direct_show 3). It takes no texture:
- * the light a world pixel is written with comes from the lights alone.
+ * MTL_RTDIR_MAX_RAYS strongest are the candidates (mtl_rtdir_keep);
+ * traced strongest first (mtl_rtdir_keep_rank, TASK188 slice 3), the first
+ * MTL_RTDIR_MAX_TRACED whose shadow ray reaches the point (mtl_rtdir_walk)
+ * are summed, each one's contribution times its colour and style, so an
+ * occluded light takes no place; under r_rt_direct_show 3 no ray is
+ * traced and the first MTL_RTDIR_MAX_TRACED are. At most
+ * MTL_RTDIR_MAX_RAYS rays a pixel; past the bound a pixel is capped
+ * (mtl_rtdir_capped). It takes no texture: the light a world pixel is
+ * written with comes from the lights alone. A ray stops a unit short of
+ * its light: an entity's origin is in open space.
  */
 static float3
 rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_float3 *styles,
@@ -183,6 +189,7 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
 	const float3 o = p + n * mtl_rtao_bias(distance(p, v.eye.xyz), v.bias_k);
 	mtl_rtdir_keep_t k;
 	float3 raw = float3(0.0f);
+	uint seen = 0u;
 
 	k.n = 0u;
 	k.capped = 0u;
@@ -214,10 +221,9 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
 		k = mtl_rtdir_keep(k, i, s);
 	}
 
-	k = mtl_rtdir_keep_order(k);
-	t.capped = k.capped;
+	k = mtl_rtdir_keep_rank(k);
 
-	for (uint j = 0; j < k.n; j++)
+	for (uint j = 0; mtl_rtdir_walk(j, k.n, seen); j++)
 	{
 		const rm_rtdir_light l = lights[k.i[j]];
 
@@ -228,7 +234,6 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
 
 			t.rays++;
 
-			/* the ray stops a unit short of the light: an entity's origin is in open space */
 			if ((len > 1.0f) && (rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris) < 0.5f))
 			{
 				continue;
@@ -237,9 +242,11 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
 			t.lit++;
 		}
 
+		seen++;
 		raw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]);
 	}
 
+	t.capped = mtl_rtdir_capped(k, seen);
 	return raw * MTL_RTDIR_UNIT;
 }
 

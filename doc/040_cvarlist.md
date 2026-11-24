@@ -1243,8 +1243,8 @@ is.
   times the light's colour and lightstyle (and `r_modulate`), each light
   with one shadow ray through the ray-tracing scene (water and glass let
   it through, up to four of them), in the lightmap's units, in place of
-  the lightmap. A pixel with more than 16 lights in range takes the 16
-  strongest, so it traces at most 16 shadow rays, and a light's
+  the lightmap. A pixel sums at most 16 lights and traces at most 32
+  shadow rays (below), and a light's
   intensity is held to `16384`, which already reaches every point of a
   map. A spotlight lights only inside its cone; one whose target
   is missing lights nothing, as in qrad3. The world's emissive faces
@@ -1254,33 +1254,34 @@ is.
   its mean colour doubled when dim; an unread texture lights nothing)
   times the face's area times `0.4`, out of range where that falls under
   one lightmap step, at most 2048 faces (the first 2048 in the map's
-  face order when it has more). The 16 a pixel takes are the 16 strongest
-  of the lights and the faces together, chosen before any shadow ray and
-  before the lightstyle, so a light that is occluded or switched off can
-  hold a place a visible one then goes without. The choice is the same for
-  the same view and does not flicker, but a seam can show where an
-  occluded light's strength crosses a visible one's. On a map with many
-  lights most pixels are past 16 (a third on `base2`, nearly all on
-  `waste2`) and about a third of the rays reach their light, so the sum is
-  a sample of the lights, not all of them; choosing among the visible
-  lights is left for a later slice. Under every other presentation
+  face order when it has more). The 16 a pixel sums are chosen among the
+  visible lights: of the lights and the faces in range together, the 32
+  strongest are traced strongest first, and the first 16 whose shadow ray
+  reaches the pixel are summed, so an occluded light takes no place. A
+  pixel with more than 32 lights in range of which fewer than 16 are seen
+  is past the bound: the weaker lights are not tried, and the sum holds
+  the visible ones among the 32 strongest (of equal strengths the one kept is by position, not by index). The choice is made before the
+  lightstyle (a switched-off light can still take a place) and is the
+  same for the same view. Under every other presentation
   it does nothing at any value. Forced to `0` on a device without ray
   tracing. `r_rt_stats 1` prints the map's lines of lights and emissive
   faces uploaded,
   `r_rt_stats 2` a line a frame (world pixels, lights in range, shadow
-  rays, rays that reached their light, the pixels past the 16 lights,
+  rays, rays that reached their light, the pixels past the bound,
   the exposure fit's sums and the exposure). Default `0`; not saved with
   the configuration.
 
 * **r_rt_direct_exposure**: The exposure of the Metal renderer's direct
   light (`r_rt_direct`). `0` (the default) takes the fit: the sum of the
-  stock lightmap over the world pixels of the latest completed frame of
-  the map, every fourth
+  stock lightmap over the world pixels of the frame three before
+  (a fixed lag, the frames in flight, so every run gives a frame the same
+  exposure), every fourth
   pixel a row and a column, divided by the sum of the traced light over
   the same pixels, held between `0.25` and `16`, so the traced frame's
   mean light is the stock frame's (the lightmap enters this ratio only,
-  never a pixel's own light); `1` until a frame has been measured, and
-  kept while no traced light reaches a sampled pixel. A value above `0`
+  never a pixel's own light); `1` at a map's first frames, and kept
+  while no traced light reaches a sampled pixel or the frame three
+  before traced nothing. A value above `0`
   is a fixed exposure, at most `64`. Saved with the configuration.
 
 * **r_rt_direct_show**: A development view of the Metal renderer's

@@ -22,8 +22,8 @@
  * which the mode's overlay reads 1, r_rt_direct_exposure and the
  * development view r_rt_direct_show), the map's lights (TASK187's light
  * entities, rm_rtdata.c) and after them its emissive faces as qrad3's
- * surface lights (TASK188 slice 2), uploaded once a map, the exposure fitted from
- * each completed frame's sums, the frame's decision (with it the view
+ * surface lights (TASK188 slice 2), uploaded once a map (the back end
+ * fits the exposure at a fixed lag, slice 3), the frame's decision (with it the view
  * takes the G-buffer path), the view and the style table handed to the
  * back end before the raster, and the r_rt_stats lines. Under any
  * presentation but RT-primary nothing here builds or allocates anything.
@@ -56,8 +56,6 @@ static int dir_viewed;              /* RM_RTDir_View handed this frame's view to
 static const rm_world_t *dir_world; /* the map whose lights are uploaded */
 static char dir_map[MAX_QPATH];     /* its model name (a new map's buffers may take the old one's address) */
 static long dir_nlights;            /* the records uploaded: the lights, then the emissive faces */
-static float dir_fit;               /* the exposure fitted from the last completed frame, 1 at a map's first */
-static unsigned long dir_after;     /* the frame of the fit applied, or the last traced before the map's reset */
 static int dir_fixed;               /* the frame's exposure is r_rt_direct_exposure's */
 
 void
@@ -73,8 +71,6 @@ RM_RTDir_Init(const rmb_caps_t *caps)
 	dir_world = NULL;
 	dir_map[0] = '\0';
 	dir_nlights = 0;
-	dir_fit = 1.0f;
-	dir_after = 0;
 }
 
 void
@@ -155,9 +151,6 @@ RM_RTDir_Lights(void)
 
 	dir_world = wm->world;
 	Q_strlcpy(dir_map, wm->name, sizeof(dir_map));
-	/* 1 from here, and no frame traced before (the old map's, still in flight) overwrites it */
-	dir_fit = 1.0f;
-	dir_after = rmb_rtdir_last_frame();
 	memset(&why, 0, sizeof(why));
 	memset(&ewhy, 0, sizeof(ewhy));
 
@@ -261,9 +254,8 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 		return;
 	}
 
-	/* the fit: the latest completed frame's sums since the map's reset give the exposure the next views take */
+	/* the lines of the frames completed since; the fit is the back end's, at a fixed lag (rm_rtdir_fit_lag) */
 	n = rmb_rtdir_stats(st, RMB_FRAMES_IN_FLIGHT);
-	dir_fit = rm_rtdir_fit_latest(st, n, &dir_after, dir_fit);
 
 	for (i = 0; i < n; i++)
 	{
@@ -320,7 +312,8 @@ RM_RTDir_View(const rm_view_t *view)
 	}
 
 	rm_rtdir_styles((const float (*)[3])st, n, r_modulate->value, dir_styles);
-	exposure = rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), dir_fit, &dir_fixed);
+	/* r_rt_direct_exposure's, else 0: the back end then takes its fit at the lag, at the trace */
+	exposure = rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), 0.0f, &dir_fixed);
 
 	RM_GB_TargetSize(&w, &h);
 
