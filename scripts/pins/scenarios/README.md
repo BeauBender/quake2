@@ -232,9 +232,9 @@ leaves `water.dm2` beside the binary (`release/baseq2/demos/`); record
 lower bound on time, so the demo is longer on a busy host; the script
 states the message range it must give and `make-demo` fails a demo
 outside it. From a demo in range (`soft`, the default `PINS_EVERY` 30)
-the first half of the frames show the pool of `base1` from just above
-its surface and the second half from under it: 4 frames, 2 and 2, in
-every record made so far. Records of one demo file compared at score 0
+the first 2 frames show the pool of `base1` from just above its surface
+and the rest (2 or 3) from under it: a demo of 96 to 147 messages gives 4
+or 5 frames, and the id of a record includes the demo's checksum. Records of one demo file compared at score 0
 in 27 pairs, but differ slightly when the engine stalls, so `skywater`
 from `water.dm2` is accepted at `--bad-threshold 0.03` (its
 `// nondeterministic:` line and the runbook). A script under
