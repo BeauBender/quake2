@@ -263,7 +263,7 @@ typedef struct
 	float vp[4];        /* the view's viewport at the render size */
 	float eye[4];       /* the view's origin */
 	float bias_k;       /* mtl_rtao_bias's k */
-	float exposure;     /* rm_rtdir_exposure */
+	float exposure;     /* r_rt_direct_exposure's, else 0 for the back end's fit at the lag (rm_rtdir_fit_lag) */
 	unsigned nlights;   /* the lights in the buffer */
 	unsigned show;      /* rm_rtdir_show */
 } rm_rtdir_view_t;
@@ -323,7 +323,10 @@ int rmb_rtdir_open(char *err, size_t errlen);
 /* releases the pipelines, the outputs, the lights and the counters */
 void rmb_rtdir_close(void);
 
-/* the map's lights (copied into a buffer the frames read); 1, or 0 when it cannot be made (n 0 keeps none) */
+/*
+ * the map's lights (copied into a buffer the frames read); 1, or 0 when it cannot be made (n 0 keeps none); the
+ * exposure fit starts again at 1, from the frames encoded after this call (rm_rtdir_fit_lag's reset)
+ */
 int rmb_rtdir_set_lights(const rm_rtdir_light_t *l, long n);
 
 /* before the raster: the outputs at the render size; 1 when the view can trace */
@@ -334,9 +337,6 @@ void rmb_rtdir_set_view(const rm_rtdir_view_t *v, const float *styles);
 
 /* the stats of the frames whose pass completed since the last call, at most cap, in slot order; their number */
 int rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap);
-
-/* the frame number of the last pass encoded since the pass opened; 0 for none */
-unsigned long rmb_rtdir_last_frame(void);
 
 /* TASK179: the effect table's backend rows (rm_rtfx.c): the trace, its light in io's place, and the view */
 void rmb_rtdir_fx_trace(rmb_rtfx_io_t *io);
