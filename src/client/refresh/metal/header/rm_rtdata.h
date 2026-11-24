@@ -18,8 +18,9 @@
  * =======================================================================
  *
  * The ray-traced presentation's data at map load (TASK187, PM5): the two
- * hooks of rm_model.c. Gathered only while r_rt_stats is not 0; nothing
- * draws it yet.
+ * hooks of rm_model.c. Gathered only while r_rt_stats is not 0 or the
+ * presentation is RT-primary, whose direct light (TASK188) reads the
+ * lights.
  *
  * =======================================================================
  */
@@ -27,10 +28,15 @@
 #ifndef RM_RTDATA_H
 #define RM_RTDATA_H
 
+#include "rm_rtlights.h"
+
 /* from Mod_LoadBrushModel, the map file still in memory and its lumps checked: the lights and the emitters */
 void RM_RTD_BrushLoaded(const char *name, const byte *mod_base, const dheader_t *header);
 
 /* from RI_EndRegistration, the sky set: the r_rt_stats 1 line, once a load */
 void RM_RTD_MapLoaded(void);
+
+/* the light entities of the last map gathered, its model name in *map; NULL when none was gathered */
+const rm_rtl_lights_t *RM_RTD_Lights(const char **map);
 
 #endif

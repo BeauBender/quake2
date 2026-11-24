@@ -36,7 +36,9 @@
  *   texture's texels, so it is the mean of the faces' means as uploaded
  *   (image_t.mean, TASK56).
  *
- * None of it runs while r_rt_stats is 0: the stock path is untouched.
+ * None of it runs while r_rt_stats is 0 and the presentation is not
+ * RT-primary (TASK188, whose direct light reads the lights through
+ * RM_RTD_Lights): the stock path is untouched.
  *
  * =======================================================================
  */
@@ -46,6 +48,7 @@
 #include "header/local.h"
 #include "header/rm_rtdata.h"
 #include "header/rm_rtlights.h"
+#include "header/rm_rtgate.h"
 
 _Static_assert(sizeof(texinfo_t) == RM_RTL_TEXINFO_SIZE, "a texinfo is 76 bytes");
 _Static_assert(offsetof(texinfo_t, flags) == RM_RTL_TEXINFO_FLAGS, "texinfo flags at 32");
@@ -65,6 +68,8 @@ static rm_rtl_lights_t rtd_lights;
 static rm_rtl_emitters_t rtd_emit;
 static char rtd_map[MAX_QPATH];
 static int rtd_pending;   /* gathered, its line not yet printed */
+static int rtd_have;      /* rtd_lights and rtd_emit hold rtd_map's data */
+static int rtd_say;       /* r_rt_stats was on at the gathering: print the line */
 
 void
 RM_RTD_BrushLoaded(const char *name, const byte *mod_base, const dheader_t *header)
@@ -75,9 +80,10 @@ RM_RTD_BrushLoaded(const char *name, const byte *mod_base, const dheader_t *head
 	const lump_t *fa = &header->lumps[LUMP_FACES];
 	int i;
 
-	rtd_pending = 0;
+	rtd_pending = rtd_have = 0;
+	rtd_say = stats && stats->value;
 
-	if (!stats || !stats->value)
+	if (!rtd_say && (RM_PresentationMode() != RM_PRES_RTPRIMARY))
 	{
 		return;
 	}
@@ -105,7 +111,20 @@ RM_RTD_BrushLoaded(const char *name, const byte *mod_base, const dheader_t *head
 	}
 
 	Q_strlcpy(rtd_map, name, sizeof(rtd_map));
-	rtd_pending = 1;
+	rtd_have = 1;
+	rtd_pending = rtd_say;
+}
+
+const rm_rtl_lights_t *
+RM_RTD_Lights(const char **map)
+{
+	if (!rtd_have)
+	{
+		return NULL;
+	}
+
+	*map = rtd_map;
+	return &rtd_lights;
 }
 
 void

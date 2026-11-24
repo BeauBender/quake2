@@ -52,14 +52,16 @@ enum
 	RM_RTFX_AO,        /* RT5 (TASK57): the ambient occlusion */
 	RM_RTFX_SUN,       /* RT4 (TASK56): the sun and sky shadow */
 	RM_RTFX_WATER,     /* RT6 (TASK58): the water reflections */
+	RM_RTFX_DIRECT,    /* TASK188 (PM6): RT-primary's direct light, in the lightmap's place */
 	RM_RTFX_COUNT
 };
 
 /*
- * The order every walk takes, each id once: the shadows, the AO, the sun,
- * the water. The AO goes before the sun, which adds its term to the
- * lightmap x AO light; the water's reflections go last, from the
- * resolve's lit result.
+ * The order every walk takes, each id once: the direct light, the
+ * shadows, the AO, the sun, the water. RT-primary's direct light goes
+ * first, since it replaces the lightmap the others' light starts from;
+ * the AO goes before the sun, which adds its term to the lightmap x AO
+ * light; the water's reflections go last, from the resolve's lit result.
  */
 extern const int rm_rtfx_order[RM_RTFX_COUNT];
 

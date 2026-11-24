@@ -182,6 +182,12 @@ static const char *const rtg_cvars[] = {
 	"r_rt_ao_show",
 	/* TASK194's read-only report of the gate's path for the menu: the renderer sets it, it traces nothing */
 	"r_rt_available",
+	/* TASK188's direct light of RT-primary (PM6): a ray each light in range and pixel, only under
+	   r_presentation 3, whose overlay reads it 1 */
+	"r_rt_direct",
+	/* its fixed exposure and its development view: read only while the direct light runs */
+	"r_rt_direct_exposure",
+	"r_rt_direct_show",
 	/* TASK173's preview grey: it replaces a lightmap sample on the G-buffer raster path, which every
 	   Metal GPU runs, and traces nothing itself; left alone, it does nothing where the path is off */
 	"r_rt_flatlight",
@@ -325,10 +331,16 @@ rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t *ou
  * setting (the AO's size, the sun's angles, r_metalfx, ...) stays the
  * user's. Retro (TASK184, PM2) needs no ray tracing and runs on every
  * device; its post-process decides no cvar of its own, but plan call P8
- * (TASK197) has it read every ray-traced effect and r_metalfx as 0, so no
- * layer or scaler smears or relights the quantized view. No cvar is
- * written; the overlay is read-only like Enhanced's.
- * RT-primary is a later slice and decides nothing here.
+ * (TASK197) has it read every ray-traced layer and r_metalfx as 0, so no
+ * layer or scaler smears or relights the quantized view. r_rt_direct is
+ * not in its table and keeps the user's value: that switch runs nothing
+ * outside RT-primary (rm_rtdir_on). No cvar is written; the overlay is
+ * read-only like Enhanced's.
+ * RT-primary (TASK188, PM6 slice 1) turns on its direct light
+ * (r_rt_direct) and, as the plan's section 2.2 has it, the water
+ * reflections; AO is off (the bounce, PM7, replaces it), and so are the
+ * sun and the dlight shadows until PM7 and PM6's second slice make them
+ * terms of the light model, so no layer adds the lightmap's light back.
  */
 typedef struct
 {
@@ -356,7 +368,7 @@ static const pres_row_t pres_enhanced[] = {
 
 #define PRES_NENHANCED ((int)(sizeof(pres_enhanced) / sizeof(pres_enhanced[0])))
 
-/* Retro's table (P8): the effect switches and the scaler, all read as 0 */
+/* Retro's table (P8): the layers' switches and the scaler, all read as 0 (r_rt_direct is RT-primary's alone) */
 static const pres_row_t pres_retro[] = {
 	{ "r_rt_shadows", 0.0f },
 	{ "r_rt_sun", 0.0f },
@@ -367,6 +379,17 @@ static const pres_row_t pres_retro[] = {
 };
 
 #define PRES_NRETRO ((int)(sizeof(pres_retro) / sizeof(pres_retro[0])))
+
+/* RT-primary's table (TASK188): the direct light on, the layers it replaces off, the water on */
+static const pres_row_t pres_rtprimary[] = {
+	{ "r_rt_direct", 1.0f },
+	{ "r_rt_shadows", 0.0f },
+	{ "r_rt_sun", 0.0f },
+	{ "r_rt_ao", 0.0f },
+	{ "r_rt_water", 1.0f },
+};
+
+#define PRES_NRTPRIMARY ((int)(sizeof(pres_rtprimary) / sizeof(pres_rtprimary[0])))
 
 /* the table a mode overlays, NULL when it decides nothing */
 static const pres_row_t *
@@ -382,6 +405,12 @@ pres_table(int mode, int *n)
 	{
 		*n = PRES_NRETRO;
 		return pres_retro;
+	}
+
+	if (mode == RM_PRES_RTPRIMARY)
+	{
+		*n = PRES_NRTPRIMARY;
+		return pres_rtprimary;
 	}
 
 	*n = 0;
@@ -412,6 +441,18 @@ rm_pres_decide(float requested, int path, int *why)
 	else if ((int)requested == RM_PRES_RETRO)
 	{
 		mode = RM_PRES_RETRO;
+	}
+	else if ((int)requested == RM_PRES_RTPRIMARY)
+	{
+		/* by capability only (decision 0014): wherever the device traces rays */
+		if (path == RM_RTG_NONE)
+		{
+			w = RM_PRES_WHY_NORT;
+		}
+		else
+		{
+			mode = RM_PRES_RTPRIMARY;
+		}
 	}
 	else if ((int)requested != RM_PRES_STOCK)
 	{
@@ -491,6 +532,13 @@ rm_pres_format(float requested, int mode, int why, char *buf, size_t len)
 		{
 			return rtg_put(snprintf(buf, len,
 					"ref_metal: presentation: retro (r_presentation %d): the 3D view in RGB565 with the 4 x 4 dither, r_retro_filter and r_retro_gamma read each frame; r_rt_shadows, r_rt_sun, r_rt_ao, r_rt_water, r_rt_gunshadow and r_metalfx read 0",
+					mode), buf, len);
+		}
+
+		if (mode == RM_PRES_RTPRIMARY)
+		{
+			return rtg_put(snprintf(buf, len,
+					"ref_metal: presentation: ray traced (r_presentation %d): the lightmap off at the visible world surface, the direct light of the map's lights in its place; r_rt_direct and r_rt_water read 1, r_rt_shadows, r_rt_sun and r_rt_ao read 0",
 					mode), buf, len);
 		}
 
