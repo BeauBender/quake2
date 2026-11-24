@@ -177,13 +177,28 @@ mtl_rtt_blend(unsigned rejected, float cur, float hist, float hcount, float alph
 	return w * hist + (1.0f - w) * cur;
 }
 
+/*
+ * The dynamic light set of a shadow pixel (TASK59 slice 1b): the shadow
+ * kernel's packed indices (mtl_rts_pack_idx, the second word of its out
+ * texture), the four slots' light indices at 6 bits each, with its flag
+ * bits (in range, shadowed) masked off, so that only a change of the
+ * lights that reach the pixel, or of their order, rejects its history.
+ */
+#define MTL_RTT_LIGHTS_MASK 0x00ffffffu
+
+static inline unsigned
+mtl_rtt_lights(unsigned packed)
+{
+	return packed & MTL_RTT_LIGHTS_MASK;
+}
+
 /* the view of the accumulation (rm_rtt_view_t in C, the kernels' rm_rtt_view): 16 bytes */
 typedef struct
 {
 	float alpha;        /* rm_rtt_alpha: 0 accumulates nothing */
 	float move;         /* the eye's move since the last view, units */
 	unsigned reset;     /* rm_rtt_step's reasons, 0 when the history is kept */
-	unsigned pad;
+	unsigned seq;       /* the view's number (rm_rtt_state_t's seq); the kernels do not read it */
 } mtl_rtt_view_t;
 
 #endif /* MTL_RTT_MATH_H */

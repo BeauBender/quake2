@@ -20,7 +20,8 @@
  * Host test of ref_metal's temporal accumulation (RT7, TASK59 slice 1):
  * the rejection rule, the blend and the sample count of
  * common/mtl_rtt_math.h, which the kernel calls, and r_rt_temporal and the
- * reset events of rm_rttemporal.c. Built and run by tests/check-ref-metal.sh,
+ * reset events of rm_rttemporal.c; the shadows' light set and the one
+ * reset state of the three effects' histories (slice 1b). Built and run by tests/check-ref-metal.sh,
  * which also builds it against mutants of both files that it must fail.
  *
  * =======================================================================
@@ -31,6 +32,8 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/header/rm_rttemporal.h"
+#include "../../src/client/refresh/metal/common/mtl_shader_math.h"
+#include "../../src/client/refresh/metal/common/mtl_rts_math.h"
 
 static int checks, failures;
 
@@ -209,7 +212,7 @@ test_alpha(void)
 	{
 		const rm_rtt_view_t v = rm_rtt_view(0.9f, RM_RTT_RESET_SIZE, 3.0f), z = rm_rtt_view(NAN, 0, NAN);
 
-		CHECK((v.alpha == 0.9f) && (v.reset == RM_RTT_RESET_SIZE) && (v.move == 3.0f) && (v.pad == 0));
+		CHECK((v.alpha == 0.9f) && (v.reset == RM_RTT_RESET_SIZE) && (v.move == 3.0f) && (v.seq == 0));
 		CHECK((z.alpha == 0.0f) && (z.reset == 0) && (z.move == 0.0f));
 	}
 
@@ -240,6 +243,8 @@ test_reset(void)
 	rm_rtt_state_t st;
 	rm_rtt_key_t k = key(100, 200, 50);
 	float move = -1.0f;
+
+	memset(&st, 0, sizeof(st));
 
 	/* the renderer's start (a vid_restart makes it again): the first view resets */
 	rm_rtt_state_reset(&st);
@@ -313,6 +318,163 @@ test_reset(void)
 	CHECK(st.views == 1);
 }
 
+/* the shadow kernel's packed indices with the four slots' lights a, b, c, d and the flags */
+static unsigned
+packed(unsigned a, unsigned b, unsigned c, unsigned d, unsigned flags)
+{
+	mtl_rts_top_t t = mtl_rts_top_init();
+
+	t.idx[0] = a;
+	t.idx[1] = b;
+	t.idx[2] = c;
+	t.idx[3] = d;
+	return mtl_rts_pack_idx(t, flags);
+}
+
+/* reject's reasons for two light sets, everything else kept */
+static unsigned
+rej_lights(unsigned lights, unsigned hlights)
+{
+	return mtl_rtt_reject(0, 1, 100.0f, 100.0f, 0.0f, 1, 1, lights, hlights, 4.0f);
+}
+
+/* the shadows' dynamic light set (slice 1b): the packed indices, the flag bits masked off */
+static void
+test_lights(void)
+{
+	const unsigned n = MTL_RTS_NO_LIGHT;
+	const unsigned p = packed(3, 7, n, n, MTL_RTS_IN_RANGE | MTL_RTS_SHADOWED);
+	const unsigned lit = packed(3, 7, n, n, MTL_RTS_IN_RANGE), none = packed(n, n, n, n, 0);
+
+	/* the mask is the four indices' bits, none of the flags' */
+	CHECK((MTL_RTT_LIGHTS_MASK & (MTL_RTS_IN_RANGE | MTL_RTS_SHADOWED)) == 0);
+	CHECK(mtl_rtt_lights(none) == MTL_RTT_LIGHTS_MASK);
+	CHECK(mtl_rtt_lights(0xffffffffu) == MTL_RTT_LIGHTS_MASK);
+
+	/* the flags masked: a pixel shadowed in one frame and lit in the next keeps its set */
+	CHECK(mtl_rtt_lights(p) == mtl_rtt_lights(lit));
+	CHECK((mtl_rtt_lights(p) & (MTL_RTS_IN_RANGE | MTL_RTS_SHADOWED)) == 0);
+	CHECK(mtl_rtt_lights(p) == packed(3, 7, n, n, 0));
+
+	/* the same set accepts */
+	CHECK(rej_lights(mtl_rtt_lights(p), mtl_rtt_lights(lit)) == 0);
+
+	/* a set change rejects: another light, one more, one gone, the slots' order, none left */
+	CHECK(rej_lights(mtl_rtt_lights(packed(3, 8, n, n, MTL_RTS_IN_RANGE)), mtl_rtt_lights(p)) == MTL_RTT_REJ_LIGHTS);
+	CHECK(rej_lights(mtl_rtt_lights(packed(3, 7, 9, n, 0)), mtl_rtt_lights(p)) == MTL_RTT_REJ_LIGHTS);
+	CHECK(rej_lights(mtl_rtt_lights(packed(3, n, n, n, 0)), mtl_rtt_lights(p)) == MTL_RTT_REJ_LIGHTS);
+	CHECK(rej_lights(mtl_rtt_lights(packed(7, 3, n, n, 0)), mtl_rtt_lights(p)) == MTL_RTT_REJ_LIGHTS);
+	CHECK(rej_lights(mtl_rtt_lights(none), mtl_rtt_lights(p)) == MTL_RTT_REJ_LIGHTS);
+}
+
+/* one view of the state for every effect: its step and the view the kernels take */
+static rm_rtt_view_t
+step(rm_rtt_state_t *st, const rm_rtt_key_t *k)
+{
+	float move = 0.0f;
+	const unsigned r = rm_rtt_step(st, k, &move);
+	rm_rtt_view_t t = rm_rtt_view(0.9f, r, move);
+
+	t.seq = st->seq;
+	return t;
+}
+
+/*
+ * The one reset state of the three effects (slice 1b): a reset or a cut
+ * resets every history in the same view, and a history whose dispatch was
+ * not encoded for a view (the trace's early return after rm_rtt_step) is
+ * not read in the next.
+ */
+static void
+test_hist(void)
+{
+	rm_rtt_state_t st;
+	rm_rtt_hist_t sh, sun, ao;
+	rm_rtt_key_t k = key(100, 200, 50);
+	rm_rtt_view_t t;
+	unsigned seq;
+
+	memset(&st, 0, sizeof(st));
+	rm_rtt_state_reset(&st);
+	rm_rtt_hist_reset(&sh);
+	rm_rtt_hist_reset(&sun);
+	rm_rtt_hist_reset(&ao);
+
+	/* the first view: every history resets */
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sh, &t) == RM_RTT_RESET_FIRST);
+	CHECK(rm_rtt_hist_take(&sun, &t) == RM_RTT_RESET_FIRST);
+	CHECK(rm_rtt_hist_take(&ao, &t) == RM_RTT_RESET_FIRST);
+	rm_rtt_frame_end(&st);
+
+	/* the next: every history kept */
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sh, &t) == 0);
+	CHECK(rm_rtt_hist_take(&sun, &t) == 0);
+	CHECK(rm_rtt_hist_take(&ao, &t) == 0);
+	rm_rtt_frame_end(&st);
+
+	/* a cut resets the three in the same view */
+	k = key(100, 200, 50 + 300);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sh, &t) == RM_RTT_RESET_CUT);
+	CHECK(rm_rtt_hist_take(&sun, &t) == RM_RTT_RESET_CUT);
+	CHECK(rm_rtt_hist_take(&ao, &t) == RM_RTT_RESET_CUT);
+	rm_rtt_frame_end(&st);
+
+	/*
+	 * The early return: the shadows' trace returns after this view's step,
+	 * its dispatch not encoded, its history a view behind. The next view
+	 * resets it alone; the others are kept.
+	 */
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sun, &t) == 0);
+	CHECK(rm_rtt_hist_take(&ao, &t) == 0);
+	rm_rtt_frame_end(&st);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sh, &t) == RM_RTT_RESET_FIRST);
+	CHECK(rm_rtt_hist_take(&sun, &t) == 0);
+	CHECK(rm_rtt_hist_take(&ao, &t) == 0);
+	rm_rtt_frame_end(&st);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sh, &t) == 0);
+	rm_rtt_frame_end(&st);
+
+	/* the same on a reset view: its reason is not lost with the skipped dispatch */
+	rm_rtt_state_reset(&st);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sun, &t) == RM_RTT_RESET_FIRST);
+	rm_rtt_frame_end(&st);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sun, &t) == 0);
+	CHECK(rm_rtt_hist_take(&ao, &t) == RM_RTT_RESET_FIRST);
+	rm_rtt_frame_end(&st);
+
+	/* a view taken twice (no new step) is not a history of it */
+	CHECK(rm_rtt_hist_take(&ao, &t) == RM_RTT_RESET_FIRST);
+
+	/* the views' numbers outlive a map load, so a history that skipped views across it is not read */
+	seq = st.seq;
+	rm_rtt_state_reset(&st);
+	CHECK(st.seq == seq);
+
+	/*
+	 * r_rt_temporal 0 and back: the histories are released and made again
+	 * (rm_rtt_hist_reset); even one kept up with the views is not read then.
+	 */
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sun, &t) == RM_RTT_RESET_FIRST);
+	rm_rtt_frame_end(&st);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sun, &t) == 0);
+	rm_rtt_frame_end(&st);
+	rm_rtt_hist_reset(&sun);
+	t = step(&st, &k);
+	CHECK(t.reset == 0);
+	CHECK(rm_rtt_hist_take(&sun, &t) == RM_RTT_RESET_FIRST);
+	CHECK(rm_rtt_hist_take(&sh, &t) == RM_RTT_RESET_FIRST);
+}
+
 int
 main(void)
 {
@@ -322,6 +484,8 @@ main(void)
 	test_blend();
 	test_alpha();
 	test_reset();
+	test_lights();
+	test_hist();
 
 	printf("rm_rttemporal_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

@@ -69,9 +69,13 @@ typedef struct
 	rm_rtt_key_t last;      /* the last accumulated view since the last reset of the state */
 	int drew;               /* this frame accumulated a view */
 	unsigned long views;    /* views accumulated since the last history reset */
+	unsigned seq;           /* the number of the last view stepped; kept by rm_rtt_state_reset, so it never repeats */
 } rm_rtt_state_t;
 
-/* forgets everything: the renderer's start (a vid_restart), a map load; the next view resets (FIRST) */
+/*
+ * Forgets everything but seq: the renderer's start (a vid_restart), a map
+ * load; the next view resets (FIRST).
+ */
 void rm_rtt_state_reset(rm_rtt_state_t *st);
 
 /*
@@ -95,5 +99,30 @@ void rm_rtt_frame_end(rm_rtt_state_t *st);
  * reasons and move as rm_rtt_step gave them.
  */
 rm_rtt_view_t rm_rtt_view(float alpha, unsigned reasons, float move);
+
+/*
+ * One effect's history (TASK59 slice 1b): the shadows', the sun's and the
+ * AO's each keep one, judged against the one state above, so that a reset
+ * or a cut resets all three in the same view. It holds the number of the
+ * last view whose accumulation was encoded into it.
+ */
+typedef struct
+{
+	int valid;              /* seq holds a view: a dispatch was encoded since the history was made */
+	unsigned seq;
+} rm_rtt_hist_t;
+
+/* the history was made anew or released: its texels hold no view, so the next take resets (FIRST) */
+void rm_rtt_hist_reset(rm_rtt_hist_t *h);
+
+/*
+ * The view t is encoded into the history: the reasons its dispatch takes,
+ * t's own, with FIRST when the history did not take the view before t,
+ * so a view whose dispatch was not encoded (an early return of the trace
+ * after rm_rtt_step, the effect off for views the others accumulated, a
+ * history just made) leaves a history that is not read again. Called
+ * only where the dispatch is encoded.
+ */
+unsigned rm_rtt_hist_take(rm_rtt_hist_t *h, const rm_rtt_view_t *t);
 
 #endif /* RM_RTTEMPORAL_H */
