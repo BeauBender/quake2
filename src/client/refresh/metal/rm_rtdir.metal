@@ -17,15 +17,17 @@
  *
  * =======================================================================
  *
- * The shaders of RT-primary's direct light (TASK188, PM6 slice 1;
+ * The shaders of RT-primary's direct light (TASK188, PM6 slices 1 and 2;
  * docs/plans/presentation-modes.md, section 4.1), linked into
  * ref_metal.metallib beside rm_rtsun.metal:
  *
  * - rm_rtdir_trace, the compute pass after the G-buffer raster and before
  *   the other effects' kernels and the resolve: for each lightmapped world
  *   pixel (material 1), the sum over the map's lights in range of qrad3's
- *   (intensity - dist) x N.L (mtl_rtdir_scale) times the light's colour
- *   and lightstyle, each light with one shadow ray from the surface
+ *   (intensity - dist) x N.L (mtl_rtdir_scale) and over its emissive
+ *   faces in range of qrad3's intensity / dist^2 x both cosines
+ *   (mtl_rtdir_emit_scale, slice 2) times the light's colour and
+ *   lightstyle, each light with one shadow ray from the surface
  *   offset along its normal (TASK57's mtl_rtao_bias) to the light,
  *   against the frame's instance structure with MTL_RTAO_MASK. Out: the
  *   light the resolve reads (RGBA16Unorm): that sum in the lightmap's
@@ -140,7 +142,7 @@ rm_rtdir_seen(ray r, instance_acceleration_structure ias, device const uint *ins
 /*
  * The frame's counts (rmb_rtdir.m's RMB_RTDIR_COUNTS). The lights in
  * range, the rays and the lit ones are 64-bit, a low word and a high one
- * (rm_rtdir_add64): with up to RM_RTL_MAX_LIGHTS lights in range a pixel,
+ * (rm_rtdir_add64): with up to RM_RTDIR_MAX_UPLOAD lights in range a pixel,
  * 32 bits would wrap at 4K.
  */
 #define RM_RTDIR_C_WORLD 0
@@ -166,8 +168,9 @@ struct rm_rtdir_tally
 
 /*
  * The direct light at the world point p of unit normal n, in the
- * lightmap's units: of the lights in range and facing (the strongest
- * MTL_RTDIR_MAX_TRACED, mtl_rtdir_keep), in the buffer's order, each
+ * lightmap's units: of the lights in range and facing, point lights and
+ * emissive faces alike (mtl_rtdir_reach, mtl_rtdir_contrib), the
+ * strongest MTL_RTDIR_MAX_TRACED (mtl_rtdir_keep), in the buffer's order, each
  * one's contribution times its colour and style where its shadow ray
  * reaches it (every one under r_rt_direct_show 3). It takes no texture:
  * the light a world pixel is written with comes from the lights alone.
@@ -192,14 +195,15 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
 		float3 dir;
 		float s;
 
-		/* the linear falloff ends at the intensity: the cheap test first */
-		if (!(dist < l.pos.w) || !(dist > 0.0f))
+		/* the cheap test first: a point light's linear falloff ends at its intensity, a face's at its cut */
+		if (!mtl_rtdir_reach(l.pos.w, dist, l.spot.w))
 		{
 			continue;
 		}
 
+		/* a point or spot light (qrad3's emit_point, emit_spotlight) or an emissive face (emit_surface) */
 		dir = dv / dist;
-		s = mtl_rtdir_scale(l.pos.w, dist, dot(n, dir), -dot(dir, l.spot.xyz), l.spot.w);
+		s = mtl_rtdir_contrib(l.pos.w, dist, dot(n, dir), -dot(dir, l.spot.xyz), l.spot.w);
 
 		if (!(s > 0.0f))
 		{

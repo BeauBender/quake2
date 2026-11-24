@@ -980,7 +980,9 @@ TuneMenu_Rules(void)
 					s_tune_hdr_note, sizeof(s_tune_hdr_note)));
 			continue;
 		}
-		RTSetRule(s_tune_items[i], VidRules_TuneOverridden(i, s_built_renderer, pres) ?
+		/* TASK188: a row of an effect the mode reads off (Ray traced's sun and AO) is the mode's too */
+		RTSetRule(s_tune_items[i], (VidRules_TuneOverridden(i, s_built_renderer, pres) ||
+			(e && !on && VidRules_RTOverridden(c->effect, s_built_renderer, available, pres))) ?
 			(vidrule_t){ 0, "set by the presentation" } :
 			VidRules_TuneItem(i, s_built_renderer, available, on));
 	}

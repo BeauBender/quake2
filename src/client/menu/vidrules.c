@@ -572,6 +572,20 @@ VidRules_RTItem(int i, const char *renderer, int available, int effect_on)
 }
 
 /*
+ * TASK188: whether Ray traced (RT-primary) is run. The renderer runs it
+ * wherever the device traces rays (decision 0014), although its menu item
+ * is greyed "awaiting review" (the console sets it), so this is not
+ * VidRules_PresentationMode's rule. Its overlay (rm_rtgate.c's
+ * pres_rtprimary) reads shadows, sun and AO as 0 and the water as 1.
+ */
+static int
+RTPrimaryInForce(const char *renderer, int available, float presentation)
+{
+	return (VidRules_PresentationIndex(presentation) == VIDPRES_RTPRIMARY) &&
+		(VidRules_Renderer(renderer) == VIDREF_METAL) && available;
+}
+
+/*
  * TASK183: the switches the presentation in use decides. Enhanced reads
  * rows 0 to 3 (shadows, sun, ambient occlusion, water) as on, as the
  * renderer's RM_Effect does; the rows are the first four of rt_controls.
@@ -592,17 +606,31 @@ VidRules_RTOverridden(int i, const char *renderer, int available, float presenta
 	{
 		return (i <= RT_GUNSHADOW) && (VidRules_Renderer(renderer) == VIDREF_METAL);
 	}
+	if (pres == VIDPRES_RTPRIMARY)
+	{
+		return (i < 4) && RTPrimaryInForce(renderer, available, presentation);
+	}
 	return (i < 4) && (pres == VIDPRES_ENHANCED) &&
 		VidRules_PresentationMode(VIDPRES_ENHANCED, renderer, available).enabled;
 }
 
-/* the value of a switch as the renderer runs it: the mode's when it decides it (Enhanced on, Retro off), else the cvar's */
+/*
+ * The value of a switch as the renderer runs it: the mode's when it
+ * decides it (Enhanced on, Retro off, Ray traced the water on and the
+ * rest off), else the cvar's.
+ */
 int
 VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user)
 {
 	if (VidRules_RTOverridden(i, renderer, available, presentation))
 	{
-		return VidRules_PresentationIndex(presentation) != VIDPRES_RETRO;
+		const int pres = VidRules_PresentationIndex(presentation);
+
+		if (pres == VIDPRES_RTPRIMARY)
+		{
+			return i == RT_WATER;
+		}
+		return pres != VIDPRES_RETRO;
 	}
 	return user != 0.0f;
 }
@@ -627,7 +655,8 @@ VidRules_RTRow(int i, const char *renderer, int available, float presentation, f
 	}
 	if (VidRules_Renderer(renderer) == VIDREF_METAL && available &&
 		(VidRules_RTOverridden(i, renderer, available, presentation) ||
-		(c && (c->effect >= 0) && RTRetroInForce(renderer, presentation))))
+		(c && (c->effect >= 0) && RTRetroInForce(renderer, presentation)) ||
+		(c && (c->effect >= 0) && RTPrimaryInForce(renderer, available, presentation) && !on)))
 	{
 		return (vidrule_t){ 0, "set by the presentation" };
 	}
@@ -722,6 +751,10 @@ VidRules_RTStatus(const char *renderer, int available, float presentation)
 	if (RTRetroInForce(renderer, presentation))
 	{
 		return "Retro reads the effects and the scaler as off";
+	}
+	if (RTPrimaryInForce(renderer, available, presentation))
+	{
+		return "Ray traced reads shadows, sun and AO as off, the water on";
 	}
 	return "Esc: back; each change shows on the next frame";
 }
