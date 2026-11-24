@@ -358,25 +358,18 @@ rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long samples,
 }
 
 float
-rm_rtdir_fit_latest(const rm_rtdir_stats_t *s, int n, unsigned long *after, float prev)
+rm_rtdir_fit_lag(const rm_rtdir_stats_t *lagged, unsigned long frame, unsigned long reset, float prev)
 {
-	int i, best = -1;
+	/* STUB (red): any record given */
+	(void)frame;
+	(void)reset;
 
-	for (i = 0; s && after && (i < n); i++)
-	{
-		if ((s[i].frame > *after) && ((best < 0) || (s[i].frame > s[best].frame)))
-		{
-			best = i;
-		}
-	}
-
-	if (best < 0)
+	if (!lagged)
 	{
 		return prev;
 	}
 
-	*after = s[best].frame;
-	return rm_rtdir_fit(s[best].fit_lm, s[best].fit_raw, s[best].fit_n, prev);
+	return rm_rtdir_fit(lagged->fit_lm, lagged->fit_raw, lagged->fit_n, prev);
 }
 
 float

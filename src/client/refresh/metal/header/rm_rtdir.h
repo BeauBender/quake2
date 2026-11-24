@@ -293,15 +293,21 @@ typedef struct
 } rm_rtdir_stats_t;
 
 /*
- * The exposure after a harvest of completed frames (s, n of them, in any
- * order: the back end reads its slots in slot order): the fit
- * (rm_rtdir_fit, from prev) of the one with the largest frame number
- * after *after, else prev. *after is the frame of the fit last applied
- * or of the map's reset (RM_RTDir_Lights: the last frame traced before
- * it): an entry at or before it is older, a frame of the map before among
- * them, and is ignored. *after moves to the frame applied.
+ * TASK188 slice 3: the exposure fit at a fixed lag. The pass's back end
+ * keeps RM_RTDIR_FIT_LAG slots (RMB_FRAMES_IN_FLIGHT), frame f in slot
+ * f % RM_RTDIR_FIT_LAG, so the slot frame f takes last held frame
+ * f - RM_RTDIR_FIT_LAG, which the frame semaphore has seen complete
+ * before frame f began. lagged is that slot's record (its frame and the
+ * fit's sums; NULL for none). Its fit (rm_rtdir_fit, from prev) is frame
+ * f's exposure when lagged->frame is exactly f - RM_RTDIR_FIT_LAG and
+ * after reset (the last frame traced before the map's lights were set);
+ * else prev, the exposure in use, is kept. So a frame's exposure follows
+ * from the frames traced before it, never from the order in which they
+ * completed.
  */
-float rm_rtdir_fit_latest(const rm_rtdir_stats_t *s, int n, unsigned long *after, float prev);
+#define RM_RTDIR_FIT_LAG 3
+
+float rm_rtdir_fit_lag(const rm_rtdir_stats_t *lagged, unsigned long frame, unsigned long reset, float prev);
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
 int rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *buf, size_t len);

@@ -925,96 +925,166 @@ test_fit(void)
 }
 
 /*
- * The exposure is the latest completed frame's fit for this map: of a
- * harvest in slot order, the largest frame wins; an entry at or before the
- * reset (the old map's frames in flight) is ignored.
+ * TASK188 slice 3, the exposure at a fixed lag: frame f takes the fit of
+ * frame f - RM_RTDIR_FIT_LAG (the last frame of its back-end slot), only
+ * when that record is exactly the lag behind and after the map's reset;
+ * else the exposure in use is kept.
  */
 static void
-test_fit_latest(void)
+test_fit_lag(void)
 {
-	rm_rtdir_stats_t s[3];
-	unsigned long after = 0;
+	rm_rtdir_stats_t s;
 
-	memset(s, 0, sizeof(s));
-	/* frame 6 in slot 0 and frame 5 in slot 2, read in that order */
-	s[0].frame = 6;
-	s[0].fit_lm = 300;
-	s[0].fit_raw = 100;
-	s[0].fit_n = 10;
-	s[1].frame = 5;
-	s[1].fit_lm = 100;
-	s[1].fit_raw = 100;
-	s[1].fit_n = 10;
-	CHECK(near(rm_rtdir_fit_latest(s, 2, &after, 1), 3.0, 1e-6) && (after == 6));
-	/* the same order the other way round */
-	s[2] = s[0];
-	s[0] = s[1];
-	s[1] = s[2];
-	after = 0;
-	CHECK(near(rm_rtdir_fit_latest(s, 2, &after, 1), 3.0, 1e-6) && (after == 6));
-	/* a frame already applied, or older, changes nothing */
-	CHECK(near(rm_rtdir_fit_latest(s, 2, &after, 2.5f), 2.5, 1e-6) && (after == 6));
+	CHECK(RM_RTDIR_FIT_LAG == 3);
+	memset(&s, 0, sizeof(s));
+	s.frame = 7;
+	s.fit_lm = 300;
+	s.fit_raw = 100;
+	s.fit_n = 10;
 
-	/* the map changed after frame 10 was traced: its frames in flight do not overwrite the reset to 1 */
-	after = 10;
-	s[0].frame = 9;
-	s[0].fit_lm = 800;
-	s[0].fit_raw = 100;
-	s[1].frame = 10;
-	s[1].fit_lm = 800;
-	s[1].fit_raw = 100;
-	CHECK(near(rm_rtdir_fit_latest(s, 2, &after, 1), 1.0, 1e-6) && (after == 10));
-	/* and the new map's first completed frame is applied */
-	s[1].frame = 11;
-	s[1].fit_lm = 200;
-	CHECK(near(rm_rtdir_fit_latest(s, 2, &after, 1), 2.0, 1e-6) && (after == 11));
+	/* exactly the lag behind, after the reset: its fit */
+	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 0, 1), 3.0, 1e-6));
+	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 6, 1), 3.0, 1e-6));
 
-	/* the newest with no sample keeps the exposure in use, and is the frame applied */
-	s[0].frame = 12;
-	s[0].fit_n = 0;
-	s[1].frame = 13;
-	s[1].fit_n = 0;
-	CHECK(near(rm_rtdir_fit_latest(s, 2, &after, 2), 2.0, 1e-6) && (after == 13));
-	CHECK(near(rm_rtdir_fit_latest(s, 0, &after, 2), 2.0, 1e-6) && (after == 13));
-	CHECK(near(rm_rtdir_fit_latest(NULL, 2, &after, 2), 2.0, 1e-6) && (after == 13));
+	/* a record nearer or older than the lag (a slot whose last frame did not trace): kept */
+	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG - 1, 0, 1.5f), 1.5, 1e-6));
+	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG + 1, 0, 1.5f), 1.5, 1e-6));
+	CHECK(near(rm_rtdir_fit_lag(&s, 7 + 2 * RM_RTDIR_FIT_LAG, 0, 1.5f), 1.5, 1e-6));
+
+	/* at or before the map's reset (the old map's frame, still in its slot): kept */
+	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 7, 1), 1.0, 1e-6));
+	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 9, 1), 1.0, 1e-6));
+
+	/* no record, a slot never used (frame 0), a frame before the lag, no sample: kept */
+	CHECK(near(rm_rtdir_fit_lag(NULL, 10, 0, 2), 2.0, 1e-6));
+	s.frame = 0;
+	CHECK(near(rm_rtdir_fit_lag(&s, RM_RTDIR_FIT_LAG, 0, 2), 2.0, 1e-6));
+	s.frame = 7;
+	CHECK(near(rm_rtdir_fit_lag(&s, 2, 0, 2), 2.0, 1e-6));
+	s.fit_n = 0;
+	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 0, 2), 2.0, 1e-6));
 }
 
-/* the lights a pixel takes: all of them up to the cap, in the buffer's order; past it the strongest */
+/*
+ * The same: a simulated back end of RM_RTDIR_FIT_LAG slots over 200
+ * frames, whose frames in flight complete in another order each run
+ * (frame f - RM_RTDIR_FIT_LAG always has, by the frame semaphore), with a
+ * map change at frame 100 and frames that do not trace. Every run gives
+ * every frame the same exposure: the fit of the frame the lag behind, or
+ * the one kept.
+ */
+static void
+test_fit_lag_runs(void)
+{
+	static float first[201];
+	int run, same = 1, moved = 0;
+
+	for (run = 0; run < 4; run++)
+	{
+		unsigned long slot_frame[RM_RTDIR_FIT_LAG], slot_lm[RM_RTDIR_FIT_LAG], last = 0, reset = 0, f;
+		int done[201];
+		float fit = 1.0f;
+
+		memset(slot_frame, 0, sizeof(slot_frame));
+		memset(slot_lm, 0, sizeof(slot_lm));
+		memset(done, 0, sizeof(done));
+		srand((unsigned)run * 7919u + 1u);
+
+		for (f = 1; f <= 200; f++)
+		{
+			const int k = (int)(f % RM_RTDIR_FIT_LAG);
+			rm_rtdir_stats_t lag;
+			unsigned long g;
+
+			/* the frames in flight complete in an order of this run's; the one the lag behind has */
+			for (g = (f > RM_RTDIR_FIT_LAG) ? f - RM_RTDIR_FIT_LAG + 1 : 1; g < f; g++)
+			{
+				done[g] = done[g] || (rand() & 1);
+			}
+
+			if (f > RM_RTDIR_FIT_LAG)
+			{
+				done[f - RM_RTDIR_FIT_LAG] = 1;
+			}
+
+			/* the map changes before frame 100: its lights set, the reset at the last frame traced */
+			if (f == 100)
+			{
+				fit = 1.0f;
+				reset = last;
+			}
+
+			memset(&lag, 0, sizeof(lag));
+			lag.frame = slot_frame[k];
+			lag.fit_lm = slot_lm[k];
+			lag.fit_raw = 1000;
+			lag.fit_n = 50;
+			fit = rm_rtdir_fit_lag(&lag, f, reset, fit);
+
+			if (run == 0)
+			{
+				first[f] = fit;
+				moved += (fit != 1.0f);
+			}
+
+			same = same && (fit == first[f]);
+
+			/* every seventh frame traces nothing (a menu, a frame skipped): its slot keeps the older frame */
+			if (f % 7)
+			{
+				slot_frame[k] = f;
+				slot_lm[k] = 1000 + 37 * (f % 23);
+				last = f;
+			}
+		}
+
+		CHECK(done[200 - RM_RTDIR_FIT_LAG]);
+	}
+
+	CHECK(same && (moved > 100));
+	/* the first frames of each map keep 1: nothing is the lag behind them yet, or it is the old map's */
+	CHECK((first[1] == 1.0f) && (first[RM_RTDIR_FIT_LAG] == 1.0f) && (first[100] == 1.0f) && (first[102] == 1.0f));
+	/* frame 4 takes frame 1's fit; frame 10 keeps 9's (frame 7 did not trace); 103 takes 100's, the new map's */
+	CHECK(near(first[RM_RTDIR_FIT_LAG + 1], (1000.0 + 37.0) / 1000.0, 1e-6));
+	CHECK(first[10] == first[9]);
+	CHECK(near(first[103], (1000.0 + 37.0 * (100 % 23)) / 1000.0, 1e-6));
+}
+
+/* a pixel's candidates: all of them up to MTL_RTDIR_MAX_RAYS; past it the strongest; ranked strongest first */
 static void
 test_keep(void)
 {
 	mtl_rtdir_keep_t k;
 	unsigned i;
-	int ordered = 1, strongest = 1;
+	int ranked = 1, strongest = 1;
 
 	memset(&k, 0, sizeof(k));
 
-	for (i = 0; i < MTL_RTDIR_MAX_TRACED; i++)
+	for (i = 0; i < MTL_RTDIR_MAX_RAYS; i++)
 	{
 		k = mtl_rtdir_keep(k, i, 1.0f + (float)i);
 	}
 
-	CHECK((k.n == MTL_RTDIR_MAX_TRACED) && (k.capped == 0));
-	k = mtl_rtdir_keep_order(k);
-
-	for (i = 0; i < MTL_RTDIR_MAX_TRACED; i++)
-	{
-		ordered &= (k.i[i] == i) && (k.s[i] == 1.0f + (float)i);
-	}
-
-	CHECK(ordered);
+	CHECK((k.n == MTL_RTDIR_MAX_RAYS) && (k.capped == 0));
 
 	/* a weaker light past the cap is dropped, an equal one too (the first weakest stays) */
 	k = mtl_rtdir_keep(k, 100, 0.5f);
 	k = mtl_rtdir_keep(k, 101, 1.0f);
-	CHECK((k.n == MTL_RTDIR_MAX_TRACED) && (k.capped == 1) && (k.i[0] == 0));
+	CHECK((k.n == MTL_RTDIR_MAX_RAYS) && (k.capped == 1) && (k.i[0] == 0));
 
-	/* a stronger one replaces the weakest; in order again, it is last */
+	/* a stronger one replaces the weakest; ranked, it is first, and the rest follow strongest first */
 	k = mtl_rtdir_keep(k, 102, 50.0f);
-	k = mtl_rtdir_keep_order(k);
-	CHECK((k.i[0] == 1) && (k.i[MTL_RTDIR_MAX_TRACED - 1] == 102) && (k.s[MTL_RTDIR_MAX_TRACED - 1] == 50.0f));
+	k = mtl_rtdir_keep_rank(k);
+	CHECK((k.i[0] == 102) && (k.s[0] == 50.0f));
 
-	/* 2048 lights in range, the strongest at the end: the cap's strongest are kept, in order */
+	for (i = 1; i < MTL_RTDIR_MAX_RAYS; i++)
+	{
+		ranked &= (k.i[i] == MTL_RTDIR_MAX_RAYS - i) && (k.s[i] == (float)(MTL_RTDIR_MAX_RAYS - i + 1));
+	}
+
+	CHECK(ranked);
+
+	/* 2048 lights in range, the strongest at the end: the bound's strongest are kept, strongest first */
 	memset(&k, 0, sizeof(k));
 
 	for (i = 0; i < RM_RTL_MAX_LIGHTS; i++)
@@ -1022,14 +1092,181 @@ test_keep(void)
 		k = mtl_rtdir_keep(k, i, (float)i);
 	}
 
-	k = mtl_rtdir_keep_order(k);
+	k = mtl_rtdir_keep_rank(k);
 
-	for (i = 0; i < MTL_RTDIR_MAX_TRACED; i++)
+	for (i = 0; i < MTL_RTDIR_MAX_RAYS; i++)
 	{
-		strongest &= (k.i[i] == RM_RTL_MAX_LIGHTS - MTL_RTDIR_MAX_TRACED + i);
+		strongest &= (k.i[i] == RM_RTL_MAX_LIGHTS - 1 - i);
 	}
 
-	CHECK((k.n == MTL_RTDIR_MAX_TRACED) && k.capped && strongest);
+	CHECK((k.n == MTL_RTDIR_MAX_RAYS) && k.capped && strongest);
+
+	/* equal contributions rank by the buffer's order */
+	memset(&k, 0, sizeof(k));
+
+	for (i = 0; i < 10; i++)
+	{
+		k = mtl_rtdir_keep(k, 9 - i, 2.0f);
+	}
+
+	k = mtl_rtdir_keep_rank(k);
+
+	for (i = 0, ranked = 1; i < 10; i++)
+	{
+		ranked &= (k.i[i] == i);
+	}
+
+	CHECK(ranked);
+}
+
+/* the kernel's choice (rm_rtdir_direct's two loops) on the host: s[i] each light's contribution, vis[i] its ray */
+typedef struct
+{
+	double sum;
+	unsigned rays, seen, capped;
+	unsigned took[MTL_RTDIR_MAX_RAYS];
+} choice_t;
+
+static choice_t
+choose(const float *s, const unsigned char *vis, unsigned n)
+{
+	mtl_rtdir_keep_t k;
+	choice_t c;
+	unsigned i, j;
+
+	memset(&k, 0, sizeof(k));
+	memset(&c, 0, sizeof(c));
+
+	for (i = 0; i < n; i++)
+	{
+		if (s[i] > 0.0f)
+		{
+			k = mtl_rtdir_keep(k, i, s[i]);
+		}
+	}
+
+	k = mtl_rtdir_keep_rank(k);
+
+	for (j = 0; mtl_rtdir_walk(j, k.n, c.seen); j++)
+	{
+		c.rays++;
+
+		if (!vis[k.i[j]])
+		{
+			continue;
+		}
+
+		c.took[c.seen++] = k.i[j];
+		c.sum += k.s[j];
+	}
+
+	c.capped = mtl_rtdir_capped(k, c.seen);
+	return c;
+}
+
+/*
+ * TASK188 slice 3: the 16 lights a pixel sums are chosen among the visible
+ * ones. The candidates are traced strongest first until 16 reach the
+ * pixel, at most MTL_RTDIR_MAX_RAYS rays; an occluded light takes no
+ * place. Past the bound (more lights in range than candidates, and fewer
+ * than 16 of these visible) the weaker lights are not tried: the pixel is
+ * capped.
+ */
+static void
+test_visible_choice(void)
+{
+	static float s[RM_RTL_MAX_LIGHTS];
+	static unsigned char vis[RM_RTL_MAX_LIGHTS];
+	choice_t c, d;
+	unsigned i;
+	int ok;
+
+	CHECK(MTL_RTDIR_MAX_RAYS == 32);
+	CHECK(MTL_RTDIR_MAX_TRACED == 16);
+
+	/* 20 lights, the 4 strongest occluded: the next 16 are summed, none of the occluded */
+	for (i = 0; i < 20; i++)
+	{
+		s[i] = 100.0f - (float)i;
+		vis[i] = i >= 4;
+	}
+
+	c = choose(s, vis, 20);
+	CHECK((c.seen == MTL_RTDIR_MAX_TRACED) && (c.rays == 20) && (c.capped == 0));
+
+	for (i = 0, ok = 1; i < c.seen; i++)
+	{
+		ok &= (c.took[i] == 4 + i);
+	}
+
+	CHECK(ok);
+
+	/* every other light occluded, 40 in range: the first 16 visible, strongest first, in 31 rays */
+	for (i = 0; i < 40; i++)
+	{
+		s[i] = 100.0f - (float)i;
+		vis[i] = !(i & 1u);
+	}
+
+	c = choose(s, vis, 40);
+	CHECK((c.seen == MTL_RTDIR_MAX_TRACED) && (c.rays == 31) && (c.capped == 0));
+
+	for (i = 0, ok = 1; i < c.seen; i++)
+	{
+		ok &= (c.took[i] == 2 * i);
+	}
+
+	CHECK(ok);
+
+	/* 40 in range and none visible: the bound, MTL_RTDIR_MAX_RAYS rays, and the pixel capped */
+	memset(vis, 0, sizeof(vis));
+	c = choose(s, vis, 40);
+	CHECK((c.seen == 0) && (c.rays == MTL_RTDIR_MAX_RAYS) && (c.capped == 1) && (c.sum == 0));
+
+	/* only the 33rd strongest visible: past the bound, not tried; the 32nd is the last tried */
+	vis[32] = 1;
+	c = choose(s, vis, 40);
+	CHECK((c.seen == 0) && (c.rays == MTL_RTDIR_MAX_RAYS) && (c.capped == 1));
+	vis[32] = 0;
+	vis[31] = 1;
+	c = choose(s, vis, 40);
+	CHECK((c.seen == 1) && (c.took[0] == 31) && (c.rays == MTL_RTDIR_MAX_RAYS) && (c.capped == 1));
+
+	/* 10 in range, 3 occluded: every one tried, 7 summed, not capped (nothing was left out) */
+	for (i = 0; i < 10; i++)
+	{
+		vis[i] = ((i % 3) != 0) || (i == 9);
+	}
+
+	c = choose(s, vis, 10);
+	CHECK((c.seen == 7) && (c.rays == 10) && (c.capped == 0));
+
+	/* 2048 rising lights, all visible: the 16 strongest in 16 rays; all occluded: the bound */
+	for (i = 0; i < RM_RTL_MAX_LIGHTS; i++)
+	{
+		s[i] = (float)i + 1.0f;
+		vis[i] = 1;
+	}
+
+	c = choose(s, vis, RM_RTL_MAX_LIGHTS);
+	CHECK((c.seen == MTL_RTDIR_MAX_TRACED) && (c.rays == MTL_RTDIR_MAX_TRACED) && (c.capped == 0) &&
+		(c.took[0] == RM_RTL_MAX_LIGHTS - 1) &&
+		(c.took[MTL_RTDIR_MAX_TRACED - 1] == RM_RTL_MAX_LIGHTS - MTL_RTDIR_MAX_TRACED));
+	memset(vis, 0, sizeof(vis));
+	c = choose(s, vis, RM_RTL_MAX_LIGHTS);
+	CHECK((c.seen == 0) && (c.rays == MTL_RTDIR_MAX_RAYS) && (c.capped == 1));
+
+	/* equal lights, all visible: the first 16 of the buffer, the same twice */
+	for (i = 0; i < 40; i++)
+	{
+		s[i] = 5.0f;
+		vis[i] = 1;
+	}
+
+	c = choose(s, vis, 40);
+	d = choose(s, vis, 40);
+	CHECK(!memcmp(&c, &d, sizeof(c)) && (c.seen == MTL_RTDIR_MAX_TRACED) && (c.took[0] == 0) &&
+		(c.took[MTL_RTDIR_MAX_TRACED - 1] == MTL_RTDIR_MAX_TRACED - 1));
 }
 
 static void
@@ -1407,10 +1644,11 @@ test_pack_emitters(void)
 }
 
 /*
- * The lights a pixel samples are chosen deterministically: with point
- * lights and emitters in one buffer, the 16 strongest of those in range,
- * the same set for the same input, summed in the buffer's order. The
- * selection mtl_rtdir_keep runs per light as the kernel's loop does.
+ * The candidates a pixel traces are chosen deterministically: with point
+ * lights and emitters in one buffer, the MTL_RTDIR_MAX_RAYS strongest of
+ * those in range, the same set for the same input, ranked strongest
+ * first. The selection mtl_rtdir_keep runs per light as the kernel's loop
+ * does.
  */
 static void
 test_mixed_choice(void)
@@ -1435,29 +1673,29 @@ test_mixed_choice(void)
 		}
 	}
 
-	a = mtl_rtdir_keep_order(a);
-	b = mtl_rtdir_keep_order(b);
-	CHECK(a.n == MTL_RTDIR_MAX_TRACED && a.capped);
+	a = mtl_rtdir_keep_rank(a);
+	b = mtl_rtdir_keep_rank(b);
+	CHECK(a.n == MTL_RTDIR_MAX_RAYS && a.capped);
 
 	for (i = 0; i < a.n; i++)
 	{
-		same = same && (a.i[i] == b.i[i]) && (a.s[i] == b.s[i]) && ((i == 0) || (a.i[i - 1] < a.i[i]));
+		same = same && (a.i[i] == b.i[i]) && (a.s[i] == b.s[i]) && ((i == 0) || (a.s[i - 1] >= a.s[i]));
 	}
 
 	CHECK(same);
 
-	/* the points (400 - d: 300 down to 262) outshine the faces (4e5 / d^2: 154 down to 64): the 16 nearest points */
+	/* the points (400 - d: 300 down to 262) outshine the faces (4e5 / d^2: 154 down to 50): the 20 points, then the 12 nearest faces */
 	for (i = 0, same = 1; i < a.n; i++)
 	{
-		same = same && (a.i[i] == 2 * i);
+		same = same && (a.i[i] == ((i < 20) ? 2 * i : 2 * (i - 20) + 1));
 	}
 
 	CHECK(same);
 
-	/* a face near the point beats them all and takes the weakest point's place, the order kept */
+	/* a face near the point beats them all and takes the weakest kept face's place */
 	a = mtl_rtdir_keep(a, 41, mtl_rtdir_contrib(4e5f, 20, 1, 1, MTL_RTDIR_EMITTER));
-	a = mtl_rtdir_keep_order(a);
-	CHECK(a.n == MTL_RTDIR_MAX_TRACED && a.i[MTL_RTDIR_MAX_TRACED - 1] == 41 && a.i[MTL_RTDIR_MAX_TRACED - 2] == 28);
+	a = mtl_rtdir_keep_rank(a);
+	CHECK(a.n == MTL_RTDIR_MAX_RAYS && a.i[0] == 41 && a.i[MTL_RTDIR_MAX_RAYS - 1] == 21);
 }
 
 /* the mode itself: RT-primary is chosen where the device traces rays, and reads 0 where it does not */
@@ -1487,8 +1725,10 @@ main(void)
 	test_host_binding();
 	test_q();
 	test_fit();
-	test_fit_latest();
+	test_fit_lag();
+	test_fit_lag_runs();
 	test_keep();
+	test_visible_choice();
 	test_pack();
 	test_styles();
 	test_view_lines();

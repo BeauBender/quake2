@@ -77,35 +77,41 @@
 #define MTL_RTDIR_FIT_STEP 4u
 
 /*
- * The lights a pixel takes, at most: past MTL_RTDIR_MAX_TRACED lights in
- * range, the strongest of them (the largest mtl_rtdir_scale), so a pixel
- * traces at most MTL_RTDIR_MAX_TRACED shadow rays (each of at most
- * MTL_RTDIR_LAYERS + 1 intersections) whatever the map holds.
+ * The lights a pixel sums, at most (TASK188 slices 1 and 3): the first
+ * MTL_RTDIR_MAX_TRACED of its candidates, strongest first, whose shadow
+ * ray reaches it.
  */
 #define MTL_RTDIR_MAX_TRACED 16
 
-/* the lights a pixel keeps (mtl_rtdir_keep): n of them, their indices in the light buffer and their contributions */
+/*
+ * The shadow rays a pixel traces, at most (TASK188 slice 3): of the lights
+ * in range, the MTL_RTDIR_MAX_RAYS strongest are the pixel's candidates
+ * (mtl_rtdir_keep), each ray of at most MTL_RTDIR_LAYERS + 1
+ * intersections, whatever the map holds.
+ */
+#define MTL_RTDIR_MAX_RAYS 16
+
+/* a pixel's candidates (mtl_rtdir_keep): n of them, their indices in the light buffer and their contributions */
 typedef struct
 {
 	unsigned n;
 	unsigned capped;                    /* 1 once a light in range found the set full */
-	unsigned i[MTL_RTDIR_MAX_TRACED];
-	float s[MTL_RTDIR_MAX_TRACED];
+	unsigned i[MTL_RTDIR_MAX_RAYS];
+	float s[MTL_RTDIR_MAX_RAYS];
 } mtl_rtdir_keep_t;
 
 /*
  * k with the light of index i and contribution s added: appended while
- * fewer than MTL_RTDIR_MAX_TRACED are kept (so the set stays in the
- * buffer's order), else in the place of the weakest kept one when s is
- * stronger (the first weakest on a tie; an equal light does not replace
- * it), and capped set either way.
+ * fewer than MTL_RTDIR_MAX_RAYS are kept, else in the place of the weakest
+ * kept one when s is stronger (the first weakest on a tie; an equal light
+ * does not replace it), and capped set either way.
  */
 static inline mtl_rtdir_keep_t
 mtl_rtdir_keep(mtl_rtdir_keep_t k, unsigned i, float s)
 {
 	unsigned j, w = 0;
 
-	if (k.n < MTL_RTDIR_MAX_TRACED)
+	if (k.n < MTL_RTDIR_MAX_RAYS)
 	{
 		k.i[k.n] = i;
 		k.s[k.n] = s;
@@ -115,7 +121,7 @@ mtl_rtdir_keep(mtl_rtdir_keep_t k, unsigned i, float s)
 
 	k.capped = 1;
 
-	for (j = 1; j < MTL_RTDIR_MAX_TRACED; j++)
+	for (j = 1; j < MTL_RTDIR_MAX_RAYS; j++)
 	{
 		if (k.s[j] < k.s[w])
 		{
@@ -132,9 +138,9 @@ mtl_rtdir_keep(mtl_rtdir_keep_t k, unsigned i, float s)
 	return k;
 }
 
-/* k's lights in the buffer's order (a set that was never full is in it already), so the sum runs in that order */
+/* STUB (red): k in the buffer's order */
 static inline mtl_rtdir_keep_t
-mtl_rtdir_keep_order(mtl_rtdir_keep_t k)
+mtl_rtdir_keep_rank(mtl_rtdir_keep_t k)
 {
 	unsigned a, b;
 
@@ -153,6 +159,22 @@ mtl_rtdir_keep_order(mtl_rtdir_keep_t k)
 	}
 
 	return k;
+}
+
+/* STUB (red): every candidate */
+static inline int
+mtl_rtdir_walk(unsigned j, unsigned n, unsigned seen)
+{
+	(void)seen;
+	return (j < n) ? 1 : 0;
+}
+
+/* STUB (red): more lights in range than candidates */
+static inline unsigned
+mtl_rtdir_capped(mtl_rtdir_keep_t k, unsigned seen)
+{
+	(void)seen;
+	return k.capped;
 }
 
 /*
