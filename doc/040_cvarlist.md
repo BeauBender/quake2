@@ -1521,8 +1521,8 @@ is.
   accumulates `r_rt_ao` only; the shadows and the sun follow, and the
   design's default of `0.9` is set once the denoiser lands and the look
   is judged. Saved with the configuration; applies from the next frame.
-  On the Ray tracing screen's tuning screen as "temporal blend", greyed
-  on other renderers and while `r_rt_ao` is `0`.
+  Not on the Ray tracing screens yet: it joins the tuning screen, the
+  presets and the settings optimizer with its default.
 
 * **r_rt_water**: When set to `1`, the Metal renderer gives water a
   ray-traced reflection, one bounce: from each pixel of water (the

@@ -1393,7 +1393,7 @@ test_presentation_item(void)
 static void
 test_tuning_screen(void)
 {
-	static const char *const items[] = { "sun elevation", "sun azimuth", "AO rays", "water hits", "temporal blend", "flat light",
+	static const char *const items[] = { "sun elevation", "sun azimuth", "AO rays", "water hits", "flat light",
 		"scaler", "debug view", "presentation", "HDR", "HDR peak", "scale", "A/B: A: your settings", "B: stock", "preset name",
 		"save preset", "load preset", "preset as B", "apply (restart)" };
 	menuframework_s *tm;
@@ -1430,9 +1430,6 @@ test_tuning_screen(void)
 	CHECK(RTGreyed("AO rays") && !strcmp(RTItem("AO rays")->statusbar, "turn on ambient occlusion first"),
 		"AO rays says %s", RTItem("AO rays")->statusbar);
 	CHECK(RTGreyed("water hits"), "water hits live with water off");
-	/* TASK59: the temporal blend accumulates the AO alone in its first slice: greyed with the AO's reason */
-	CHECK(RTGreyed("temporal blend") && !strcmp(RTItem("temporal blend")->statusbar, "turn on ambient occlusion first"),
-		"temporal blend says %s", RTItem("temporal blend")->statusbar);
 	CHECK(!RTGreyed("scaler") && !RTGreyed("scale") && !RTGreyed("flat light") && !RTGreyed("debug view"), "a live row greyed");
 	CHECK(RTGreyed("save preset") && !strcmp(RTItem("save preset")->statusbar, "the name is empty"),
 		"save preset says %s", RTItem("save preset")->statusbar);

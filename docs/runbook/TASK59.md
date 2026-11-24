@@ -57,9 +57,11 @@ not accumulated yet (*Left for the next slices*).
   `RM_RTT_EndFrame` from `RM_FX_EndFrame`, so RT7's history resets on the scaler's events.
   `r_rt_scale` does not exist yet (RT11); its change will reach the history as a change of
   the render size, which resets it today.
-- `r_rt_temporal` in `doc/040_cvarlist.md`, classified in `rm_rtgate.c` as a setting, and a
-  row of the tuning screen ("temporal blend", `src/client/menu/vidrules.c`), greyed while
-  `r_rt_ao` is 0 and on other renderers.
+- `r_rt_temporal` in `doc/040_cvarlist.md` and classified in `rm_rtgate.c` as a setting.
+  It has no tuning-screen row yet: a row of `rt_tune` is also a preset cvar
+  (`VidRules_PresetCvar`, counted by `scripts/rt/preset-to-table.sh`) and shifts the rows the
+  unit tests name by index, so it lands with the default in slice 2, with the presets and the
+  settings optimizer.
 
 ## Tests
 
@@ -86,8 +88,21 @@ One hold on the final commit, as the scratchpad's `task59s1-hold.sh`: `make -j8 
 branch and compared frame by frame; and two scratch scenarios, never committed, from
 `rt-ao.cfg` with the shadows, the sun and the AO on, one AO ray a pixel and the noise
 moving (`r_rt_ao_seed 0`), at `r_rt_temporal 0.9` (run twice) and at 0. Their frames are
-for the owner and are kept outside the repository. The results are in the card's comment
-for this slice.
+for the owner and are kept outside the repository.
+
+Results of the first hold (commit `f70d57b7`, base `8870daa5`; the menu row it still had is
+gone since, which changes no renderer frame):
+
+- `pins: 29 of 29 stock scenarios byte-identical to the base`, so accumulation off changes
+  no frame.
+- The accumulated scenario, 23 frames of `demo1.dm2` at 640 x 480: the engine log has
+  `ref_metal: rt temporal 640x480: 9895936 bytes allocated` once, the run at
+  `r_rt_temporal 0` has no such line, and all 23 frames differ between the two.
+- Determinism: two runs of the accumulated scenario give one hash (`e55e54e3528f`), every
+  frame byte-identical. The pins harness drives `timedemo 1`, so the frames, the noise's
+  frame count (`r_rt_ao_seed 0`) and the histories are the same on every run.
+
+The hold for the final commit repeats every check.
 
 No pin is made of an accumulated scenario in this slice.
 
@@ -97,6 +112,7 @@ No pin is made of an accumulated scenario in this slice.
   shadows' light set (the packed indices) passed to the rule.
 - The 5x5 bilateral denoiser on AO and sun, scaled by the sample count, and the reflections'
   3x3 blur (slice 2).
-- The default of 0.9, set when the denoiser lands and the look is judged.
+- The default of 0.9, set when the denoiser lands and the look is judged, and the
+  tuning-screen row with it.
 - RT11's `r_rt_scale` and the `r_rt_stats 1` reset line of the design's RT11 row.
 - The GPU time of the accumulation, recorded as information (decision 0014: no target).
