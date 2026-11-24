@@ -1,4 +1,4 @@
-# RT-primary direct light from the map's point lights, one shadow ray each (TASK188, PM6 slice 1)
+# RT-primary direct light from the map's point lights and emissive faces, one shadow ray each (TASK188, PM6 slices 1 and 2)
 
 Card: TASK188 (#535). Plan: `docs/plans/presentation-modes.md`, section 4.1 and row PM6 of section 7.
 Under `r_presentation 3` (*Ray traced*) the lightmap is off at the visible world surface, and each
@@ -250,19 +250,133 @@ at `PINS_EVERY=7`. Compared by the hash of the frames' sha256s:
 
 29 of 29 byte-identical: at `r_presentation 0` the branch changes no pixel. No existing record was replaced.
 
-## Left for slice 2 (and later rows)
+## Slice 2: the emissive faces, the lightstyles, the Ray tracing screen
 
-- **Emissive faces** (`SURF_LIGHT`, TASK187's emitters) as area lights, and their colour: TASK187's raw texel
-  mean or qrad3's normalized and doubled one, and an unread texture at 0.5 or 0.
-- **Lightstyles** are applied here per light (a light's `style` scales it each frame); slice 2 checks the
-  switched and animated styles on a map that has them (`demo2.dm2`, the `dlights` scenario's second run).
+### The emissive faces as area lights
+
+The world's `SURF_LIGHT` faces (TASK187's emitters) join the point lights in the same buffer, after them,
+so the 16 lights a pixel traces are the strongest of either kind. Each face is one qrad3 surface light
+(`emit_surface`), built by `rm_rtdir_emitter` (`rm_rtdir.c`) from the face's polygon in the world's
+retained vertices (`rm_rtdirscene.c`, `RM_RTDir_Face`), its plane normal flipped for `SURF_PLANEBACK`:
+
+- **Where and which way**: the points' mean (qrad3's `WindingCenter`) a unit in front of the face
+  (`MakePatchForFace`), the face's normal in the record's direction word, `MTL_RTDIR_EMITTER` (-3) in place
+  of a cone's cosine. Only the world model's faces emit, as in qrad3 (`fn < dmodels[0].numfaces`); a brush
+  entity's light face is counted `not the world's`.
+- **How bright**: qrad3's patch light, the reflectivity times the texinfo value (`BaseLightForFace`) times
+  the normalized reflectivity, so `value x refl x refl / max(refl)`; its colour that light normalized; its
+  intensity the light's largest channel times the polygon's area times 0.4 (`CreateDirectLights`, the
+  default `-direct` scale). A face below 3 in every channel sends no direct light (qrad3's `DIRECT_LIGHT`).
+  Style 0: qrad3's surface lights have none.
+- **The falloff** (`mtl_rtdir_emit_scale`, `common/mtl_rtdir_math.h`): `intensity / dist^2 x N.L x
+  facedot`, `facedot` minus the dot of the direction to the light and the face's normal, nothing where
+  either cosine is at most 0.001 (`GatherSampleLight`). qrad3's inverse square never ends, so a face's
+  range is where `intensity / dist^2` falls under one lightmap step (`MTL_RTDIR_EMIT_CUT`, 1): `sqrt(intensity)`.
+  The kernel's light loop calls `mtl_rtdir_reach` (the cheap test) and `mtl_rtdir_contrib` (the
+  dispatch) for every record; a point or spot light takes slice 1's arithmetic unchanged.
+- **The bounds stay slice 1's**: at most 16 lights a pixel (`mtl_rtdir_keep`, the same deterministic choice:
+  the strongest, ties to the first, summed in the buffer's order), one shadow ray each. A face's intensity
+  is held to `16384^2` (`RM_RTDIR_MAX_EMIT_INTENSITY`), so it reaches no farther than the strongest point
+  light, and at most 2048 faces are packed (`RM_RTDIR_MAX_EMITTERS`, the rest counted); the buffer holds
+  at most `RM_RTDIR_MAX_UPLOAD` (4096) records. The shadow ray stops a unit short of the light, which is a
+  unit in front of the face, so it ends above the face's plane and never meets the face itself.
+
+**The choices.** The plan (section 4.2) says the emitted colour is the texture's average colour "as qrad3
+takes it"; TASK187's runbook left the two readings open. This slice takes qrad3's, so the light matches the
+light baked into the stock lightmap the exposure fit compares against: the reflectivity is the texel mean,
+doubled when its largest channel is under 0.5 (`CalcTextureReflectivity`, "because the textures are so
+dim"), and a texture that cannot be read is 0 and lights nothing (qrad3 skips it with "Couldn't load").
+Each other reading is one constant in `header/rm_rtdir.h`: `RM_RTDIR_EMIT_QRAD3_COLOUR 0` takes TASK187's
+raw mean, and `RM_RTDIR_EMIT_UNREAD` set to `RM_RTL_UNREAD_GREY` takes its 0.5 grey. qrad3's exception
+for texinfo 0 (0.5 when unread) is not followed: an unread texture lights nothing here whatever its index.
+
+**Differences from qrad3, knowingly.** qrad3 chops a face into patches of 64 units and gives each its own
+light; this slice takes the face whole, one light at its centre with the whole area. qbsp already cuts a
+lightmapped face to at most 240 units, so far from the face the two agree; near it the light comes from
+the centre, not spread over the face. And qrad3 limits a light to the clusters its PVS sees, where this
+range is the cut above. The plan's "one light chosen per pixel per frame, weighted" is not followed: as in
+slice 1, every light in range up to the 16 is traced, so the term is exact for its model and noise-free,
+and no denoiser (TASK59) is needed.
+
+**Not yet**: a face is not drawn at its own emission. qrad3 adds the face's light to its own lightmap
+("the texture itself should still be full bright"); under RT-primary a light fixture's pixel takes only
+the light other lights send it. The kernel cannot tell an emitter's pixel from the G-buffer (its material
+is the world's), so this needs a material bit or a per-triangle table; it is slice 3's.
+
+**Lines.** `r_rt_stats 1` adds the emitters' map line:
+`ref_metal: rt direct: <map>: N emissive faces uploaded (B not the world's, S shapeless, D below qrad3's
+direct light, U of an unread texture, O past the cap of 2048 left out, C held to the intensity cap)`.
+
+### The lightstyles
+
+Slice 1 already scales each light by its style each view (`rm_rtdir_styles`: the refdef's
+`lightstyles[style].rgb` times `r_modulate`, as `R_BuildLightMap` takes them); the kernel reads
+`styles[style & 255]`. A switched light (`style` 32 and up, set by the game when it is targeted) and an
+animated one take the same path; an emissive face has style 0, as qrad3's. The check below records
+RT-primary on `demo2.dm2` (the `dlights` scenario's second run, every 7th frame), whose frames 51, 61, 63,
+67 and 69 show an animated style.
+
+### The Ray tracing screen under RT-primary
+
+`vidrules.c` follows Enhanced and Retro: under `r_presentation 3` on Metal, wherever the device traces rays
+(the renderer runs the mode there although its menu item is greyed "awaiting review"), the four switches
+`pres_rtprimary` decides are greyed "set by the presentation" and show the value in use (shadows, sun and
+AO off, the water on), as are the sliders of the three effects it reads off; the gun shadow and the
+water's sliders stay the user's, and "reset to defaults" writes no greyed row. The tuning screen's rows
+of the sun and AO say "set by the presentation" too, not "turn on ... first", which the user cannot do
+there. The status bar reads "Ray traced reads shadows, sun and AO as off, the water on". Nothing is
+hidden; without ray tracing the screen is greyed for the device, as before.
+
+### Tests
+
+`tests/metal/rm_rtdir_test.c`: `test_emit_scale` (the falloff, both cosines, the range, the reach test
+and the dispatch), `test_reflectivity` (qrad3's doubling, the unread texture, values that are not
+numbers), `test_emitter` (a 64 x 32 face: the centre a unit out, the normal, the marker, the intensity
+`300 x 2048 x 0.4`, a coloured texture's light, the `DIRECT_LIGHT` threshold, the cap, the shapeless
+faces, the light the kernel's dispatch gives below it), `test_pack_emitters` (the counts of each reason,
+the order, the same records twice, the cap of 2048, the line) and `test_mixed_choice` (points and faces in
+one buffer: the 16 strongest, the same set for the same input, in the buffer's order; a near face takes
+the weakest point's place). Red first, scratch copies of `rm_rtdir.c` with one guard changed each:
+
+```
+raw mean colour: FAIL tests/metal/rm_rtdir_test.c:1172: near(r[0], 0.8, 1e-6) && near(r[1], 0.4, 1e-6) && near(r[2], 0.2, 1e-6) | rm_rtdir_test: 457 checks, 2 failed
+unread at grey: FAIL tests/metal/rm_rtdir_test.c:1175: (r[0] == RM_RTDIR_EMIT_UNREAD) && ... | rm_rtdir_test: 457 checks, 6 failed
+no direct-light threshold: FAIL tests/metal/rm_rtdir_test.c:1222: rm_rtdir_emitter(&f, 23, faint, &l, &cl) == RM_RTDIR_EMIT_DIM | rm_rtdir_test: 457 checks, 6 failed
+no intensity cap: FAIL tests/metal/rm_rtdir_test.c:1231: rm_rtdir_emitter(&f, 2000000000, white, &l, &cl) == RM_RTDIR_EMIT_KEPT && cl == 1 | rm_rtdir_test: 457 checks, 5 failed
+centre on the face: FAIL tests/metal/rm_rtdir_test.c:1209: near(l.pos[0], 32, 1e-4) && ... | rm_rtdir_test: 457 checks, 1 failed
+no direct_scale: FAIL tests/metal/rm_rtdir_test.c:1213: near(l.pos[3], 300.0 * 2048.0 * 0.4, 1e-1) | rm_rtdir_test: 457 checks, 4 failed
+```
+
+**The kernel and host pins** cover the new paths. `kernel_broken` now pins `rm_rtdir_direct`'s parameter
+list whole (no texture, no buffer but the scene's and the lights), its two reads of the light buffer
+(`lights[i]` and `lights[k.i[j]]`, no other), the reach test and the dispatch; `binding_broken` pins the
+light buffer bound once, at the kernel's index 9, and the upload's cap `(n > RM_RTDIR_MAX_UPLOAD)`. Five
+new mutants, each refused: `emit-buffer` (a new buffer into the trace, added to its light), `emit-third-read`
+(a third read of the light buffer added to `raw`), `emit-bypass` (the reach test replaced by `dist > 0`),
+and on the host `lights-cap` (the old cap of 2048) and `lights-twice` (a second buffer at index 9). The
+three kernel mutants compile with `xcrun metal`. Red first, slice 1's rules against them:
+`emit-third-read`, `emit-bypass`, `lights-cap` and `lights-twice` pass them, `rm_rtdir_test: 462 checks,
+4 failed`. Green: `rm_rtdir_test: 462 checks, 0 failed`.
+
+`tests/unit/test_vidrules.c` (`vidrules_rt_screen_under_rtprimary`) and `tests/menu/videomenu_test.c`
+(`test_rt_screen_under_rtprimary`) hold the screen. Red first against the old rules:
+`vidrules_rt_screen_under_rtprimary` failed (`VidRules_RTEffective(3, "metal", 1, rtp, 0.0f)` among
+them), `videomenu_test: 3343 checks, 13 failed` (the AO sliders "applies from the next frame", the water's
+sliders greyed, the reset writing a greyed row), and the tuning rows "turn on sun first" (`3348 checks, 3
+failed`). Green: `yq2test: 30 tests, 0 failed` (the vidrules tests), `videomenu_test: 3382 checks, 0 failed`.
+
+HOLD_A_RESULTS
+
+## Left for slice 3 (and later rows)
+
+- **An emissive face drawn at its own emission** (see above): a material bit in the G-buffer or a
+  per-triangle table, under RT-primary only.
+- **A face cut into qrad3's 64-unit patches**, if the frames near a fixture call for it.
 - **RT3's dlights as a term** of the light model, in place of the layer this mode turns off.
 - **A finer exposure fit**: at map load from a sample of luxels (the plan's wording), or a fixed value the
-  owner picks from frames, and a fit that leaves out the near-black parts slice 2 will light.
-- **The menu**: under RT-primary the Ray tracing screen does not yet grey the rows the mode decides ("set by
-  the presentation"), as it does for Enhanced and Retro; the mode itself is greyed "awaiting review".
+  owner picks from frames, and a fit that leaves out the near-black parts the emissive faces now light.
 - **The water reflections** (`rmb_rtwater.m`) still shade the reflected world from the lightmap array
-  under RT-primary: that is a water pixel's light, not a world pixel's, and is slice 2 or PM7.
+  under RT-primary: that is a water pixel's light, not a world pixel's, and is slice 3 or PM7.
 - **TASK187's open choices** stand as they were (empty values, a short `_color`, a fractional `_style`); a
   spotlight with a missing target now lights nothing, as in qrad3.
 - Sky light, the sun and the bounce (PM7), the denoiser and the MetalFX scaler through the overlay (PM8, where
