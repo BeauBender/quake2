@@ -223,7 +223,7 @@ RM_FX_Begin(const rm_viewport_t *out, const float *vieworg, int *rw, int *rh, rm
 		return 0;
 	}
 
-	scale = rm_fx_scale(r_metalfx_scale->value, rm_fx_default_rows(fx_families), (int)out->h,
+	scale = rm_fx_scale(RM_Effect(r_metalfx_scale), rm_fx_default_rows(fx_families), (int)out->h,
 			rmb_fx_max_ratio(fx_mode));
 
 	if (!rm_fx_sizes(out, scale, &s))

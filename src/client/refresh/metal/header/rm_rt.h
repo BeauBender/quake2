@@ -269,6 +269,16 @@ int rm_rt_frame_format(const rm_rt_frame_stats_t *s, char *buf, size_t len);
 int rm_rt_summary_format(const char *map, unsigned long frames, const rm_rt_spread_t *alias,
 		const rm_rt_spread_t *ias, unsigned long busiest_aliases, unsigned long busiest_tris, char *buf, size_t len);
 
+/*
+ * The settings optimizer's cost hints (TASK203), metal_rt_cost: the mean
+ * GPU ms per timed frame of each effect, in the order shadows, sun, ao,
+ * water (sum[i] over n[i] frames, 0 where n[i] is 0), as
+ * "shadows=<ms> sun=<ms> ao=<ms> water=<ms>", which
+ * src/client/menu/optimize.c parses. 1 when it fits in len; 0, with buf
+ * empty, when it does not or no effect was timed.
+ */
+int rm_rt_cost_format(const double sum[4], const unsigned long n[4], char *buf, size_t len);
+
 /* ---- rmb_rt.m: the Metal back end ------------------------------------------------ */
 
 /* The lerp of one alias instance: gl1's R_LerpVerts without the shell offset, the factors of rm_alias_lerp_setup. */

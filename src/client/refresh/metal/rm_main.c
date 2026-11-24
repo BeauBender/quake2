@@ -35,6 +35,7 @@
 #include <TargetConditionals.h>
 
 #include "header/local.h"
+#include "header/rm_rt.h"
 #include "header/rm_rtscene.h"
 #include "header/rm_rtfx.h"
 #include "header/rm_gbufscene.h"
@@ -56,6 +57,13 @@ cvar_t *r_norefresh;
 cvar_t *r_vsync;
 cvar_t *vid_fullscreen;
 cvar_t *metal_stats;
+/* TASK203: optimize_state (the client's, read only here) and metal_presented, the frames presented while a run is on */
+static cvar_t *rm_optimize_state, *metal_presented;
+/* TASK203: metal_rt_cost, the probe's cost hints: each effect's GPU ms summed over its timed frames, from the probe's start */
+static cvar_t *metal_rt_cost;
+static double rm_cost_sum[4];
+static unsigned long rm_cost_n[4];
+static int rm_cost_probe;   /* optimize_state was 2 at the last frame's end */
 static cvar_t *metal_rate_start;   /* seconds after the first frame ended at which the presented-rate window begins (TASK161) */
 static mtl_rate_t rm_rate;
 static double rm_rate_start;       /* metal_rate_start, read once in RI_Init, as the shim reads it (TASK161) */
@@ -379,6 +387,10 @@ R_Register(void)
 	r_vsync = ri.Cvar_Get("r_vsync", "1", CVAR_ARCHIVE);
 	vid_fullscreen = ri.Cvar_Get("vid_fullscreen", "0", CVAR_ARCHIVE);
 	metal_stats = ri.Cvar_Get("metal_stats", "0", 0);
+	/* the settings optimizer (TASK203): its run state, the client's; and the frames presented, written only during a run */
+	rm_optimize_state = ri.Cvar_Get("optimize_state", "0", 0);
+	metal_presented = ri.Cvar_Get("metal_presented", "0", 0);
+	metal_rt_cost = ri.Cvar_Get("metal_rt_cost", "", 0);
 	metal_rate_start = ri.Cvar_Get("metal_rate_start", "1", 0);
 	r_presentation = ri.Cvar_Get("r_presentation", "0", CVAR_ARCHIVE);
 	r_retro_filter = ri.Cvar_Get("r_retro_filter", "0", CVAR_ARCHIVE);
@@ -1444,6 +1456,49 @@ RI_EndFrame(void)
 			mtl_rate_frame(&rm_rate, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), frames - no_drawable,
 				rm_rate_start);
 		}
+	}
+
+	/* while the settings optimizer runs, the frames presented since the renderer started (TASK203); never otherwise */
+	if (rm_optimize_state && rm_optimize_state->value && metal_presented)
+	{
+		unsigned long frames, no_drawable;
+		char text[32];
+
+		rmb_rate_counts(&frames, &no_drawable);
+		snprintf(text, sizeof(text), "%lu", frames - no_drawable);
+		ri.Cvar_Set("metal_presented", text);
+	}
+
+	/* the probe's cost hints (TASK203): from the probe's first frame, written each frame while it runs; never otherwise */
+	if (rm_optimize_state && metal_rt_cost && (rm_optimize_state->value == 2))
+	{
+		char text[96];
+
+		if (!rm_cost_probe)
+		{
+			memset(rm_cost_sum, 0, sizeof(rm_cost_sum));
+			memset(rm_cost_n, 0, sizeof(rm_cost_n));
+			rm_cost_probe = 1;
+		}
+		rm_rt_cost_format(rm_cost_sum, rm_cost_n, text, sizeof(text));
+		if (strcmp(metal_rt_cost->string, text))
+		{
+			ri.Cvar_Set("metal_rt_cost", text);
+		}
+	}
+	else
+	{
+		rm_cost_probe = 0;
+	}
+}
+
+void
+RM_OptCost_Add(int effect, double ms)
+{
+	if (rm_cost_probe && (effect >= 0) && (effect < 4) && (ms >= 0) && isfinite(ms))
+	{
+		rm_cost_sum[effect] += ms;
+		rm_cost_n[effect]++;
 	}
 }
 

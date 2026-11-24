@@ -132,6 +132,12 @@ RM_RTAO_Frame(const refdef_t *fd, int scene_ready)
 
 	n = rmb_rtao_stats(st, RMB_FRAMES_IN_FLIGHT);
 
+	/* the settings optimizer's cost hints (TASK203): kept only during its probe */
+	for (i = 0; i < n; i++)
+	{
+		RM_OptCost_Add(RM_COST_AO, st[i].ms);
+	}
+
 	for (i = 0; i < n && r_rt_stats_ref && (r_rt_stats_ref->value >= 2); i++)
 	{
 		char line[RM_STATS_LINE];

@@ -426,6 +426,30 @@ rm_rt_map_format(const char *map, const rm_rt_map_stats_t *s, char *buf, size_t 
 }
 
 int
+rm_rt_cost_format(const double sum[4], const unsigned long n[4], char *buf, size_t len)
+{
+	double ms[4];
+	size_t used = 0;
+	int i, any = 0;
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	buf[0] = '\0';
+
+	for (i = 0; i < 4; i++)
+	{
+		ms[i] = n[i] ? sum[i] / (double)n[i] : 0.0;
+		any |= (n[i] != 0);
+	}
+
+	return rm_rt_done(buf, len, any && rm_rt_append(buf, len, &used, "shadows=%.3f sun=%.3f ao=%.3f water=%.3f",
+			ms[0], ms[1], ms[2], ms[3]));
+}
+
+int
 rm_rt_frame_format(const rm_rt_frame_stats_t *s, char *buf, size_t len)
 {
 	size_t used = 0;

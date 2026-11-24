@@ -1264,6 +1264,8 @@ CLIENT_OBJS_ := \
 	src/client/input/ingate.o \
 	src/client/input/touch.o \
 	src/client/menu/menu.o \
+	src/client/menu/optimize.o \
+	src/client/menu/optsearch.o \
 	src/client/menu/qmenu.o \
 	src/client/menu/rtpreset.o \
 	src/client/menu/vidrules.o \
@@ -1907,6 +1909,8 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/input/ingate.o \
 	$(TESTDIR)/src/client/input/touch.o \
 	$(TESTDIR)/src/client/keybind.o \
+	$(TESTDIR)/src/client/menu/optimize.o \
+	$(TESTDIR)/src/client/menu/optsearch.o \
 	$(TESTDIR)/src/client/menu/rtpreset.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \

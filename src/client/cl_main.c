@@ -29,6 +29,7 @@
 #include "header/client.h"
 #include "header/upscale.h"
 #include "input/header/input.h"
+#include "menu/header/optsearch.h"
 
 void CL_ForwardToServer_f(void);
 void CL_Changing_f(void);
@@ -1010,6 +1011,9 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 		IN_Update();
 		Cbuf_Execute();
 		CL_FixCvarCheats();
+		/* the settings optimizer: its time cap, timedemo and the renderer, checked in every
+		   connection state, after the cheat check that may reset timedemo (TASK203) */
+		Optimize_Tick();
 
 		if (cls.state > ca_connecting)
 		{
