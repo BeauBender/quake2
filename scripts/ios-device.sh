@@ -434,7 +434,7 @@ EOF
 	command -v perl > /dev/null 2>&1 || die "perl not found: the selftest's interrupt cases need it"
 	dt_signal()
 	{
-		local name=$1 sig=$2 sc=$3 app=$4 d why= a hp rc want=1
+		local name=$1 sig=$2 sc=$3 app=$4 d why= a hp rc want=1 left
 		local -a args=()
 		shift 4
 		[ "${1:-}" = -- ] && shift
@@ -474,13 +474,19 @@ EOF
 		) > "${d:?}/rc" 2> "${d:?}/launcher.err"
 		rc=$(cat "${d:?}/rc")
 		hp=$(cat "${d:?}/state/hang.pid" 2>/dev/null) || hp=
+		# a hung script, killed above, leaves the fake running: the verdict
+		# names the hang first, so it is not read as a stop that missed (FIX192)
+		left=
+		if [ -n "$hp" ] && kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: the fake hanging step outlived the script
+			left=1
+			kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hanging step
+		fi
 		if [ -z "$hp" ]; then
 			why="the fake never started its hanging step"
-		elif kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: the fake hanging step outlived the script
-			why="the fake (PID $hp) still runs after the script exited"
-			kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hanging step
 		elif [ "$rc" = hung ]; then
-			why="it outlived 10 s after the $sig"
+			why="it outlived 10 s after the $sig${left:+, and so did the fake (PID $hp)}"
+		elif [ -n "$left" ]; then
+			why="the fake (PID $hp) still runs after the script exited"
 		elif [ "$rc" != "$want" ]; then
 			why="it exited $rc, not $want"
 		elif [ -n "$(ls -A "${d:?}/tmp")" ]; then
