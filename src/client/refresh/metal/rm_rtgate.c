@@ -331,9 +331,11 @@ rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t *ou
  * setting (the AO's size, the sun's angles, r_metalfx, ...) stays the
  * user's. Retro (TASK184, PM2) needs no ray tracing and runs on every
  * device; its post-process decides no cvar of its own, but plan call P8
- * (TASK197) has it read every ray-traced effect and r_metalfx as 0, so no
- * layer or scaler smears or relights the quantized view. No cvar is
- * written; the overlay is read-only like Enhanced's.
+ * (TASK197) has it read every ray-traced layer and r_metalfx as 0, so no
+ * layer or scaler smears or relights the quantized view. r_rt_direct is
+ * not in its table and keeps the user's value: that switch runs nothing
+ * outside RT-primary (rm_rtdir_on). No cvar is written; the overlay is
+ * read-only like Enhanced's.
  * RT-primary (TASK188, PM6 slice 1) turns on its direct light
  * (r_rt_direct) and, as the plan's section 2.2 has it, the water
  * reflections; AO is off (the bounce, PM7, replaces it), and so are the
@@ -366,7 +368,7 @@ static const pres_row_t pres_enhanced[] = {
 
 #define PRES_NENHANCED ((int)(sizeof(pres_enhanced) / sizeof(pres_enhanced[0])))
 
-/* Retro's table (P8): the effect switches and the scaler, all read as 0 */
+/* Retro's table (P8): the layers' switches and the scaler, all read as 0 (r_rt_direct is RT-primary's alone) */
 static const pres_row_t pres_retro[] = {
 	{ "r_rt_shadows", 0.0f },
 	{ "r_rt_sun", 0.0f },
