@@ -350,4 +350,28 @@ void RTPreset_AB(void);
 const char *RTPreset_Side(void);
 void RTPreset_SetDir(const char *dir);   /* the tests: NULL is <writedir> */
 
+/*
+ * The settings optimizer's entry points (TASK203). PublishSet makes the
+ * given set (n cvars, each a preset row, with values a preset may hold)
+ * the B side, labelled as the preset label, every other row at its value
+ * now, and shows B; it writes no tuning cvar, only r_rt_ab. SaveSet saves
+ * the tuning cvars with the given set over them as preset name, through
+ * the checks of RTPreset_Save, and writes no cvar: 1 saved, 2 saved over
+ * a preset of that name, 0 refused. A refusal leaves everything as it
+ * was. GetState and SetState keep and put back the B side and A/B state.
+ */
+#define RTPRESET_MAXROWS 32
+#define RTPRESET_MAXVALUE 64
+typedef struct
+{
+	int side;
+	char bname[VIDPRESET_MAXNAME + 1];
+	char bvals[RTPRESET_MAXROWS][RTPRESET_MAXVALUE];
+} rtpreset_state_t;
+
+int RTPreset_PublishSet(const char *label, const char *const *names, const char *const *vals, int n);
+int RTPreset_SaveSet(const char *name, const char *const *names, const char *const *vals, int n);
+void RTPreset_GetState(rtpreset_state_t *st);
+void RTPreset_SetState(const rtpreset_state_t *st);
+
 #endif

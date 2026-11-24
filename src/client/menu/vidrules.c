@@ -673,7 +673,7 @@ VidRules_TuneOverridden(int i, const char *renderer, float presentation)
 	const vidrt_control_t *c = VidRules_TuneControl(i);
 
 	return c && RTRetroInForce(renderer, presentation) &&
-		(!strcmp(c->cvar, "r_metalfx") || (c->effect >= 0));
+		(!strcmp(c->cvar, "r_metalfx") || !strcmp(c->cvar, "r_metalfx_scale") || (c->effect >= 0));
 }
 
 /* TASK197: whether Retro reads r_metalfx as 0, so the MetalFX scaler and scale items are not the user's to set */
@@ -787,6 +787,8 @@ static const vidrt_control_t rt_tune[] = {
 	{ "r_hdr", "HDR", "0", CVAR_ARCHIVE, -1, 0.0f, 1.0f, 1.0f, NULL, hdr_names, 0, 0 },
 	{ "r_hdr_peak", "HDR peak", "4", CVAR_ARCHIVE, -1, VIDHDR_PEAK_MIN, VIDHDR_PEAK_MAX, VIDHDR_PEAK_STEP, "%.1f",
 		NULL, 0, 0 },
+	/* TASK203: the 3D view's size under a scaler, held in the presets and the A/B (the settings optimizer turns it) */
+	{ "r_metalfx_scale", "scale", "0", CVAR_ARCHIVE, -1, 0.0f, 1.0f, 0.05f, "%.2f", NULL, 0, 0 },
 };
 
 int
@@ -827,6 +829,10 @@ VidRules_TuneItem(int i, const char *renderer, int available, int effect_on)
 	if (!strcmp(c->cvar, "r_metalfx"))
 	{
 		return (vidrule_t){ 1, "the scaler; denoised needs a traced effect; next frame" };
+	}
+	if (!strcmp(c->cvar, "r_metalfx_scale"))
+	{
+		return (vidrule_t){ 1, "the 3D view's size under a scaler; 0 is the device's default; next frame" };
 	}
 	if (c->restart)
 	{

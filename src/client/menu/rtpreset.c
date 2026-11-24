@@ -30,8 +30,8 @@
 #include "../../common/header/common.h"
 #include "header/vidrules.h"
 
-#define RTP_MAXCVARS 32
-#define RTP_MAXVALUE 64
+#define RTP_MAXCVARS RTPRESET_MAXROWS
+#define RTP_MAXVALUE RTPRESET_MAXVALUE
 
 static const char *rtp_dir;   /* NULL: FS_Gamedir(); the unit tests set their own */
 static int rtp_side;    /* 0: A, the user's values; 1: B */
@@ -213,23 +213,69 @@ RTP_Read(const char *cmd, const char *name, char vals[RTP_MAXCVARS][RTP_MAXVALUE
 	return 1;
 }
 
-int
-RTPreset_Save(const char *name)
+/* the row of cvar name, -1 when it is no row */
+static int
+RTP_Row(const char *name)
+{
+	for (int i = 0; name && i < VidRules_PresetNum() && i < RTP_MAXCVARS; i++)
+	{
+		if (!strcmp(VidRules_PresetCvar(i, NULL), name))
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+/* a given set (TASK203) as a value for each row, NULL where the set has none; 0, with a line, when refused */
+static int
+RTP_SetRows(const char *cmd, const char *const *names, const char *const *vals, int n,
+	const char *over[RTP_MAXCVARS])
+{
+	for (int i = 0; i < RTP_MAXCVARS; i++)
+	{
+		over[i] = NULL;
+	}
+	for (int k = 0; k < n; k++)
+	{
+		const int row = RTP_Row(names[k]);
+
+		if (row < 0 || !vals[k] || !RTP_ValueOk(vals[k]))
+		{
+			Com_Printf("%s: refused: %s is no preset row, or its value may not be held\n", cmd,
+				(row < 0) ? "a cvar" : names[k]);
+			return 0;
+		}
+		over[row] = vals[k];
+	}
+	return 1;
+}
+
+/* writes the tuning cvars, with over[i] in place of row i's value where set, as preset name */
+static int
+RTP_SaveRows(const char *cmd, const char *name, const char *const over[RTP_MAXCVARS])
 {
 	char path[MAX_OSPATH], date[32];
 	time_t now = time(NULL);
-	int saved = 0;
+	int saved = 0, existed = 0;
 	FILE *f;
 
-	if (!RTP_NameOk("rt_preset save", name) || !RTP_Path("rt_preset save", name, path, sizeof(path)))
+	if (!RTP_NameOk(cmd, name) || !RTP_Path(cmd, name, path, sizeof(path)))
 	{
 		return 0;
+	}
+
+	/* the optimizer says when it saves over a preset (plan, section 6) */
+	if (over && (f = Q_fopen(path, "r")))
+	{
+		existed = 1;
+		fclose(f);
 	}
 
 	FS_CreatePath(path);
 	if (!(f = Q_fopen(path, "w")))
 	{
-		Com_Printf("rt_preset save: cannot write %s\n", path);
+		Com_Printf("%s: cannot write %s\n", cmd, path);
 		return 0;
 	}
 
@@ -244,8 +290,13 @@ RTPreset_Save(const char *name)
 		const char *cv = VidRules_PresetCvar(i, NULL);
 		const char *v = Cvar_VariableString(cv);
 
+		if (over && i < RTP_MAXCVARS && over[i])
+		{
+			fprintf(f, "set %s \"%s\"\n", cv, over[i]);
+			saved++;
+		}
 		/* unset (gl1 registers few of them), a value a server wrote (FIX168), or not a value a preset may hold: no line */
-		if (v[0] && !Cvar_ServerWrote(cv) && RTP_ValueOk(v))
+		else if (v[0] && !Cvar_ServerWrote(cv) && RTP_ValueOk(v))
 		{
 			fprintf(f, "set %s \"%s\"\n", cv, v);
 			saved++;
@@ -253,8 +304,67 @@ RTPreset_Save(const char *name)
 	}
 
 	fclose(f);
-	Com_Printf("rt_preset: saved %s (%d settings)\n", name, saved);
+	Com_Printf("rt_preset: %s %s (%d settings)\n", existed ? "replaced" : "saved", name, saved);
+	return existed ? 2 : 1;
+}
+
+int
+RTPreset_Save(const char *name)
+{
+	return RTP_SaveRows("rt_preset save", name, NULL);
+}
+
+int
+RTPreset_SaveSet(const char *name, const char *const *names, const char *const *vals, int n)
+{
+	const char *over[RTP_MAXCVARS];
+
+	if (!RTP_SetRows("optimize", names, vals, n, over))
+	{
+		return 0;
+	}
+	return RTP_SaveRows("optimize", name, over);
+}
+
+int
+RTPreset_PublishSet(const char *label, const char *const *names, const char *const *vals, int n)
+{
+	const char *over[RTP_MAXCVARS];
+
+	if (!RTP_NameOk("optimize", label) || !RTP_SetRows("optimize", names, vals, n, over))
+	{
+		return 0;
+	}
+
+	/* every other row as RTP_Read starts it: its value now, or the default where unset or not to be held */
+	for (int i = 0; i < VidRules_PresetNum() && i < RTP_MAXCVARS; i++)
+	{
+		const char *def;
+		const char *v = Cvar_VariableString(VidRules_PresetCvar(i, &def));
+
+		Q_strlcpy(rtp_bvals[i], over[i] ? over[i] : ((v[0] && RTP_ValueOk(v)) ? v : def), RTP_MAXVALUE);
+	}
+	Q_strlcpy(rtp_bname, label, sizeof(rtp_bname));
+	rtp_side = 1;
+	RTP_Publish();
 	return 1;
+}
+
+void
+RTPreset_GetState(rtpreset_state_t *st)
+{
+	st->side = rtp_side;
+	Q_strlcpy(st->bname, rtp_bname, sizeof(st->bname));
+	memcpy(st->bvals, rtp_bvals, sizeof(st->bvals));
+}
+
+void
+RTPreset_SetState(const rtpreset_state_t *st)
+{
+	rtp_side = st->side ? 1 : 0;
+	Q_strlcpy(rtp_bname, st->bname, sizeof(rtp_bname));
+	memcpy(rtp_bvals, st->bvals, sizeof(rtp_bvals));
+	RTP_Publish();
 }
 
 int

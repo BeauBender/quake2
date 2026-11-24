@@ -26,6 +26,7 @@
 
 #include "header/client.h"
 #include "input/header/input.h"
+#include "menu/header/optsearch.h"
 
 /* development tools for weapons */
 int gun_frame;
@@ -488,6 +489,7 @@ V_RenderView(float stereo_separation)
 		}
 
 		cl.timedemo_frames++;
+		Optimize_Frame();   /* the settings optimizer's frame time, only while a run is on (TASK203) */
 	}
 
 	/* an invalid frame will just use the exact previous refdef

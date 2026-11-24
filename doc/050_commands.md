@@ -133,6 +133,31 @@ original clients (Vanilla Quake II) commands are still in place.
   as an uncompressed 24-bit TGA. TGA is the only format; the argument is
   optional and, if given, must be `tga`.
 
+* **optimize run [name] | cancel | report | undo**: The settings
+  optimizer (docs/plans/settings-optimizer.md), Metal renderer only. `run`
+  plays the benchmark, `timedemo 1` on `optimize_demo`, which ends the
+  current game: once untimed (the probe), then once per trial, each
+  with its candidate as the B side of `rt_ab`. Over at most
+  `optimize_rounds` trials and `optimize_seconds` seconds it gives up the
+  lowest-ranked of `optimize_rank` first and keeps the configuration
+  that best meets `optimize_target`, or the closest one. It saves the
+  player's values as the preset `before-optimize` first, saves the
+  result as the preset `name` (default `optimized`, the name checked as
+  `rt_preset`'s is; the report says when it replaced one), makes it B,
+  and prints a report: each trial, each change and why, and when nothing
+  met the target, what limits it. It never writes a setting: accepting
+  the result is the player's own `rt_preset load <name>`, and
+  `rt_preset load before-optimize` undoes that. `cancel`, or a trial that
+  fails (the renderer changed or restarted, a disconnect before the
+  demo's end, a demo that ends with no frame drawn or is gone, `timedemo`
+  reset, the time cap), stops the run and puts back the B side and A/B
+  state from before it; after a trial, the report then ends with the best
+  result so far, its limit and what it gave up. `report` prints the last
+  report again; `undo` puts back the B side and A/B state from before the
+  last run. Refused under another renderer, with a run on, for the name
+  `before-optimize`, or when an `optimize_*` value does not parse or is
+  not a finite number.
+
 * **rt_ab [stock]**: Flips the Metal renderer between A, the player's
   own ray-tracing settings, and B, a second set: every tuning setting at
   its default ("B: stock", the default), or a preset given with
@@ -144,8 +169,9 @@ original clients (Vanilla Quake II) commands are still in place.
 * **rt_preset save|load|ab <name>, rt_preset list**: The ray-tracing
   tuning presets, `<writedir>/presets/rt-<name>.cfg`: plain `set` lines
   for every tuning setting (the ray-tracing screen's and the tuning
-  screen's, without the debug views and the presentation, with `r_hdr`
-  and `r_hdr_peak`) under a
+  screen's, without the debug views and the presentation, with `r_hdr`,
+  `r_hdr_peak` and `r_metalfx_scale`; a preset saved before
+  `r_metalfx_scale` was held loads with its current value kept) under a
   comment with the engine version and the date; a setting the renderer
   has not registered, or whose value holds a quote or one of `;`, `|`
   and `=`, gets no line. Its first word: save writes the
