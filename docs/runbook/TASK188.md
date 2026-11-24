@@ -365,7 +365,62 @@ them), `videomenu_test: 3343 checks, 13 failed` (the AO sliders "applies from th
 sliders greyed, the reset writing a greyed row), and the tuning rows "turn on sun first" (`3348 checks, 3
 failed`). Green: `yq2test: 30 tests, 0 failed` (the vidrules tests), `videomenu_test: 3382 checks, 0 failed`.
 
-HOLD_A_RESULTS
+### The terms are live (M6, apple9, 640 x 480)
+
+Recorded at `66fa02ed` (the code as in the final commit). `rtprimary-world` with `r_rt_stats 2` (a scratch
+copy of the scenario, not committed; its frames hash as `rtprimary-world`'s, so the stats change no pixel),
+on `demo1.dm2`, the map `base2`:
+
+```
+ref_metal: rt-data: maps/base2.bsp: lights 248 (spot 0, styled 4, untargeted 0) emitters 422 (textures 11, unread 0) sky 97,29,8 refused 0 (past the cap 0)
+ref_metal: rt direct: maps/base2.bsp: 248 lights uploaded (0 dark, 0 spotlights without a target, 0 past the cap left out, 0 brighter than 16384 held to it)
+ref_metal: rt direct: maps/base2.bsp: 417 emissive faces uploaded (5 not the world's, 0 shapeless, 0 below qrad3's direct light, 0 of an unread texture, 0 past the cap of 2048 left out, 0 held to the intensity cap)
+ref_metal: rt direct: frame 18: 307200 pixels, 307200 world, 665 lights, 3088729 in range, 3045707 shadow rays (9.91 a world pixel), 901839 lit, 19406 pixels past 16 lights, fit 376127/274712 over 19200 samples, exposure 1.0000 (fit), 10.501 ms
+ref_metal: rt direct: frame 19: 307200 pixels, 307200 world, 665 lights, 3088729 in range, 3045707 shadow rays (9.91 a world pixel), 901839 lit, 19406 pixels past 16 lights, fit 376127/274712 over 19200 samples, exposure 1.3692 (fit), 7.151 ms
+ref_metal: rt direct: frame 704: 307200 pixels, 306572 world, 665 lights, 4174875 in range, 3971019 shadow rays (12.95 a world pixel), 1474682 lit, 105803 pixels past 16 lights, fit 550117/238515 over 19156 samples, exposure 2.3064 (fit), 6.828 ms
+```
+
+Against slice 1's frame 18 (`521201 in range, 521201 shadow rays (1.70 a world pixel), 489574 lit, 0 pixels
+past 16 lights, fit 376127/258792`): the 417 faces put 2.5 million more lights in range, 16 % of whose rays
+reach them (a face's range, up to `sqrt(intensity)`, runs far past the walls between); the traced sum
+rises 6 % there and 9 % at frame 704, so the fit falls from 2.51 to 2.31. The cap now bites: over the 686
+frames a mean of 123903 world pixels (40 %) have more than 16 lights in range and take the 16 strongest.
+The pass's GPU time read 6.5 to 10.5 ms against slice 1's 2.2 ms, in a window not held quiet; it is
+information, not a measurement (decision 0014).
+
+The level of the frames (the slice 1 tool over the 23 frames; near-black: brightest channel at most 4), and
+the harness's comparator (`framediff`, threshold 0):
+
+| Record | Mean level | Near-black | Near-white | Against stock `world` (mean score, max) |
+|---|---|---|---|---|
+| stock `world` | 19.3 (9.6 to 38.0) | 3.3 % | 0.04 % | |
+| `rtprimary-world`, slice 1 | 17.7 (6.4 to 34.3) | 33.9 % | 0.05 % | 0.0352 (0.0969) |
+| `rtprimary-world`, slice 2 | 18.5 (8.8 to 36.3) | 16.0 % | 0.04 % | 0.0186 (0.0587) |
+
+The emissive faces halve the near-black share (the parts no light entity reaches, which qrad3 lit by its
+faces and bounces) and halve the distance to stock; the rest is the bounce (PM7) and the faces' own
+emission (slice 3). Slice 2 against slice 1: 23 of 23 frames differ, mean score 0.0220 (max 0.0909). The
+hashes of the four records: `rtprimary-world` `3e45a102fc0a`, `rtprimary-direct` `a38ba393ebf6`,
+`rtprimary-vis` `8eab56606653`, `rtprimary-noshadow` `62207ce09aaa`; the final hold records them again
+(below).
+
+**The lightstyles** (`demo2.dm2`, every 7th frame, 89 frames, the map `waste2`, with a scratch text table
+for the demo's opening text in captures 2 to 6, removed after the run):
+
+```
+ref_metal: rt-data: maps/waste2.bsp: lights 214 (spot 0, styled 2, untargeted 0) emitters 281 (textures 5, unread 0) sky 90,33,15 refused 0 (past the cap 0)
+ref_metal: rt direct: maps/waste2.bsp: 214 lights uploaded (0 dark, 0 spotlights without a target, 0 past the cap left out, 0 brighter than 16384 held to it)
+ref_metal: rt direct: maps/waste2.bsp: 280 emissive faces uploaded (1 not the world's, 0 shapeless, 0 below qrad3's direct light, 0 of an unread texture, 0 past the cap of 2048 left out, 0 held to the intensity cap)
+ref_metal: rt direct: frame 447: 307200 pixels, 307200 world, 494 lights, 9674097 in range, 4912217 shadow rays (15.99 a world pixel), 1483298 lit, 303436 pixels past 16 lights, fit 192985/122266 over 19200 samples, exposure 1.1862 (fit), 6.695 ms
+ref_metal: rt direct: frame 487: 307200 pixels, 307200 world, 494 lights, 8223498 in range, 4911930 shadow rays (15.99 a world pixel), 1277093 lit, 302006 pixels past 16 lights, fit 105691/62847 over 19200 samples, exposure 1.6671 (fit), 6.527 ms
+```
+
+Its two styled lights are kept with their styles (the packing keeps `style`, `test_pack` and
+`test_styles` hold the table), and the record's captures 61 and 67, which the `dlights` scenario names as
+frames an animated style changes, are the two style states the owner reviews. No style is lost on the
+way: the record holds 89 frames (hash `065e37ee63c3`) and nothing needed fixing. The style state of a
+capture is not in the lines (the stats line has no style column), so the check that the light follows
+the style is the owner's, from those frames.
 
 ## Left for slice 3 (and later rows)
 
