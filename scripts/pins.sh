@@ -3372,15 +3372,19 @@ st_make_demo_script() { # TASK70: a demo script holds only commands of this tree
         IFS='|' read -r m l a b <<< "$s"
         if demo_move_ok "$m" "$l" "$a" "$b" 2>/dev/null; then st_fail "demo_move_ok must be false for '$s'"; return 1; fi
     done
+    # the committed water.cfg carries exactly one move line: a script without it would switch the move check off (FIX47)
+    [ "$(grep -c '^// pins: move ' "$root/scripts/pins/demos/water.cfg")" = 1 ] || st_fail "the committed water.cfg must carry exactly one '// pins: move' line" || return 1
+    sed '/^\/\/ pins: move /d' "$root/scripts/pins/demos/water.cfg" > "$tmp/ds/water-nomove.cfg"
+    [ "$(grep -c '^// pins: move ' "$tmp/ds/water-nomove.cfg")" != 1 ] || st_fail "a water.cfg without its move line must fail the assertion" || return 1
     # the range make-demo compares with comes from the check, and is verified again before the engine starts
     (check_demo_script "$tmp/ds/good.cfg" good; [ "$demo_lo $demo_hi" = "10 20" ]) || st_fail "the script check must set the range it accepted" || return 1
-    for s in '92|154' 'x|124' '097|124' '124|97' '0|999' "97 124
+    for s in '96|147' 'x|124' '097|124' '124|97' '0|999' "97 124
 0|124" '|' '97|'; do
         if (demo_dir="$root/scripts/pins/demos"; check_demo_script() { demo_lo=${s%|*}; demo_hi=${s#*|}; }
             PINS_DRYRUN=1 PINS_BASEDIR="$tmp/gd" cmd_make_demo water) >/dev/null 2>&1; then
-            [ "$s" = '92|154' ] && continue
+            [ "$s" = '96|147' ] && continue
             st_fail "make-demo must refuse the message range '$s' before the engine starts"; return 1
-        elif [ "$s" = '92|154' ]; then st_fail "a dry run with the range 92 154 must pass"; return 1
+        elif [ "$s" = '96|147' ]; then st_fail "a dry run with the range 96 147 must pass"; return 1
         fi
     done
     # a comparison that errors is never in range
@@ -3400,7 +3404,8 @@ st_demo_file() {
     local out=$1 n=$2 first=$3 mv=$4 i
     { for ((i = 0; i < n; i++)); do
         if [ "$i" = "$mv" ]; then
-            if [ -n "${5:-}" ]; then printf '\032\000\000\000\015\001\000a\000'; else printf '\025\000\000\000'; fi
+            if [ "${5:-}" = print ]; then printf '\030\000\000\000\012\002\000'
+            elif [ -n "${5:-}" ]; then printf '\032\000\000\000\015\001\000a\000'; else printf '\025\000\000\000'; fi
             printf '\024\000\000\000\000\000\000\000\000\000\001\002\021\002\000\040\015\050\030\260\366'
         elif [ "$i" = "$first" ]; then
             printf '\025\000\000\000\024\000\000\000\000\000\000\000\000\000\001\002\021\002\000\040\015\050\030\060\370'
@@ -3415,11 +3420,14 @@ st_make_demo_run() { # TASK70: make-demo passes only with a whole demo, and fail
     [ "$(demo_move "$tmp/demo-ok.bin")" = "2 41 -2000 -2384" ] || st_fail "demo_move must read two origin frames, the last at 41: $(demo_move "$tmp/demo-ok.bin")" || return 1
     st_demo_file "$tmp/demo-pre.bin" 100 6 41 prefix
     [ "$(demo_move "$tmp/demo-pre.bin")" = "2 41 -2000 -2384" ] || st_fail "demo_move must read a frame behind a configstring: $(demo_move "$tmp/demo-pre.bin")" || return 1
+    # a print (svc_print, level, empty string) in front of the frame: the skip of 2 bytes then the NUL must land on the frame
+    st_demo_file "$tmp/demo-print.bin" 100 6 41 print
+    [ "$(demo_move "$tmp/demo-print.bin")" = "2 41 -2000 -2384" ] || st_fail "demo_move must read a frame behind a print: $(demo_move "$tmp/demo-print.bin")" || return 1
     rm -rf "$tmp/baseq2"
     fake_demo_engine "$tmp/fake-demo" "$ok"
     rep=$(PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo" cmd_make_demo water 2>&1) || st_fail "make-demo must pass with a whole demo: $rep" || return 1
     [ -f "$d" ] && [ ! -f "$tmp/baseq2/pins_make_water.cfg" ] || st_fail "the demo must be left and the script copy removed" || return 1
-    case $rep in *"(100 messages, 92 to 154 wanted, the move on rendered frame 36, 33 to 57 wanted)"*"PINS_DEMO=water.dm2"*) ;; *) st_fail "make-demo must report the demo and how to record it: $rep"; return 1;; esac
+    case $rep in *"(100 messages, 96 to 147 wanted, the move on rendered frame 36, 33 to 57 wanted)"*"PINS_DEMO=water.dm2"*) ;; *) st_fail "make-demo must report the demo and how to record it: $rep"; return 1;; esac
     echo keep >> "$d"
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo" cmd_make_demo water) >/dev/null 2>&1; then st_fail "an existing demo must not be replaced without --replace"; return 1; fi
     grep -q keep "$d" || st_fail "the refused make-demo must leave the demo untouched" || return 1
@@ -3439,8 +3447,8 @@ st_make_demo_run() { # TASK70: make-demo passes only with a whole demo, and fail
     for body in 'exit 0|wrote no demo' \
         'printf "\001\000\000\000x\001\000\000" > "$f"; exit 0|ends before its end marker' \
         'printf "\001\000\000\000x\377\377\377\377" > "$f"; exit 0|holds only 1 messages' \
-        'for i in $(seq 91); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 91 messages, outside 92 to 154' \
-        'for i in $(seq 155); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 155 messages, outside 92 to 154' \
+        'for i in $(seq 95); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 95 messages, outside 96 to 147' \
+        'for i in $(seq 148); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 148 messages, outside 96 to 147' \
         "cp \"$tmp/demo-m37.bin\" \"\$f\"; exit 0|the move of the camera is not on rendered frames 33 to 57 (water.cfg): 2 frames with an origin (two wanted), the last on message 37, so rendered frame 32" \
         "cp \"$tmp/demo-m63.bin\" \"\$f\"; exit 0|so rendered frame 58" \
         "cp \"$tmp/demo-m65.bin\" \"\$f\"; exit 0|so rendered frame 60" \

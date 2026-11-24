@@ -656,14 +656,17 @@ move) and fails the demo, the same way, when that is not on rendered
 frames `<low>` to `<high>` (the message's index less 5; a demo of N
 messages renders N-5 frames). That is a property of the demo and not of
 the clock. `water` holds 220 waits before the move and 370 after, so the
-move falls at 0.38 of the frames at any pace, and states frames 33 to 57
-and 92 to 154 messages. A `skywater` capture falls on every 30th rendered
-frame from frame 0, so a move on those frames lies between the second
-capture (frame 30) and the third (frame 60), 3 frames from each: the
-first 2 captures look from just above the pool's surface and the rest
-from under it, in a demo of 4 captures or of 5. A pace that gives a
-demo outside 92 to 154 messages (the range spans a factor of 1.7) still
-fails; make the demo again when the host is quieter, or lower
+move falls at 0.38 to 0.40 of the frames (measured, from 36 of 95 to
+61 of 154), and states frames 33 to 57 and 96 to 147 messages. A `skywater`
+capture falls on every 30th rendered frame from frame 0, so a move on those
+frames lies between the second capture (frame 30) and the third (frame 60),
+3 frames from each: the first 2 captures look from just above the pool's
+surface and the rest (2 or 3) from under it, in a demo of 4 captures (96 to
+125 messages) or of 5 (126 to 147). The count differs between demos, which
+is safe because the id of a record includes the demo's checksum. At the top
+of the range the move is at 142 * 0.40 = 56.8, and a demo of 148 messages
+may put it on frame 57.2, so it is refused. A pace that gives a demo outside
+96 to 147 messages (the range spans a factor of 1.5) still fails; make the demo again when the host is quieter, or lower
 `PINS_WIDTH` and `PINS_HEIGHT`.
 How it was checked is in [FIX47](../docs/runbook/FIX47.md).
 
