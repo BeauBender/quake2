@@ -226,6 +226,11 @@ vidrule_t VidRules_PresentationMode(int mode, const char *renderer, int availabl
  * VidRules_RTItem under the mode: a switch the mode decides is greyed
  * "set by the presentation", a slider is live while its effect is on as
  * run, effect_user being the cvar of its switch. Mode 0 is VidRules_RTItem.
+ * TASK188: Ray traced (RT-primary), wherever the device traces rays on
+ * Metal, decides the same four switches (shadows, sun and AO off, the
+ * water on); RTRow greys them and the sliders of the three it reads off
+ * "set by the presentation", and leaves the gun shadow and the water's
+ * sliders the user's.
  */
 int VidRules_RTOverridden(int i, const char *renderer, int available, float presentation);
 /*

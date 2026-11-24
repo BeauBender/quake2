@@ -682,7 +682,10 @@ def engine_args(ctx, scenario_sets, extra_sets, tail, write=False):
 
 
 ENGINE_GRACE = 5  # the seconds run_engine gives a stopped engine between TERM and KILL
-ENGINE_DRAIN = 2  # the most seconds run_engine reads what the pty still holds before it closes it
+ENGINE_DRAIN = 2  # the most seconds run_engine reads what the pty still holds before it closes it: once after the
+# engine exits (a writer that left its session and keeps writing cannot hold that read open, FIX191) and once more
+# in the finally, so the two reads together take at most 2 * ENGINE_DRAIN: no select in them waits past its
+# deadline, and a read after a select that found data does not block (FIX193)
 
 
 def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=True):
@@ -712,6 +715,17 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
         except OSError:
             pass
         time.sleep(t)
+
+    def take():  # one read of the console into buf, with the stop signals held (FIX193): one that comes meanwhile
+        # is raised once the bytes are in buf, since they have left the pty and no later read finds them
+        held = signal.pthread_sigmask(signal.SIG_BLOCK, bounded.STOP_SIGNALS)
+        try:
+            data = os.read(master, 65536)
+            if data:
+                buf.extend(data)
+            return data
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)
     try:
         if ctx.cfg is not None:
             ctx.cfg.clear()  # the run starts from the engine's defaults, not from what the last run saved
@@ -727,20 +741,18 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
             r, _, _ = select.select([master], [], [], 0.2)
             if r:
                 try:
-                    data = os.read(master, 65536)
+                    take()  # the engine's console, read and kept with the stop signals held (FIX193)
                 except OSError:
-                    data = b""  # the engine closed its side
-                if data:
-                    buf += data
+                    pass  # the engine closed its side
             rc = p.poll()
             if rc is not None:
                 status = rc
-                try:  # what is left in the pipe
-                    while select.select([master], [], [], 0.2)[0]:
-                        data = os.read(master, 65536)
-                        if not data:
+                try:  # what is left in the pipe, for at most ENGINE_DRAIN seconds (FIX191)
+                    left_end = time.monotonic() + ENGINE_DRAIN
+                    while time.monotonic() < left_end and select.select(
+                            [master], [], [], max(0, min(0.2, left_end - time.monotonic())))[0]:
+                        if not take():
                             break
-                        buf += data
                 except OSError:
                     pass
                 break
@@ -763,10 +775,8 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
                 # before the slave closes, non-blocking and for at most ENGINE_DRAIN seconds
                 end = time.monotonic() + ENGINE_DRAIN
                 while time.monotonic() < end and select.select([master], [], [], 0)[0]:
-                    data = os.read(master, 65536)
-                    if not data:
+                    if not take():
                         break
-                    buf.extend(data)
             except OSError:
                 pass
             finally:
