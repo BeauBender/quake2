@@ -682,7 +682,9 @@ def engine_args(ctx, scenario_sets, extra_sets, tail, write=False):
 
 
 ENGINE_GRACE = 5  # the seconds run_engine gives a stopped engine between TERM and KILL
-ENGINE_DRAIN = 2  # the most seconds run_engine reads what the pty still holds before it closes it
+ENGINE_DRAIN = 2  # the most seconds run_engine reads what the pty still holds before it closes it: once after the
+# engine exits (a writer that left its session and keeps writing cannot hold that read open, FIX191) and once more
+# in the finally, so the two reads together take at most 2 * ENGINE_DRAIN
 
 
 def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=True):
@@ -735,8 +737,9 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
             rc = p.poll()
             if rc is not None:
                 status = rc
-                try:  # what is left in the pipe
-                    while select.select([master], [], [], 0.2)[0]:
+                try:  # what is left in the pipe, for at most ENGINE_DRAIN seconds (FIX191)
+                    left_end = time.monotonic() + ENGINE_DRAIN
+                    while time.monotonic() < left_end and select.select([master], [], [], 0.2)[0]:
                         data = os.read(master, 65536)
                         if not data:
                             break
