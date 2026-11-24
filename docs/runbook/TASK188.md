@@ -1,4 +1,4 @@
-# RT-primary direct light from the map's point lights, emissive faces and dynamic lights, one shadow ray each (TASK188, PM6 slices 1 to 3b)
+# RT-primary direct light from the map's point lights, emissive faces and dynamic lights, one shadow ray each (TASK188, PM6 slices 1 to 3c)
 
 Card: TASK188 (#535). Plan: `docs/plans/presentation-modes.md`, section 4.1 and row PM6 of section 7.
 Under `r_presentation 3` (*Ray traced*) the lightmap is off at the visible world surface, and each
@@ -634,7 +634,7 @@ RT-primary records, three runs each with one hash. No frame was looked at by the
 
 ## Slice 3b: the dynamic lights as a term, and an emissive face drawn at its own light
 
-Slice 3b takes two items of the list slice 3a left (now "Left for slice 3c" below): RT3's dlights as a term,
+Slice 3b takes two items of the list slice 3a left (now "Left for later rows" below): RT3's dlights as a term,
 and an emissive face at its own emission, both under RT-primary only.
 
 ### What the stock and RT3 layers do, and what RT-primary did with them
@@ -813,16 +813,17 @@ look, not in the repository: the emissive frame is `rtprimary-world` capture 6 (
 ### Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
 
 The before is slice 3a (`7383bf09`), built in a scratch copy and run by `PINS_BIN`; the after is `251451f7`.
-`rtprimary-s3bstats` is `demo1.dm2` (`base2`, 687 frame lines) and `rtprimary-s3bstyles` is `demo2.dm2` every
-7th (`waste2`, 617 frame lines); the time is the mean of 687 and of 616 frame lines. The numbers are
+`rtprimary-s3bstats` is a scratch copy of `rtprimary-dlights` with `r_rt_stats 2` (`demo1.dm2`, `base2`,
+`cl_lights 1`, `PINS_SEED=1`, 687 frame lines) and `rtprimary-s3bstyles` one of `rtprimary-world` (`demo2.dm2`
+every 7th, `waste2`, `cl_lights 0`, 617 frame lines), so the `waste2` rows have no dynamic light; the time is the mean of 687 and of 616 frame lines. The numbers are
 information only (decision 0014), not a gate:
 
-| Map | Side | Capped (mean share of world pixels) | Lights in range (mean) | Rays a world pixel (mean) | Pass time (mean) |
+| Map (scenario, `cl_lights`) | Side | Capped (mean share of world pixels) | Lights in range (mean) | Rays a world pixel (mean) | Pass time (mean) |
 |---|---|---|---|---|---|
-| `base2` | slice 3a | 5.5 % | 16.01 | 15.71 | 7.763 ms |
-| `base2` | branch | 5.5 % | 16.12 | 15.82 | 7.064 ms |
-| `waste2` | slice 3a | 34.5 % | 28.40 | 26.10 | 10.743 ms |
-| `waste2` | branch | 34.5 % | 28.40 | 26.10 | 9.027 ms |
+| `base2` (`rtprimary-s3bstats`, 1) | slice 3a | 5.5 % | 16.01 | 15.71 | 7.763 ms |
+| `base2` (`rtprimary-s3bstats`, 1) | branch | 5.5 % | 16.12 | 15.82 | 7.064 ms |
+| `waste2` (`rtprimary-s3bstyles`, 0) | slice 3a | 34.5 % | 28.40 | 26.10 | 10.743 ms |
+| `waste2` (`rtprimary-s3bstyles`, 0) | branch | 34.5 % | 28.40 | 26.10 | 9.027 ms |
 
 The digests of the runs are `55c66bcc68ec` (slice 3a, `base2`), `0c678f1b2ea1` (slice 3a, `waste2`),
 `af586c32f8cb` (branch, `base2`) and `491fb53deed4` (branch, `waste2`). The map lights' share is the same on
@@ -852,21 +853,202 @@ In one hold on the code of the final commit (`251451f7`; main merged: no), each 
 The stock pin compare (29 of 29) and the RT-primary records, three runs each with one hash. No frame was
 looked at by the agent.
 
-## Left for slice 3c (and later rows)
+## Slice 3c: the exposure fitted at map load, the review notes, and PM6's close-out
 
-- Done in slice 3b: RT3's dlights as a term, and an emissive face drawn at its own light (above).
-- **A face cut into qrad3's 64-unit patches**, if the frames near a fixture call for it.
-- **The dynamic lights on a surface's own texture axes** (RT3's surface tables), if a scaled texture's
-  reach is seen to differ in the frames.
-- **A PVS cull of emitters**, as qrad3 has, if the share of pixels past slice 3a's bound calls for it.
-- **A finer exposure fit**: at map load from a sample of luxels (the plan's wording), or a fixed value the
-  owner picks from frames, and a fit that leaves out the near-black parts the emissive faces now light.
-- **The water reflections** (`rmb_rtwater.m`) still shade the reflected world from the lightmap array
-  under RT-primary: that is a water pixel's light, not a world pixel's, and is slice 3 or PM7.
-- **TASK187's open choices** stand as they were (empty values, a short `_color`, a fractional `_style`); a
-  spotlight with a missing target now lights nothing, as in qrad3.
-- Sky light, the sun and the bounce (PM7), the denoiser and the MetalFX scaler through the overlay (PM8, where
-  the scaler's absence on visionOS starts to matter), models (PM9).
+### The exposure fitted at map load from a sample of luxels
+
+The plan (section 4.1) fits the exposure "at map load by comparing the traced direct light with the
+lightmap at a sample of luxels". Slices 1 to 3b fitted it from the frames (slice 3a: the frame three
+before). Now it is fitted once a map, when its lights are uploaded (`RM_RTDir_Lights`, `rm_rtdirscene.c`),
+on the host, and every frame of the map uses it:
+
+- **The samples** (`RM_RTDir_FitPoints`): of the world model's faces in the faces lump's order, every n-th
+  (n = 1 + faces / 1024), its centre and the points half way from the centre to each corner, at most 8192
+  in all, each with the face's unit normal. A face takes none without a lightmap, or when it is a fixture
+  (`SURF_LIGHT`: qrad3 fills its luxels with its own light, which RT-primary adds through the own-light
+  table and which a lightmap byte clips), translucent, sky or warped. Each point reads the face's
+  lightmap at its nearest luxel (`rm_rtdir_fit_luxel`, held to the face), the face's maps summed with
+  every style at 1, as qrad3 baked them.
+- **The traced light at a sample** (`rm_rtdir_fit_light`): the kernel's rule run on the host with the
+  same header functions (`mtl_rtdir_reach`, `mtl_rtdir_contrib`, `mtl_rtdir_keep`, `mtl_rtdir_keep_rank`,
+  `mtl_rtdir_walk`): the 32 strongest lights in range are traced strongest first, and the first 16 that
+  reach the point are summed, every style at 1. The shadow ray runs from 1 unit off the face to 1 unit
+  short of the light, and is a line test through the map's tree (`RM_RTDir_Clear`), blocked by a solid
+  leaf, as qrad3 traces; water and glass let it through, as in the kernel. No dynamic light (there is none
+  at map load) and no own light (a fixture takes no sample).
+- **Which luxels enter** (`rm_rtdir_fit_enters`): a luxel whose brightest channel is under 16 of 255 is
+  near black and is left out, and so is one with a channel at 255 (clipped). In a dark room that a bright
+  fixture's traced light reaches, the lightmap reads near black where the trace reads bright, and
+  entered, those luxels would pull the ratio to the floor and crush the rest of the map. A clipped luxel
+  holds less than its light, so it would pull the same way.
+- **The exposure** (`rm_rtdir_fit_map`): `rm_rtdir_fit` of the entered luxels' sums, each `mtl_rtdir_q` of
+  the lightmap and of the traced light over 255, held between 0.25 and 16, and 1 when no luxel enters or
+  no traced light reaches one. `r_rt_direct_exposure` above 0 still fixes it.
+- `r_rt_stats 1` prints the map's line: `ref_metal: rt direct: <map>: exposure fit <e> over <n> luxels of
+  <m> (<d> near black, <c> clipped), <r> lines`.
+
+**Why this way.** The plan's wording, at map load from a sample of luxels, is the only one it allows; the
+choice left was how to trace there. A GPU pass at load would need the acceleration structure built before
+the first frame and a wait for its result, so the exposure would hang on when the scene is ready. The host
+pass is a function of the map's file alone: the same map gives the same exposure on every run, device and
+frame order, with no lag and no reset. The cost is that the line test sees only the world's solid
+brushes, not a door or another brush entity in the scene (the kernel's rays do), and a luxel's light is
+compared at its nearest luxel, not filtered like the G-buffer's.
+
+**The frame-lag code is gone**: `rm_rtdir_fit_lag`, `RM_RTDIR_FIT_LAG`, the back end's `fit` and `fit_reset`
+and its `last_frame`, the lag's `_Static_assert`, and their tests (`test_fit_lag`, `test_fit_lag_runs`) and
+pins and mutants (`test_fit_lag_binding`: `memset-first`, `reset-dropped`, `exposure-always`). The back end
+no longer fits or writes the view's exposure; the view always carries it. The kernel's lightmap read at
+every fourth pixel stays: its sums are the `r_rt_stats 2` line's `fit a/b over n samples`, which now
+compare the view with the map's fit and are information only.
+
+### The review notes of slice 3b
+
+| Note | What changed |
+|---|---|
+| Correctness N2, security N3: the own-light eye ray traced where its result is unused | `rm_rtdir_direct` looks the own light up only under views 0, 1 and 2. Under view 3 no ray at all is traced now (the fixture's own light, which needs the eye ray, is left out of view 3), and view 4 does not show it. A new mutant `self-ray-unused` casts it there. |
+| Correctness N1: carrier crossings share the 4-layer budget with water | Kept, and stated: a carried light's ray passes its carrier within the same `MTL_RTDIR_LAYERS` as water and translucent faces, so every ray stays at 5 intersections. RT3 counts a carrier's crossings apart and lets the ray through past its own budget; here a ray that crosses the carrier and water or glass more than 4 times in all is shadowed (`MTL_RTDIR_MAT_CARRIER`'s comment, `common/mtl_rtdir_math.h`). A separate budget would raise the bound to 9 intersections. |
+| Correctness N4, security N1, spec N4: the 1023 cap's condition | Stated exactly (below). |
+| Correctness N5, spec N2: `KERNEL_DYN` and `KERNEL_TERMS` in one check | Two checks. `dlight-dropped` and `self-dropped` now read `rm_rtdir_direct does not sum its three terms once (the own light's ray not under views 3 and 4)`; the four mutants of the walk keep `rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound`. |
+| Correctness N3: views 3 and 4 fit on the shown term | With the map's fit every view is drawn at the map's exposure; the `doc/040_cvarlist.md` entry of `r_rt_direct_show` says so, and that the stats line's sums under views 3 and 4 are of the term shown. |
+| Security N2: `view.nself`'s bound rests on the call order | The table's count is taken at the encode, beside the table's binding (`rmb_rtdir_trace`: `view.nself = selftab ? (unsigned)nself : 0u;`), not when the view is set. The host pin holds it in the trace; a new host mutant `self-count-early` removes it there. |
+| Spec N1: the stats scenarios' `cl_lights` | Named in both before-and-after tables (slice 3b's below, and this slice's). |
+
+**The 1023 cap, exactly.** The own light's word holds each channel at 1023 before any style. The kernel
+multiplies it by `styles[0]` (lightstyle 0's rgb times `r_modulate`) and the exposure, and the store holds
+a channel at 1. So a capped channel is white whenever `styles[0] x exposure x 1023 / 255 >= 1`, that is
+`styles[0] x exposure >= 0.2493`. At the default `r_modulate 1` and style 0 at 1 that is the fit's floor
+of 0.25; a server that sets lightstyle 0 below 1, an `r_modulate` under 1, or a fixed
+`r_rt_direct_exposure` under 0.25 can make a channel brighter than 1023 read dimmer than it would
+uncapped.
+
+### Tests
+
+`tests/metal/rm_rtdir_test.c`, written first against stubs (every luxel entering, no traced light, no
+lookup): `rm_rtdir_test: 703 checks, 29 failed`. Green: `rm_rtdir_test: 706 checks, 0 failed`.
+
+- `test_fit_enters`: a luxel enters at a brightest channel of 16 and up to 254.5, and not at 15.9, 0, below
+  0, at 255 or past it, or with a channel that is not a number.
+- `test_fit_light`: one point light 100 above with intensity 300 gives 200 (times its colour), its line
+  from 1 unit off the face to 1 unit short of the light; blocked, 0 in one line; behind the face or out of
+  range, no line; an emissive face 100 above, intensity 10^6, gives 100; 64 visible lights at one place sum
+  the 16 strongest in 16 lines, and behind a wall take 32 lines and sum nothing.
+- `test_fit_map`: the known set (a light of 300 at 100 above, luxels of 100 and 200 where the trace reads
+  200: sums 75 and 100, exposure 0.75); the same behind a wall, 1; an all-dark map (8 luxels of 5), no
+  luxel enters, 1; a map with one very bright fixture (4 lit luxels at 100 against a traced 200, 20 dark
+  luxels at 4 and one clipped luxel at 255 under an emissive face of 10^9): 0.5, the dark and clipped ones
+  left out (20 and 1); the same 21 raised to 16, entered, crush it to the floor, 0.25.
+- `test_fit_luxel`: the nearest luxel, two maps summed, a point past the last column or before the first
+  held to the face, a coordinate that is not a number reads luxel 0, no maps or no samples read 0.
+- `test_fit_binding`, the pin of where the fit is taken: `dir_fit` set twice in `rm_rtdirscene.c`, both in
+  `RM_RTDir_Lights` (the reset to 1, then `rm_rtdir_fit_map`), the view's exposure
+  `rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), dir_fit, &dir_fixed)` once, in `RM_RTDir_View`, and
+  no write of the view's exposure and no fit in `rmb_rtdir.m`. Each of its mutants is refused:
+
+```
+fit-ignored: the view's exposure is not r_rt_direct_exposure's, else the map's fit
+reset-dropped: the map's fit is not taken once, in RM_RTDir_Lights, after its reset
+fit-per-view: the map's fit is not taken once, in RM_RTDir_Lights, after its reset
+back-end-exposure: the back end fits or writes the view's exposure
+```
+
+The rule's own mutants, each in a scratch copy of the branch with one change (`git archive`), each red:
+
+```
+fit-floor-dropped: FAIL tests/metal/rm_rtdir_test.c:1277: rm_rtdir_fit_enters(out[i]) == 0 | rm_rtdir_test: 705 checks, 6 failed
+fit-clip-dropped: FAIL tests/metal/rm_rtdir_test.c:1277: rm_rtdir_fit_enters(out[i]) == 0 | rm_rtdir_test: 705 checks, 4 failed
+fit-unshadowed: FAIL tests/metal/rm_rtdir_test.c:1304: out[0] == 0 && out[1] == 0 && out[2] == 0 && (rays == 1) | rm_rtdir_test: 705 checks, 3 failed
+fit-walk-unbounded: FAIL tests/metal/rm_rtdir_test.c:1330: rays == MTL_RTDIR_MAX_TRACED | rm_rtdir_test: 705 checks, 2 failed
+fit-luxel-unheld: FAIL tests/metal/rm_rtdir_test.c:1439: out[0] == 10 && out[1] == 20 && out[2] == 30 | rm_rtdir_test: 706 checks, 1 failed
+```
+
+`fit-floor-dropped` lets a near-black luxel in (it also fails the fixture's 0.5), `fit-clip-dropped` a
+clipped one, `fit-unshadowed` ignores the line test, `fit-walk-unbounded` walks every candidate past the
+16 seen, and `fit-luxel-unheld` reads past the face's last column. The kernel mutants `self-ray-unused`,
+`dlight-dropped` and `self-dropped` compile with `xcrun metal`, as does the kernel.
+
+### The records are pins (M6, apple9, 640 x 480)
+
+Recorded at `@CODE@` (the code of the final commit), three runs each (`--run 2`, `--run 3`), hashed as the
+hash of the frames' sha256s:
+
+| Record | Frames | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|---|
+@RECORDS@
+
+Slice 3b's records were, at `251451f7`: `rtprimary-world` `0b44b41a739d`, `rtprimary-direct`
+`c9a2f64eee98`, `rtprimary-vis` `469ce42fec8c`, `rtprimary-noshadow` `fe4e7d8028f1`, `waste2` `491fb53deed4`,
+`rtprimary-dlights` `af586c32f8cb` and `aa8b1b87d17b`. @MOVED@ These hashes are the RT-primary pins from here,
+provisional until the owner accepts the look (PM11), where they are recorded again. For the owner's look,
+not in the repository: the same captures as slice 3b, from the branch and from slice 3b's code
+(`058c609c`), `rtprimary-world` captures 6 and 12, `waste2` captures 61 and 67, and `rtprimary-dlights`
+capture 20.
+
+The maps' fits (`r_rt_stats 1`, in the stats runs):
+
+```
+@FITLINES@
+```
+
+### Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
+
+The before is slice 3b (`058c609c`), built in a scratch copy and run by `PINS_BIN`; the after is `@CODE@`.
+`rtprimary-s3cstats` is a scratch copy of `rtprimary-dlights` with `r_rt_stats 2` (`demo1.dm2`, `base2`,
+`cl_lights 1`, `PINS_SEED=1`) and `rtprimary-s3cstyles` one of `rtprimary-world` (`demo2.dm2` every 7th,
+`waste2`, `cl_lights 0`). The numbers are information only (decision 0014), not a gate:
+
+| Map (scenario, `cl_lights`) | Side | Exposure (mean) | Capped (mean share) | Rays a world pixel (mean) | Pass time (mean) |
+|---|---|---|---|---|---|
+@STATS@
+
+@STATSNOTE@
+
+### Stock is unchanged
+
+The same method as slice 3b (every committed `metal` scenario but RT-primary's, seeded, the water
+scenarios on one `water.dm2` copied to both, `cinematic` on `idlog.cin` at `PINS_EVERY=7`), base main at
+`@BASE@` and the branch at `@CODE@`: @PINS@ At `r_presentation 0` the slice changes no pixel.
+
+### Checks
+
+In one hold on the code of the final commit (`@CODE@`; main merged: @MERGED@), each check's last line:
+
+@CHECKS@
+
+The stock pin compare and the RT-primary records, three runs each with one hash. No frame was looked at
+by the agent.
+
+## Left for later rows
+
+PM6's row and the acceptance lines of #535, gone through at the end of slice 3c:
+
+| Item | Where it stands |
+|---|---|
+| The lightmap off at the visible surface | Done (slice 1; the kernel pin, `test_no_lightmap_kernel`). |
+| Point and emissive lights with one shadow ray | Done (slices 1 and 2; the 16 visible among the 32 strongest, slice 3a). |
+| Lightstyles | Done (slice 2, checked on `waste2`). |
+| RT3's dlights as a term | Done (slice 3b). |
+| The exposure fit | Done (slice 3c: at map load from a sample of luxels). |
+| The per-term debug views | Views 1 to 4 (slices 1 and 3b): the direct term, the visibility, the term unshadowed, the dynamic lights alone. The own light has no view alone (it shows in view 1 at a fixture); PM7, which adds the sky and bounce terms and their views, takes it. |
+| Numbers and log lines here | Each slice's records, stats and checks above. |
+| Section 6: stock unchanged, no boundary moved, no asset | Each slice's 29 of 29 stock scenarios; the renderer API, the protocol, savegames and the game module unchanged. |
+| A new cvar documented and classified | No new cvar in slices 3a to 3c; `r_rt_direct`, `r_rt_direct_exposure` and `r_rt_direct_show` documented and classified (slice 1). |
+| `scripts/test.sh` green | The gate, run before each merge. |
+
+Left, and who takes it:
+
+| Item | Taken by |
+|---|---|
+| The water reflections (`rmb_rtwater.m`) shade the reflected world from the lightmap array under RT-primary: a water pixel's light, not a world pixel's | PM7. |
+| Sky light, the sun and the bounce | PM7 (TASK189). |
+| The denoiser and the MetalFX scaler through the overlay | PM8. |
+| Models lit by traced light | PM9. |
+| A face cut into qrad3's 64-unit patches, if the frames near a fixture call for it | No row: the follow-up card drafted at the end of slice 3c, for the owner's frames at PM11. |
+| A PVS cull of emitters, as qrad3 has, if the share of pixels past the bound calls for it (a third on `waste2`) | No row: the same follow-up card. |
+| The dynamic lights on a surface's own texture axes (RT3's surface tables), if a scaled texture's reach is seen to differ | No row: the same follow-up card. |
+| The map-load fit's line test sees the world's solid brushes only, not a door or another brush entity | No row: the same follow-up card, if the owner's frames show a map whose exposure it moves. |
+| TASK187's open choices (empty values, a short `_color`, a fractional `_style`) | TASK187's own follow-ups, as they stood; a spotlight with a missing target lights nothing, as in qrad3. |
+| The look, the pins recorded at it and the menu item ungreyed | PM11. |
 
 ## Checks
 
