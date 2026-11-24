@@ -859,14 +859,19 @@ limit" "$out"
     # round 2: where that first TERM lands is the runner's speed, so the case runs twice: "hold" lands it
     # in spawn's hold window, every time (spawn's proc_start waits until the engine says it has sent it),
     # before run_engine has read anything, and "free" leaves it to the runner. Either way the status is
-    # the TERM's and the log has the engine's line, which the drain in run_engine's finally reads
+    # the TERM's and the log has the engine's line, which the drain in run_engine's finally reads.
+    # FIX193: "read" lands it between run_engine's first read and the append of what it read, every time:
+    # the engine waits for the .go file the staged read makes, and that read returns only once the
+    # engine says it has sent the TERM. The log keeps the line only if run_engine holds the stop signals
+    # around its read and append
     if has engine; then
-    for how in hold free; do
+    for how in hold free read; do
     rm -rf "$w/held"; mkdir -p "$w/held"
-    printf '%s\n' '#!/bin/sh' 'trap "kill -s TERM \$PPID" TERM' 'echo engine-ready' 'kill -s TERM $PPID' ': > "$0.sent"' \
+    printf '%s\n' '#!/bin/sh' 'trap "kill -s TERM \$PPID" TERM' 'echo engine-ready' \
+        'while [ "$1" = read ] && [ ! -e "$0.go" ] && [ -e "$0.flag" ]; do sleep 0.05; done' 'kill -s TERM $PPID' ': > "$0.sent"' \
         'while [ -e "$0.flag" ]; do sleep 0.1; done' > "$w/held/eng"
     chmod +x "$w/held/eng"; : > "$w/held/eng.flag"
-    python3 -I -c 'import os, signal, sys, time
+    python3 -I -c 'import os, signal, sys, time, types
 sys.path.insert(0, sys.argv[1])
 import mfx
 def h(s, f):
@@ -887,8 +892,25 @@ def held_start(pid):  # spawn calls it inside its hold window: there it waits fo
             print("unsent")
     return real(pid)
 mfx.bounded.proc_start = held_start
+staged = [sys.argv[4] == "read"]
+real_read = os.read
+def staged_read(fd, n):  # "read": the first read with data returns once the engine has sent its TERM
+    data = real_read(fd, n)
+    if data and staged[0]:
+        staged[0] = False
+        open(sys.argv[2] + ".go", "w").close()
+        end = time.monotonic() + 10
+        while not os.path.exists(sys.argv[2] + ".sent") and time.monotonic() < end:
+            time.sleep(0.02)
+        if not os.path.exists(sys.argv[2] + ".sent"):
+            print("unsent")
+    return data
+shim = types.ModuleType("os")
+shim.__dict__.update(os.__dict__)
+shim.read = staged_read
+mfx.os = shim
 try:
-    mfx.run_engine(Ctx(), [], sys.argv[3], timeout=30, debug=False)
+    mfx.run_engine(Ctx(), [sys.argv[4]], sys.argv[3], timeout=30, debug=False)
     print("no exit")
 except SystemExit as e:
     print("exit %s" % e.code)' "$d" "$w/held/eng" "$w/held/log" $how < /dev/null > "$w/held/out" 2>&1 &
@@ -898,7 +920,7 @@ except SystemExit as e:
     if kill -0 $hp 2>/dev/null; then ko engine-held-log "$how: the run outlived 30 s"; kill -s KILL $hp; fi
     wait $hp 2>/dev/null
     grep -qx 'exit 143' "$w/held/out" || ko engine-held-log "$how: the run did not end on its TERM: $(cat "$w/held/out")"
-    if [ "$how" = hold ] && grep -qx unsent "$w/held/out"; then ko engine-held-log "$how: the TERM never landed in the hold window"; fi
+    if [ "$how" != free ] && grep -qx unsent "$w/held/out"; then ko engine-held-log "$how: the TERM never landed in its window"; fi
     grep -qx 'engine-ready' "$w/held/log" 2>/dev/null || ko engine-held-log "$how: no log, or not the engine's line, after a held TERM: $(cat "$w/held/out")"
     done
     # FIX186 slice 2, round 2: an engine that has exited before spawn returns (spawn's proc_start waits
@@ -930,6 +952,33 @@ mfx.bounded.proc_start = gone_start
 print("status %s" % mfx.run_engine(Ctx(), [], sys.argv[3], timeout=30, debug=False))' "$d" "$w/gone/eng" "$w/gone/log" < /dev/null 2>&1)
     [ "$out" = "status 0" ] || ko engine-exit-log "the run of an engine that exited at once: $out"
     grep -qx 'engine-done' "$w/gone/log" 2>/dev/null || ko engine-exit-log "no log, or not the engine's line, from an engine that exited before spawn returned: $out"
+    # FIX191: what run_engine reads after the engine exits ends within ENGINE_DRAIN however long a writer that left the
+    # engine's session (its own setsid) keeps writing to the pty. The writer ends on state: when its write fails
+    # (the master closed) or when the stop file appears; the check makes the file after 15 s at the latest, so it is
+    # never left running, and sends it no signal (FIX193: by then its pid may no longer be its). ENGINE_DRAIN is 1 s
+    # here: the two reads take 2 s at most, and the run must end within 10 s, with the engine's own line in the log
+    rm -rf "$w/esc"; mkdir -p "$w/esc"
+    printf '%s\n' 'import os, sys, time' 'os.setsid()' 'open(sys.argv[1] + ".up", "w").close()' \
+        'while not os.path.exists(sys.argv[1] + ".stop"):' '    try:' '        os.write(1, b"escaped-writer\n")' \
+        '    except OSError:' '        break' '    time.sleep(0.02)' > "$w/esc/writer.py"
+    printf '%s\n' '#!/bin/sh' 'echo engine-ready' 'python3 -I "$0.py" "$0" &' \
+        'while [ ! -e "$0.up" ] && [ ! -e "$0.stop" ]; do sleep 0.1; done' 'exit 0' > "$w/esc/eng"
+    mv "$w/esc/writer.py" "$w/esc/eng.py"; chmod +x "$w/esc/eng"
+    python3 -I -c 'import sys, time
+sys.path.insert(0, sys.argv[1])
+import mfx
+class Ctx:
+    bin, cfg = sys.argv[2], None
+mfx.ENGINE_DRAIN = 1
+t = time.monotonic()
+st = mfx.run_engine(Ctx(), [], sys.argv[3], timeout=60, debug=False)
+open(sys.argv[2] + ".done", "w").write("status %s in %.1f\n" % (st, time.monotonic() - t))' "$d" "$w/esc/eng" "$w/esc/log" < /dev/null > "$w/esc/out" 2>&1 &
+    ep=$!
+    n=0; while [ ! -e "$w/esc/eng.done" ] && [ $n -lt 150 ]; do sleep 0.1; n=$((n+1)); done
+    : > "$w/esc/eng.stop"
+    wait $ep 2>/dev/null
+    awk -v s="$(sed -n 's/.* in \([0-9.]*\)$/\1/p' "$w/esc/eng.done" 2>/dev/null)" 'BEGIN { exit !(s != "" && s < 10.0) }' || ko engine-escaped-log "the run did not end within its bound with a writer outside the engine's session: $(cat "$w/esc/eng.done" 2>/dev/null) $(cat "$w/esc/out")"
+    grep -qx 'engine-ready' "$w/esc/log" 2>/dev/null || ko engine-escaped-log "no log, or not the engine's line, with an escaped writer"
     fi
 
     # the structural measure
@@ -1182,6 +1231,9 @@ mutant quality-vs-itself e2e-quality py 'diff_frames(ctx, nat[k], fr[k])' 'diff_
 mutant crop-is-native e2e-crop py 'img = nimg if oid == "native" else read_tga(frames_by_index(pins[oid])[mid])' 'img = nimg'
 mutant crop-frame-first e2e-index py 'mid = nkeys[len(nkeys) // 2]' 'mid = nkeys[0]'
 mutant pins-not-in-group e2e-group lib '        os.killpg(c.pid, sig)' '        os.kill(c.pid, sig)'
+mutant engine-leftover-unbounded engine-escaped-log py 'while time.monotonic() < left_end and select.select(
+                            [master], [], [], max(0, min(0.2, left_end - time.monotonic())))[0]:' 'while select.select([master], [], [], 0.2)[0]:'
+mutant engine-read-unheld engine-held-log py "take()  # the engine's console, read and kept with the stop signals held (FIX193)" 'buf.extend(os.read(master, 65536))  # the read and append without the stop signals held'
 mutant engine-drain-dropped engine-held-log py 'while time.monotonic() < end and select.select([master], [], [], 0)[0]:' 'while False:'
 mutant engine-slave-closed-early engine-exit-log py '        p = c.popen
 ' '        p = c.popen
