@@ -58,7 +58,9 @@ static const rm_world_t *dir_world; /* the map whose lights are uploaded */
 static char dir_map[MAX_QPATH];     /* its model name (a new map's buffers may take the old one's address) */
 static long dir_nlights;            /* the records uploaded: the lights, then the emissive faces */
 static int dir_fixed;               /* the frame's exposure is r_rt_direct_exposure's */
-static float dir_fit;               /* the map's exposure, fitted at its load (TASK188 slice 3c, rm_rtdir_fit_map) */
+static float dir_fit;               /* the map's exposure, fitted at its load (TASK188 slice 3c, rm_rtdir_fit_tree) */
+static const rm_world_t *fit_world; /* the map dir_fit is of: kept across a reopen of the pass, reset by a new map */
+static char fit_map[MAX_QPATH];
 
 void
 RM_RTDir_Init(const rmb_caps_t *caps)
@@ -70,8 +72,8 @@ RM_RTDir_Init(const rmb_caps_t *caps)
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	dir_device = caps->raytracing != 0;
 	dir_opened = dir_refused = dir_active = dir_viewed = dir_fixed = 0;
-	dir_world = NULL;
-	dir_map[0] = '\0';
+	dir_world = fit_world = NULL;
+	dir_map[0] = fit_map[0] = '\0';
 	dir_nlights = 0;
 }
 
@@ -84,7 +86,8 @@ RM_RTDir_Shutdown(void)
 	}
 
 	dir_opened = dir_active = dir_viewed = 0;
-	dir_world = NULL;
+	dir_world = fit_world = NULL;
+	fit_map[0] = '\0';
 	dir_nlights = 0;
 }
 
@@ -134,68 +137,45 @@ RM_RTDir_Face(void *ctx, long face, rm_rtdir_face_t *out)
 	return 1;
 }
 
-/* the deepest the fit's line test walks the map's tree; past it a line counts as blocked */
-#define RM_RTDIR_FIT_DEPTH 1024
+/* the engine's values of the fit's copies (rm_rtdir.h) */
+typedef char rm_rtdir_surf_same[((RM_RTDIR_SURF_LIGHT == SURF_LIGHT) && (RM_RTDIR_SURF_SKY == SURF_SKY) &&
+	(RM_RTDIR_SURF_WARP == SURF_WARP) && (RM_RTDIR_SURF_TRANS33 == SURF_TRANS33) &&
+	(RM_RTDIR_SURF_TRANS66 == SURF_TRANS66) && (RM_RTDIR_CONTENTS_SOLID == CONTENTS_SOLID)) ? 1 : -1];
 
-/* 1 when the segment a to b crosses no solid leaf of the tree under node (the world's line test, as R_RecursiveLightPoint walks) */
-static int
-RM_RTDir_ClearNode(const mnode_t *node, const float *a, const float *b, int depth)
+/* rm_rtdir_tree_t's read: a node or a leaf of the world's tree (mleaf_t shares mnode_t's contents) */
+static void
+RM_RTDir_Node(const void *p, rm_rtdir_node_t *out)
 {
-	float front, back, frac, mid[3];
-	int side, k;
+	const mnode_t *node = p;
 
-	if (!node || (depth > RM_RTDIR_FIT_DEPTH))
+	memset(out, 0, sizeof(*out));
+	out->leaf = node->contents != CONTENTS_NODE;
+	out->contents = node->contents;
+
+	if (!out->leaf)
 	{
-		return 0;
+		VectorCopy(node->plane->normal, out->normal);
+		out->dist = node->plane->dist;
+		out->child[0] = node->children[0];
+		out->child[1] = node->children[1];
 	}
-
-	if (node->contents != CONTENTS_NODE)
-	{
-		return !(node->contents & CONTENTS_SOLID);
-	}
-
-	front = DotProduct(a, node->plane->normal) - node->plane->dist;
-	back = DotProduct(b, node->plane->normal) - node->plane->dist;
-	side = front < 0;
-
-	if ((back < 0) == side)
-	{
-		return RM_RTDir_ClearNode(node->children[side], a, b, depth + 1);
-	}
-
-	frac = front / (front - back);
-
-	for (k = 0; k < 3; k++)
-	{
-		mid[k] = a[k] + (b[k] - a[k]) * frac;
-	}
-
-	return RM_RTDir_ClearNode(node->children[side], a, mid, depth + 1) &&
-		RM_RTDir_ClearNode(node->children[!side], mid, b, depth + 1);
-}
-
-/* the exposure fit's shadow ray (rm_rtdir_clear_fn): the world's solid leaves alone, as qrad3 traces */
-static int
-RM_RTDir_Clear(void *ctx, const float *a, const float *b)
-{
-	const model_t *wm = ctx;
-
-	return RM_RTDir_ClearNode(wm->nodes, a, b, 0);
 }
 
 /*
  * TASK188 slice 3c: the exposure fit's samples, at most cap: of every
- * n-th world face (about RM_RTDIR_FIT_FACES of them) that has a
- * lightmap and is not a fixture (SURF_LIGHT, whose own luxels qrad3 fills
- * with its own light) nor translucent, its centre and the points half way
- * from it to each corner, each with the face's lightmap at its luxel
- * (rm_rtdir_fit_luxel, every style at 1). In the face's order, so the
- * samples are a function of the map alone.
+ * n-th world face (about RM_RTDIR_FIT_FACES of them) that takes samples
+ * (rm_rtdir_fit_face_ok: a lightmap, not a fixture, whose own luxels
+ * qrad3 fills with its own light, nor translucent), its centre and the
+ * points half way from it to each corner, each with the face's lightmap
+ * at its luxel (rm_rtdir_fit_st, rm_rtdir_fit_luxel, every style at 1).
+ * Past cap, every k-th of those points (rm_rtdir_fit_every), so the
+ * samples cover the whole face list. In the faces' order, so the samples
+ * are a function of the map alone. With pts NULL, the points counted.
  */
 static long
-RM_RTDir_FitPoints(const model_t *wm, rm_rtdir_fitpt_t *pts, long cap)
+RM_RTDir_FitPoints(const model_t *wm, rm_rtdir_fitpt_t *pts, long cap, long every)
 {
-	long first = 0, num = wm->numsurfaces, face, stride, n = 0;
+	long first = 0, num = wm->numsurfaces, face, stride, n = 0, g = 0;
 
 	if (wm->numsubmodels > 0)
 	{
@@ -205,17 +185,31 @@ RM_RTDir_FitPoints(const model_t *wm, rm_rtdir_fitpt_t *pts, long cap)
 
 	stride = 1 + num / RM_RTDIR_FIT_FACES;
 
-	for (face = first; (face < first + num) && (face < wm->numsurfaces) && (n < cap); face += stride)
+	for (face = first; (face < first + num) && (face < wm->numsurfaces) && (!pts || (n < cap)); face += stride)
 	{
-		const msurface_t *fa = &wm->surfaces[face];
-		const mtexinfo_t *tex = fa->texinfo;
+		const msurface_t *fa;
+		const mtexinfo_t *tex;
 		rm_rtdir_face_t f;
 		float c[3] = { 0, 0, 0 };
 		int smax, tmax, v, k;
 
-		if ((face < 0) || !fa->samples || !tex || (tex->flags & (SURF_LIGHT | SURF_TRANS33 | SURF_TRANS66 | SURF_SKY | SURF_WARP)) ||
+		if (face < 0)
+		{
+			continue;
+		}
+
+		fa = &wm->surfaces[face];
+		tex = fa->texinfo;
+
+		if (!tex || !rm_rtdir_fit_face_ok(tex->flags, fa->samples != NULL) ||
 			!rm_lm_size(fa->extents[0], fa->extents[1], &smax, &tmax) || !RM_RTDir_Face((void *)wm, face, &f) || (f.n < 3))
 		{
+			continue;
+		}
+
+		if (!pts)
+		{
+			n += f.n + 1;
 			continue;
 		}
 
@@ -227,9 +221,17 @@ RM_RTDir_FitPoints(const model_t *wm, rm_rtdir_fitpt_t *pts, long cap)
 			}
 		}
 
-		for (v = -1; (v < f.n) && (n < cap); v++)
+		for (v = -1; (v < f.n) && (n < cap); v++, g++)
 		{
-			rm_rtdir_fitpt_t *p = &pts[n++];
+			rm_rtdir_fitpt_t *p;
+			float st[2];
+
+			if (g % every)
+			{
+				continue;
+			}
+
+			p = &pts[n++];
 
 			for (k = 0; k < 3; k++)
 			{
@@ -237,9 +239,8 @@ RM_RTDir_FitPoints(const model_t *wm, rm_rtdir_fitpt_t *pts, long cap)
 				p->normal[k] = f.normal[k];
 			}
 
-			rm_rtdir_fit_luxel(fa->samples, rm_lm_nummaps(fa->styles), smax, tmax,
-					(DotProduct(p->pos, tex->vecs[0]) + tex->vecs[0][3] - fa->texturemins[0]) / 16.0f,
-					(DotProduct(p->pos, tex->vecs[1]) + tex->vecs[1][3] - fa->texturemins[1]) / 16.0f, p->lm);
+			rm_rtdir_fit_st(p->pos, tex->vecs, fa->texturemins, st);
+			rm_rtdir_fit_luxel(fa->samples, rm_lm_nummaps(fa->styles), smax, tmax, st[0], st[1], p->lm);
 		}
 	}
 
@@ -265,7 +266,6 @@ RM_RTDir_Lights(void)
 
 	dir_world = wm->world;
 	Q_strlcpy(dir_map, wm->name, sizeof(dir_map));
-	dir_fit = 1.0f;
 	memset(&why, 0, sizeof(why));
 	memset(&ewhy, 0, sizeof(ewhy));
 
@@ -288,19 +288,36 @@ RM_RTDir_Lights(void)
 		dir_nlights = nemit = 0;
 	}
 
-	/* TASK188 slice 3c: the map's exposure, once at its load, from a sample of its luxels (rm_rtdir_fit_map) */
+	/*
+	 * TASK188 slice 3c: the map's exposure, once a map, from a sample of its luxels (rm_rtdir_fit_tree); a
+	 * reopen of the pass on the same map (r_rt_direct or the presentation away and back) keeps it
+	 */
+	if ((fit_world != wm->world) || strcmp(fit_map, wm->name))
 	{
+		const long every = rm_rtdir_fit_every(RM_RTDir_FitPoints(wm, NULL, 0, 1), RM_RTDIR_FIT_POINTS);
 		rm_rtdir_fitpt_t *pts = malloc(RM_RTDIR_FIT_POINTS * sizeof(*pts));
-		const long npts = (pts && wm->nodes) ? RM_RTDir_FitPoints(wm, pts, RM_RTDIR_FIT_POINTS) : 0;
+		const long npts = (pts && wm->nodes) ? RM_RTDir_FitPoints(wm, pts, RM_RTDIR_FIT_POINTS, every) : 0;
+		rm_rtdir_tree_t tree = { wm->nodes, RM_RTDir_Node, 0, RM_RTDIR_FIT_VISITS, 0 };
 		rm_rtdir_mapfit_t f;
 
-		dir_fit = rm_rtdir_fit_map(dir_lights, dir_nlights + nemit, pts, npts, RM_RTDir_Clear, (void *)wm, &f);
+		/* the old map's fit never survives into a new one's */
+		fit_world = wm->world;
+		Q_strlcpy(fit_map, wm->name, sizeof(fit_map));
+		dir_fit = 1.0f;
+		dir_fit = rm_rtdir_fit_tree(dir_lights, dir_nlights + nemit, pts, npts, &tree, &f);
 		free(pts);
+
+		if (f.over)
+		{
+			R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: the exposure fit's line tests passed %lu node visits; "
+					"exposure 1\n", wm->name, (unsigned long)RM_RTDIR_FIT_VISITS);
+		}
 
 		if (r_rt_stats_ref && r_rt_stats_ref->value)
 		{
 			R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: exposure fit %.4f over %lu luxels of %ld (%lu near black, "
-					"%lu clipped), %lu lines\n", wm->name, (double)dir_fit, f.n, npts, f.dark, f.clipped, f.rays);
+					"%lu clipped), %lu lines, %lu node visits, every %ld-th point\n", wm->name, (double)dir_fit, f.n,
+					npts, f.dark, f.clipped, f.rays, f.visits, every);
 		}
 	}
 

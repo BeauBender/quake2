@@ -645,6 +645,117 @@ rm_rtdir_fit_luxel(const unsigned char *samples, int nummaps, int smax, int tmax
 	}
 }
 
+void
+rm_rtdir_fit_st(const float *pos, const float vecs[2][4], const short *texturemins, float *st)
+{
+	int a;
+
+	for (a = 0; a < 2; a++)
+	{
+		st[a] = (pos[0] * vecs[a][0] + pos[1] * vecs[a][1] + pos[2] * vecs[a][2] + vecs[a][3] - texturemins[a]) / 16.0f;
+	}
+}
+
+int
+rm_rtdir_fit_face_ok(int flags, int has_samples)
+{
+	return has_samples && !(flags & RM_RTDIR_FIT_SKIP);
+}
+
+long
+rm_rtdir_fit_every(long total, long cap)
+{
+	if ((total <= cap) || (cap < 1))
+	{
+		return 1;
+	}
+
+	return 1 + (total - 1) / cap;
+}
+
+/* rm_rtdir_tree_clear's walk of the tree under node, depth levels down */
+static int
+rm_rtdir_clear_node(rm_rtdir_tree_t *t, const void *node, const float *a, const float *b, int depth)
+{
+	rm_rtdir_node_t nd;
+	float front, back, frac, mid[3];
+	int side, k;
+
+	if (!node || (depth > RM_RTDIR_FIT_DEPTH))
+	{
+		return 0;
+	}
+
+	if (t->visits >= t->cap)
+	{
+		t->over = 1;
+		return 0;
+	}
+
+	t->visits++;
+	t->read(node, &nd);
+
+	if (nd.leaf)
+	{
+		return !(nd.contents & RM_RTDIR_CONTENTS_SOLID);
+	}
+
+	front = a[0] * nd.normal[0] + a[1] * nd.normal[1] + a[2] * nd.normal[2] - nd.dist;
+	back = b[0] * nd.normal[0] + b[1] * nd.normal[1] + b[2] * nd.normal[2] - nd.dist;
+	side = front < 0;
+
+	if ((back < 0) == side)
+	{
+		return rm_rtdir_clear_node(t, nd.child[side], a, b, depth + 1);
+	}
+
+	frac = front / (front - back);
+
+	for (k = 0; k < 3; k++)
+	{
+		mid[k] = a[k] + (b[k] - a[k]) * frac;
+	}
+
+	return rm_rtdir_clear_node(t, nd.child[side], a, mid, depth + 1) &&
+		rm_rtdir_clear_node(t, nd.child[!side], mid, b, depth + 1);
+}
+
+int
+rm_rtdir_tree_clear(void *ctx, const float *a, const float *b)
+{
+	rm_rtdir_tree_t *t = ctx;
+
+	if (!t || !t->read || t->over)
+	{
+		return 0;
+	}
+
+	return rm_rtdir_clear_node(t, t->root, a, b, 0);
+}
+
+float
+rm_rtdir_fit_tree(const rm_rtdir_light_t *l, long n, const rm_rtdir_fitpt_t *pts, long npts, rm_rtdir_tree_t *tree,
+		rm_rtdir_mapfit_t *out)
+{
+	rm_rtdir_mapfit_t f;
+
+	f.exposure = rm_rtdir_fit_map(l, n, pts, npts, tree ? rm_rtdir_tree_clear : NULL, tree, &f);
+	f.visits = tree ? tree->visits : 0;
+	f.over = tree && tree->over;
+
+	if (f.over)
+	{
+		f.exposure = 1.0f;
+	}
+
+	if (out)
+	{
+		*out = f;
+	}
+
+	return f.exposure;
+}
+
 float
 rm_rtdir_exposure(float cvar, float fit, int *fixed)
 {

@@ -378,6 +378,8 @@ typedef struct
 	unsigned long dark;     /* left out: near black */
 	unsigned long clipped;  /* left out: clipped */
 	unsigned long rays;     /* the lines tested */
+	unsigned long visits;   /* rm_rtdir_fit_tree's: the tree's nodes those lines visited */
+	int over;               /* rm_rtdir_fit_tree's: past RM_RTDIR_FIT_VISITS, the exposure 1 */
 	float exposure;
 } rm_rtdir_mapfit_t;
 
@@ -405,6 +407,79 @@ float rm_rtdir_fit_map(const rm_rtdir_light_t *l, long n, const rm_rtdir_fitpt_t
  * smax by tmax luxels summed into out[3]: the luxel held to the face.
  */
 void rm_rtdir_fit_luxel(const unsigned char *samples, int nummaps, int smax, int tmax, float s, float t, float *out);
+
+/*
+ * A sample's texture coordinates on its face, for rm_rtdir_fit_luxel:
+ * pos on the texinfo's axes vecs (four floats each, the offset last),
+ * less the face's texturemins, in luxels of 16 units, into st[2].
+ */
+void rm_rtdir_fit_st(const float *pos, const float vecs[2][4], const short *texturemins, float *st);
+
+/* the texinfo flags (the engine's SURF_*) whose faces take no sample: a fixture, translucent, the sky, a warp */
+#define RM_RTDIR_SURF_LIGHT 0x1
+#define RM_RTDIR_SURF_SKY 0x4
+#define RM_RTDIR_SURF_WARP 0x8
+#define RM_RTDIR_SURF_TRANS33 0x10
+#define RM_RTDIR_SURF_TRANS66 0x20
+#define RM_RTDIR_FIT_SKIP \
+	(RM_RTDIR_SURF_LIGHT | RM_RTDIR_SURF_TRANS33 | RM_RTDIR_SURF_TRANS66 | RM_RTDIR_SURF_SKY | RM_RTDIR_SURF_WARP)
+
+/* 1 when a face of texinfo flags (has_samples: a lightmap) takes samples: a lightmap, and none of RM_RTDIR_FIT_SKIP */
+int rm_rtdir_fit_face_ok(int flags, int has_samples);
+
+/*
+ * The fit's sample stride over the total candidate points of the faces
+ * it walks: every k-th point is taken, k the least that keeps them at
+ * cap or fewer (1 while total is at most cap), so a map past the cap is
+ * sampled across its whole face list, not its first faces alone.
+ */
+long rm_rtdir_fit_every(long total, long cap);
+
+/* the deepest the fit's line test walks a map's tree; past it a line counts as blocked */
+#define RM_RTDIR_FIT_DEPTH 1024
+
+/*
+ * The node visits the fit's line tests make in one map, at most: past it
+ * every line counts as blocked and the map's exposure is 1, so a crafted
+ * tree cannot stall the map's first RT-primary frame (r_rt_stats prints
+ * a map's count on its fit line).
+ */
+#define RM_RTDIR_FIT_VISITS (1UL << 26)
+
+/* the engine's CONTENTS_SOLID: a leaf with it blocks the fit's line */
+#define RM_RTDIR_CONTENTS_SOLID 1
+
+/* one node of the caller's tree, as rm_rtdir_tree_t's read gives it */
+typedef struct
+{
+	int leaf;           /* 1 for a leaf */
+	int contents;       /* a leaf's contents (RM_RTDIR_CONTENTS_SOLID blocks) */
+	float normal[3];    /* a node's plane: normal . p - dist is in front at 0 or more */
+	float dist;
+	const void *child[2]; /* a node's children: in front, behind */
+} rm_rtdir_node_t;
+
+typedef struct
+{
+	const void *root;
+	void (*read)(const void *node, rm_rtdir_node_t *out);
+	unsigned long visits;   /* the nodes visited so far */
+	unsigned long cap;      /* RM_RTDIR_FIT_VISITS, or a test's */
+	int over;               /* a line wanted more than cap: every line since reads blocked */
+} rm_rtdir_tree_t;
+
+/*
+ * The fit's line test (an rm_rtdir_clear_fn, ctx an rm_rtdir_tree_t):
+ * 1 when the segment a to b crosses no solid leaf of the tree, as
+ * R_RecursiveLightPoint walks it (a point at 0 is in front; a segment
+ * crossing a plane is split there, each half walked down its side). 0
+ * past RM_RTDIR_FIT_DEPTH, for a missing child, and past the visit cap.
+ */
+int rm_rtdir_tree_clear(void *ctx, const float *a, const float *b);
+
+/* rm_rtdir_fit_map with rm_rtdir_tree_clear over tree; 1 (and out->over set) when the walk passed its visit cap */
+float rm_rtdir_fit_tree(const rm_rtdir_light_t *l, long n, const rm_rtdir_fitpt_t *pts, long npts, rm_rtdir_tree_t *tree,
+		rm_rtdir_mapfit_t *out);
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
 int rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *buf, size_t len);
