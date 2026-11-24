@@ -347,4 +347,16 @@ int RM_PresentationMode(void);
 const char *RM_EffectString(const cvar_t *cv);
 int RM_EffectOverlaid(const cvar_t *cv);
 
+/*
+ * TASK203: one completed frame's GPU time of a traced effect, from the
+ * pass's stats harvest, for the settings optimizer's cost hints
+ * (metal_rt_cost, written by RI_EndFrame while optimize_state is 2, the
+ * probe). Kept only then; ms below 0 (not measured) is not counted.
+ */
+#define RM_COST_SHADOWS 0
+#define RM_COST_SUN 1
+#define RM_COST_AO 2
+#define RM_COST_WATER 3
+void RM_OptCost_Add(int effect, double ms);
+
 #endif /* RM_LOCAL_H */

@@ -1603,6 +1603,16 @@ is.
   end for the presented rate. Not saved, and it means nothing outside a
   run.
 
+* **metal_rt_cost**: The settings optimizer's cost hints, written by the
+  Metal renderer at the end of each frame only while `optimize_state` is
+  `2` (the probe): the mean GPU milliseconds per timed frame of each
+  traced effect since the probe began, as `shadows=<ms> sun=<ms> ao=<ms>
+  water=<ms>` (`0` for an effect that was not timed), or empty when no
+  effect was timed. At the probe's end the optimizer orders the
+  ray-traced effects dearest first by it, and uses its fixed order when
+  it is empty or does not parse. Not saved, and it means nothing outside
+  a run.
+
 * **optimize_demo**: The demo the settings optimizer (`optimize run`)
   plays as its benchmark, a file under `demos/`. `demo1.dm2` (the
   default) is the stock demo. The name is refused when it holds `..`, a
@@ -1624,9 +1634,10 @@ is.
   to 1 to 64. Default `10`. Saved with the configuration.
 
 * **optimize_seconds**: The most seconds one `optimize run` takes from
-  its first frame drawn, the probe included, held to 10 to 3600. The
-  search starts no trial past it, and a trial still playing at it stops
-  the run with the best result so far. Default `300`. Saved with the
+  the command, the probe and every map load included, held to 10 to
+  3600. It is checked on every client frame, whether or not a frame is
+  drawn. The search starts no trial past it, and a run still on at it
+  stops with the best result so far. Default `300`. Saved with the
   configuration.
 
 * **optimize_stat**: The statistic of a trial's frame times compared with

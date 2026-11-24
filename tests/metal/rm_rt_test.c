@@ -528,6 +528,21 @@ test_format(void)
 	CHECK(rm_rt_summary_format("maps/base1.bsp", 3, &sa, &si, 0, 0, small, sizeof(small)) == 0 && small[0] == '\0');
 }
 
+/* TASK203: the probe's cost hints, metal_rt_cost, in the form src/client/menu/optimize.c parses */
+static void
+test_cost_format(void)
+{
+	const double sum[4] = { 12.5, 0, 30, 4.5 };
+	const unsigned long n[4] = { 10, 0, 12, 3 };
+	const unsigned long none[4] = { 0, 0, 0, 0 };
+	char buf[96], small[20];
+
+	CHECK(rm_rt_cost_format(sum, n, buf, sizeof(buf)) == 1);
+	CHECK(strcmp(buf, "shadows=1.250 sun=0.000 ao=2.500 water=1.500") == 0);
+	CHECK(rm_rt_cost_format(sum, none, buf, sizeof(buf)) == 0 && buf[0] == 0);
+	CHECK(rm_rt_cost_format(sum, n, small, sizeof(small)) == 0 && small[0] == 0);
+}
+
 int
 main(void)
 {
@@ -543,6 +558,7 @@ main(void)
 	test_bytes();
 	test_spread();
 	test_format();
+	test_cost_format();
 
 	printf("rm_rt_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
