@@ -1146,10 +1146,10 @@ fit_rule_broken(const char *scene, const char *back)
 	}
 
 	reset = strstr(li.body, "dir_fit = 1.0f;");
-	taken = strstr(li.body, "dir_fit = rm_rtdir_fit_map(");
+	taken = strstr(li.body, "dir_fit = rm_rtdir_fit_tree(");
 
 	if ((count_in(text, strlen(text), "dir_fit = ") != 2) || (count_in(li.body, li.nbody, "dir_fit = 1.0f;") != 1) ||
-		(count_in(li.body, li.nbody, "dir_fit = rm_rtdir_fit_map(") != 1) || !reset || !taken || (reset > taken))
+		(count_in(li.body, li.nbody, "dir_fit = rm_rtdir_fit_tree(") != 1) || !reset || !taken || (reset > taken))
 	{
 		return "the map's fit is not taken once, in RM_RTDir_Lights, after its reset";
 	}
@@ -1187,8 +1187,8 @@ test_fit_binding(void)
 		{ "reset-dropped", "scene", "\tdir_fit = 1.0f;\n", "" },
 		/* a fit again each view */
 		{ "fit-per-view", "scene", "\texposure = rm_rtdir_exposure(",
-			"\tdir_fit = rm_rtdir_fit_map(dir_lights, dir_nlights, NULL, 0, NULL, NULL, NULL);\n\texposure = rm_rtdir_exposure(" },
-		/* the back end overriding the view's exposure (the lagged fit's shape) */
+			"\tdir_fit = rm_rtdir_fit_tree(dir_lights, dir_nlights, NULL, 0, NULL, NULL);\n\texposure = rm_rtdir_exposure(" },
+		/* the back end overriding the view's exposure, so the scene's fit never reaches the kernel */
 		{ "back-end-exposure", "back", "\t\t[ce setBytes:&view length:sizeof(view) atIndex:0];",
 			"\t\tview.exposure = 1.0f;\n\t\t[ce setBytes:&view length:sizeof(view) atIndex:0];" },
 	};
@@ -1445,6 +1445,192 @@ test_fit_luxel(void)
 	CHECK(out[0] == 0);
 	rm_rtdir_fit_luxel(s, 1, 0, 2, 0, 0, out);
 	CHECK(out[0] == 0);
+}
+
+/* the fit's tree tests: the nodes are rm_rtdir_node_t themselves */
+static void
+tree_read(const void *p, rm_rtdir_node_t *out)
+{
+	memcpy(out, p, sizeof(*out));
+}
+
+static int
+tree_line(rm_rtdir_tree_t *t, float ax, float ay, float bx, float by)
+{
+	const float a[3] = { ax, ay, 0 }, b[3] = { bx, by, 0 };
+
+	return rm_rtdir_tree_clear(t, a, b);
+}
+
+/*
+ * TASK188 slice 3c: the fit's line test on a tree of two nodes and three
+ * leaves. The root splits at x = 0: in front (x >= 0) a node splitting at
+ * y = 0, whose front leaf is empty and whose back leaf is solid; behind
+ * it an empty leaf.
+ */
+static void
+test_fit_tree(void)
+{
+	static rm_rtdir_node_t chain[RM_RTDIR_FIT_DEPTH + 2];
+	rm_rtdir_node_t empty = { 1, 0, { 0, 0, 0 }, 0, { NULL, NULL } };
+	rm_rtdir_node_t solid = { 1, RM_RTDIR_CONTENTS_SOLID | 0x40, { 0, 0, 0 }, 0, { NULL, NULL } };
+	rm_rtdir_node_t back = { 1, 0x20, { 0, 0, 0 }, 0, { NULL, NULL } };
+	rm_rtdir_node_t ynode = { 0, 0, { 0, 1, 0 }, 0, { &empty, &solid } };
+	rm_rtdir_node_t root = { 0, 0, { 1, 0, 0 }, 0, { &ynode, &back } };
+	rm_rtdir_tree_t t = { &root, tree_read, 0, 1000, 0 };
+	int i, n;
+
+	/* on one side of every plane: the empty leaf in front, the one behind */
+	CHECK(tree_line(&t, 1, 1, 2, 5) == 1);
+	CHECK(tree_line(&t, -1, 1, -3, -4) == 1);
+	CHECK(tree_line(&t, 1, -1, 2, -5) == 0);
+	CHECK(t.visits == 3 + 2 + 3);
+
+	/* across y = 0 into the solid leaf, either way */
+	CHECK(tree_line(&t, 1, 1, 1, -1) == 0);
+	CHECK(tree_line(&t, 1, -1, 1, 1) == 0);
+
+	/* across x = 0 into empty space, either way */
+	CHECK(tree_line(&t, 1, 1, -1, 1) == 1);
+	CHECK(tree_line(&t, -1, 1, 1, 1) == 1);
+
+	/* out of the solid leaf across x = 0: its half is solid, wherever the other half goes */
+	CHECK(tree_line(&t, 1, -1, -1, -1) == 0);
+	CHECK(tree_line(&t, -1, -1, 1, -1) == 0);
+
+	/* a point at 0 is in front: on x = 0 below y = 0 is the solid leaf, not the empty one behind */
+	CHECK(tree_line(&t, 0, -1, 0, -2) == 0);
+	CHECK(tree_line(&t, 0, 1, 0, 2) == 1);
+	CHECK(tree_line(&t, 0, -1, -1, -1) == 0);
+
+	/* a missing child is blocked */
+	root.child[1] = NULL;
+	CHECK(tree_line(&t, -1, 1, -2, 1) == 0);
+	root.child[1] = &back;
+	CHECK(!t.over);
+
+	/* the depth cap: a chain of n nodes, each with the line in front, then an empty leaf at depth n */
+	t.root = chain;
+	t.cap = 1UL << 20;
+
+	for (n = RM_RTDIR_FIT_DEPTH; n <= RM_RTDIR_FIT_DEPTH + 1; n++)
+	{
+		for (i = 0; i < n; i++)
+		{
+			memset(&chain[i], 0, sizeof(chain[i]));
+			chain[i].normal[0] = 1;
+			chain[i].dist = -1000;
+			chain[i].child[0] = &chain[i + 1];
+			chain[i].child[1] = &solid;
+		}
+
+		chain[n] = empty;
+		CHECK(tree_line(&t, 1, 1, 2, 2) == (n == RM_RTDIR_FIT_DEPTH));
+	}
+
+	CHECK(!t.over);
+
+	/* the visit cap: the crossing line visits four nodes; at three it is blocked, and every line after it */
+	t.root = &root;
+	t.visits = 0;
+	t.cap = 4;
+	CHECK(tree_line(&t, 1, 1, -1, 1) == 1 && t.visits == 4 && !t.over);
+	t.visits = 0;
+	t.cap = 3;
+	CHECK(tree_line(&t, 1, 1, -1, 1) == 0 && t.over);
+	t.visits = 0;
+	CHECK(tree_line(&t, 1, 1, 2, 5) == 0 && t.visits == 0);
+
+	/* no tree, no read */
+	CHECK(rm_rtdir_tree_clear(NULL, (const float[3]){ 0, 0, 0 }, (const float[3]){ 1, 1, 1 }) == 0);
+	t.over = 0;
+	t.read = NULL;
+	CHECK(tree_line(&t, 1, 1, 2, 5) == 0);
+}
+
+/* the fit over a tree: the fit_map of rm_rtdir_tree_clear, and 1 past the visit cap */
+static void
+test_fit_tree_map(void)
+{
+	rm_rtdir_node_t empty = { 1, 0, { 0, 0, 0 }, 0, { NULL, NULL } };
+	rm_rtdir_tree_t t = { &empty, tree_read, 0, RM_RTDIR_FIT_VISITS, 0 };
+	rm_rtdir_light_t l;
+	rm_rtdir_fitpt_t p[2];
+	rm_rtdir_mapfit_t f, g;
+	float e;
+
+	fit_wall[0] = 1e30f;
+	fit_point_light(&l, 0, 0, 100, 300);
+	fit_point(&p[0], 0, 100);
+	fit_point(&p[1], 10, 120);
+	e = rm_rtdir_fit_map(&l, 1, p, 2, fit_clear, NULL, &g);
+	CHECK(e != 1.0f && g.n == 2);
+	CHECK(rm_rtdir_fit_tree(&l, 1, p, 2, &t, &f) == e);
+	CHECK(f.exposure == e && f.n == 2 && f.rays == 2 && f.visits == 2 && !f.over);
+
+	/* past the cap: the exposure 1, and the cap said */
+	t.visits = 0;
+	t.cap = 1;
+	CHECK(rm_rtdir_fit_tree(&l, 1, p, 2, &t, &f) == 1.0f);
+	CHECK(f.exposure == 1.0f && f.over && f.visits == 1);
+	CHECK(rm_rtdir_fit_tree(&l, 1, p, 2, NULL, NULL) == 1.0f);
+}
+
+/* the faces that take samples: a lightmap, and no fixture, translucent, sky or warp flag */
+static void
+test_fit_face(void)
+{
+	static const int skip[] = { 0x1, 0x4, 0x8, 0x10, 0x20 };
+	int i;
+
+	CHECK(rm_rtdir_fit_face_ok(0, 1) == 1);
+	CHECK(rm_rtdir_fit_face_ok(0, 0) == 0);
+	CHECK(rm_rtdir_fit_face_ok(0x2 | 0x40 | 0x80 | 0x100 | 0x200, 1) == 1);  /* slick, flowing, nodraw, hint, skip */
+
+	for (i = 0; i < (int)(sizeof(skip) / sizeof(skip[0])); i++)
+	{
+		CHECK(rm_rtdir_fit_face_ok(skip[i], 1) == 0);
+		CHECK(rm_rtdir_fit_face_ok(skip[i] | 0x40, 1) == 0);
+	}
+}
+
+/* a sample's luxel coordinates, texturemins taken off both, and the sample stride past the cap */
+static void
+test_fit_st(void)
+{
+	const float vecs[2][4] = { { 1, 0, 0, 8 }, { 0, 1, 0, -2 } };
+	const float diag[2][4] = { { 0.5f, 0.5f, 0, 0 }, { 0, 0, 2, 4 } };
+	const float pos[3] = { 40, 50, 3 };
+	const short mins[2] = { 32, 16 }, zero[2] = { 0, 0 }, neg[2] = { -48, -64 };
+	float st[2];
+
+	rm_rtdir_fit_st(pos, vecs, mins, st);
+	CHECK(st[0] == 1.0f && st[1] == 2.0f);
+	rm_rtdir_fit_st(pos, vecs, zero, st);
+	CHECK(st[0] == 3.0f && st[1] == 3.0f);
+	rm_rtdir_fit_st(pos, vecs, neg, st);
+	CHECK(st[0] == 6.0f && st[1] == 7.0f);
+	rm_rtdir_fit_st(pos, diag, mins, st);
+	CHECK(st[0] == 0.8125f && st[1] == -0.375f);
+
+	CHECK(rm_rtdir_fit_every(0, 8192) == 1);
+	CHECK(rm_rtdir_fit_every(8192, 8192) == 1);
+	CHECK(rm_rtdir_fit_every(8193, 8192) == 2);
+	CHECK(rm_rtdir_fit_every(16384, 8192) == 2);
+	CHECK(rm_rtdir_fit_every(16385, 8192) == 3);
+	CHECK(rm_rtdir_fit_every(100, 0) == 1);
+
+	/* every k-th of total points is at most cap of them */
+	{
+		long total, k;
+
+		for (total = 1; total < 40000; total += 997)
+		{
+			k = rm_rtdir_fit_every(total, 8192);
+			CHECK((total + k - 1) / k <= 8192);
+			CHECK((k == 1) || ((total + k - 2) / (k - 1) > 8192));
+		}
+	}
 }
 
 /* a pixel's candidates: all of them up to MTL_RTDIR_MAX_RAYS; past it the strongest; ranked strongest first */
@@ -2362,6 +2548,10 @@ main(void)
 	test_fit_light();
 	test_fit_map();
 	test_fit_luxel();
+	test_fit_tree();
+	test_fit_tree_map();
+	test_fit_face();
+	test_fit_st();
 	test_keep();
 	test_visible_choice();
 	test_pack();

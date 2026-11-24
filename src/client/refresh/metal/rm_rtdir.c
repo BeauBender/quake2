@@ -659,7 +659,8 @@ rm_rtdir_fit_st(const float *pos, const float vecs[2][4], const short *texturemi
 int
 rm_rtdir_fit_face_ok(int flags, int has_samples)
 {
-	return has_samples && !(flags & RM_RTDIR_FIT_SKIP);
+	return has_samples &&
+		!(flags & (RM_RTDIR_SURF_LIGHT | RM_RTDIR_SURF_TRANS33 | RM_RTDIR_SURF_TRANS66 | RM_RTDIR_SURF_SKY | RM_RTDIR_SURF_WARP));
 }
 
 long

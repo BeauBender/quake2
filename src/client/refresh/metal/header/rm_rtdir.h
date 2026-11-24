@@ -421,10 +421,8 @@ void rm_rtdir_fit_st(const float *pos, const float vecs[2][4], const short *text
 #define RM_RTDIR_SURF_WARP 0x8
 #define RM_RTDIR_SURF_TRANS33 0x10
 #define RM_RTDIR_SURF_TRANS66 0x20
-#define RM_RTDIR_FIT_SKIP \
-	(RM_RTDIR_SURF_LIGHT | RM_RTDIR_SURF_TRANS33 | RM_RTDIR_SURF_TRANS66 | RM_RTDIR_SURF_SKY | RM_RTDIR_SURF_WARP)
 
-/* 1 when a face of texinfo flags (has_samples: a lightmap) takes samples: a lightmap, and none of RM_RTDIR_FIT_SKIP */
+/* 1 when a face of texinfo flags (has_samples: a lightmap) takes samples: a lightmap, and none of those five flags */
 int rm_rtdir_fit_face_ok(int flags, int has_samples);
 
 /*
