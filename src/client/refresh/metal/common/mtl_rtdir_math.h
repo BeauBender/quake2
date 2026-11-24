@@ -44,6 +44,21 @@
 /* a point light's cone: every direction is inside it (the spot test always passes) */
 #define MTL_RTDIR_NOSPOT (-2.0f)
 
+/*
+ * TASK188 slice 2: an emissive face (SURF_LIGHT), qrad3's emit_surface,
+ * is marked by this in place of the cone's cosine; its direction is then
+ * the face's normal.
+ */
+#define MTL_RTDIR_EMITTER (-3.0f)
+
+/*
+ * An emissive face lights a point while its contribution before the two
+ * cosines, intensity / dist^2, is at least this (qrad3's units, one step
+ * of a lightmap byte): qrad3's inverse-square falloff never ends, so this
+ * is the face's range, sqrt(intensity / MTL_RTDIR_EMIT_CUT).
+ */
+#define MTL_RTDIR_EMIT_CUT 1.0f
+
 /* qrad3's units to the lightmap's: a lightmap byte of 255 reads 1 */
 #define MTL_RTDIR_UNIT (1.0f / 255.0f)
 
@@ -163,6 +178,68 @@ mtl_rtdir_scale(float intensity, float dist, float ndotl, float spotdot, float s
 
 	s = (intensity - dist) * ndotl;
 	return (s > 0.0f) ? s : 0.0f;
+}
+
+/*
+ * The contribution of an emissive face (qrad3's emit_surface in
+ * GatherSampleLight): intensity / dist^2 x ndotl x facedot, facedot being
+ * minus the dot of the unit vector toward the light and the face's
+ * normal (the point is in front of the face). 0 when either cosine is at
+ * most MTL_RTDIR_MIN_DOT, when the point is out of the face's range
+ * (intensity / dist^2 below MTL_RTDIR_EMIT_CUT), and for any value that
+ * is not a number.
+ */
+static inline float
+mtl_rtdir_emit_scale(float intensity, float dist, float ndotl, float facedot)
+{
+	float s;
+
+	if (!(ndotl > MTL_RTDIR_MIN_DOT) || !(facedot > MTL_RTDIR_MIN_DOT) || !(dist > 0.0f) ||
+		!(dist * dist * MTL_RTDIR_EMIT_CUT <= intensity))
+	{
+		return 0.0f;
+	}
+
+	s = intensity / (dist * dist) * ndotl * facedot;
+	return (s > 0.0f) ? s : 0.0f;
+}
+
+/*
+ * The cheap test before the cosines: 1 when a light of the buffer
+ * (intensity, its spot word stopdot) can reach a point dist away. A point
+ * or spot light's linear falloff ends at its intensity; an emissive
+ * face's range is sqrt(intensity / MTL_RTDIR_EMIT_CUT).
+ */
+static inline int
+mtl_rtdir_reach(float intensity, float dist, float stopdot)
+{
+	if (!(dist > 0.0f))
+	{
+		return 0;
+	}
+
+	if (stopdot == MTL_RTDIR_EMITTER)
+	{
+		return (dist * dist * MTL_RTDIR_EMIT_CUT <= intensity) ? 1 : 0;
+	}
+
+	return (dist < intensity) ? 1 : 0;
+}
+
+/*
+ * A light of the buffer at a point: mtl_rtdir_emit_scale for an emissive
+ * face (stopdot MTL_RTDIR_EMITTER, spotdot then minus the dot of the
+ * direction and the face's normal), else mtl_rtdir_scale.
+ */
+static inline float
+mtl_rtdir_contrib(float intensity, float dist, float ndotl, float spotdot, float stopdot)
+{
+	if (stopdot == MTL_RTDIR_EMITTER)
+	{
+		return mtl_rtdir_emit_scale(intensity, dist, ndotl, spotdot);
+	}
+
+	return mtl_rtdir_scale(intensity, dist, ndotl, spotdot, stopdot);
 }
 
 /*

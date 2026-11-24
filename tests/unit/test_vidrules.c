@@ -877,6 +877,64 @@ TEST(vidrules_rt_status_names_the_presentation)
 	T_CHECK(!VidRules_TuneOverridden(4, "metal", 2));   /* flat light stays the user's */
 }
 
+/*
+ * TASK188 slice 2: under Ray traced (RT-primary) the Ray tracing screen
+ * greys the four switches the mode's overlay decides (rm_rtgate.c's
+ * pres_rtprimary: shadows, sun and AO read 0, water 1) "set by the
+ * presentation", showing the value in use, and the sliders of the effects
+ * it reads off; the gun shadow and the water's sliders stay the user's.
+ * Only on Metal, and only where the device traces rays (the renderer runs
+ * the mode there although its menu item is greyed "awaiting review").
+ */
+TEST(vidrules_rt_screen_under_rtprimary)
+{
+	const float rtp = (float)VIDPRES_RTPRIMARY;
+	int i;
+
+	for (i = 0; i < 4; i++)
+	{
+		T_CHECK(VidRules_RTOverridden(i, "metal", 1, rtp));
+		T_CHECK(!VidRules_RTOverridden(i, "metal", 0, rtp));
+		T_CHECK(!VidRules_RTOverridden(i, "gl1", 1, rtp));
+		T_EQ_STR(VidRules_RTRow(i, "metal", 1, rtp, 0.0f).text, "set by the presentation");
+		T_CHECK(!VidRules_RTRow(i, "metal", 1, rtp, 0.0f).enabled);
+	}
+	T_CHECK(!VidRules_RTOverridden(4, "metal", 1, rtp));   /* the gun shadow stays the user's */
+	T_CHECK(VidRules_RTRow(4, "metal", 1, rtp, 0.0f).enabled);
+
+	/* the values in use: shadows, sun and AO off whatever the user set, the water on */
+	T_CHECK(!VidRules_RTEffective(0, "metal", 1, rtp, 1.0f));
+	T_CHECK(!VidRules_RTEffective(1, "metal", 1, rtp, 1.0f));
+	T_CHECK(!VidRules_RTEffective(2, "metal", 1, rtp, 1.0f));
+	T_CHECK(VidRules_RTEffective(3, "metal", 1, rtp, 0.0f));
+	T_CHECK(VidRules_RTEffective(4, "metal", 1, rtp, 1.0f) && !VidRules_RTEffective(4, "metal", 1, rtp, 0.0f));
+	/* no ray tracing: the mode is not run, the user's values stand */
+	T_CHECK(VidRules_RTEffective(0, "metal", 0, rtp, 1.0f));
+
+	/* the sliders: those of an effect read off are the mode's, the water's live */
+	for (i = 5; i < VidRules_RTNum(); i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+		const vidrule_t r = VidRules_RTRow(i, "metal", 1, rtp, 1.0f);
+
+		T_REQUIRE(c && (c->effect >= 0));
+		if (c->effect == 3)
+		{
+			T_CHECK(r.enabled);
+		}
+		else
+		{
+			T_CHECK(!r.enabled && r.text && !strcmp(r.text, "set by the presentation"));
+		}
+		T_CHECK(VidRules_RTRow(i, "metal", 1, 0.0f, 1.0f).enabled);
+	}
+
+	/* the status bar names the mode where it runs */
+	T_CHECK(strstr(VidRules_RTStatus("metal", 1, rtp), "Ray traced") != NULL);
+	T_CHECK(strstr(VidRules_RTStatus("metal", 0, rtp), "Ray traced") == NULL);
+	T_CHECK(strstr(VidRules_RTStatus("gl1", 1, rtp), "Ray traced") == NULL);
+}
+
 /* TASK183: r_presentation survives a restart, written and read back as config.cfg is */
 TEST(vidrules_presentation_persists)
 {

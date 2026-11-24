@@ -118,6 +118,210 @@ rm_rtdir_pack(const rm_rtl_lights_t *l, rm_rtdir_light_t *out, long cap, rm_rtdi
 }
 
 void
+rm_rtdir_reflectivity(const float *mean, int read, float *out)
+{
+	float big = 0.0f;
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		const float v = read ? mean[k] : RM_RTDIR_EMIT_UNREAD;
+
+		out[k] = (isfinite(v) && (v > 0.0f)) ? v : 0.0f;
+		big = (out[k] > big) ? out[k] : big;
+	}
+
+	/* qrad3 scales the reflectivity up, "because the textures are so dim": doubled when its largest channel is under 0.5 */
+	if (RM_RTDIR_EMIT_QRAD3_COLOUR && read && (big < 0.5f))
+	{
+		for (k = 0; k < 3; k++)
+		{
+			out[k] *= 2.0f;
+		}
+	}
+}
+
+int
+rm_rtdir_emitter(const rm_rtdir_face_t *f, int value, const float *refl, rm_rtdir_light_t *out, int *clamped)
+{
+	double c[3] = { 0, 0, 0 }, area2[3] = { 0, 0, 0 }, area, nlen, light[3], big, rmax = 0, intensity;
+	const float *p0;
+	int i, k;
+
+	if (clamped)
+	{
+		*clamped = 0;
+	}
+
+	if (!f || !f->pts || (f->n < 3) || (f->n > RM_RTDIR_EMIT_MAXPTS) || (f->stride < 3) || (value <= 0))
+	{
+		return RM_RTDIR_EMIT_SHAPELESS;
+	}
+
+	nlen = sqrt((double)f->normal[0] * f->normal[0] + (double)f->normal[1] * f->normal[1] +
+			(double)f->normal[2] * f->normal[2]);
+
+	if (!isfinite(nlen) || (fabs(nlen - 1.0) > 0.01))
+	{
+		return RM_RTDIR_EMIT_SHAPELESS;
+	}
+
+	/* WindingCenter, the points' mean, and WindingArea, the fan's triangles */
+	p0 = f->pts;
+
+	for (i = 0; i < f->n; i++)
+	{
+		const float *p = f->pts + (size_t)i * (size_t)f->stride;
+
+		for (k = 0; k < 3; k++)
+		{
+			c[k] += p[k];
+		}
+
+		if (i >= 2)
+		{
+			const float *q = f->pts + (size_t)(i - 1) * (size_t)f->stride;
+			const double a[3] = { (double)q[0] - p0[0], (double)q[1] - p0[1], (double)q[2] - p0[2] };
+			const double b[3] = { (double)p[0] - p0[0], (double)p[1] - p0[1], (double)p[2] - p0[2] };
+
+			area2[0] += a[1] * b[2] - a[2] * b[1];
+			area2[1] += a[2] * b[0] - a[0] * b[2];
+			area2[2] += a[0] * b[1] - a[1] * b[0];
+		}
+	}
+
+	area = 0.5 * sqrt(area2[0] * area2[0] + area2[1] * area2[1] + area2[2] * area2[2]);
+
+	for (k = 0; k < 3; k++)
+	{
+		c[k] = c[k] / f->n + RM_RTDIR_EMIT_OFFSET * f->normal[k];
+
+		if (!isfinite(c[k]))
+		{
+			return RM_RTDIR_EMIT_SHAPELESS;
+		}
+	}
+
+	if (!isfinite(area) || !(area > 0))
+	{
+		return RM_RTDIR_EMIT_SHAPELESS;
+	}
+
+	/* the patch's light: BaseLightForFace's refl x value, times the normalized reflectivity (MakePatchForFace) */
+	for (k = 0; k < 3; k++)
+	{
+		const double r = (refl && isfinite(refl[k]) && (refl[k] > 0)) ? refl[k] : 0.0;
+
+		rmax = (r > rmax) ? r : rmax;
+		light[k] = r;
+	}
+
+	big = 0;
+
+	for (k = 0; k < 3; k++)
+	{
+		light[k] = (rmax > 0) ? (double)value * light[k] * light[k] / rmax : 0.0;
+		big = (light[k] > big) ? light[k] : big;
+	}
+
+	if (!isfinite(big) || !(big >= RM_RTDIR_DIRECT_LIGHT))
+	{
+		return RM_RTDIR_EMIT_DIM;
+	}
+
+	/* CreateDirectLights: ColorNormalize of the light, its largest channel times the area times direct_scale */
+	intensity = big * area * RM_RTDIR_DIRECT_SCALE;
+
+	if (!isfinite(intensity) || (intensity > RM_RTDIR_MAX_EMIT_INTENSITY))
+	{
+		intensity = RM_RTDIR_MAX_EMIT_INTENSITY;
+
+		if (clamped)
+		{
+			*clamped = 1;
+		}
+	}
+
+	for (k = 0; k < 3; k++)
+	{
+		out->pos[k] = (float)c[k];
+		out->color[k] = (float)(light[k] / big);
+		out->spot[k] = f->normal[k];
+	}
+
+	out->pos[3] = (float)intensity;
+	out->color[3] = 0.0f;
+	out->spot[3] = MTL_RTDIR_EMITTER;
+	return RM_RTDIR_EMIT_KEPT;
+}
+
+long
+rm_rtdir_pack_emitters(const rm_rtl_emitters_t *e, rm_rtdir_face_fn face, void *ctx, rm_rtdir_light_t *out,
+		long cap, rm_rtdir_emitpack_t *why)
+{
+	rm_rtdir_emitpack_t w;
+	long i, n = 0;
+
+	memset(&w, 0, sizeof(w));
+
+	for (i = 0; e && face && (i < e->n) && (i < RM_RTL_MAX_EMITTERS); i++)
+	{
+		static const float grey0[3] = { 0, 0, 0 };
+		const rm_rtl_emit_t *s = &e->emit[i];
+		const rm_rtl_tex_t *t = ((s->tex >= 0) && (s->tex < e->ntex) && (s->tex < RM_RTL_MAX_TEXTURES)) ?
+			&e->tex[s->tex] : NULL;
+		rm_rtdir_face_t f;
+		rm_rtdir_light_t l;
+		float refl[3];
+		int r, cl;
+
+		if (!t || !t->read)
+		{
+			w.unread++;
+		}
+
+		if (!face(ctx, s->face, &f))
+		{
+			w.bmodel++;
+			continue;
+		}
+
+		rm_rtdir_reflectivity(t ? t->mean : grey0, t ? t->read : 0, refl);
+		r = rm_rtdir_emitter(&f, s->value, refl, &l, &cl);
+
+		if (r == RM_RTDIR_EMIT_SHAPELESS)
+		{
+			w.shapeless++;
+			continue;
+		}
+
+		if (r == RM_RTDIR_EMIT_DIM)
+		{
+			w.dim++;
+			continue;
+		}
+
+		if (n >= cap)
+		{
+			w.over++;
+			continue;
+		}
+
+		w.clamped += cl;
+		out[n++] = l;
+	}
+
+	w.kept = n;
+
+	if (why)
+	{
+		*why = w;
+	}
+
+	return n;
+}
+
+void
 rm_rtdir_styles(const float (*styles)[3], int n, float modulate, float *out)
 {
 	int s, k;
@@ -268,4 +472,18 @@ rm_rtdir_map_format(const char *map, const rm_rtdir_pack_t *p, char *buf, size_t
 	return rtdir_put(snprintf(buf, len, "ref_metal: rt direct: %s: %ld lights uploaded (%ld dark, %ld spotlights "
 			"without a target, %ld past the cap left out, %ld brighter than %d held to it)", map ? map : "?", p->kept,
 			p->dark, p->untargeted, p->over, p->clamped, (int)RM_RTDIR_MAX_INTENSITY), buf, len);
+}
+
+int
+rm_rtdir_emit_format(const char *map, const rm_rtdir_emitpack_t *p, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	return rtdir_put(snprintf(buf, len, "ref_metal: rt direct: %s: %ld emissive faces uploaded (%ld not the world's, "
+			"%ld shapeless, %ld below qrad3's direct light, %ld of an unread texture, %ld past the cap of %d left out, "
+			"%ld held to the intensity cap)", map ? map : "?", p->kept, p->bmodel, p->shapeless, p->dim, p->unread,
+			p->over, RM_RTDIR_MAX_EMITTERS, p->clamped), buf, len);
 }
