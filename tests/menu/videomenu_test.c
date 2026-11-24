@@ -1200,6 +1200,28 @@ test_rt_screen_under_rtprimary(void)
 		CHECK(!RTGreyed(live[i]), "%s greyed under Ray traced", live[i]);
 	}
 
+	/* the tuning screen: the sun's and AO's rows the mode's, the water's live */
+	RTItem("tuning...");
+	Menu_SelectItem(rt_menu);
+	rt_menu = menu;
+	{
+		static const char *const tu_off[] = { "sun elevation", "sun azimuth", "AO rays" };
+
+		for (size_t i = 0; i < sizeof(tu_off) / sizeof(tu_off[0]); i++)
+		{
+			CHECK(RTGreyed(tu_off[i]) && !strcmp(RTItem(tu_off[i])->statusbar, "set by the presentation"),
+				"%s on the tuning screen under Ray traced: greyed %d, %s", tu_off[i], RTGreyed(tu_off[i]),
+				RTItem(tu_off[i])->statusbar);
+		}
+		CHECK(!RTGreyed("water hits") && !RTGreyed("scaler") && !RTGreyed("flat light"),
+			"a tuning row Ray traced leaves alone is greyed");
+	}
+	Open("metal", "7");
+	menu = main_menu;
+	Cursor("ray tracing...");
+	Menu_SelectItem(menu);
+	rt_menu = menu;
+
 	/* reset to defaults writes no row the mode decides */
 	SetCv("r_rt_ao_range", "512");
 	RTItem("reset to defaults");
