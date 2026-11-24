@@ -780,6 +780,78 @@ dropped (a rocket's light shadowed by the rocket), `dlight-dropped` the term not
 the file.
 
 
+### The records are pins (M6, apple9, 640 x 480)
+
+Recorded at `251451f7` (the code of the final commit), three runs each (`--run 2`, `--run 3`), hashed as the
+hash of the frames' sha256s. Every row is three runs and one hash:
+
+| Record | Frames | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|---|
+| `rtprimary-world` (`demo1.dm2`, `base2`) | 23 | `0b44b41a739d` | `0b44b41a739d` | `0b44b41a739d` |
+| `rtprimary-direct` | 23 | `c9a2f64eee98` | `c9a2f64eee98` | `c9a2f64eee98` |
+| `rtprimary-vis` | 23 | `469ce42fec8c` | `469ce42fec8c` | `469ce42fec8c` |
+| `rtprimary-noshadow` | 23 | `fe4e7d8028f1` | `fe4e7d8028f1` | `fe4e7d8028f1` |
+| `rtprimary-world`, `PINS_DEMO=demo2.dm2 PINS_EVERY=7` (`waste2`, the lightstyles) | 89 | `491fb53deed4` | `491fb53deed4` | `491fb53deed4` |
+| `rtprimary-dlights` (new) | 23 | `af586c32f8cb` | `af586c32f8cb` | `af586c32f8cb` |
+| `rtprimary-dlights`, `PINS_DEMO=demo2.dm2 PINS_EVERY=7` (new) | 89 | `aa8b1b87d17b` | `aa8b1b87d17b` | `aa8b1b87d17b` |
+
+Slice 3a's own records, run again in the hold on its code (`7383bf09`) as the before: `rtprimary-world`
+`e6caa48ee013` and `rtprimary-dlights` `55c66bcc68ec` (23 frames each). `rtprimary-world` moves from
+`e6caa48ee013` to `0b44b41a739d` (the emissive faces at their own light), and `rtprimary-dlights` from
+`55c66bcc68ec` to `af586c32f8cb` (the dynamic lights as a term). `rtprimary-vis` is unchanged at
+`469ce42fec8c`. The `r_rt_stats 2` runs below (scratch copies, the stats changing no pixel) give the branch's
+hashes again, `af586c32f8cb` and `491fb53deed4`.
+
+These hashes are the RT-primary pins from here, provisional until the owner accepts the look (PM11), where
+they are recorded again (the scenarios README; `docs/plans/presentation-modes.md` section 6, item 4). A
+later slice that changes the look says so and records them again. The harness cannot carry a scenario's
+threshold, so these are compared by hash for now, which is stricter than the 0.02 default. For the owner's
+look, not in the repository: the emissive frame is `rtprimary-world` capture 6 (score 0.007358 against slice
+3a's), the dynamic-light frame is `rtprimary-dlights` capture 20 (score 0.058856 against the branch's
+`rtprimary-world`), and `rtprimary-world` captures 12, 61 and 67.
+
+### Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
+
+The before is slice 3a (`7383bf09`), built in a scratch copy and run by `PINS_BIN`; the after is `251451f7`.
+`rtprimary-s3bstats` is `demo1.dm2` (`base2`, 687 frame lines) and `rtprimary-s3bstyles` is `demo2.dm2` every
+7th (`waste2`, 617 frame lines); the time is the mean of 687 and of 616 frame lines. The numbers are
+information only (decision 0014), not a gate:
+
+| Map | Side | Capped (mean share of world pixels) | Lights in range (mean) | Rays a world pixel (mean) | Pass time (mean) |
+|---|---|---|---|---|---|
+| `base2` | slice 3a | 5.5 % | 16.01 | 15.71 | 7.763 ms |
+| `base2` | branch | 5.5 % | 16.12 | 15.82 | 7.064 ms |
+| `waste2` | slice 3a | 34.5 % | 28.40 | 26.10 | 10.743 ms |
+| `waste2` | branch | 34.5 % | 28.40 | 26.10 | 9.027 ms |
+
+The digests of the runs are `55c66bcc68ec` (slice 3a, `base2`), `0c678f1b2ea1` (slice 3a, `waste2`),
+`af586c32f8cb` (branch, `base2`) and `491fb53deed4` (branch, `waste2`). The map lights' share is the same on
+both sides; `base2` has 248 lights uploaded and none past the cap.
+
+### Stock is unchanged
+
+The same method as slice 3a (every committed `metal` scenario but RT-primary's, seeded, the water scenarios
+on one `water.dm2` copied to both, `cinematic` on `idlog.cin` at `PINS_EVERY=7`), base main at `8870daa5`
+and the branch at `251451f7`: `base: 29 scenarios, 0 failed`, `branch: 29 scenarios, 0 failed`, and
+`pins: 29 of 29 stock scenarios byte-identical to the base`. At `r_presentation 0` the slice changes no
+pixel.
+
+### Checks
+
+In one hold on the code of the final commit (`251451f7`; main merged: no), each check's last line:
+
+- `make ref_metal` and `make`: exit 0.
+- `make test`: `yq2test: 591 tests, 0 failed`.
+- `tests/check-ref-metal.sh`: `check-ref-metal: ok (13162 checks, 0 failed; ... direct light 680 checks, 0 failed; ...; ref_metal built)`.
+- `tests/check-cvar-docs.sh`: `check-cvar-docs: ok`.
+- `tests/check-runbook-index.sh`: `check-runbook-index: ok`.
+- `tests/check-doc-links.sh`: `check-doc-links: ok`.
+- `tests/check-video-menu.sh`: `check-video-menu: ok`.
+- `tests/check-pin-chars.sh`: `check-pin-chars: ok`.
+
+The stock pin compare (29 of 29) and the RT-primary records, three runs each with one hash. No frame was
+looked at by the agent.
+
 ## Left for slice 3c (and later rows)
 
 - Done in slice 3b: RT3's dlights as a term, and an emissive face drawn at its own light (above).
