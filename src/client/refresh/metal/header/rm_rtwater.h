@@ -87,9 +87,9 @@ float rm_rtw_reflect(float v);
 int rm_rtw_show(float v);
 
 /*
- * TASK158: r_rt_water_hits, how a reflection's hit is shaded: 0 (the
- * default) TASK58's screen-space path, the kernel over every pixel and a
- * hit's colour the picture's or none; 1 this card's world-space path,
+ * TASK158: r_rt_water_hits, how a reflection's hit is shaded: 0
+ * TASK58's screen-space path, the kernel over every pixel and a
+ * hit's colour the picture's or none; 1 (the default, TASK168) this card's world-space path,
  * the marks the G-buffer raster's last draw makes (TASK162), the compaction
  * over them and the trace over its list, a hit the picture does not show
  * shaded in world space. 1 from 1 up; 0 below
