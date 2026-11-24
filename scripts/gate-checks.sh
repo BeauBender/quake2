@@ -156,8 +156,9 @@ gate_reap() {
 }
 
 # gate_drop <entry>: takes that entry (<index>:<pid>:<start>, unique) out of
-# the running list _grun
+# the running list _grun; an entry that is not there leaves _grun as it is
 gate_drop() {
+	case " $_grun " in *" $1 "*) ;; *) return 0 ;; esac
 	_gdr=" $_grun "
 	_grun="${_gdr%% "$1" *} ${_gdr#* "$1" }"
 }
