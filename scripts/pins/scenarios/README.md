@@ -47,6 +47,7 @@ scenario through it. The cases each of them is held to are in
 | `rtprimary-direct` | `rtprimary-world` with `r_rt_direct_show 1`: the direct term alone, on white albedo; a pin as `rtprimary-world` (TASK188) |
 | `rtprimary-vis` | `rtprimary-world` with `r_rt_direct_show 2`: the shadow visibility, grey by the share of the lights in range that their ray reached, dark blue where none is in range; a pin as `rtprimary-world` (TASK188) |
 | `rtprimary-noshadow` | `rtprimary-world` with `r_rt_direct_show 3`: the direct term alone with no shadow ray traced, to compare with `rtprimary-direct`; a pin as `rtprimary-world` (TASK188) |
+| `rtprimary-dlights` | `rtprimary-world` with `cl_lights 1`: the dynamic lights as a term of RT-primary's light, each in range with one shadow ray, by gl1's radius rule; recorded with `PINS_SEED` (the engine PRNG sets a muzzle flash's radius, as in `dlights`), at the default demo and with `PINS_DEMO=demo2.dm2 PINS_EVERY=7`; seeded, a pin as `rtprimary-world`, provisional until the owner accepts the look (TASK188 slice 3b, PM11) |
 | `hdr` | `world` with `r_hdr 1`: `ref_metal`'s float16 frame target, read back as its SDR fallback (each channel clamped to white, in 8 bits); its own reference, not compared with `world`, since float16 blends round once where 8-bit ones round at each layer; other renderers ignore the cvar and draw it as `world` (TASK196, HD2); `r_hdr_peak 1` holds HD3's tone map to that clamp on any display, so the frames do not follow a display's headroom |
 | `hdr-metalfx2` | `hdr` with `r_metalfx 2` at `r_metalfx_scale 0.5`: `MTLFXTemporalScaler` on `ref_metal`'s float16 view and frame, before the tone map; its own reference, not compared with `hdr` or `world-metalfx2`; where the device lacks the scaler `r_metalfx` reads the best supported mode below; other renderers ignore the cvars and draw it as `world` (TASK196, HD4) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
@@ -157,6 +158,7 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `rtprimary-direct` | world | `models` |
 | `rtprimary-vis` | world | `models` |
 | `rtprimary-noshadow` | world | `models` |
+| `rtprimary-dlights` | world,dynamic-lights | `particles` |
 | `hdr` | world | `models` |
 | `hdr-metalfx2` | world | `models` |
 | `dlights` | world,dynamic-lights | `particles` |
