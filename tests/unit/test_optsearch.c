@@ -90,7 +90,7 @@ static const float trace[] = { 30.0f, 26.0f, 24.0f, 22.0f, 18.0f, 12.0f, 15.0f, 
 /* section 4.2's table, row by row */
 TEST(optsearch_worked_trace)
 {
-	optsearch_t s;
+	static optsearch_t s;
 	optinput_t in;
 	optcand_t c[16];
 	const optcand_t *r;
@@ -148,7 +148,7 @@ TEST(optsearch_worked_trace)
 /* a trial passes when its statistic is at most the target; the first meeting it ends the run at one round */
 TEST(optsearch_first_meets_ends_at_one)
 {
-	optsearch_t s;
+	static optsearch_t s;
 	optinput_t in;
 	optcand_t c[4];
 	const float one[] = { 16.7f };
@@ -164,7 +164,7 @@ TEST(optsearch_first_meets_ends_at_one)
 /* recorded measurements that meet the target: the result keeps the most of the highest-ranked */
 TEST(optsearch_meets_keeps_highest_ranked)
 {
-	optsearch_t s;
+	static optsearch_t s;
 	optinput_t in;
 	optcand_t c[16];
 	const optcand_t *r;
@@ -188,7 +188,7 @@ TEST(optsearch_meets_keeps_highest_ranked)
 /* missing gives up the lowest-ranked first; within rt the switches go dearest first by the hints */
 TEST(optsearch_gives_up_lowest_first_dearest_by_hints)
 {
-	optsearch_t s;
+	static optsearch_t s;
 	optinput_t in;
 	optcand_t c[4];
 	const float miss[] = { 30.0f, 30.0f };
@@ -232,7 +232,7 @@ TEST(optsearch_gives_up_lowest_first_dearest_by_hints)
 /* nothing meets the target: the closest measured, with the line naming its limit */
 TEST(optsearch_nothing_meets_gives_closest)
 {
-	optsearch_t s;
+	static optsearch_t s;
 	optinput_t in;
 	optcand_t c[16];
 	const optcand_t *r;
@@ -273,7 +273,7 @@ TEST(optsearch_deterministic)
 /* the round cap and the time cap each stop the search with the best so far */
 TEST(optsearch_caps_stop_with_best)
 {
-	optsearch_t s;
+	static optsearch_t s;
 	optinput_t in;
 	optcand_t c[16];
 	int met = 1;
@@ -341,7 +341,7 @@ TEST(optsearch_warmup_left_out)
 /* a priority whose capability is false is never tried, and the report says why */
 TEST(optsearch_false_capability_never_tried)
 {
-	optsearch_t s;
+	static optsearch_t s;
 	optinput_t in;
 	optcand_t c[16];
 	int n;
@@ -366,7 +366,7 @@ TEST(optsearch_false_capability_never_tried)
 /* under each presentation the rows of its table are left untried, "set by the presentation" */
 TEST(optsearch_presentation_rows_untried)
 {
-	optsearch_t s;
+	static optsearch_t s;
 	optinput_t in;
 	optcand_t c[16];
 
@@ -402,7 +402,7 @@ TEST(optsearch_presentation_rows_untried)
 /* a candidate whose coupled values equal an earlier one is looked up, not timed */
 TEST(optsearch_coupled_lookup)
 {
-	optsearch_t s;
+	static optsearch_t s;
 	optinput_t in;
 	optcand_t c[16];
 	const float stats[] = { 30.0f, 25.0f, 10.0f, 12.0f, 20.0f };

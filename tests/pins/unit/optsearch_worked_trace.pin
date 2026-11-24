@@ -1,0 +1,36 @@
+# Pin "optsearch_worked_trace", produced by test optsearch_worked_trace (tests/unit/test_optsearch.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+target: p95 <= 16.7 ms; 10 rounds, 300 s
+presentation: not turned (Stock; r_presentation needs a vid_restart)
+trial 1: the first candidate: stat 30.0 ms, mean 24.0 ms, p95 30.0 ms, presented 41.7 fps: misses
+trial 2: r_metalfx 2: stat 26.0 ms, mean 20.8 ms, p95 26.0 ms, presented 48.1 fps: misses
+  denoise at its cheapest still misses: it stays there
+trial 3: r_metalfx 0: stat 24.0 ms, mean 19.2 ms, p95 24.0 ms, presented 52.1 fps: misses
+  upscale at its cheapest still misses: it stays there
+trial 4: r_hdr 0, r_metalfx 0: stat 22.0 ms, mean 17.6 ms, p95 22.0 ms, presented 56.8 fps: misses
+  hdr at its cheapest still misses: it stays there
+trial 5: r_hdr 0, r_metalfx 1, r_metalfx_scale 0.34: stat 18.0 ms, mean 14.4 ms, p95 18.0 ms, presented 69.4 fps: misses
+  resolution at its cheapest still misses: it stays there
+trial 6: r_rt_shadows 0, r_rt_sun 0, r_rt_ao 0, r_rt_water 0, r_rt_gunshadow 0, r_rt_ao_rays 1, r_rt_ao_scale 0.33, r_rt_water_hits 0, r_hdr 0, r_metalfx 1, r_metalfx_scale 0.34: stat 12.0 ms, mean 9.6 ms, p95 12.0 ms, presented 104.2 fps: meets
+trial 7: r_rt_ao_rays 1, r_rt_ao_scale 0.33, r_rt_water_hits 0, r_hdr 0, r_metalfx 1, r_metalfx_scale 0.34: stat 15.0 ms, mean 12.0 ms, p95 15.0 ms, presented 83.3 fps: meets
+trial 8: r_rt_ao_rays 1, r_rt_water_hits 0, r_hdr 0, r_metalfx 1, r_metalfx_scale 0.34: stat 17.0 ms, mean 13.6 ms, p95 17.0 ms, presented 73.5 fps: misses
+trial 9: r_rt_ao_rays 1, r_rt_ao_scale 0.5, r_rt_water_hits 0, r_hdr 0, r_metalfx 1, r_metalfx_scale 0.34: stat 16.0 ms, mean 12.8 ms, p95 16.0 ms, presented 78.1 fps: meets
+  rt settles at position 3 of 9
+trial 10: r_rt_ao_rays 1, r_rt_ao_scale 0.5, r_rt_water_hits 0, r_hdr 0, r_metalfx 1, r_metalfx_scale 0.5: stat 16.5 ms, mean 13.2 ms, p95 16.5 ms, presented 75.8 fps: meets
+  resolution bought back to position 2
+the round cap ended the search
+result: trial 10, 16.5 ms meets 16.7 ms: r_rt_ao_rays 1, r_rt_ao_scale 0.5, r_rt_water_hits 0, r_hdr 0, r_metalfx 1, r_metalfx_scale 0.5
+r_rt_water_hits 0: rt gave up step 1 of 9 to meet 16.7 ms
+r_rt_ao_rays 1: rt gave up step 2 of 9 to meet 16.7 ms
+r_rt_ao_scale 0.5: rt gave up step 3 of 9 to meet 16.7 ms
+r_metalfx_scale 0.75: resolution gave up step 1 of 3 to meet 16.7 ms
+r_metalfx_scale 0.5: resolution gave up step 2 of 3 to meet 16.7 ms
+r_hdr 0: hdr gave up step 1 of 1 to meet 16.7 ms
+r_metalfx 1: upscale gave up step 1 of 2 to meet 16.7 ms
+r_metalfx 0: upscale gave up step 2 of 2 to meet 16.7 ms
+r_metalfx 2: denoise gave up step 1 of 1 to meet 16.7 ms
+r_metalfx 1: forced on by resolution 0.5

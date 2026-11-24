@@ -68,8 +68,8 @@ typedef enum
 
 #define OPT_MAXROUNDS 64      /* optimize_rounds is held to 1 .. this */
 #define OPT_MAXSTEPS 12       /* positions on one ladder */
-#define OPT_MAXLINES 96
-#define OPT_LINELEN 192
+#define OPT_MAXLINES 128
+#define OPT_LINELEN 320
 #define OPT_STAT_MEAN 0       /* optimize_stat mean; 50 .. 99 is that percentile */
 
 typedef struct
