@@ -552,6 +552,72 @@ slice 2's choice. `walk-unbounded` drops the stop at 16 seen; `vis-ignored` lets
 `rm_rtdir.metal: rm_rtdir_direct's walk is not its candidates traced strongest first, one ray each, under the
 bound`, `rm_rtdir_test: 496 checks, 5 failed` (the new mutants do not apply to its text).
 
+### The records are pins (M6, apple9, 640 x 480)
+
+Recorded at `cfd8d3ba` (the code of the final commit), three runs each (`--run 2`, `--run 3`), hashed as the
+hash of the frames' sha256s:
+
+| Record | Frames | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|---|
+| `rtprimary-world` (`demo1.dm2`, `base2`) | 23 | `e6caa48ee013` | `e6caa48ee013` | `e6caa48ee013` |
+| `rtprimary-direct` | 23 | `a3a554b71cdf` | `a3a554b71cdf` | `a3a554b71cdf` |
+| `rtprimary-vis` | 23 | `469ce42fec8c` | `469ce42fec8c` | `469ce42fec8c` |
+| `rtprimary-noshadow` | 23 | `b9206ff8cb45` | `b9206ff8cb45` | `b9206ff8cb45` |
+| `rtprimary-world`, `PINS_DEMO=demo2.dm2 PINS_EVERY=7` (`waste2`, the lightstyles) | 89 | `0c678f1b2ea1` | `0c678f1b2ea1` | `0c678f1b2ea1` |
+
+The `r_rt_stats 2` runs below (scratch copies of `rtprimary-world`, the stats changing no pixel) are a fourth
+run of each map and give the same hashes, `e6caa48ee013` and `0c678f1b2ea1`. So each record is one set of
+frames, byte for byte, and these hashes are the RT-primary pins from here (the scenarios README); a later
+slice that changes the look says so and records them again. The demo's own text in the `demo2.dm2` captures
+2 to 6 is declared in `scripts/pins/text/demo2.dm2-every7.txt`, committed now (slice 2 used a scratch copy).
+The look itself is still the owner's to accept (PM11), from the `base2` capture 12 and the `waste2` captures
+61 and 67, which are for the owner and not in the repository.
+
+### Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
+
+The base is main at `9f1d6d64`, built in a scratch copy and run by `PINS_BIN`; the branch is `cfd8d3ba`. Its
+"pixels past" counts the pixels with more than 16 lights in range (slice 2's line); the branch's counts the
+pixels past the bound (more than 32 in range and fewer than 16 seen). The means are over every frame line of
+the run (687 on `demo1.dm2`, 617 on `demo2.dm2` every 7th):
+
+| Map | Side | Pixels past (mean share) | Shadow rays a world pixel (mean) | Pass GPU time (mean) |
+|---|---|---|---|---|
+| `base2` | base | 40.6 % (past 16 in range) | 12.86 | 6.09 ms |
+| `base2` | branch | 5.5 % (past the bound) | 15.69 | 7.81 ms |
+| `waste2` | base | 88.4 % (past 16 in range) | 15.73 | 6.46 ms |
+| `waste2` | branch | 34.5 % (past the bound) | 26.10 | 10.75 ms |
+
+The lines at frame 447 of `base2` show the trade:
+
+```
+base:   frame 447: 307200 pixels, 307200 world, 665 lights, 6916616 in range, 4800299 shadow rays (15.63 a world pixel), 1024409 lit, 227989 pixels past 16 lights, fit 159204/71321 over 19200 samples, exposure 2.2663 (fit), 6.985 ms
+branch: frame 447: 307200 pixels, 307200 world, 665 lights, 6916616 in range, 6841409 shadow rays (22.27 a world pixel), 1417470 lit, 35474 pixels past the bound (32 rays, 16 lights), fit 159204/71879 over 19200 samples, exposure 2.2396 (fit), 9.570 ms
+```
+
+The same lights are in range. The branch traces 43 % more rays, 38 % more of them reach their light
+(1417470 against 1024409), and the traced sum rises 0.8 % (71879 against 71321); the exposures the two frames used (each the fit of its frame
+three before, or in the base the latest completed) read 2.27 and 2.24. On `waste2` at frame 447 the branch reads `9674097 in range, 9078373 shadow rays (29.55 a world
+pixel), 1996346 lit, 126870 pixels past the bound`, against the base's `4912217 shadow rays (15.99 a world
+pixel), 1483298 lit, 303436 pixels past 16 lights`. A third of the `waste2` pixels still find fewer than 16
+visible lights among their 32 strongest: the faces' ranges run far past the walls between (slice 2), and a
+PVS cull of emitters is what would let those pixels reach their visible lights within the bound. The GPU
+times were read in the hold, on a quiet host. They are information, not a gate (decision 0014).
+
+### Stock is unchanged
+
+The same method as slice 2 (every committed `metal` scenario but RT-primary's, seeded, the water scenarios on
+one `water.dm2` copied to both, `cinematic` on `idlog.cin` at `PINS_EVERY=7`), base main at `9f1d6d64` and the
+branch at `cfd8d3ba`: 29 of 29 stock scenarios byte-identical, no failures. At `r_presentation 0` the slice
+changes no pixel.
+
+### Checks
+
+In one hold on the code of the final commit (`cfd8d3ba`): `make ref_metal`, `make`, `make test`
+(`yq2test: 591 tests, 0 failed`), `tests/check-ref-metal.sh` (`direct light 496 checks, 0 failed`),
+`tests/check-cvar-docs.sh`, `tests/check-runbook-index.sh`, `tests/check-doc-links.sh`,
+`tests/check-video-menu.sh` and `tests/check-pin-chars.sh`, all ok; the stock pin compare (29 of 29) and the
+RT-primary records, three runs each with one hash. No frame was looked at by the agent.
+
 ## Left for slice 3b (and later rows)
 
 - **An emissive face drawn at its own emission** (see above): a material bit in the G-buffer or a
