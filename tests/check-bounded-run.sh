@@ -24,7 +24,7 @@
 #           unmarked).
 #   mutants each one literal change to a copy of scripts/ must be refused,
 #           in its own file and for its own rule.
-#   pyprobe the same for the Python helper, scripts/lib/bounded.py, and four
+#   pyprobe the same for the Python helper, scripts/lib/bounded.py, and ten
 #           mutants of it, each failing its own case (part 4 below).
 #   probe   the disposition probe, the behavioural proof: each caller runs
 #           a stand-in (a child that starts a grandchild; both live while a
@@ -648,7 +648,12 @@ EOF
 # callers do. Cases: timeout and ignore (bounded.run past its timeout, the
 # stand-in acting on TERM or ignoring it), recycled (the identity check: a
 # child whose recorded start time is not its own, as a recycled pid would
-# be, gets nothing), kinds (a normal exit and a signal told apart), caller
+# be, gets nothing), reaped (a reaped child whose pid another process now
+# holds, with ps failing, gets nothing), spawnwin (a SIGTERM to this process
+# between the fork and the record), nostart (no start time read at spawn:
+# the unreaped child is still stopped), partial (a timeout's Result holds
+# what was written), pshang (a ps that does not answer is no answer, within
+# PS_WAIT), kinds (a normal exit and a signal told apart), caller
 # (bounded.run with a long timeout, for the shell to signal this process).
 mk_pyprobe() {
 	cat > "$1" << 'EOF'
@@ -1208,8 +1213,12 @@ printf '%s\n' "$pout" | grep -E "^ios-sim late: caller exit [1-9][0-9]*; child g
 
 # 4. the Python helper's probe (scripts/lib/bounded.py): TERM first to the
 # group on a timeout and on the caller's own TERM or INT, KILL after the
-# grace to what ignores TERM, nothing to a pid that is not the child's;
-# then its mutants, each failing its own case
+# grace to what ignores TERM, nothing to a pid that is not the child's
+# (unreaped with another start time, or reaped and held by another process),
+# a signal in the spawn window held, a timeout's output kept and a ps that
+# hangs bounded; then its mutants, each failing its own case (the three
+# marked only fail no other; the last three run their own case alone, each
+# hanging up to the probe's 60 s bound without the fix)
 yout=$(pyprobe "$here")
 printf '%s\n' "$yout" | sed "s/^/$me: pyprobe: /"
 yj=$(pyjudge "$yout")
@@ -1227,11 +1236,11 @@ pymutant spawn-unheld py-spawnwin '    held = signal.pthread_sigmask(signal.SIG_
     c = None' only
 pymutant nostart-refused py-nostart '    return c.start is None or s == c.start' '    return s == c.start' only
 pymutant partial-unread py-partial '                    c.output = c.popen.communicate(timeout=AFTER_KILL)' '                    pass' partial
-pymutant ps-unbounded py-pshang 'communicate(timeout=PS_WAIT)' 'communicate()' pshang
+pymutant ps-unbounded py-pshang 'out = p.communicate(timeout=PS_WAIT)[0]' 'out = p.communicate()[0]' pshang
 pymutant run-unbounded py-timeout '            out = c.popen.communicate(timeout=timeout)' '            out = c.popen.communicate()' timeout
 
 if [ -n "$fails" ]; then
 	echo "$me: failed:$fails"
 	exit 1
 fi
-echo "$me: ok (guard, $nmut mutants refused, probe, pyprobe and its 4 mutants)"
+echo "$me: ok (guard, $nmut mutants refused, probe, pyprobe and its 10 mutants)"
