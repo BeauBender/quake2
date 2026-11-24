@@ -53,6 +53,59 @@ static int ao_active;           /* this frame traces the AO */
 static int ao_viewed;           /* RM_RTAO_View handed this frame's view to the back end */
 static unsigned long ao_count;  /* the views traced, the noise's frame without a seed */
 
+/* RT7 (TASK59 slice 1): r_rt_temporal and the history's reset state */
+static cvar_t *r_rt_temporal;
+static rm_rtt_state_t rtt_state;
+
+void
+RM_RTT_Reset(void)
+{
+	rm_rtt_state_reset(&rtt_state);
+}
+
+void
+RM_RTT_EndFrame(void)
+{
+	rm_rtt_frame_end(&rtt_state);
+}
+
+/*
+ * The AO's accumulation for this view at the render size w x h: with
+ * r_rt_temporal 0 the state is forgotten and the histories released, so
+ * the next view with it on resets.
+ */
+static void
+RM_RTT_View(const rm_view_t *view, int w, int h)
+{
+	const float alpha = rm_rtt_alpha(r_rt_temporal ? r_rt_temporal->value : 0.0f);
+	rm_rtt_key_t k;
+	rm_rtt_view_t t;
+	float move = 0.0f;
+	unsigned reasons;
+
+	if (!(alpha > 0.0f))
+	{
+		rm_rtt_state_reset(&rtt_state);
+		rmb_rtao_temporal(NULL, 0, 0);
+		return;
+	}
+
+	k.w = (unsigned)w;
+	k.h = (unsigned)h;
+	k.vx = (int)view->vp.x;
+	k.vy = (int)view->vp.y;
+	k.vw = (int)view->vp.w;
+	k.vh = (int)view->vp.h;
+	VectorCopy(r_newrefdef.vieworg, k.org);
+	reasons = rm_rtt_step(&rtt_state, &k, &move);
+	t = rm_rtt_view(alpha, reasons, move);
+
+	if (!rmb_rtao_temporal(&t, (unsigned long)w, (unsigned long)h))
+	{
+		rm_rtt_state_reset(&rtt_state);
+	}
+}
+
 void
 RM_RTAO_Init(const rmb_caps_t *caps)
 {
@@ -64,6 +117,8 @@ RM_RTAO_Init(const rmb_caps_t *caps)
 	r_rt_ao_scale = ri.Cvar_Get("r_rt_ao_scale", "0.5", CVAR_ARCHIVE);
 	r_rt_ao_rays = ri.Cvar_Get("r_rt_ao_rays", "2", CVAR_ARCHIVE);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
+	r_rt_temporal = ri.Cvar_Get("r_rt_temporal", "0", CVAR_ARCHIVE);
+	rm_rtt_state_reset(&rtt_state);
 	ao_device = caps->raytracing != 0;
 	ao_opened = ao_refused = ao_active = ao_viewed = 0;
 	ao_count = 0;
@@ -190,6 +245,7 @@ RM_RTAO_View(const rm_view_t *view)
 	}
 
 	rmb_rtao_set_view(&v);
+	RM_RTT_View(view, w, h);
 	ao_viewed = 1;
 	ao_count++;
 }

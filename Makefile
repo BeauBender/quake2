@@ -1073,6 +1073,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/common/mtl_gbuf_math.h \
 		src/client/refresh/metal/common/mtl_rts_math.h \
 		src/client/refresh/metal/common/mtl_rtao_math.h \
+		src/client/refresh/metal/common/mtl_rtt_math.h \
 		src/client/refresh/metal/common/mtl_rtsun_math.h \
 		src/client/refresh/metal/common/mtl_rtw_math.h \
 		src/client/refresh/metal/common/mtl_rtdir_math.h \
@@ -1484,6 +1485,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_rtshadowscene.o \
 	src/client/refresh/metal/rm_rtao.o \
 	src/client/refresh/metal/rm_rtaoscene.o \
+	src/client/refresh/metal/rm_rttemporal.o \
 	src/client/refresh/metal/rm_rtsun.o \
 	src/client/refresh/metal/rm_rtsunscene.o \
 	src/client/refresh/metal/rm_rtdir.o \

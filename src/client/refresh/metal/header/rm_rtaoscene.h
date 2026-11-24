@@ -41,4 +41,13 @@ int RM_RTAO_Active(void);
 int RM_RTAO_ShowOnly(void);
 void RM_RTAO_View(const rm_view_t *view);
 
+/*
+ * RT7's history (TASK59 slice 1, the AO's in this slice): RM_RTT_Reset
+ * forgets the last view on a map load, with the scaler's (RM_FX_Reset);
+ * RM_RTT_EndFrame ends the frame with the scaler's (RM_FX_EndFrame), so a
+ * frame that accumulated no view resets the next.
+ */
+void RM_RTT_Reset(void);
+void RM_RTT_EndFrame(void);
+
 #endif /* RM_RTAOSCENE_H */

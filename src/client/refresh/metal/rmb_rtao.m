@@ -69,6 +69,18 @@ static id<MTLTexture> t_ao_lo;          /* the traced AO at the reduced size, R8
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTAO_COUNTS */
 static id<MTLCounterSampleBuffer> samples;
 
+/*
+ * RT7's accumulation (TASK59 slice 1), made only while r_rt_temporal is
+ * above 0: its pipeline, at the first view that accumulates, and the two
+ * histories, RGBA32Float at the render size, read and written in turn.
+ */
+static id<MTLComputePipelineState> tmp_pipe;
+static id<MTLTexture> t_hist[2];
+static int hist_cur;                    /* the history this view reads; the other is written */
+static int hist_fresh;                  /* the histories were just made: their texels are not a history */
+static rm_rtt_view_t tview;
+static int tview_set;
+
 /* per slot: the frame whose pass completed (set by its handler), the frame whose counts are awaited */
 static atomic_ulong slot_done[RMB_FRAMES_IN_FLIGHT];
 static int slot_pending[RMB_FRAMES_IN_FLIGHT];
@@ -209,10 +221,14 @@ rmb_rtao_close(void)
 		RMB_RTAO_SET(t_ao_lo, nil);
 		RMB_RTAO_SET(counts, nil);
 		RMB_RTAO_SET(samples, nil);
+		RMB_RTAO_SET(tmp_pipe, nil);
+		RMB_RTAO_SET(t_hist[0], nil);
+		RMB_RTAO_SET(t_hist[1], nil);
 	}
 
 	ao_open = 0;
 	view_set = traced = 0;
+	tview_set = hist_fresh = hist_cur = 0;
 	ndone = 0;
 }
 
@@ -296,6 +312,67 @@ rmb_rtao_prepare(unsigned long w, unsigned long h, unsigned div)
 				(unsigned long)(t_ao.allocatedSize + t_light.allocatedSize));
 	}
 
+	return 1;
+}
+
+int
+rmb_rtao_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
+{
+	tview_set = 0;
+
+	/* off: no history is kept */
+	if (!t || !(t->alpha > 0.0f) || !ao_open || (w < 1) || (h < 1) || (w > 0xffffffffUL) || (h > 0xffffffffUL))
+	{
+		if (t_hist[0] || t_hist[1])
+		{
+			RMB_RTAO_SET(t_hist[0], nil);
+			RMB_RTAO_SET(t_hist[1], nil);
+		}
+
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		if (!tmp_pipe)
+		{
+			NSError *e = nil;
+			id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rtao_temporal"];
+
+			RMB_RTAO_SET(tmp_pipe, k ? [rmb_device newComputePipelineStateWithFunction:k error:&e] : nil);
+
+			if (!tmp_pipe)
+			{
+				return 0;
+			}
+		}
+
+		if (!t_hist[0] || !t_hist[1] || (t_hist[0].width != w) || (t_hist[0].height != h))
+		{
+			MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+					width:w height:h mipmapped:NO];
+
+			d.storageMode = MTLStorageModePrivate;
+			d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+			RMB_RTAO_SET(t_hist[0], [rmb_device newTextureWithDescriptor:d]);
+			RMB_RTAO_SET(t_hist[1], [rmb_device newTextureWithDescriptor:d]);
+
+			if (!t_hist[0] || !t_hist[1])
+			{
+				RMB_RTAO_SET(t_hist[0], nil);
+				RMB_RTAO_SET(t_hist[1], nil);
+				return 0;
+			}
+
+			hist_cur = 0;
+			hist_fresh = 1;
+			fprintf(stderr, "ref_metal: rt temporal %lux%lu: %lu bytes allocated\n", w, h,
+					(unsigned long)(t_hist[0].allocatedSize + t_hist[1].allocatedSize));
+		}
+	}
+
+	tview = *t;
+	tview_set = 1;
 	return 1;
 }
 
@@ -501,6 +578,41 @@ rmb_rtao_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mater
 		}
 
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTAO_GROUP, RMB_RTAO_GROUP, 1)];
+
+		/*
+		 * RT7 (TASK59 slice 1): the AO accumulated over the views, the light
+		 * written again from it. Only while r_rt_temporal is above 0 and the
+		 * histories and the motion vectors are at the render size; otherwise
+		 * nothing below runs and the frame is the trace's alone.
+		 */
+		if (tview_set && tmp_pipe && t_hist[0] && t_hist[1] && (t_hist[0].width == w) && (t_hist[0].height == h))
+		{
+			id<MTLTexture> mv = rmb_gbuf_motion();
+
+			if (mv && (mv.width == w) && (mv.height == h))
+			{
+				rm_rtt_view_t tv = tview;
+
+				if (hist_fresh)
+				{
+					tv.reset |= RM_RTT_RESET_FIRST;
+				}
+
+				[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+				[ce setComputePipelineState:tmp_pipe];
+				[ce setTexture:t_ao atIndex:4];
+				[ce setTexture:mv atIndex:7];
+				[ce setTexture:t_hist[hist_cur] atIndex:8];
+				[ce setTexture:t_hist[1 - hist_cur] atIndex:9];
+				[ce setBytes:&tv length:sizeof(tv) atIndex:9];
+				[ce dispatchThreads:MTLSizeMake(w, h, 1)
+						threadsPerThreadgroup:MTLSizeMake(RMB_RTAO_GROUP, RMB_RTAO_GROUP, 1)];
+				hist_cur = 1 - hist_cur;
+				hist_fresh = 0;
+			}
+		}
+
+		tview_set = 0;
 		[ce endEncoding];
 
 		slot_pending[slot] = 1;

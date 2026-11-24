@@ -55,6 +55,7 @@ using namespace metal::raytracing;
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
 #include "common/mtl_rtao_math.h"
+#include "common/mtl_rtt_math.h"
 
 /* rm_rtao.h's rm_rtao_view_t */
 struct rm_rtao_view
@@ -516,6 +517,82 @@ rm_rtao_upsample(depth2d<float, access::read> depth [[texture(0)]],
 	}
 
 	rm_rtao_count(counts, traced, (traced && (ao < 1.0f)) ? 1u : 0u, (traced && (ao < v.floor_)) ? 1u : 0u, up, 0, 0);
+}
+
+/* rm_rttemporal.h's rm_rtt_view_t (common/mtl_rtt_math.h's mtl_rtt_view_t) */
+struct rm_rtt_view
+{
+	float alpha;
+	float move;
+	uint reset;
+	uint pad;
+};
+
+/*
+ * RT7's temporal accumulation of the AO (TASK59 slice 1), after the trace
+ * in the same encoder, only while r_rt_temporal is above 0: each pixel's
+ * AO of this frame blended with its history, read where the unjittered
+ * motion vector says the point was (mtl_rtt_reproject) and rejected by
+ * mtl_rtt_reject, then the light written again from the accumulated AO.
+ * The history (RGBA32Float): the accumulated AO, the distance from the
+ * eye, the material id and the sample count. The AO reaches no dynamic
+ * light, so its light set is 0 on both sides.
+ */
+kernel void
+rm_rtao_temporal(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<float, access::read> light [[texture(3)]],
+		texture2d<float, access::read> ao_in [[texture(4)]],
+		texture2d<float, access::write> light_out [[texture(5)]],
+		texture2d<float, access::read> motion [[texture(7)]],
+		texture2d<float, access::read> hist_in [[texture(8)]],
+		texture2d<float, access::write> hist_out [[texture(9)]],
+		constant rm_rtao_view &v [[buffer(0)]],
+		constant rm_rtt_view &t [[buffer(9)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint w = hist_out.get_width(), hh = hist_out.get_height();
+
+	if ((px.x >= w) || (px.y >= hh))
+	{
+		return;
+	}
+
+	{
+		const uint m = mat.read(px).r;
+		const float d = depth.read(px);
+		const float a = ao_in.read(px).r;
+		const float2 mv = motion.read(px).xy;
+		const mtl_rtt_px_t r = mtl_rtt_reproject(px.x, px.y, mv.x, mv.y, w, hh);
+		const float4 h = r.ok ? hist_in.read(uint2(r.x, r.y)) : float4(0.0f);
+		const uint hm = (uint)h.z;
+		float dist = 0.0f;
+
+		if (d < 1.0f)
+		{
+			dist = distance(rm_rtao_position(v, px, d), v.eye.xyz);
+		}
+
+		{
+			const uint rej = mtl_rtt_reject(t.reset, r.ok, dist, h.y, t.move, m, hm, 0u, 0u, h.w);
+			const float acc = mtl_rtt_blend(rej, a, h.x, h.w, t.alpha);
+
+			hist_out.write(float4(acc, dist, (float)m, mtl_rtt_count(rej, h.w)), px);
+
+			if (m == MTL_GB_MAT_WORLD)
+			{
+				const float4 l = light.read(px);
+				mtl_rgba_t c;
+
+				c.r = l.r;
+				c.g = l.g;
+				c.b = l.b;
+				c.a = l.a;
+				c = mtl_rtao_light(c, m, mtl_rtao_factor(acc, v.floor_));
+				light_out.write(float4(c.r, c.g, c.b, c.a), px);
+			}
+		}
+	}
 }
 
 /*
