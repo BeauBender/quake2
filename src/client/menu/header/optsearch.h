@@ -87,7 +87,7 @@ typedef struct
 	int rounds;               /* the most timed trials */
 	float seconds;            /* the most seconds, the probe included */
 	float probe_seconds;      /* the probe's duration */
-	int have_hints;           /* the probe gave metal_rt_cost */
+	int have_hints;           /* the probe gave metal_rt_cost (ref_metal, rm_main.c) */
 	float hint_ms[4];         /* shadows, sun, ao, water: mean GPU ms per frame */
 } optinput_t;
 
@@ -124,6 +124,7 @@ typedef struct
 	int done;
 	int best;                 /* index into trial, -1 for none */
 	int met;                  /* whether best meets the target */
+	const char *stopped;      /* during OptSearch_Stop's replay: why the run stopped */
 	char lines[OPT_MAXLINES][OPT_LINELEN];
 	int nlines;
 } optsearch_t;
@@ -135,7 +136,7 @@ const char *OptSearch_CvarName(int cv);
 
 /* optimize_rank: words, highest first; 0 with the reason in err for a word not known or given twice */
 int OptSearch_ParseRank(const char *text, int rank[OPT_NPRI], int *n, char *err, size_t errlen);
-/* optimize_target: "60" (a rate) or "12ms"; 0 when it does not parse or is not above 0 */
+/* optimize_target: "60" (a rate, at least 1) or "12ms" (above 0); 0 when it does not parse or is out of range */
 int OptSearch_ParseTarget(const char *text, float *ms);
 /* optimize_stat: "mean" or "p50" .. "p99"; 0 when it does not parse */
 int OptSearch_ParseStat(const char *text, int *stat);
@@ -152,6 +153,12 @@ void OptSearch_Init(optsearch_t *s, const optinput_t *in);
 int OptSearch_Next(optsearch_t *s, optcand_t *c);
 /* the measurement of the candidate Next gave last */
 void OptSearch_Record(optsearch_t *s, const optmeasure_t *m);
+/*
+ * The run stopped before the search ended (why: a reason, which need not
+ * outlive the call): the report lines are replayed to that point and end
+ * with the best so far, its limit and what it gave up, as at a cap.
+ */
+void OptSearch_Stop(optsearch_t *s, const char *why);
 /* the result, NULL when no trial was measured; *met is whether it meets the target */
 const optcand_t *OptSearch_Result(const optsearch_t *s, int *met);
 int OptSearch_NumLines(const optsearch_t *s);
@@ -161,19 +168,25 @@ void OptSearch_Describe(const optsearch_t *s, const optcand_t *c, char *buf, siz
 
 /*
  * optimize.c (TASK203): the optimize command and the optimize_* cvars.
- * Optimize_Frame is called for each timedemo frame (cl_view.c) and
- * Optimize_DemoEnd at a disconnect (cl_network.c); both return at once
- * when no run is on. A demo name for optimize_demo: NULL when it may be
+ * Optimize_Frame is called for each timedemo frame (cl_view.c),
+ * Optimize_Tick on every client frame in every connection state
+ * (cl_main.c: the time cap, timedemo and the renderer are checked there)
+ * and Optimize_DemoEnd at a disconnect (cl_network.c); each returns at
+ * once when no run is on. A demo name for optimize_demo: NULL when it may be
  * played, else why not (as CL_DownloadFilter refuses: "..", a leading
  * '.' or '/', ':', '\', and any character a console line could split on).
  */
 void Optimize_Init(void);
 void Optimize_Frame(void);
+void Optimize_Tick(void);
 void Optimize_DemoEnd(void);
 int Optimize_Running(void);
 const char *Optimize_DemoError(const char *demo);
 /* the tests: the time of a frame, and what plays a demo and checks that it exists (NULL: the engine's) */
 void Optimize_FrameAt(long long us);
+void Optimize_TickAt(long long us);
 void Optimize_SetHooks(void (*play)(const char *demo), int (*exists)(const char *demo));
+/* the tests: the clock the run's start and Optimize_Frame and Optimize_Tick read (NULL: Sys_Microseconds) */
+void Optimize_SetClock(long long (*now)(void));
 
 #endif

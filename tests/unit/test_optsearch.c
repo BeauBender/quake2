@@ -307,6 +307,37 @@ TEST(optsearch_caps_stop_with_best)
 	T_EQ_INT(s.in.rounds, OPT_MAXROUNDS);
 }
 
+/* a run stopped before the search ended: the report ends with the best so far, its limit and what it gave up */
+TEST(optsearch_stop_reports_best_so_far)
+{
+	static optsearch_t s;
+	optinput_t in;
+	optcand_t c[16];
+	int met = 1;
+
+	/* three trials of the worked trace, none meeting: the closest and its limit */
+	DefaultInput(&in);
+	T_EQ_INT(Play(&s, &in, trace, 3, c, 3), 3);
+	T_CHECK(!Has(&s, "closest:"));
+	OptSearch_Stop(&s, "a disconnect came before the demo's end");
+	T_CHECK(Has(&s, "stopped before the search ended: a disconnect came before the demo's end"));
+	T_CHECK(Has(&s, "closest: 24.0 ms against 16.7 ms (trial 3"));
+	T_CHECK(Has(&s, "limit: the run stopped before the search ended: a disconnect"));
+	T_REQUIRE(OptSearch_Result(&s, &met) != NULL);
+	T_EQ_INT(met, 0);
+	T_EQ_MEM(OptSearch_Result(&s, &met), &c[2], sizeof(c[0]));
+	T_CHECK(s.stopped == NULL);
+
+	/* seven trials, rt position 4 met: the result and what it gave up */
+	DefaultInput(&in);
+	T_EQ_INT(Play(&s, &in, trace, 7, c, 7), 7);
+	OptSearch_Stop(&s, "the time cap ended it");
+	T_CHECK(Has(&s, "result: trial "));
+	T_CHECK(Has(&s, "gave up step 1 of"));
+	T_CHECK(Has(&s, "stopped before the search ended: the time cap ended it"));
+	T_EQ_INT(OptSearch_NumLines(&s) > 0, 1);
+}
+
 /* warm-up frames are not in a trial's statistic */
 TEST(optsearch_warmup_left_out)
 {
@@ -457,6 +488,11 @@ TEST(optsearch_parse_inputs)
 	T_EQ_INT(OptSearch_ParseTarget("fast", &ms), 0);
 	T_EQ_INT(OptSearch_ParseTarget("12 ms", &ms), 0);
 	T_EQ_INT(OptSearch_ParseTarget("-5", &ms), 0);
+	/* a rate below 1 would give a frame time past any trial's (N2) */
+	T_EQ_INT(OptSearch_ParseTarget("1e-300", &ms), 0);
+	T_EQ_INT(OptSearch_ParseTarget("0.5", &ms), 0);
+	T_EQ_INT(OptSearch_ParseTarget("1", &ms), 1);
+	T_EQ_FLT(ms, 1000.0f);
 
 	T_EQ_INT(OptSearch_ParseStat("p95", &stat), 1);
 	T_EQ_INT(stat, 95);

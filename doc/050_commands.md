@@ -148,11 +148,15 @@ original clients (Vanilla Quake II) commands are still in place.
   met the target, what limits it. It never writes a setting: accepting
   the result is the player's own `rt_preset load <name>`, and
   `rt_preset load before-optimize` undoes that. `cancel`, or a trial that
-  fails (the renderer changed, a disconnect before the demo's end, the
-  time cap), stops the run and puts back the B side and A/B state from
-  before it. `report` prints the last report again; `undo` puts back the
-  B side and A/B state from before the last run. Refused under another
-  renderer, with a run on, or when an `optimize_*` value does not parse.
+  fails (the renderer changed or restarted, a disconnect before the
+  demo's end, a demo that ends with no frame drawn or is gone, `timedemo`
+  reset, the time cap), stops the run and puts back the B side and A/B
+  state from before it; after a trial, the report then ends with the best
+  result so far, its limit and what it gave up. `report` prints the last
+  report again; `undo` puts back the B side and A/B state from before the
+  last run. Refused under another renderer, with a run on, for the name
+  `before-optimize`, or when an `optimize_*` value does not parse or is
+  not a finite number.
 
 * **rt_ab [stock]**: Flips the Metal renderer between A, the player's
   own ray-tracing settings, and B, a second set: every tuning setting at

@@ -31,6 +31,6 @@ r_metalfx_scale 0.75: resolution gave up step 1 of 3 to meet 16.7 ms
 r_metalfx_scale 0.5: resolution gave up step 2 of 3 to meet 16.7 ms
 r_hdr 0: hdr gave up step 1 of 1 to meet 16.7 ms
 r_metalfx 1: upscale gave up step 1 of 2 to meet 16.7 ms
-r_metalfx 0: upscale gave up step 2 of 2 to meet 16.7 ms
-r_metalfx 2: denoise gave up step 1 of 1 to meet 16.7 ms
+r_metalfx 0: upscale gave up step 2 of 2 to meet 16.7 ms (the result holds r_metalfx 1)
+r_metalfx 2: denoise gave up step 1 of 1 to meet 16.7 ms (the result holds r_metalfx 1)
 r_metalfx 1: forced on by resolution 0.5

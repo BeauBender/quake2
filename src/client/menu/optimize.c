@@ -70,12 +70,14 @@ static cvar_t *optimize_rank, *optimize_target, *optimize_stat, *optimize_rounds
 
 static void (*opt_play)(const char *demo);
 static int (*opt_exists)(const char *demo);
+static long long (*opt_clock)(void);
 
 static optsearch_t opt_s;
 static optinput_t opt_in;
 static optcand_t opt_cand;
 static int opt_state;            /* OPT_STATE_*: OPT_STATE_NONE is no run */
 static int opt_pending;          /* a play is queued for "optimize _play" */
+static int opt_in_play;          /* inside the play call: a disconnect there is the game the benchmark ends */
 static int opt_have_report;
 static char opt_demo[OPT_MAXDEMO];
 static char opt_name[VIDPRESET_MAXNAME + 1];
@@ -87,6 +89,7 @@ static int opt_nframes;
 static int opt_probe_frames;
 static float opt_pres_warm;      /* metal_presented after the warm-up, and when */
 static long long opt_t_warm;
+static float opt_pres_last;      /* metal_presented when last read: it only goes back when the renderer restarts */
 static rtpreset_state_t opt_saved;   /* the B side and A/B state before the run */
 static int opt_have_saved;
 
@@ -154,6 +157,24 @@ Optimize_SetHooks(void (*play)(const char *demo), int (*exists)(const char *demo
 {
 	opt_play = play;
 	opt_exists = exists;
+}
+
+void
+Optimize_SetClock(long long (*now)(void))
+{
+	opt_clock = now;
+}
+
+static long long
+Opt_Now(void)
+{
+	return opt_clock ? opt_clock() : Sys_Microseconds();
+}
+
+static int
+Opt_Exists(const char *demo)
+{
+	return (opt_exists ? opt_exists : Opt_EngineExists)(demo);
 }
 
 int
@@ -249,12 +270,18 @@ Opt_SaveResult(void)
 
 /* cancel or a failure: the B side and A/B state put back, never a candidate left on B */
 static void
-Opt_Fail(const char *why)
+Opt_Fail(const char *reason)
 {
+	char why[160];
+
+	/* the reason may be va()'s buffer, which the calls below reuse */
+	Q_strlcpy(why, reason, sizeof(why));
 	Com_Printf("optimize: stopped: %s\n", why);
 	RTPreset_SetState(&opt_saved);
 	if (opt_s.ntrials > 0)
 	{
+		/* the best so far, its limit and what it gave up (plan 5.3) */
+		OptSearch_Stop(&opt_s, why);
 		Opt_PrintReport();
 		opt_have_report = 1;
 		if (strcmp(why, "cancelled"))
@@ -320,23 +347,73 @@ Opt_PlayQueued(void)
 		return;
 	}
 	opt_pending = 0;
+	/* existence is checked again before each play: the demo may be removed between trials */
+	if (!Opt_Exists(opt_demo))
+	{
+		Opt_Fail(va("the demo demos/%s is missing", opt_demo));
+		return;
+	}
+	/* a disconnect inside this call is the game the benchmark ends (SV_InitGame's CL_Drop). An
+	   ERR_DROP here jumps out of the call; the next Optimize_TickAt clears the flag then. */
+	opt_in_play = 1;
 	(opt_play ? opt_play : Opt_EnginePlay)(opt_demo);
+	opt_in_play = 0;
+}
+
+/* the checks of every client frame, in every connection state: 0 when they stopped the run */
+static int
+Opt_Check(long long us)
+{
+	float pres;
+
+	if (us - opt_run_start > (long long)(opt_in.seconds * 1000000.0f))
+	{
+		Opt_Fail("the time cap ended it");
+		return 0;
+	}
+	/* CL_FixCvarCheats resets it while the configstrings say maxclients is above 1 (a multiplayer
+	   demo, or a local multiplayer game the benchmark ends), and a demo's own text may set it */
+	if (Cvar_VariableValue("timedemo") != 1.0f)
+	{
+		Opt_Fail("timedemo is not 1 (the cheat check resets it in a multiplayer game or demo, or the demo's text set it)");
+		return 0;
+	}
+	/* the renderer's count of presented frames starts again from 0 at a vid_restart */
+	pres = Cvar_VariableValue("metal_presented");
+	if (pres < opt_pres_last)
+	{
+		Opt_Fail("the renderer changed (a vid_restart in the run)");
+		return 0;
+	}
+	opt_pres_last = pres;
+	return 1;
 }
 
 void
-Optimize_FrameAt(long long us)
+Optimize_TickAt(long long us)
 {
 	if (!Optimize_Running())
 	{
 		return;
 	}
-	if (!opt_run_start)
+	opt_in_play = 0;   /* CL_Frame never runs inside the play call */
+	Opt_Check(us);
+}
+
+void
+Optimize_Tick(void)
+{
+	if (Optimize_Running())
 	{
-		opt_run_start = us;
+		Optimize_TickAt(Opt_Now());
 	}
-	if (us - opt_run_start > (long long)(opt_in.seconds * 1000000.0f))
+}
+
+void
+Optimize_FrameAt(long long us)
+{
+	if (!Optimize_Running() || !Opt_Check(us))
 	{
-		Opt_Fail("the time cap ended it");
 		return;
 	}
 	if (opt_nframes < OPT_FRAMES)
@@ -355,7 +432,7 @@ Optimize_Frame(void)
 {
 	if (Optimize_Running())
 	{
-		Optimize_FrameAt(Sys_Microseconds());
+		Optimize_FrameAt(Opt_Now());
 	}
 }
 
@@ -394,7 +471,13 @@ Optimize_DemoEnd(void)
 	}
 	if (!opt_nframes)
 	{
-		return;   /* the game the benchmark ended, before the demo's first frame */
+		if (opt_in_play)
+		{
+			return;   /* the game the benchmark ended, inside the play call */
+		}
+		/* the play ended with no frame drawn: its map is not installed, or it is not a demo the client can play */
+		Opt_Fail("the demo ended with no frame drawn (its map may be missing, or it is not a playable demo)");
+		return;
 	}
 	if (VidRules_Renderer(Cvar_VariableString("vid_renderer")) != VIDREF_METAL)
 	{
@@ -417,7 +500,8 @@ Optimize_DemoEnd(void)
 		return;
 	}
 
-	if (opt_nframes < opt_probe_frames)
+	/* a timedemo of the same demo draws about the probe's count; well short of it is a disconnect */
+	if ((long long)opt_nframes * 10 < (long long)opt_probe_frames * 9)
 	{
 		Opt_Fail("a disconnect came before the demo's end");
 		return;
@@ -478,6 +562,12 @@ Opt_Inputs(void)
 	hdr = VidRules_Hdr(VIDHDR_ITEM_ON, "metal", OPT_HDRPLAT, headroom[0] ? (float)atof(headroom) : -1.0f,
 		(float)opt_in.presentation, Cvar_VariableValue("r_hdr"));
 	opt_in.hdr_why = hdr.enabled ? NULL : hdr.text;
+	/* atof takes "nan" and "inf", which Q_clamp passes on */
+	if (!isfinite(optimize_rounds->value) || !isfinite(optimize_seconds->value) || !isfinite(optimize_warmup->value))
+	{
+		Com_Printf("optimize run: refused: optimize_rounds, optimize_seconds and optimize_warmup are numbers\n");
+		return 0;
+	}
 	opt_in.rounds = (int)Q_clamp(optimize_rounds->value, 1, OPT_MAXROUNDS);
 	opt_in.seconds = (float)Q_clamp(optimize_seconds->value, 10, 3600);
 	opt_warmup = (float)Q_clamp(optimize_warmup->value, 0, 30);
@@ -505,12 +595,17 @@ Opt_Run(const char *name)
 		Com_Printf("optimize run: refused: %s\n", why);
 		return;
 	}
+	if (!Q_stricmp(name, OPT_BEFORE))
+	{
+		Com_Printf("optimize run: refused: " OPT_BEFORE " is the copy optimize undo puts back\n");
+		return;
+	}
 	if ((why = Optimize_DemoError(optimize_demo->string)))
 	{
 		Com_Printf("optimize run: refused: optimize_demo: %s\n", why);
 		return;
 	}
-	if (!(opt_exists ? opt_exists : Opt_EngineExists)(optimize_demo->string))
+	if (!Opt_Exists(optimize_demo->string))
 	{
 		Com_Printf("optimize run: refused: the demo demos/%s is missing\n", optimize_demo->string);
 		return;
@@ -531,7 +626,12 @@ Opt_Run(const char *name)
 	Cvar_Set("timedemo", "1");
 	opt_have_report = 0;
 	opt_probe_frames = 0;
-	opt_run_start = 0;   /* the first frame drawn starts the clock */
+	opt_run_start = Opt_Now();   /* the time cap counts from here, whether or not a frame is drawn */
+	opt_in_play = 0;
+	/* the renderer writes its count while a run is on; from 0 here, so a stale value cannot look like a restart */
+	Cvar_Set("metal_presented", "0");
+	opt_pres_last = 0;
+	Cvar_Set("metal_rt_cost", "");   /* the probe's renderer writes it again; a stale one is not read */
 
 	/* the probe: the first candidate, untimed */
 	OptSearch_Init(&opt_s, &opt_in);

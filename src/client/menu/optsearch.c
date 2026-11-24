@@ -145,7 +145,8 @@ OptSearch_ParseTarget(const char *text, float *ms)
 		*ms = (float)v;
 		return 1;
 	}
-	if (*end)
+	/* a rate below one frame a second is no target: 1e-300 would give an infinite frame time */
+	if (*end || v < 1.0)
 	{
 		return 0;
 	}
@@ -698,6 +699,10 @@ Measure(optsearch_t *s, optreplay_t *r, const int pos[OPT_NPRI])
 	{
 		elapsed += s->meas[i].seconds;
 	}
+	if (s->stopped)
+	{
+		return OPT_CAPPED;   /* the run stopped: the next trial is never timed */
+	}
 	if (s->ntrials >= s->in.rounds)
 	{
 		r->cap = "round cap";
@@ -820,6 +825,11 @@ Limit(optsearch_t *s, const optreplay_t *r)
 		Line(s, "limit: %s set by the presentation", s->why[OPT_PRESENTATION]);
 		return;
 	}
+	if (s->stopped)
+	{
+		Line(s, "limit: the run stopped before the search ended: %s", s->stopped);
+		return;
+	}
 	Line(s, "limit: the %s ended the search", r->cap ? r->cap : "search");
 }
 
@@ -832,7 +842,11 @@ End(optsearch_t *s, const optreplay_t *r)
 	optcand_t again;
 
 	s->done = 1;
-	if (r->cap)
+	if (s->stopped)
+	{
+		Line(s, "stopped before the search ended: %s", s->stopped);
+	}
+	else if (r->cap)
 	{
 		Line(s, "the %s ended the search", r->cap);
 	}
@@ -858,8 +872,16 @@ End(optsearch_t *s, const optreplay_t *r)
 
 		for (int k = 1; k <= c->pos[p] && k < s->nsteps[p]; k++)
 		{
-			Line(s, "%s: %s gave up step %d of %d to meet %.1f ms", s->stepname[p][k], opt_words[p], k,
-				s->nsteps[p] - 1, (double)s->in.target_ms);
+			char held[64] = "";
+
+			/* the scaler's steps are coupled: say what the result holds where it differs (N1) */
+			if ((p == OPT_UPSCALE || p == OPT_DENOISE) && s->stepset[p][OPT_CV_METALFX] && c->set[OPT_CV_METALFX] &&
+				s->steps[p][k][OPT_CV_METALFX] != c->val[OPT_CV_METALFX])
+			{
+				snprintf(held, sizeof(held), " (the result holds r_metalfx %g)", (double)c->val[OPT_CV_METALFX]);
+			}
+			Line(s, "%s: %s gave up step %d of %d to meet %.1f ms%s", s->stepname[p][k], opt_words[p], k,
+				s->nsteps[p] - 1, (double)s->in.target_ms, held);
 		}
 	}
 	Build(s, c->pos, &again, &forced);
@@ -993,6 +1015,17 @@ OptSearch_Record(optsearch_t *s, const optmeasure_t *m)
 	s->trial[s->ntrials] = r.next;
 	s->meas[s->ntrials] = *m;
 	s->ntrials++;
+}
+
+void
+OptSearch_Stop(optsearch_t *s, const char *why)
+{
+	optreplay_t r;
+
+	memset(&r, 0, sizeof(r));
+	s->stopped = why ? why : "stopped";
+	Search(s, &r);
+	s->stopped = NULL;
 }
 
 const optcand_t *
