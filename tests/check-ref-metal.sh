@@ -413,7 +413,7 @@ if [ -n "$rtfx" ]; then
 	for fxm in order tablesw gatesw surf forward aoswap wframe postempty resolvego wantedgo; do
 		cp "$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtgate.c" "${tmp:?}/fxm/"
 		case $fxm in
-			order) sed 's/{ RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER }/{ RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER }/' \
+			order) sed 's/{ RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER }/{ RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER }/' \
 				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 			tablesw) sed 's/"ao", "r_rt_ao"/"ao", "r_rt_ambient"/' "$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 			gatesw) sed 's/^	"r_rt_ao",$/	"r_rt_ambient",/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/fxm/rm_rtgate.c" ;;
