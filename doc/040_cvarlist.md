@@ -1534,14 +1534,15 @@ is.
   Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_water_hits**: How `r_rt_water` shades what a reflection meets.
-  `0` (the default): from the picture alone, as described under
-  `r_rt_water`; a surface of the world the view does not show gives no
-  reflection.
-  `1`: a surface of the map the view does not show (off the screen, or
+  `1` (the default since TASK168, the owner having approved its look
+  under decision 0014): a surface of the map the view does not show (off the screen, or
   hidden behind something nearer) is drawn on its own, its texture and
   lightmap, with the dynamic lights but without their shadows or the
   ambient occlusion; the sky the view does not show comes from the sky
-  box. At both settings a model (a
+  box.
+  `0`: from the picture alone, as described under `r_rt_water`; a
+  surface of the world the view does not show gives no reflection.
+  At both settings a model (a
   player, a monster, an item, a weapon) the view does not show is passed over, so the
   reflection shows what lies behind it, and neither the model nor its
   outline. This works per face (a shown model's unseen far side is
