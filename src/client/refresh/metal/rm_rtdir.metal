@@ -137,7 +137,12 @@ rm_rtdir_seen(ray r, instance_acceleration_structure ias, device const uint *ins
 	return 0.0f;
 }
 
-/* the frame's counts (rmb_rtdir.m's RMB_RTDIR_COUNTS) */
+/*
+ * The frame's counts (rmb_rtdir.m's RMB_RTDIR_COUNTS). The lights in
+ * range, the rays and the lit ones are 64-bit, a low word and a high one
+ * (rm_rtdir_add64): with up to RM_RTL_MAX_LIGHTS lights in range a pixel,
+ * 32 bits would wrap at 4K.
+ */
 #define RM_RTDIR_C_WORLD 0
 #define RM_RTDIR_C_INRANGE 1
 #define RM_RTDIR_C_RAYS 2
@@ -145,6 +150,144 @@ rm_rtdir_seen(ray r, instance_acceleration_structure ias, device const uint *ins
 #define RM_RTDIR_C_FIT_LM 4
 #define RM_RTDIR_C_FIT_RAW 5
 #define RM_RTDIR_C_FIT_N 6
+#define RM_RTDIR_C_INRANGE_HI 7
+#define RM_RTDIR_C_RAYS_HI 8
+#define RM_RTDIR_C_LIT_HI 9
+#define RM_RTDIR_C_CAPPED 10
+
+/* a pixel's counts: the lights in range and facing, the shadow rays, the ones that reached their light, the cap */
+struct rm_rtdir_tally
+{
+	uint inrange;
+	uint rays;
+	uint lit;
+	uint capped;
+};
+
+/*
+ * The direct light at the world point p of unit normal n, in the
+ * lightmap's units: of the lights in range and facing (the strongest
+ * MTL_RTDIR_MAX_TRACED, mtl_rtdir_keep), in the buffer's order, each
+ * one's contribution times its colour and style where its shadow ray
+ * reaches it (every one under r_rt_direct_show 3). It takes no texture:
+ * the light a world pixel is written with comes from the lights alone.
+ */
+static float3
+rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_float3 *styles,
+		instance_acceleration_structure ias, device const uint *inst, device const uchar *tmat, uint ntris,
+		device const rm_rtdir_light *lights, thread rm_rtdir_tally &t)
+{
+	const float3 o = p + n * mtl_rtao_bias(distance(p, v.eye.xyz), v.bias_k);
+	mtl_rtdir_keep_t k;
+	float3 raw = float3(0.0f);
+
+	k.n = 0u;
+	k.capped = 0u;
+
+	for (uint i = 0; i < v.nlights; i++)
+	{
+		const rm_rtdir_light l = lights[i];
+		const float3 dv = l.pos.xyz - p;
+		const float dist = length(dv);
+		float3 dir;
+		float s;
+
+		/* the linear falloff ends at the intensity: the cheap test first */
+		if (!(dist < l.pos.w) || !(dist > 0.0f))
+		{
+			continue;
+		}
+
+		dir = dv / dist;
+		s = mtl_rtdir_scale(l.pos.w, dist, dot(n, dir), -dot(dir, l.spot.xyz), l.spot.w);
+
+		if (!(s > 0.0f))
+		{
+			continue;
+		}
+
+		t.inrange++;
+		k = mtl_rtdir_keep(k, i, s);
+	}
+
+	k = mtl_rtdir_keep_order(k);
+	t.capped = k.capped;
+
+	for (uint j = 0; j < k.n; j++)
+	{
+		const rm_rtdir_light l = lights[k.i[j]];
+
+		if (v.show != 3u)
+		{
+			const float3 to = l.pos.xyz - o;
+			const float len = length(to);
+
+			t.rays++;
+
+			/* the ray stops a unit short of the light: an entity's origin is in open space */
+			if ((len > 1.0f) && (rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris) < 0.5f))
+			{
+				continue;
+			}
+
+			t.lit++;
+		}
+
+		raw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]);
+	}
+
+	return raw * MTL_RTDIR_UNIT;
+}
+
+/* the exposure fit's samples: every MTL_RTDIR_FIT_STEP-th pixel a row and a column */
+static bool
+rm_rtdir_fit_at(uint2 px)
+{
+	return ((px.x % MTL_RTDIR_FIT_STEP) == 0u) && ((px.y % MTL_RTDIR_FIT_STEP) == 0u);
+}
+
+/*
+ * The exposure fit's sample at px, the one read of the lightmap: its
+ * quantized value and the traced light's (mtl_rtdir_q), for the frame's
+ * sums. raw comes by value: nothing here reaches a pixel's light.
+ */
+static uint2
+rm_rtdir_fit_sample(texture2d<float, access::read> lm, uint2 px, float3 raw)
+{
+	const float4 lms = lm.read(px);
+
+	return uint2(mtl_rtdir_q(lms.r, lms.g, lms.b), mtl_rtdir_q(raw.r, raw.g, raw.b));
+}
+
+/* the light a traced world pixel is written with: mtl_rtdir_light of its traced light and the exposure */
+static float4
+rm_rtdir_out(float3 raw, float exposure)
+{
+	const mtl_rgba_t c = mtl_rtdir_light(raw.r, raw.g, raw.b, exposure);
+
+	return float4(c.r, c.g, c.b, c.a);
+}
+
+/* the visibility a traced world pixel is written with: the share of its rays that reached their light, whether any light was in range */
+static float4
+rm_rtdir_vis(uint show, rm_rtdir_tally t)
+{
+	const float seen = (show == 3u) ? 1.0f : (t.rays ? float(t.lit) / float(t.rays) : 0.0f);
+
+	return float4(seen, t.inrange ? 1.0f : 0.0f, 1.0f, 1.0f);
+}
+
+/* a 64-bit count in two words: the carry into hi when this add wraps lo */
+static void
+rm_rtdir_add64(device atomic_uint *lo, device atomic_uint *hi, uint n)
+{
+	const uint was = atomic_fetch_add_explicit(lo, n, memory_order_relaxed);
+
+	if (was + n < was)
+	{
+		atomic_fetch_add_explicit(hi, 1u, memory_order_relaxed);
+	}
+}
 
 kernel void
 rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
@@ -165,8 +308,10 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 		uint2 px [[thread_position_in_grid]])
 {
 	const bool inside = (px.x < light_out.get_width()) && (px.y < light_out.get_height());
-	uint m = MTL_GB_MAT_NONE, world = 0u, inrange = 0u, rays = 0u, lit = 0u, fit_lm = 0u, fit_raw = 0u, fit_n = 0u;
-	float3 raw = float3(0.0f);
+	uint m = MTL_GB_MAT_NONE, world = 0u;
+	float d = 1.0f;
+	float4 nn = float4(0.0f);
+	rm_rtdir_tally t = { 0u, 0u, 0u, 0u };
 
 	if (inside)
 	{
@@ -175,88 +320,29 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 
 	if (inside && (m == MTL_GB_MAT_WORLD))
 	{
-		const float d = depth.read(px);
-		const float4 nn = normal.read(px);
-
-		if ((d < 1.0f) && (nn.a > 0.5f))
-		{
-			const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
-			const float3 p = rm_rtdir_position(v, px, d);
-			const float3 o = p + n * mtl_rtao_bias(distance(p, v.eye.xyz), v.bias_k);
-
-			world = 1u;
-
-			for (uint i = 0; i < v.nlights; i++)
-			{
-				const rm_rtdir_light l = lights[i];
-				const float3 dv = l.pos.xyz - p;
-				const float dist = length(dv);
-				float3 dir;
-				float s;
-
-				/* the linear falloff ends at the intensity: the cheap test first */
-				if (!(dist < l.pos.w) || !(dist > 0.0f))
-				{
-					continue;
-				}
-
-				dir = dv / dist;
-				s = mtl_rtdir_scale(l.pos.w, dist, dot(n, dir), -dot(dir, l.spot.xyz), l.spot.w);
-
-				if (!(s > 0.0f))
-				{
-					continue;
-				}
-
-				inrange++;
-
-				if (v.show != 3u)
-				{
-					const float3 to = l.pos.xyz - o;
-					const float len = length(to);
-
-					rays++;
-
-					/* the ray stops a unit short of the light: an entity's origin is in open space */
-					if ((len > 1.0f) && (rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris) <
-						0.5f))
-					{
-						continue;
-					}
-
-					lit++;
-				}
-
-				raw += s * l.color.rgb * float3(styles[(uint)l.color.w & 255u]);
-			}
-
-			raw *= MTL_RTDIR_UNIT;
-
-			/* the fit's samples: the lightmap enters the frame's sums, never this pixel's light */
-			if (((px.x % MTL_RTDIR_FIT_STEP) == 0u) && ((px.y % MTL_RTDIR_FIT_STEP) == 0u))
-			{
-				const float4 lms = lm.read(px);
-
-				fit_lm = mtl_rtdir_q(lms.r, lms.g, lms.b);
-				fit_raw = mtl_rtdir_q(raw.r, raw.g, raw.b);
-				fit_n = 1u;
-			}
-		}
+		d = depth.read(px);
+		nn = normal.read(px);
+		world = ((d < 1.0f) && (nn.a > 0.5f)) ? 1u : 0u;
 	}
+
+	/* the traced light, from the lights alone (no texture reaches rm_rtdir_direct) */
+	const float3 raw = world ? rm_rtdir_direct(v, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), styles, ias,
+			inst, tmat, ntris, lights, t) : float3(0.0f);
+
+	/* the fit's sample: the lightmap enters the frame's sums, never a pixel's light */
+	const uint sampled = (world && rm_rtdir_fit_at(px)) ? 1u : 0u;
+	const uint2 fit = sampled ? rm_rtdir_fit_sample(lm, px, raw) : uint2(0u);
 
 	if (inside)
 	{
+		/* a traced world pixel takes the traced light; any other pixel its light as it was, bit for bit */
 		if (world)
 		{
-			const mtl_rgba_t c = mtl_rtdir_light(raw.r, raw.g, raw.b, v.exposure);
-			const float seen = (v.show == 3u) ? 1.0f : (rays ? float(lit) / float(rays) : 0.0f);
-
-			light_out.write(float4(c.r, c.g, c.b, c.a), px);
-			vis_out.write(float4(seen, inrange ? 1.0f : 0.0f, 1.0f, 1.0f), px);
+			light_out.write(rm_rtdir_out(raw, v.exposure), px);
+			vis_out.write(rm_rtdir_vis(v.show, t), px);
 		}
 		else
 		{
-			/* not a traced world pixel: its light as it was, bit for bit */
 			light_out.write(base.read(px), px);
 			vis_out.write(float4(0.0f), px);
 		}
@@ -264,18 +350,19 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 
 	/* the frame's counts, one atomic per SIMD group and count */
 	{
-		const uint c_w = simd_sum(world), c_i = simd_sum(inrange), c_r = simd_sum(rays), c_l = simd_sum(lit);
-		const uint c_fl = simd_sum(fit_lm), c_fr = simd_sum(fit_raw), c_fn = simd_sum(fit_n);
+		const uint c_w = simd_sum(world), c_i = simd_sum(t.inrange), c_r = simd_sum(t.rays), c_l = simd_sum(t.lit);
+		const uint c_fl = simd_sum(fit.x), c_fr = simd_sum(fit.y), c_fn = simd_sum(sampled), c_c = simd_sum(t.capped);
 
 		if (simd_is_first())
 		{
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_WORLD], c_w, memory_order_relaxed);
-			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_INRANGE], c_i, memory_order_relaxed);
-			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_RAYS], c_r, memory_order_relaxed);
-			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_LIT], c_l, memory_order_relaxed);
+			rm_rtdir_add64(&counts[RM_RTDIR_C_INRANGE], &counts[RM_RTDIR_C_INRANGE_HI], c_i);
+			rm_rtdir_add64(&counts[RM_RTDIR_C_RAYS], &counts[RM_RTDIR_C_RAYS_HI], c_r);
+			rm_rtdir_add64(&counts[RM_RTDIR_C_LIT], &counts[RM_RTDIR_C_LIT_HI], c_l);
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_FIT_LM], c_fl, memory_order_relaxed);
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_FIT_RAW], c_fr, memory_order_relaxed);
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_FIT_N], c_fn, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_CAPPED], c_c, memory_order_relaxed);
 		}
 	}
 }

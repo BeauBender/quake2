@@ -96,7 +96,13 @@ rm_rtdir_pack(const rm_rtl_lights_t *l, rm_rtdir_light_t *out, long cap, rm_rtdi
 			d->spot[k] = s->spot ? s->dir[k] : 0.0f;
 		}
 
-		d->pos[3] = s->intensity;
+		/* the range and the brightness held to RM_RTDIR_MAX_INTENSITY: past it a light reaches no further point */
+		if (s->intensity > RM_RTDIR_MAX_INTENSITY)
+		{
+			w.clamped++;
+		}
+
+		d->pos[3] = (s->intensity > RM_RTDIR_MAX_INTENSITY) ? RM_RTDIR_MAX_INTENSITY : s->intensity;
 		d->color[3] = (float)(((s->style >= 0) && (s->style < RM_RTL_STYLES)) ? s->style : 0);
 		d->spot[3] = s->spot ? (float)cos((double)s->cone * M_PI / 180.0) : MTL_RTDIR_NOSPOT;
 	}
@@ -145,6 +151,28 @@ rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long samples,
 	}
 
 	return (e > RM_RTDIR_FIT_MAX) ? RM_RTDIR_FIT_MAX : (float)e;
+}
+
+float
+rm_rtdir_fit_latest(const rm_rtdir_stats_t *s, int n, unsigned long *after, float prev)
+{
+	int i, best = -1;
+
+	for (i = 0; s && after && (i < n); i++)
+	{
+		if ((s[i].frame > *after) && ((best < 0) || (s[i].frame > s[best].frame)))
+		{
+			best = i;
+		}
+	}
+
+	if (best < 0)
+	{
+		return prev;
+	}
+
+	*after = s[best].frame;
+	return rm_rtdir_fit(s[best].fit_lm, s[best].fit_raw, s[best].fit_n, prev);
 }
 
 float
@@ -222,10 +250,11 @@ rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *b
 	}
 
 	return rtdir_put(snprintf(buf, len, "ref_metal: rt direct: frame %lu: %lu pixels, %lu world, %d lights, "
-			"%lu in range, %lu shadow rays (%.2f a world pixel), %lu lit, fit %lu/%lu over %lu samples, "
-			"exposure %.4f (%s), %s ms", s->frame, s->pixels, s->world, nlights, s->inrange, s->rays,
-			s->world ? (double)s->rays / (double)s->world : 0.0, s->lit, s->fit_lm, s->fit_raw, s->fit_n,
-			(double)s->exposure, fixed ? "r_rt_direct_exposure" : "fit", ms), buf, len);
+			"%llu in range, %llu shadow rays (%.2f a world pixel), %llu lit, %lu pixels past %d lights, "
+			"fit %lu/%lu over %lu samples, exposure %.4f (%s), %s ms", s->frame, s->pixels, s->world, nlights,
+			s->inrange, s->rays, s->world ? (double)s->rays / (double)s->world : 0.0, s->lit, s->capped,
+			MTL_RTDIR_MAX_TRACED, s->fit_lm, s->fit_raw, s->fit_n, (double)s->exposure,
+			fixed ? "r_rt_direct_exposure" : "fit", ms), buf, len);
 }
 
 int
@@ -237,6 +266,6 @@ rm_rtdir_map_format(const char *map, const rm_rtdir_pack_t *p, char *buf, size_t
 	}
 
 	return rtdir_put(snprintf(buf, len, "ref_metal: rt direct: %s: %ld lights uploaded (%ld dark, %ld spotlights "
-			"without a target, %ld past the cap left out)", map ? map : "?", p->kept, p->dark, p->untargeted, p->over),
-			buf, len);
+			"without a target, %ld past the cap left out, %ld brighter than %d held to it)", map ? map : "?", p->kept,
+			p->dark, p->untargeted, p->over, p->clamped, (int)RM_RTDIR_MAX_INTENSITY), buf, len);
 }

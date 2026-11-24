@@ -55,6 +55,7 @@ static const rm_world_t *dir_world; /* the map whose lights are uploaded */
 static char dir_map[MAX_QPATH];     /* its model name (a new map's buffers may take the old one's address) */
 static long dir_nlights;            /* the lights uploaded */
 static float dir_fit;               /* the exposure fitted from the last completed frame, 1 at a map's first */
+static unsigned long dir_after;     /* the frame of the fit applied, or the last traced before the map's reset */
 static int dir_fixed;               /* the frame's exposure is r_rt_direct_exposure's */
 
 void
@@ -71,6 +72,7 @@ RM_RTDir_Init(const rmb_caps_t *caps)
 	dir_map[0] = '\0';
 	dir_nlights = 0;
 	dir_fit = 1.0f;
+	dir_after = 0;
 }
 
 void
@@ -102,7 +104,9 @@ RM_RTDir_Lights(void)
 
 	dir_world = wm->world;
 	Q_strlcpy(dir_map, wm->name, sizeof(dir_map));
+	/* 1 from here, and no frame traced before (the old map's, still in flight) overwrites it */
 	dir_fit = 1.0f;
+	dir_after = rmb_rtdir_last_frame();
 	memset(&why, 0, sizeof(why));
 
 	/* the data gathered at this map's load, else none: a world with no light entity is lit by nothing here */
@@ -188,13 +192,12 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 		return;
 	}
 
-	/* the fit: each completed frame's sums give the exposure the next views take */
+	/* the fit: the latest completed frame's sums since the map's reset give the exposure the next views take */
 	n = rmb_rtdir_stats(st, RMB_FRAMES_IN_FLIGHT);
+	dir_fit = rm_rtdir_fit_latest(st, n, &dir_after, dir_fit);
 
 	for (i = 0; i < n; i++)
 	{
-		dir_fit = rm_rtdir_fit(st[i].fit_lm, st[i].fit_raw, st[i].fit_n, dir_fit);
-
 		if (r_rt_stats_ref && (r_rt_stats_ref->value >= 2))
 		{
 			char line[RM_STATS_LINE];

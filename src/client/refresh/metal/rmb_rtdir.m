@@ -51,7 +51,8 @@ extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
 #define RMB_RTDIR_GROUP 8       /* the kernel's threadgroup side */
-#define RMB_RTDIR_COUNTS 7      /* world, in range, rays, lit, the fit's lightmap and raw sums and samples */
+/* world, in range, rays, lit (their low words), the fit's lightmap and raw sums and samples, the three high words, capped */
+#define RMB_RTDIR_COUNTS 11
 
 _Static_assert(sizeof(rm_rtdir_view_t) == 112, "the view is rm_rtdir.metal's 112 bytes");
 _Static_assert(sizeof(rm_rtdir_light_t) == 48, "a light is rm_rtdir.metal's 48 bytes");
@@ -74,6 +75,7 @@ static unsigned long slot_frame[RMB_FRAMES_IN_FLIGHT], slot_pixels[RMB_FRAMES_IN
 static float slot_exposure[RMB_FRAMES_IN_FLIGHT];
 static rm_rtdir_stats_t done[RMB_FRAMES_IN_FLIGHT];
 static int ndone;
+static unsigned long last_frame;        /* the frame of the last pass encoded, 0 for none since the open */
 
 /* the view and styles the next G-buffer view traces with, and whether this one traced */
 static rm_rtdir_view_t view;
@@ -168,6 +170,7 @@ rmb_rtdir_open(char *err, size_t errlen)
 
 	ndone = 0;
 	nlights = 0;
+	last_frame = 0;
 	view_set = traced = 0;
 	dir_open = 1;
 	return 1;
@@ -190,6 +193,7 @@ rmb_rtdir_close(void)
 
 	dir_open = 0;
 	nlights = 0;
+	last_frame = 0;
 	view_set = traced = 0;
 	ndone = 0;
 }
@@ -320,12 +324,13 @@ rmb_rtdir_read(void)
 		s->frame = slot_frame[k];
 		s->pixels = slot_pixels[k];
 		s->world = c[0];
-		s->inrange = c[1];
-		s->rays = c[2];
-		s->lit = c[3];
+		s->inrange = (uint64_t)c[1] | ((uint64_t)c[7] << 32);
+		s->rays = (uint64_t)c[2] | ((uint64_t)c[8] << 32);
+		s->lit = (uint64_t)c[3] | ((uint64_t)c[9] << 32);
 		s->fit_lm = c[4];
 		s->fit_raw = c[5];
 		s->fit_n = c[6];
+		s->capped = c[10];
 		s->exposure = slot_exposure[k];
 		s->ms = -1;
 
@@ -363,6 +368,12 @@ rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap)
 
 	ndone = 0;
 	return n;
+}
+
+unsigned long
+rmb_rtdir_last_frame(void)
+{
+	return dir_open ? last_frame : 0;
 }
 
 /*
@@ -470,6 +481,7 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		slot_pending[slot] = 1;
 		slot_timed[slot] = timed;
 		slot_frame[slot] = fno;
+		last_frame = fno;
 		slot_pixels[slot] = (unsigned long)(w * h);
 		slot_exposure[slot] = view.exposure;
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {

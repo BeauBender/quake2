@@ -95,14 +95,30 @@ typedef struct
 	long dark;          /* intensity at most 0: lights nothing under the linear falloff */
 	long untargeted;    /* a spotlight whose target is missing: qrad3 leaves its normal at zero, so it lights nothing */
 	long over;          /* past cap */
+	long clamped;       /* kept, with the intensity held to RM_RTDIR_MAX_INTENSITY */
 } rm_rtdir_pack_t;
+
+/*
+ * The intensity a light is packed with, at most. qrad3 bounds no light
+ * value (rm_rtlights.c takes any finite one, as CreateDirectLights does),
+ * and its falloff is linear, (intensity - dist): a light reaches as far
+ * as its intensity. A Quake II map's points lie within +-4096 units on
+ * each axis (the protocol's coordinate, MSG_WriteCoord in
+ * src/common/movemsg.c, a short of 1/8 units), so no two are farther apart
+ * than 8192 x sqrt(3), about 14189: a light of 16384 reaches every point
+ * of any map already. Above it a light gets no further, only brighter;
+ * holding it here keeps the sum of RM_RTL_MAX_LIGHTS lights finite.
+ * qrad3's default is 300 (RM_RTL_DEFAULT_LIGHT).
+ */
+#define RM_RTDIR_MAX_INTENSITY 16384.0f
 
 /*
  * The lights of l in the kernel's form, at most cap of them, in l's
  * order: a point light's spot[3] is MTL_RTDIR_NOSPOT, a spotlight's is
- * cos(cone) (degrees) and its direction is l's. A light of intensity at
- * most 0 or not finite, and a spotlight with a missing target, are left
- * out (counted in *why, which may be NULL). Returns the number kept.
+ * cos(cone) (degrees) and its direction is l's; the intensity at most
+ * RM_RTDIR_MAX_INTENSITY. A light of intensity at most 0 or not finite,
+ * and a spotlight with a missing target, are left out (counted in *why,
+ * which may be NULL). Returns the number kept.
  */
 long rm_rtdir_pack(const rm_rtl_lights_t *l, rm_rtdir_light_t *out, long cap, rm_rtdir_pack_t *why);
 
@@ -156,15 +172,27 @@ typedef struct
 	unsigned long frame;
 	unsigned long pixels;       /* pixels the kernel ran on */
 	unsigned long world;        /* lightmapped world pixels with a depth and a normal */
-	unsigned long inrange;      /* lights in range and facing, summed over those pixels */
-	unsigned long rays;         /* shadow rays traced: one each light in range (0 under r_rt_direct_show 3) */
-	unsigned long lit;          /* rays that reached their light */
+	unsigned long long inrange; /* lights in range and facing, summed over those pixels (64-bit on the GPU too) */
+	unsigned long long rays;    /* shadow rays traced: one each light a pixel takes (0 under r_rt_direct_show 3) */
+	unsigned long long lit;     /* rays that reached their light */
+	unsigned long capped;       /* pixels with more than MTL_RTDIR_MAX_TRACED lights in range: the strongest taken */
 	unsigned long fit_lm;       /* the fit's sums and samples (rm_rtdir_fit) */
 	unsigned long fit_raw;
 	unsigned long fit_n;
 	float exposure;             /* the exposure the frame used */
 	double ms;                  /* the pass's GPU time; below 0 when not measured */
 } rm_rtdir_stats_t;
+
+/*
+ * The exposure after a harvest of completed frames (s, n of them, in any
+ * order: the back end reads its slots in slot order): the fit
+ * (rm_rtdir_fit, from prev) of the one with the largest frame number
+ * after *after, else prev. *after is the frame of the fit last applied
+ * or of the map's reset (RM_RTDir_Lights: the last frame traced before
+ * it): an entry at or before it is older, a frame of the map before among
+ * them, and is ignored. *after moves to the frame applied.
+ */
+float rm_rtdir_fit_latest(const rm_rtdir_stats_t *s, int n, unsigned long *after, float prev);
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
 int rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *buf, size_t len);
@@ -189,8 +217,11 @@ int rmb_rtdir_prepare(unsigned long w, unsigned long h);
 /* the view and the style table (3 x RM_RTL_STYLES floats) the next G-buffer view traces with; NULL turns it off */
 void rmb_rtdir_set_view(const rm_rtdir_view_t *v, const float *styles);
 
-/* the stats of the frames whose pass completed since the last call, at most cap; their number */
+/* the stats of the frames whose pass completed since the last call, at most cap, in slot order; their number */
 int rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap);
+
+/* the frame number of the last pass encoded since the pass opened; 0 for none */
+unsigned long rmb_rtdir_last_frame(void);
 
 /* TASK179: the effect table's backend rows (rm_rtfx.c): the trace, its light in io's place, and the view */
 void rmb_rtdir_fx_trace(rmb_rtfx_io_t *io);

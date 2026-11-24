@@ -29,7 +29,8 @@
  * The light a world pixel gets here never reads the lightmap at that
  * pixel (the plan's section 6, item 5): mtl_rtdir_light takes no
  * lightmap argument. The lightmap enters only the exposure fit's frame
- * sums (mtl_rtdir_q), never a pixel's own light.
+ * sums (mtl_rtdir_q), never a pixel's own light; the kernel's text is
+ * held to that by tests/metal/rm_rtdir_test.c (kernel_broken).
  *
  * =======================================================================
  */
@@ -59,6 +60,85 @@
 
 /* the fit samples every MTL_RTDIR_FIT_STEP-th pixel a row and a column, so its 32-bit sums cannot wrap below 8K */
 #define MTL_RTDIR_FIT_STEP 4u
+
+/*
+ * The lights a pixel takes, at most: past MTL_RTDIR_MAX_TRACED lights in
+ * range, the strongest of them (the largest mtl_rtdir_scale), so a pixel
+ * traces at most MTL_RTDIR_MAX_TRACED shadow rays (each of at most
+ * MTL_RTDIR_LAYERS + 1 intersections) whatever the map holds.
+ */
+#define MTL_RTDIR_MAX_TRACED 16
+
+/* the lights a pixel keeps (mtl_rtdir_keep): n of them, their indices in the light buffer and their contributions */
+typedef struct
+{
+	unsigned n;
+	unsigned capped;                    /* 1 once a light in range found the set full */
+	unsigned i[MTL_RTDIR_MAX_TRACED];
+	float s[MTL_RTDIR_MAX_TRACED];
+} mtl_rtdir_keep_t;
+
+/*
+ * k with the light of index i and contribution s added: appended while
+ * fewer than MTL_RTDIR_MAX_TRACED are kept (so the set stays in the
+ * buffer's order), else in the place of the weakest kept one when s is
+ * stronger (the first weakest on a tie; an equal light does not replace
+ * it), and capped set either way.
+ */
+static inline mtl_rtdir_keep_t
+mtl_rtdir_keep(mtl_rtdir_keep_t k, unsigned i, float s)
+{
+	unsigned j, w = 0;
+
+	if (k.n < MTL_RTDIR_MAX_TRACED)
+	{
+		k.i[k.n] = i;
+		k.s[k.n] = s;
+		k.n++;
+		return k;
+	}
+
+	k.capped = 1;
+
+	for (j = 1; j < MTL_RTDIR_MAX_TRACED; j++)
+	{
+		if (k.s[j] < k.s[w])
+		{
+			w = j;
+		}
+	}
+
+	if (s > k.s[w])
+	{
+		k.i[w] = i;
+		k.s[w] = s;
+	}
+
+	return k;
+}
+
+/* k's lights in the buffer's order (a set that was never full is in it already), so the sum runs in that order */
+static inline mtl_rtdir_keep_t
+mtl_rtdir_keep_order(mtl_rtdir_keep_t k)
+{
+	unsigned a, b;
+
+	for (a = 1; a < k.n; a++)
+	{
+		for (b = a; (b > 0) && (k.i[b - 1] > k.i[b]); b--)
+		{
+			const unsigned ti = k.i[b];
+			const float ts = k.s[b];
+
+			k.i[b] = k.i[b - 1];
+			k.s[b] = k.s[b - 1];
+			k.i[b - 1] = ti;
+			k.s[b - 1] = ts;
+		}
+	}
+
+	return k;
+}
 
 /*
  * The contribution of one light at a surface point, before its colour
