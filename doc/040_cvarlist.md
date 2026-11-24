@@ -1061,13 +1061,22 @@ marked `(n/a)` and skipped.
   Tuning screens grey those rows "set by the presentation"), so no
   ray-traced layer and no MetalFX scaler runs. The player model of the menu is quantized at the window's size. The pictures
   of the 2D layer are not changed. It needs no ray tracing and runs on
-  every device. `3` (*Ray traced*) is reserved for later work. Retro and Ray traced are greyed in
+  every device. `3` is *Ray traced* (RT-primary), on a device that
+  traces rays: the lightmap is off at the visible world surface, and in
+  its place each lightmapped world pixel takes the direct light of the
+  map's own light entities (`r_rt_direct`), one shadow ray a light,
+  scaled by one exposure (`r_rt_direct_exposure`). It reads
+  `r_rt_direct` and `r_rt_water` as `1` and `r_rt_shadows`, `r_rt_sun`
+  and `r_rt_ao` as `0`; the emissive faces, the sky, the bounce, the
+  dlights as a term and the denoiser are later work, so a part of a map
+  lit by its light faces alone is darker than in stock. Models, the sky,
+  water, particles and the 2D layer stay stock. Retro and Ray traced are greyed in
   the menu "awaiting review" until their look is accepted, and work from
   the console; the values are never renumbered. Read at start-up and at
   `vid_restart`, which say which presentation runs in one line
   (`ref_metal: presentation: stock (r_presentation 0)`); a value the
-  device cannot run, Enhanced without ray tracing or one not in this
-  build, runs stock and says why
+  device cannot run, Enhanced or Ray traced without ray tracing or one
+  not in this build, runs stock and says why
   (`ref_metal: presentation: stock; r_presentation 1 (enhanced) reads 0:
   no ray tracing on this device`), and the cvar keeps its value. Other
   renderers ignore it. The video menu and the Ray tracing screen show the
@@ -1223,6 +1232,45 @@ is.
   the menu shows `off`. The menu reads it as `off` below `1`,
   `bilateral` from `1` and `MetalFX` from `2`; a value that is not a
   finite number counts as `0`.
+
+* **r_rt_direct**: The switch of the Metal renderer's direct light under
+  the *Ray traced* presentation (`r_presentation 3`, TASK188), which reads
+  it as `1`: at each lightmapped world pixel the sum over the map's light
+  entities in range of qrad3's falloff, `(intensity - distance) x N.L`,
+  times the light's colour and lightstyle (and `r_modulate`), each light
+  with one shadow ray through the ray-tracing scene (water and glass let
+  it through, up to four of them), in the lightmap's units, in place of
+  the lightmap. A pixel with more than 16 lights in range takes the 16
+  strongest, so it traces at most 16 shadow rays, and a light's
+  intensity is held to `16384`, which already reaches every point of a
+  map. A spotlight lights only inside its cone; one whose target
+  is missing lights nothing, as in qrad3. Under every other presentation
+  it does nothing at any value. Forced to `0` on a device without ray
+  tracing. `r_rt_stats 1` prints the map's line of lights uploaded,
+  `r_rt_stats 2` a line a frame (world pixels, lights in range, shadow
+  rays, rays that reached their light, the pixels past the 16 lights,
+  the exposure fit's sums and the exposure). Default `0`; not saved with
+  the configuration.
+
+* **r_rt_direct_exposure**: The exposure of the Metal renderer's direct
+  light (`r_rt_direct`). `0` (the default) takes the fit: the sum of the
+  stock lightmap over the world pixels of the latest completed frame of
+  the map, every fourth
+  pixel a row and a column, divided by the sum of the traced light over
+  the same pixels, held between `0.25` and `16`, so the traced frame's
+  mean light is the stock frame's (the lightmap enters this ratio only,
+  never a pixel's own light); `1` until a frame has been measured, and
+  kept while no traced light reaches a sampled pixel. A value above `0`
+  is a fixed exposure, at most `64`. Saved with the configuration.
+
+* **r_rt_direct_show**: A development view of the Metal renderer's
+  direct light, drawn over the 3D view while `r_rt_direct` runs. `0`
+  (the default) the picture; `1` the direct term alone (the light, as on
+  white walls); `2` the shadow visibility, grey from black (no light in
+  range reached) to white (every one reached), dark blue where no light
+  is in range; `3` the direct term with no shadow ray traced (every light
+  in range counts as reached), to compare with `1`. Pixels that are not
+  lightmapped world are black. Not saved with the configuration.
 
 * **r_rt_flatlight**: A preview and debug setting of the Metal renderer
   (TASK173): with a level from `0` to `1`, every lightmap sample of the

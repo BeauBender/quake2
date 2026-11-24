@@ -23,6 +23,8 @@
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
 #     (rm_rtsun.c and common/mtl_rtsun_math.h, RT4, TASK56),
+#     tests/metal/rm_rtdir_test.c, the pure part of RT-primary's direct light
+#     (rm_rtdir.c and common/mtl_rtdir_math.h, TASK188),
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -291,6 +293,26 @@ else
 fi
 seg 7 "; sun ${rtsun:-host test}"
 
+# the RT-primary presentation's direct light (TASK188, PM6): rm_rtdir.c and common/mtl_rtdir_math.h, with
+# rm_rtshadow.c for the view's inverse, rm_rtgate.c for the mode and its overlay (and the effect table's host
+# stubs it takes its switches from), rm_rt.c and rm_pure.c
+rtdir=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -DRM_RTFX_HOST -Itests/metal -I"$rm_dir" \
+	-o "${tmp:?}/rm_rtdir_test" tests/metal/rm_rtdir_test.c "$rm_dir/rm_rtdir.c" "$rm_dir/rm_rtgate.c" \
+	"$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+	"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtdir_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtdir_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtdir_test.c failed"
+else
+	rtdir=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtdir_test: //')
+	case $rtdir in *", 0 failed") ;; *) bad "tests/metal/rm_rtdir_test.c printed no result line"; rtdir="";; esac
+fi
+seg 7.5 "; direct light ${rtdir:-host test}"
+
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)
 rtl=""
@@ -391,7 +413,7 @@ if [ -n "$rtfx" ]; then
 	for fxm in order tablesw gatesw surf forward aoswap wframe postempty resolvego wantedgo; do
 		cp "$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtgate.c" "${tmp:?}/fxm/"
 		case $fxm in
-			order) sed 's/{ RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER }/{ RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER }/' \
+			order) sed 's/{ RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER }/{ RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER }/' \
 				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 			tablesw) sed 's/"ao", "r_rt_ao"/"ao", "r_rt_ambient"/' "$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 			gatesw) sed 's/^	"r_rt_ao",$/	"r_rt_ambient",/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/fxm/rm_rtgate.c" ;;
