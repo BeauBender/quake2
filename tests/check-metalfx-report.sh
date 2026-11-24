@@ -859,14 +859,19 @@ limit" "$out"
     # round 2: where that first TERM lands is the runner's speed, so the case runs twice: "hold" lands it
     # in spawn's hold window, every time (spawn's proc_start waits until the engine says it has sent it),
     # before run_engine has read anything, and "free" leaves it to the runner. Either way the status is
-    # the TERM's and the log has the engine's line, which the drain in run_engine's finally reads
+    # the TERM's and the log has the engine's line, which the drain in run_engine's finally reads.
+    # FIX193: "read" lands it between run_engine's first read and the append of what it read, every time:
+    # the engine waits for the .go file the staged read makes, and that read returns only once the
+    # engine says it has sent the TERM. The log keeps the line only if run_engine holds the stop signals
+    # around its read and append
     if has engine; then
-    for how in hold free; do
+    for how in hold free read; do
     rm -rf "$w/held"; mkdir -p "$w/held"
-    printf '%s\n' '#!/bin/sh' 'trap "kill -s TERM \$PPID" TERM' 'echo engine-ready' 'kill -s TERM $PPID' ': > "$0.sent"' \
+    printf '%s\n' '#!/bin/sh' 'trap "kill -s TERM \$PPID" TERM' 'echo engine-ready' \
+        'while [ "$1" = read ] && [ ! -e "$0.go" ] && [ -e "$0.flag" ]; do sleep 0.05; done' 'kill -s TERM $PPID' ': > "$0.sent"' \
         'while [ -e "$0.flag" ]; do sleep 0.1; done' > "$w/held/eng"
     chmod +x "$w/held/eng"; : > "$w/held/eng.flag"
-    python3 -I -c 'import os, signal, sys, time
+    python3 -I -c 'import os, signal, sys, time, types
 sys.path.insert(0, sys.argv[1])
 import mfx
 def h(s, f):
@@ -887,8 +892,25 @@ def held_start(pid):  # spawn calls it inside its hold window: there it waits fo
             print("unsent")
     return real(pid)
 mfx.bounded.proc_start = held_start
+staged = [sys.argv[4] == "read"]
+real_read = os.read
+def staged_read(fd, n):  # "read": the first read with data returns once the engine has sent its TERM
+    data = real_read(fd, n)
+    if data and staged[0]:
+        staged[0] = False
+        open(sys.argv[2] + ".go", "w").close()
+        end = time.monotonic() + 10
+        while not os.path.exists(sys.argv[2] + ".sent") and time.monotonic() < end:
+            time.sleep(0.02)
+        if not os.path.exists(sys.argv[2] + ".sent"):
+            print("unsent")
+    return data
+shim = types.ModuleType("os")
+shim.__dict__.update(os.__dict__)
+shim.read = staged_read
+mfx.os = shim
 try:
-    mfx.run_engine(Ctx(), [], sys.argv[3], timeout=30, debug=False)
+    mfx.run_engine(Ctx(), [sys.argv[4]], sys.argv[3], timeout=30, debug=False)
     print("no exit")
 except SystemExit as e:
     print("exit %s" % e.code)' "$d" "$w/held/eng" "$w/held/log" $how < /dev/null > "$w/held/out" 2>&1 &
@@ -898,7 +920,7 @@ except SystemExit as e:
     if kill -0 $hp 2>/dev/null; then ko engine-held-log "$how: the run outlived 30 s"; kill -s KILL $hp; fi
     wait $hp 2>/dev/null
     grep -qx 'exit 143' "$w/held/out" || ko engine-held-log "$how: the run did not end on its TERM: $(cat "$w/held/out")"
-    if [ "$how" = hold ] && grep -qx unsent "$w/held/out"; then ko engine-held-log "$how: the TERM never landed in the hold window"; fi
+    if [ "$how" != free ] && grep -qx unsent "$w/held/out"; then ko engine-held-log "$how: the TERM never landed in its window"; fi
     grep -qx 'engine-ready' "$w/held/log" 2>/dev/null || ko engine-held-log "$how: no log, or not the engine's line, after a held TERM: $(cat "$w/held/out")"
     done
     # FIX186 slice 2, round 2: an engine that has exited before spawn returns (spawn's proc_start waits
