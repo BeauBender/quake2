@@ -208,7 +208,8 @@ and PM7). The owner judges the look from the frames.
 Determinism: `rtprimary-world` recorded three times (two commits, and `--run 2`) gives one hash of its
 frames' hashes, `000b429ec38e`; `rtprimary-direct` `dd451ee5650d`, `rtprimary-vis` `be8d223522ca` and
 `rtprimary-noshadow` `6495fa432ad0`, each the same twice. The fit reads earlier frames, so a run whose
-frames completed in another order could differ in its first frames; none did here.
+frames completed in another order could differ in its first frames; none did here. That held for slice 1's
+light only: from slice 2 on the records are not reproducible run to run (see slice 2's checks).
 
 **Round 1** (the kernel's new structure, the cap, the intensity clamp, the 64-bit counts and the fit's
 frame, at `c18902fd`): the four records give the same hashes, `000b429ec38e`, `dd451ee5650d`,
@@ -249,6 +250,15 @@ at `PINS_EVERY=7`. Compared by the hash of the frames' sha256s:
 | `cinematic` | 12 | `4f7259768d21` | | | |
 
 29 of 29 byte-identical: at `r_presentation 0` the branch changes no pixel. No existing record was replaced.
+
+**Slice 2's own run** (head `20ea6cbf`, the code of the final commit; base main at `526638e9`, built in a
+scratch copy and run by `PINS_BIN`; the same method): 29 of 29 stock scenarios byte-identical to the base,
+no failures. Twenty-six of the hashes are those of the table above, to the digit. The three that use the
+generated `water.dm2` (`rt-water`, `rt-water-entities`, `skywater`) hash the frames of a demo `make-demo`
+makes afresh each time, so they differ from the table's by the file and are compared with the base's on
+one copy of it (`e5809628905e`): `rt-water` and `rt-water-entities` `929e43a01e45` (4 frames), `skywater`
+`e82e7bb55913` (4 frames), the same from the base and from the branch. Round 0's run, on another copy of the
+demo, read the same way (`76c2932ae4e9`, `76c2932ae4e9` and `c662983be7b4`, base and branch alike).
 
 ## Slice 2: the emissive faces, the lightstyles, the Ray tracing screen
 
@@ -295,8 +305,23 @@ light; this slice takes the face whole, one light at its centre with the whole a
 lightmapped face to at most 240 units, so far from the face the two agree; near it the light comes from
 the centre, not spread over the face. And qrad3 limits a light to the clusters its PVS sees, where this
 range is the cut above. The plan's "one light chosen per pixel per frame, weighted" is not followed: as in
-slice 1, every light in range up to the 16 is traced, so the term is exact for its model and noise-free,
-and no denoiser (TASK59) is needed.
+slice 1, every light the pixel keeps, up to the 16, is traced, so the term is noise-free and no denoiser
+(TASK59) is needed. It is not exact for its model once the cap bites, because the 16 are chosen before
+visibility (next paragraph).
+
+**The 16 are chosen before the shadow test.** The kernel keeps the 16 strongest contributions at a pixel
+(`mtl_rtdir_keep`, before the colour and the lightstyle, which only enter the sum) and only then traces
+them, so an occluded light, or one whose style is dark, can hold a place while a visible one is dropped
+without a ray. The choice is deterministic (a light replaces the weakest kept one only when strictly
+stronger, ties going to the earlier light) and stable in time, so it does not flicker. Seams can show
+where an occluded light's strength crosses a visible one's at neighbouring pixels: the sum steps by the
+difference between the two. How often the cap bites is in the lines below: on `base2` a mean of 40 % of
+the world pixels over 686 frames (6 % at frame 18, 34 % at frame 704), and about 30 to 37 % of the shadow
+rays reach their light; on `waste2` 303436 of 307200 pixels at frame 447, with 9674097 lights in range
+against 4912217 rays and 30 % of the rays lit. A choice among the visible lights, under a fixed ray
+bound, or a PVS cull of emitters as qrad3 has, is left for slice 3. The 2048-emitter cap keeps the
+faces in the map's face order, so on a map with more world light faces which ones light depends on that
+order (the maps measured have 417 and 280).
 
 **Not yet**: a face is not drawn at its own emission. qrad3 adds the face's light to its own lightmap
 ("the texture itself should still be full bright"); under RT-primary a light fixture's pixel takes only
@@ -329,8 +354,9 @@ hidden; without ray tracing the screen is greyed for the device, as before.
 
 ### Tests
 
-`tests/metal/rm_rtdir_test.c`: `test_emit_scale` (the falloff, both cosines, the range, the reach test
-and the dispatch), `test_reflectivity` (qrad3's doubling, the unread texture, values that are not
+`tests/metal/rm_rtdir_test.c`: `test_emit_scale` (the falloff, both cosines, the range, the reach test,
+the dispatch, and a distance of `1e-20` that stays finite, the distance taken as at least 1 as qrad3's;
+red first: 3 checks failed with `inf`), `test_reflectivity` (qrad3's doubling, the unread texture, values that are not
 numbers), `test_emitter` (a 64 x 32 face: the centre a unit out, the normal, the marker, the intensity
 `300 x 2048 x 0.4`, a coloured texture's light, the `DIRECT_LIGHT` threshold, the cap, the shapeless
 faces, the light the kernel's dispatch gives below it), `test_pack_emitters` (the counts of each reason,
@@ -401,8 +427,14 @@ The emissive faces halve the near-black share (the parts no light entity reaches
 faces and bounces) and halve the distance to stock; the rest is the bounce (PM7) and the faces' own
 emission (slice 3). Slice 2 against slice 1: 23 of 23 frames differ, mean score 0.0220 (max 0.0909). The
 hashes of the four records: `rtprimary-world` `3e45a102fc0a`, `rtprimary-direct` `a38ba393ebf6`,
-`rtprimary-vis` `8eab56606653`, `rtprimary-noshadow` `62207ce09aaa`; the final hold records them again
-(below).
+`rtprimary-vis` `8eab56606653`, `rtprimary-noshadow` `62207ce09aaa`, at `66fa02ed`. Recorded again at
+`20ea6cbf` (the same kernel, the finite emitter term changing no frame of these) they read
+`3e45a102fc0a`, `896c04dfc674`, `8eab56606653` and `d58e06da3c7f`: two of the four differ.
+
+**RT-primary records are not reproducible run to run** (by a few levels in some frames), because the
+exposure fit reads whichever frame completed last (`rm_rtdir_fit_latest`), and slice 2's heavier pass
+makes the completion order vary. Their hashes are a record of a run, not pins; only the stock records
+above are. Slice 1's determinism paragraph held for slice 1's lighter pass.
 
 **The lightstyles** (`demo2.dm2`, every 7th frame, 89 frames, the map `waste2`, with a scratch text table
 for the demo's opening text in captures 2 to 6, removed after the run):
@@ -418,7 +450,8 @@ ref_metal: rt direct: frame 487: 307200 pixels, 307200 world, 494 lights, 822349
 Its two styled lights are kept with their styles (the packing keeps `style`, `test_pack` and
 `test_styles` hold the table), and the record's captures 61 and 67, which the `dlights` scenario names as
 frames an animated style changes, are the two style states the owner reviews. No style is lost on the
-way: the record holds 89 frames (hash `065e37ee63c3`) and nothing needed fixing. The style state of a
+way: the record holds 89 frames (hash `d54969fcd1a3` at `20ea6cbf`, `065e6a52034e` at `66fa02ed`; not a
+pin, see above) and nothing needed fixing. The style state of a
 capture is not in the lines (the stats line has no style column), so the check that the light follows
 the style is the owner's, from those frames.
 
@@ -428,6 +461,10 @@ the style is the owner's, from those frames.
   per-triangle table, under RT-primary only.
 - **A face cut into qrad3's 64-unit patches**, if the frames near a fixture call for it.
 - **RT3's dlights as a term** of the light model, in place of the layer this mode turns off.
+- **The 16 chosen among the visible lights**, under a fixed ray bound, or a PVS cull of emitters, in place
+  of the choice before occlusion (see above).
+- **The exposure fit's frame lag**: the fit reads the latest completed frame (`rm_rtdir_fit_latest`), so
+  which frame sets a frame's exposure depends on completion order.
 - **A finer exposure fit**: at map load from a sample of luxels (the plan's wording), or a fixed value the
   owner picks from frames, and a fit that leaves out the near-black parts the emissive faces now light.
 - **The water reflections** (`rmb_rtwater.m`) still shade the reflected world from the lightmap array
@@ -439,7 +476,8 @@ the style is the owner's, from those frames.
 
 ## Checks
 
-In one hold on the final commit: `make ref_metal`, `make`, `make test`, the stock `metal` pin run above
-against the base's records, the RT-primary frame record, `tests/check-ref-metal.sh`,
-`tests/check-cvar-docs.sh`, `tests/check-runbook-index.sh` and `tests/check-doc-links.sh`; their last
-lines are in the card's report.
+In one hold on the code of the final commit (`20ea6cbf`): `make ref_metal`, `make`, `make test`
+(`yq2test: 563 tests, 0 failed`), `tests/check-ref-metal.sh` (`rm_rtdir_test` 465 checks, 0 failed),
+`tests/check-cvar-docs.sh`, `tests/check-runbook-index.sh`, `tests/check-doc-links.sh` and
+`tests/check-video-menu.sh`, all ok; the stock `metal` pin run (29 of 29, above) and the RT-primary frame
+records, which are records, not pins.

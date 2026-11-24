@@ -1250,9 +1250,17 @@ is.
   intensity the texinfo value times the texture's reflectivity (qrad3's,
   its mean colour doubled when dim; an unread texture lights nothing)
   times the face's area times `0.4`, out of range where that falls under
-  one lightmap step, at most 2048 faces. The 16 a pixel takes are chosen
-  from the lights and the faces together, the same ones for the same
-  view. Under every other presentation
+  one lightmap step, at most 2048 faces (the first 2048 in the map's
+  face order when it has more). The 16 a pixel takes are the 16 strongest
+  of the lights and the faces together, chosen before any shadow ray and
+  before the lightstyle, so a light that is occluded or switched off can
+  hold a place a visible one then goes without. The choice is the same for
+  the same view and does not flicker, but a seam can show where an
+  occluded light's strength crosses a visible one's. On a map with many
+  lights most pixels are past 16 (a third on `base2`, nearly all on
+  `waste2`) and about a third of the rays reach their light, so the sum is
+  a sample of the lights, not all of them; choosing among the visible
+  lights is left for a later slice. Under every other presentation
   it does nothing at any value. Forced to `0` on a device without ray
   tracing. `r_rt_stats 1` prints the map's lines of lights and emissive
   faces uploaded,
