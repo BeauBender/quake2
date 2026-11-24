@@ -53,9 +53,16 @@ static int ao_active;           /* this frame traces the AO */
 static int ao_viewed;           /* RM_RTAO_View handed this frame's view to the back end */
 static unsigned long ao_count;  /* the views traced, the noise's frame without a seed */
 
-/* RT7 (TASK59 slice 1): r_rt_temporal and the history's reset state */
+/*
+ * RT7 (TASK59): r_rt_temporal and the one reset state of the shadows',
+ * the sun's and the AO's histories (slice 1b), so that a reset or a cut
+ * resets the three in the same view.
+ */
 static cvar_t *r_rt_temporal;
 static rm_rtt_state_t rtt_state;
+static int rtt_stepped;         /* this world view's step is taken: every effect gets rtt_view */
+static int rtt_on;              /* r_rt_temporal was above 0 at it */
+static rm_rtt_view_t rtt_view;
 
 void
 RM_RTT_Reset(void)
@@ -69,27 +76,37 @@ RM_RTT_EndFrame(void)
 	rm_rtt_frame_end(&rtt_state);
 }
 
-/*
- * The AO's accumulation for this view at the render size w x h: with
- * r_rt_temporal 0 the state is forgotten and the histories released, so
- * the next view with it on resets.
- */
-static void
-RM_RTT_View(const rm_view_t *view, int w, int h)
+void
+RM_RTT_BeginView(void)
 {
-	const float alpha = rm_rtt_alpha(r_rt_temporal ? r_rt_temporal->value : 0.0f);
-	rm_rtt_key_t k;
-	rm_rtt_view_t t;
-	float move = 0.0f;
-	unsigned reasons;
+	rtt_stepped = 0;
+}
 
-	if (!(alpha > 0.0f))
+const rm_rtt_view_t *
+RM_RTT_ViewFor(const rm_view_t *view)
+{
+	float alpha, move = 0.0f;
+	rm_rtt_key_t k;
+	unsigned reasons;
+	int w, h;
+
+	if (rtt_stepped)
 	{
-		rm_rtt_state_reset(&rtt_state);
-		rmb_rtao_temporal(NULL, 0, 0);
-		return;
+		return rtt_on ? &rtt_view : NULL;
 	}
 
+	rtt_stepped = 1;
+	alpha = rm_rtt_alpha(r_rt_temporal ? r_rt_temporal->value : 0.0f);
+	rtt_on = alpha > 0.0f;
+
+	/* off: the state forgotten, so the next view with it on resets; the effects release their histories */
+	if (!rtt_on)
+	{
+		rm_rtt_state_reset(&rtt_state);
+		return NULL;
+	}
+
+	RM_GB_TargetSize(&w, &h);
 	k.w = (unsigned)w;
 	k.h = (unsigned)h;
 	k.vx = (int)view->vp.x;
@@ -98,12 +115,9 @@ RM_RTT_View(const rm_view_t *view, int w, int h)
 	k.vh = (int)view->vp.h;
 	VectorCopy(r_newrefdef.vieworg, k.org);
 	reasons = rm_rtt_step(&rtt_state, &k, &move);
-	t = rm_rtt_view(alpha, reasons, move);
-
-	if (!rmb_rtao_temporal(&t, (unsigned long)w, (unsigned long)h))
-	{
-		rm_rtt_state_reset(&rtt_state);
-	}
+	rtt_view = rm_rtt_view(alpha, reasons, move);
+	rtt_view.seq = rtt_state.seq;
+	return &rtt_view;
 }
 
 void
@@ -245,7 +259,7 @@ RM_RTAO_View(const rm_view_t *view)
 	}
 
 	rmb_rtao_set_view(&v);
-	RM_RTT_View(view, w, h);
+	rmb_rtao_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (unsigned long)h);
 	ao_viewed = 1;
 	ao_count++;
 }

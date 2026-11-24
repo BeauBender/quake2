@@ -77,7 +77,9 @@ static id<MTLCounterSampleBuffer> samples;
 static id<MTLComputePipelineState> tmp_pipe;
 static id<MTLTexture> t_hist[2];
 static int hist_cur;                    /* the history this view reads; the other is written */
-static int hist_fresh;                  /* the histories were just made: their texels are not a history */
+static rm_rtt_hist_t thist;             /* the last view encoded into it (slice 1b): a skipped one resets the next */
+static int tmp_refused;                 /* the pipeline could not be made: not tried again until the AO is closed */
+static unsigned long tmp_bad_w, tmp_bad_h;  /* a render size whose histories could not be made: not tried again */
 static rm_rtt_view_t tview;
 static int tview_set;
 
@@ -228,7 +230,9 @@ rmb_rtao_close(void)
 
 	ao_open = 0;
 	view_set = traced = 0;
-	tview_set = hist_fresh = hist_cur = 0;
+	tview_set = hist_cur = tmp_refused = 0;
+	tmp_bad_w = tmp_bad_h = 0;
+	rm_rtt_hist_reset(&thist);
 	ndone = 0;
 }
 
@@ -329,6 +333,13 @@ rmb_rtao_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
 			RMB_RTAO_SET(t_hist[1], nil);
 		}
 
+		rm_rtt_hist_reset(&thist);
+		return 0;
+	}
+
+	/* a failure is latched (review note N1): the pipeline until the AO is closed, the histories for that size */
+	if (tmp_refused || ((w == tmp_bad_w) && (h == tmp_bad_h)))
+	{
 		return 0;
 	}
 
@@ -343,6 +354,8 @@ rmb_rtao_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
 
 			if (!tmp_pipe)
 			{
+				tmp_refused = 1;
+				fprintf(stderr, "ref_metal: rt temporal: no AO accumulation pipeline\n");
 				return 0;
 			}
 		}
@@ -357,15 +370,19 @@ rmb_rtao_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
 			RMB_RTAO_SET(t_hist[0], [rmb_device newTextureWithDescriptor:d]);
 			RMB_RTAO_SET(t_hist[1], [rmb_device newTextureWithDescriptor:d]);
 
+			rm_rtt_hist_reset(&thist);
+
 			if (!t_hist[0] || !t_hist[1])
 			{
 				RMB_RTAO_SET(t_hist[0], nil);
 				RMB_RTAO_SET(t_hist[1], nil);
+				tmp_bad_w = w;
+				tmp_bad_h = h;
+				fprintf(stderr, "ref_metal: rt temporal %lux%lu: the AO's histories cannot be made\n", w, h);
 				return 0;
 			}
 
 			hist_cur = 0;
-			hist_fresh = 1;
 			fprintf(stderr, "ref_metal: rt temporal %lux%lu: %lu bytes allocated\n", w, h,
 					(unsigned long)(t_hist[0].allocatedSize + t_hist[1].allocatedSize));
 		}
@@ -593,11 +610,8 @@ rmb_rtao_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mater
 			{
 				rm_rtt_view_t tv = tview;
 
-				if (hist_fresh)
-				{
-					tv.reset |= RM_RTT_RESET_FIRST;
-				}
-
+				/* the view is encoded into the history here, and only here (slice 1b) */
+				tv.reset = rm_rtt_hist_take(&thist, &tview);
 				[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
 				[ce setComputePipelineState:tmp_pipe];
 				[ce setTexture:t_ao atIndex:4];
@@ -608,7 +622,6 @@ rmb_rtao_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mater
 				[ce dispatchThreads:MTLSizeMake(w, h, 1)
 						threadsPerThreadgroup:MTLSizeMake(RMB_RTAO_GROUP, RMB_RTAO_GROUP, 1)];
 				hist_cur = 1 - hist_cur;
-				hist_fresh = 0;
 			}
 		}
 

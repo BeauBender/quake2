@@ -38,6 +38,7 @@
 #include "header/rm_rt.h"
 #include "header/rm_rtscene.h"
 #include "header/rm_rtfx.h"
+#include "header/rm_rtaoscene.h"
 #include "header/rm_gbufscene.h"
 #include "header/rm_fxscene.h"
 #include "header/rm_rtgate.h"
@@ -1288,8 +1289,10 @@ R_RenderViewGB(refdef_t *fd, int stencil)
 	 * Each ray-traced effect's view, in the table's order (rm_rtfx.c,
 	 * TASK179): RT3's shadow rays and lights, traced at the resolve (with
 	 * them the dynamic lights leave the lightmaps), RT5's AO rays and RT4's
-	 * sun rays, traced there after them, RT6's reflections, after it
+	 * sun rays, traced there after them, RT6's reflections, after it;
+	 * RT7's one step for every effect's history, at the first that asks
 	 */
+	RM_RTT_BeginView();
 	rm_rtfx_view(&r_view);
 	R_MarkLeaves();
 	R_DrawWorld(&r_view);

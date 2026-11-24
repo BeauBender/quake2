@@ -525,7 +525,7 @@ struct rm_rtt_view
 	float alpha;
 	float move;
 	uint reset;
-	uint pad;
+	uint seq;
 };
 
 /*

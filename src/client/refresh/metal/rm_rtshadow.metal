@@ -43,6 +43,10 @@
  *   the four visibilities at 8 bits each and the four light indices with
  *   the in-range and shadowed flags; an RGBA16Float, the term; and the
  *   frame's counts;
+ * - rm_rts_temporal, rm_rts_trace with RT7's accumulation (TASK59 slice
+ *   1b), in its place while r_rt_temporal is above 0: the four
+ *   visibilities blended with their history before the term is made of
+ *   them, the history rejected when the pixel's light set changed;
  * - rm_fragment_resolve_rts, the resolve with the term: the stock
  *   product of rm_fragment_resolve (mtl_gb_resolve) with the light of a
  *   world pixel raised by the term (mtl_rts_light, R_BuildLightMap's
@@ -60,6 +64,7 @@ using namespace metal::raytracing;
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
 #include "common/mtl_rts_math.h"
+#include "common/mtl_rtt_math.h"
 
 /* the passes a ray takes through water and translucent surfaces before it counts as stopped */
 #define RM_RTS_LAYERS 8
@@ -294,32 +299,33 @@ rm_rts_gb_surface(uint gv, constant rm_rts_view &v, constant rm_rts_mapn &mapn, 
 	return true;
 }
 
-kernel void
-rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
-		texture2d<float, access::read> normal [[texture(1)]],
-		texture2d<uint, access::read> mat [[texture(2)]],
-		texture2d<uint, access::write> out [[texture(3)]],
-		texture2d<float, access::write> term [[texture(4)]],
-		constant rm_rts_view &v [[buffer(0)]],
-		constant rm_rts_light *lights [[buffer(1)]],
-		instance_acceleration_structure ias [[buffer(2)]],
-		device const uint *inst [[buffer(3)]],
-		device const uchar *transmit [[buffer(4)]],
-		constant uint &ntris [[buffer(5)]],
-		device atomic_uint *counts [[buffer(6)]],
-		device const uint *tri_surf [[buffer(7)]],
-		device const float4 *vecs [[buffer(8)]],
-		constant rm_rts_mapn &mapn [[buffer(9)]],
-		texture2d<uint, access::read> gsurf [[texture(5)]],
-		device const uint *vert_surf [[buffer(10)]],
-		device const float4 *ents [[buffer(11)]],
-		uint2 px [[thread_position_in_grid]])
+/*
+ * What the trace finds at a pixel (rm_rts_shade): the four lights that add
+ * the most (top) and their visibilities, every light's add, the flags and
+ * the rays it took; nl lights, 0 where nothing is traced.
+ */
+struct rm_rts_px
 {
-	const bool inside = (px.x < out.get_width()) && (px.y < out.get_height());
+	mtl_rts_top_t top;
+	uint flags, rays, primary, nl;
+	float vis[MTL_RTS_CAP];
+	float adds[MTL_RTS_MAX_LIGHTS];
+};
+
+/* the trace of pixel px, shared by rm_rts_trace and rm_rts_temporal */
+static rm_rts_px
+rm_rts_shade(bool inside, uint2 px, depth2d<float, access::read> depth, texture2d<float, access::read> normal,
+		texture2d<uint, access::read> mat, constant rm_rts_view &v, constant rm_rts_light *lights,
+		instance_acceleration_structure ias, device const uint *inst, device const uchar *transmit, uint ntris,
+		device const uint *tri_surf, device const float4 *vecs, constant rm_rts_mapn &mapn,
+		texture2d<uint, access::read> gsurf, device const uint *vert_surf, device const float4 *ents)
+{
+	rm_rts_px s;
 	mtl_rts_top_t top = mtl_rts_top_init();
 	uint flags = 0, rays = 0, primary = 0;
 	float vis[MTL_RTS_CAP] = { 1.0f, 1.0f, 1.0f, 1.0f };
-	float3 t = float3(0.0f);
+
+	s.nl = 0;
 
 	if (inside && (v.nlights > 0) && (mat.read(px).r == MTL_GB_MAT_WORLD))
 	{
@@ -332,7 +338,7 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 			const float3 p = rm_rts_position(v, px, d);
 			const uint nl = min(v.nlights, (uint)MTL_RTS_MAX_LIGHTS);
 			const float3 o = p + n * mtl_rts_bias(distance(p, v.eye.xyz), v.bias_k);
-			float adds[MTL_RTS_MAX_LIGHTS];
+			thread float *adds = s.adds;
 			bool slab = false, known = false;
 			uint raw = 0;
 			mtl_rts_xform_t xf;
@@ -490,33 +496,52 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 				}
 			}
 
-			/* the term: each light's add, times its visibility where traced (1 past the four) */
-			{
-				const uint pidx = mtl_rts_pack_idx(top, flags), pvis = mtl_rts_pack_vis(vis[0], vis[1], vis[2], vis[3]);
+			s.nl = nl;
+		}
+	}
 
-				for (uint i = 0; i < nl; i++)
-				{
-					if (adds[i] > 0.0f)
-					{
-						t += mtl_rts_light_vis(pidx, pvis, i) * adds[i] * lights[i].color.rgb;
-					}
-				}
-			}
+	s.top = top;
+	s.flags = flags;
+	s.rays = rays;
+	s.primary = primary;
+
+	for (int k = 0; k < MTL_RTS_CAP; k++)
+	{
+		s.vis[k] = vis[k];
+	}
+
+	return s;
+}
+
+/* the pixel's outputs from what the trace found (and RT7 blended): the packed words, the term, the counts */
+static void
+rm_rts_finish(thread const rm_rts_px &s, bool inside, uint2 px, constant rm_rts_light *lights,
+		texture2d<uint, access::write> out, texture2d<float, access::write> term, device atomic_uint *counts)
+{
+	const uint pidx = mtl_rts_pack_idx(s.top, s.flags), pvis = mtl_rts_pack_vis(s.vis[0], s.vis[1], s.vis[2], s.vis[3]);
+	float3 t = float3(0.0f);
+
+	/* the term: each light's add, times its visibility where traced (1 past the four) */
+	for (uint i = 0; i < s.nl; i++)
+	{
+		if (s.adds[i] > 0.0f)
+		{
+			t += mtl_rts_light_vis(pidx, pvis, i) * s.adds[i] * lights[i].color.rgb;
 		}
 	}
 
 	if (inside)
 	{
-		out.write(uint4(mtl_rts_pack_vis(vis[0], vis[1], vis[2], vis[3]), mtl_rts_pack_idx(top, flags), 0, 0), px);
+		out.write(uint4(pvis, pidx, 0, 0), px);
 		term.write(float4(t, 0.0f), px);
 	}
 
 	/* the frame's counts, one atomic per SIMD group (rays: the shadow rays and the primary ones) */
 	{
-		const uint c_in = simd_sum((flags & MTL_RTS_IN_RANGE) ? 1u : 0u);
-		const uint c_tr = simd_sum(rays ? 1u : 0u);
-		const uint c_sh = simd_sum((flags & MTL_RTS_SHADOWED) ? 1u : 0u);
-		const uint c_ry = simd_sum(rays + primary);
+		const uint c_in = simd_sum((s.flags & MTL_RTS_IN_RANGE) ? 1u : 0u);
+		const uint c_tr = simd_sum(s.rays ? 1u : 0u);
+		const uint c_sh = simd_sum((s.flags & MTL_RTS_SHADOWED) ? 1u : 0u);
+		const uint c_ry = simd_sum(s.rays + s.primary);
 
 		if (simd_is_first())
 		{
@@ -526,6 +551,118 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 			atomic_fetch_add_explicit(&counts[3], c_ry, memory_order_relaxed);
 		}
 	}
+}
+
+kernel void
+rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<uint, access::write> out [[texture(3)]],
+		texture2d<float, access::write> term [[texture(4)]],
+		constant rm_rts_view &v [[buffer(0)]],
+		constant rm_rts_light *lights [[buffer(1)]],
+		instance_acceleration_structure ias [[buffer(2)]],
+		device const uint *inst [[buffer(3)]],
+		device const uchar *transmit [[buffer(4)]],
+		constant uint &ntris [[buffer(5)]],
+		device atomic_uint *counts [[buffer(6)]],
+		device const uint *tri_surf [[buffer(7)]],
+		device const float4 *vecs [[buffer(8)]],
+		constant rm_rts_mapn &mapn [[buffer(9)]],
+		texture2d<uint, access::read> gsurf [[texture(5)]],
+		device const uint *vert_surf [[buffer(10)]],
+		device const float4 *ents [[buffer(11)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const bool inside = (px.x < out.get_width()) && (px.y < out.get_height());
+	const rm_rts_px s = rm_rts_shade(inside, px, depth, normal, mat, v, lights, ias, inst, transmit, ntris, tri_surf,
+			vecs, mapn, gsurf, vert_surf, ents);
+
+	rm_rts_finish(s, inside, px, lights, out, term, counts);
+}
+
+/* rm_rttemporal.h's rm_rtt_view_t (common/mtl_rtt_math.h's mtl_rtt_view_t) */
+struct rm_rtt_view
+{
+	float alpha;
+	float move;
+	uint reset;
+	uint seq;
+};
+
+/*
+ * RT7's accumulation of the shadows (TASK59 slice 1b): rm_rts_trace, with
+ * each of the four visibilities blended with its history before the term
+ * is made of them, read where the unjittered motion vector says the point
+ * was (mtl_rtt_reproject) and rejected by mtl_rtt_reject, the light set
+ * being the packed indices with the flags masked (mtl_rtt_lights). The
+ * history: an RGBA32Uint record (the light set, the distance from the
+ * eye's bits, the material id, the sample count's bits) and an
+ * RGBA16Float of the four visibilities.
+ */
+kernel void
+rm_rts_temporal(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<uint, access::write> out [[texture(3)]],
+		texture2d<float, access::write> term [[texture(4)]],
+		constant rm_rts_view &v [[buffer(0)]],
+		constant rm_rts_light *lights [[buffer(1)]],
+		instance_acceleration_structure ias [[buffer(2)]],
+		device const uint *inst [[buffer(3)]],
+		device const uchar *transmit [[buffer(4)]],
+		constant uint &ntris [[buffer(5)]],
+		device atomic_uint *counts [[buffer(6)]],
+		device const uint *tri_surf [[buffer(7)]],
+		device const float4 *vecs [[buffer(8)]],
+		constant rm_rts_mapn &mapn [[buffer(9)]],
+		texture2d<uint, access::read> gsurf [[texture(5)]],
+		device const uint *vert_surf [[buffer(10)]],
+		device const float4 *ents [[buffer(11)]],
+		texture2d<float, access::read> motion [[texture(6)]],
+		texture2d<uint, access::read> rec_in [[texture(7)]],
+		texture2d<float, access::read> vis_in [[texture(8)]],
+		texture2d<uint, access::write> rec_out [[texture(9)]],
+		texture2d<float, access::write> vis_out [[texture(10)]],
+		constant rm_rtt_view &t [[buffer(12)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint w = out.get_width(), hh = out.get_height();
+	const bool inside = (px.x < w) && (px.y < hh);
+	rm_rts_px s = rm_rts_shade(inside, px, depth, normal, mat, v, lights, ias, inst, transmit, ntris, tri_surf, vecs,
+			mapn, gsurf, vert_surf, ents);
+
+	if (inside)
+	{
+		const uint m = mat.read(px).r;
+		const float d = depth.read(px);
+		const float2 mv = motion.read(px).xy;
+		const mtl_rtt_px_t r = mtl_rtt_reproject(px.x, px.y, mv.x, mv.y, w, hh);
+		const uint4 hr = r.ok ? rec_in.read(uint2(r.x, r.y)) : uint4(0u);
+		const float4 hv = r.ok ? vis_in.read(uint2(r.x, r.y)) : float4(1.0f);
+		const float hd = as_type<float>(hr.y), hc = as_type<float>(hr.w);
+		const uint set = mtl_rtt_lights(mtl_rts_pack_idx(s.top, s.flags)), hset = hr.x, hm = hr.z;
+		float dist = 0.0f;
+
+		if (d < 1.0f)
+		{
+			dist = distance(rm_rts_position(v, px, d), v.eye.xyz);
+		}
+
+		{
+			const uint rej = mtl_rtt_reject(t.reset, r.ok, dist, hd, t.move, m, hm, set, hset, hc);
+
+			for (int k = 0; k < MTL_RTS_CAP; k++)
+			{
+				s.vis[k] = mtl_rtt_blend(rej, s.vis[k], hv[k], hc, t.alpha);
+			}
+
+			rec_out.write(uint4(set, as_type<uint>(dist), m, as_type<uint>(mtl_rtt_count(rej, hc))), px);
+			vis_out.write(float4(s.vis[0], s.vis[1], s.vis[2], s.vis[3]), px);
+		}
+	}
+
+	rm_rts_finish(s, inside, px, lights, out, term, counts);
 }
 
 /*
