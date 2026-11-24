@@ -1260,7 +1260,7 @@ is.
   reaches the pixel are summed, so an occluded light takes no place. A
   pixel with more than 32 lights in range of which fewer than 16 are seen
   is past the bound: the weaker lights are not tried, and the sum holds
-  the visible ones among the 32 strongest. The choice is made before the
+  the visible ones among the 32 strongest (of equal strengths the one kept is by position, not by index). The choice is made before the
   lightstyle (a switched-off light can still take a place) and is the
   same for the same view. Under every other presentation
   it does nothing at any value. Forced to `0` on a device without ray

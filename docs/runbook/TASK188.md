@@ -287,7 +287,7 @@ retained vertices (`rm_rtdirscene.c`, `RM_RTDir_Face`), its plane normal flipped
   The kernel's light loop calls `mtl_rtdir_reach` (the cheap test) and `mtl_rtdir_contrib` (the
   dispatch) for every record; a point or spot light takes slice 1's arithmetic unchanged.
 - **The bounds stay slice 1's** (until slice 3a): at most 16 lights a pixel (`mtl_rtdir_keep`, the same deterministic choice:
-  the strongest, ties to the first, summed in the buffer's order), one shadow ray each. A face's intensity
+  the strongest, summed in the buffer's order; of equal strengths which one is kept is by position, see the 32 below), one shadow ray each. A face's intensity
   is held to `16384^2` (`RM_RTDIR_MAX_EMIT_INTENSITY`), so it reaches no farther than the strongest point
   light, and at most 2048 faces are packed (`RM_RTDIR_MAX_EMITTERS`, the rest counted); the buffer holds
   at most `RM_RTDIR_MAX_UPLOAD` (4096) records. The shadow ray stops a unit short of the light, which is a
@@ -315,7 +315,7 @@ visibility (next paragraph).
 (`mtl_rtdir_keep`, before the colour and the lightstyle, which only enter the sum) and only then traces
 them, so an occluded light, or one whose style is dark, can hold a place while a visible one is dropped
 without a ray. The choice is deterministic (a light replaces the weakest kept one only when strictly
-stronger, ties going to the earlier light) and stable in time, so it does not flicker. Seams can show
+stronger, and it takes the place of the first weakest by position in the kept set, not of the lowest index) and stable in time, so it does not flicker. Seams can show
 where an occluded light's strength crosses a visible one's at neighbouring pixels: the sum steps by the
 difference between the two. How often the cap bites is in the lines below: on `base2` a mean of 40 % of
 the world pixels over 686 frames (6 % at frame 18, 34 % at frame 704), and about 30 to 37 % of the shadow
@@ -474,6 +474,11 @@ levels run to run. Now the frame numbered `f` takes the fit of frame `f - 3`, ex
   it clears them, and `rm_rtdir_fit_lag` (`rm_rtdir.c`) applies them when the slot's frame is exactly
   `f - RM_RTDIR_FIT_LAG` and after the map's reset; else the exposure in use is kept. `RM_RTDIR_FIT_LAG` is
   held to `RMB_FRAMES_IN_FLIGHT` by a `_Static_assert` in `rmb_rtdir.m`.
+- The assumption under "frame `f - 3` is complete" is that every begun frame signals the semaphore only when
+  its command buffer completes. In `rmb_encode.m` a begun frame whose target, depth target, command buffer
+  or ring buffer failed to allocate still counts as begun and signals at once, so after such a failure a frame
+  can begin while the frame three before it is in flight. It is an older gap (the ring buffer and the slot
+  clearing rest on the same rule), reachable only when an allocation fails, and not changed here.
 - A map's lights (`rmb_rtdir_set_lights`) start the fit again at 1, and its reset is the last frame encoded
   before them, so a frame of the old map still in its slot is not fitted from. So the first three frames of a
   map read 1, and a frame whose frame three before traced nothing (a menu, a skipped frame) keeps the
@@ -494,8 +499,12 @@ place a visible one went without (a seam where their strengths cross). Now (`rm_
 
 - Of the lights in range, the **N = 32** strongest are the pixel's candidates (`MTL_RTDIR_MAX_RAYS`;
   `mtl_rtdir_keep`, the same deterministic choice as before: a light replaces the weakest kept one only when
-  strictly stronger).
-- They are ranked strongest first, ties to the earlier light in the buffer (`mtl_rtdir_keep_rank`), and
+  strictly stronger, and it evicts the first weakest by position in the kept set, not the one with the
+  lowest index). So at equal strength the choice is deterministic but not "the earlier light": with lights
+  0 to 31 kept, light 0 at 1, light 1 at 0.5 and the rest at 5, light 32 at 1 takes light 1's place, and a
+  later light at 5 then evicts light 0, so light 32 is kept over the earlier light 0.
+- Once kept, they are ranked strongest first, ties to the earlier light in the buffer (`mtl_rtdir_keep_rank`; the
+  ranking is exact, which 32 are kept is as above), and
   traced in that order until 16 of them (`MTL_RTDIR_MAX_TRACED`) reach the pixel (`mtl_rtdir_walk`). Those 16
   are summed, in that order; an occluded light takes no place. So a pixel traces at most 32 shadow rays of at
   most 5 intersections each, whatever the map holds.
@@ -567,8 +576,13 @@ hash of the frames' sha256s:
 
 The `r_rt_stats 2` runs below (scratch copies of `rtprimary-world`, the stats changing no pixel) are a fourth
 run of each map and give the same hashes, `e6caa48ee013` and `0c678f1b2ea1`. So each record is one set of
-frames, byte for byte, and these hashes are the RT-primary pins from here (the scenarios README); a later
-slice that changes the look says so and records them again. The demo's own text in the `demo2.dm2` captures
+frames, byte for byte, and these hashes are the RT-primary pins from here (the scenarios README), provisional:
+the plan (`docs/plans/presentation-modes.md` section 6, item 4) pins a mode's scenarios at the commit where the
+owner accepts the look (PM11) and compares at 0.02 after it, so these are recorded again then; a later
+slice that changes the look says so and records them again. The harness cannot carry a scenario's threshold:
+`--threshold` and `--bad-threshold` are options of `pins.sh compare` (default 0.02 and 0.005, per run),
+and no scenario file sets one, so the 0.02 is the default of the compare and needs no change; these records
+are compared by hash for now, which is stricter. The demo's own text in the `demo2.dm2` captures
 2 to 6 is declared in `scripts/pins/text/demo2.dm2-every7.txt`, committed now (slice 2 used a scratch copy).
 The look itself is still the owner's to accept (PM11), from the `base2` capture 12 and the `waste2` captures
 61 and 67, which are for the owner and not in the repository.
