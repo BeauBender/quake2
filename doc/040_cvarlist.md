@@ -1029,7 +1029,10 @@ marked `(n/a)` and skipped.
   each side is rounded up, so the view is never scaled by more than that
   ratio; at `1` the view is drawn at full size and the scaler still runs. A
   negative value or one that is not a finite number counts as `0`. Saved
-  with the configuration; applies from the next frame.
+  with the configuration; applies from the next frame. A preset
+  (`rt_preset`) and the A/B toggle (`rt_ab`) hold it, so the settings
+  optimizer can try a size without writing it; a preset saved before it
+  was held loads with the current value kept.
 
 * **r_presentation**: The Metal renderer's presentation, the look of the
   whole picture, as one number; the video menu's "presentation" item,
@@ -1592,6 +1595,73 @@ is.
   number below it. Cheat-protected: reset to `0` in multiplayer. Applies
   from the next frame.
 
+
+### The settings optimizer
+
+* **metal_presented**: The frames the Metal renderer has presented since
+  it started (those without a drawable left out), written by the
+  renderer at the end of each frame only while `optimize_state` is not
+  `0`; the settings optimizer reads it after a trial's warm-up and at its
+  end for the presented rate. Not saved, and it means nothing outside a
+  run.
+
+* **metal_rt_cost**: The settings optimizer's cost hints, written by the
+  Metal renderer at the end of each frame only while `optimize_state` is
+  `2` (the probe): the mean GPU milliseconds per timed frame of each
+  traced effect since the probe began, as `shadows=<ms> sun=<ms> ao=<ms>
+  water=<ms>` (`0` for an effect that was not timed), or empty when no
+  effect was timed. At the probe's end the optimizer orders the
+  ray-traced effects dearest first by it, and uses its fixed order when
+  it is empty or does not parse. Not saved, and it means nothing outside
+  a run.
+
+* **optimize_demo**: The demo the settings optimizer (`optimize run`)
+  plays as its benchmark, a file under `demos/`. `demo1.dm2` (the
+  default) is the stock demo. The name is refused when it holds `..`, a
+  colon or a backslash, starts with a dot or a slash, holds a character
+  other than a letter, a digit, `_`, `-`, `.` or `/`, or does not end in
+  `.dm2`; it is handed to the demo playback as a name, never put into a
+  console line. Saved with the configuration.
+
+* **optimize_rank**: The settings optimizer's priorities, highest first,
+  as words separated by spaces: `resolution` (`r_metalfx_scale`), `rt`
+  (the ray-traced effects and their costs), `hdr` (`r_hdr`), `upscale`
+  (`r_metalfx` 1 and 2), `denoise` (`r_metalfx 3`) and `presentation`
+  (reported only: `r_presentation` needs a `vid_restart` and is never
+  turned). A word left out is not turned. The default is `rt resolution
+  hdr upscale denoise presentation`. A word given twice, or one not in
+  the list, refuses the run. Saved with the configuration.
+
+* **optimize_rounds**: The most timed trials in one `optimize run`, held
+  to 1 to 64. Default `10`. Saved with the configuration.
+
+* **optimize_seconds**: The most seconds one `optimize run` takes from
+  the command, the probe and every map load included, held to 10 to
+  3600. It is checked on every client frame, whether or not a frame is
+  drawn. The search starts no trial past it, and a run still on at it
+  stops with the best result so far. Default `300`. Saved with the
+  configuration.
+
+* **optimize_stat**: The statistic of a trial's frame times compared with
+  `optimize_target`: `mean`, or `p` and a percentile from 50 to 99. The
+  default, `p95`, leaves out the slowest frame in twenty, so one slow
+  frame does not decide a trial while the hitches still count. Saved with
+  the configuration.
+
+* **optimize_state**: The settings optimizer's run, read only: `0` no
+  run, `1` a timed trial, `2` the probe (the first, untimed play). The
+  console cannot set it. The Metal renderer reads it and changes nothing
+  while it is `0`.
+
+* **optimize_target**: The settings optimizer's target, a frame rate
+  (`60`, the default) or a frame time with an `ms` suffix (`12ms`). A
+  trial meets it when its `optimize_stat` is at most that frame time.
+  Never a gate: the result is a suggestion (decision 0014). Saved with
+  the configuration.
+
+* **optimize_warmup**: The seconds at the start of each trial whose
+  frames are left out of its statistic, held to 0 to 30. Default `2`.
+  Saved with the configuration.
 
 ## Gamepad
 

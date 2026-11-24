@@ -293,3 +293,106 @@ TEST(rtpreset_unset_cvars_stay_unset)
 	RTPreset_AB();
 	Restore();
 }
+
+/* TASK203: the 3D view's scale is a preset row; a preset without its line keeps the current value */
+TEST(rtpreset_scale_row)
+{
+	char path[MAX_OSPATH];
+	FILE *f;
+
+	const int last = VidRules_TuneNum() - 1;
+
+	/* a tuning row too: the scaler's rule, which needs no ray tracing, and Retro reads it out with the scaler */
+	T_CHECK(VidRules_IsPresetCvar("r_metalfx_scale"));
+	T_EQ_STR(VidRules_TuneControl(last)->cvar, "r_metalfx_scale");
+	T_EQ_INT(VidRules_TuneItem(last, "metal", 0, 0).enabled, 1);
+	T_EQ_INT(VidRules_TuneItem(last, "soft", 1, 1).enabled, 0);
+	T_CHECK(VidRules_TuneOverridden(last, "metal", 2) && !VidRules_TuneOverridden(last, "metal", 0));
+	FreshTable(1);
+	Cvar_Get("r_rt_ab", "", 0);
+	Cvar_Set("r_metalfx_scale", "0.75");
+	snprintf(path, sizeof(path), "%s/presets/rt-noscale.cfg", t_tmpdir());
+	FS_CreatePath(path);
+	f = fopen(path, "w");
+	RTP_REQUIRE(f != NULL);
+	fprintf(f, "// rt preset noscale\nset r_rt_ao \"1\"\n");
+	fclose(f);
+
+	T_EQ_INT(RTPreset_Load("noscale"), 1);
+	T_EQ_STR(Cvar_VariableString("r_metalfx_scale"), "0.75");
+	T_EQ_STR(Cvar_VariableString("r_rt_ao"), "1");
+	T_EQ_INT(RTPreset_LoadAB("noscale"), 1);
+	RTPreset_AB();
+	T_CHECK(strstr(Cvar_VariableString("r_rt_ab"), "r_metalfx_scale=0.75;") != NULL);
+	RTPreset_AB();
+	Restore();
+}
+
+/* TASK203: a given set published as the B side writes no tuning cvar, and the state comes back */
+TEST(rtpreset_publish_set_writes_no_tuning_cvar)
+{
+	static const char *const names[] = { "r_rt_ao", "r_metalfx_scale" };
+	static const char *const vals[] = { "0", "0.5" };
+	static const char *const bad_names[] = { "r_mode" };
+	static const char *const bad_vals[] = { "1;quit" };
+	const int n = VidRules_PresetNum();
+	char before[32][64];
+	rtpreset_state_t st;
+	const char *spec;
+
+	FreshTable(1);
+	Cvar_Get("r_rt_ab", "", 0);
+	Cvar_Set("r_rt_ao", "1");
+	Cvar_Set("r_rt_ao_range", "512");
+	for (int i = 0; i < n; i++)
+	{
+		snprintf(before[i], sizeof(before[i]), "%s", Cvar_VariableString(VidRules_PresetCvar(i, NULL)));
+	}
+
+	RTPreset_GetState(&st);
+	T_EQ_INT(RTPreset_PublishSet("optimize", names, vals, 2), 1);
+	T_EQ_STR(RTPreset_Side(), "B: preset optimize");
+	spec = Cvar_VariableString("r_rt_ab");
+	T_CHECK(strstr(spec, "r_rt_ao=0;") != NULL);
+	T_CHECK(strstr(spec, "r_metalfx_scale=0.5;") != NULL);
+	T_CHECK(strstr(spec, "r_rt_ao_range=512;") != NULL);   /* the other rows: A's values */
+
+	/* refused: a cvar that is no row, a value with a separator, a name that may not name a file */
+	T_EQ_INT(RTPreset_PublishSet("optimize", bad_names, vals, 1), 0);
+	T_EQ_INT(RTPreset_PublishSet("optimize", names, bad_vals, 1), 0);
+	T_EQ_INT(RTPreset_PublishSet("../x", names, vals, 2), 0);
+	T_CHECK(strstr(Cvar_VariableString("r_rt_ab"), "r_rt_ao=0;") != NULL);   /* a refusal leaves B as it was */
+
+	RTPreset_SetState(&st);
+	T_EQ_STR(RTPreset_Side(), "A: your settings");
+	T_EQ_STR(Cvar_VariableString("r_rt_ab"), "");
+	for (int i = 0; i < n; i++)
+	{
+		T_EQ_STR(Cvar_VariableString(VidRules_PresetCvar(i, NULL)), before[i]);
+	}
+	Restore();
+}
+
+/* TASK203: a given set saved as a preset, through rt_preset save's name check */
+TEST(rtpreset_save_set)
+{
+	static const char *const names[] = { "r_rt_ao", "r_metalfx_scale" };
+	static const char *const vals[] = { "0", "0.34" };
+
+	FreshTable(1);
+	Cvar_Set("r_rt_ao", "1");
+	Cvar_Set("r_rt_ao_range", "256");
+	T_EQ_INT(RTPreset_SaveSet("../escape", names, vals, 2), 0);
+	T_CONSOLE_HAS("refused");
+	T_EQ_INT(RTPreset_SaveSet("optimized", names, vals, 2), 1);
+	T_EQ_STR(Cvar_VariableString("r_rt_ao"), "1");   /* saving writes no cvar */
+	T_EQ_INT(RTPreset_SaveSet("optimized", names, vals, 2), 2);   /* replaced, and said so */
+	T_CONSOLE_HAS("replaced optimized");
+
+	FreshTable(1);
+	T_EQ_INT(RTPreset_Load("optimized"), 1);
+	T_EQ_STR(Cvar_VariableString("r_rt_ao"), "0");
+	T_EQ_STR(Cvar_VariableString("r_metalfx_scale"), "0.34");
+	T_EQ_STR(Cvar_VariableString("r_rt_ao_range"), "256");
+	Restore();
+}
