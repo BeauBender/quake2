@@ -39,4 +39,7 @@ void RM_RTD_MapLoaded(void);
 /* the light entities of the last map gathered, its model name in *map; NULL when none was gathered */
 const rm_rtl_lights_t *RM_RTD_Lights(const char **map);
 
+/* the emissive faces of the last map gathered, its model name in *map; NULL when none was gathered (TASK188 slice 2) */
+const rm_rtl_emitters_t *RM_RTD_Emitters(const char **map);
+
 #endif

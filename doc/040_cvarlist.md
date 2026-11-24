@@ -1244,9 +1244,18 @@ is.
   strongest, so it traces at most 16 shadow rays, and a light's
   intensity is held to `16384`, which already reaches every point of a
   map. A spotlight lights only inside its cone; one whose target
-  is missing lights nothing, as in qrad3. Under every other presentation
+  is missing lights nothing, as in qrad3. The world's emissive faces
+  (`SURF_LIGHT`) are area lights in the same sum, each face as qrad3's
+  surface light: `intensity / distance^2` times both cosines, the
+  intensity the texinfo value times the texture's reflectivity (qrad3's,
+  its mean colour doubled when dim; an unread texture lights nothing)
+  times the face's area times `0.4`, out of range where that falls under
+  one lightmap step, at most 2048 faces. The 16 a pixel takes are chosen
+  from the lights and the faces together, the same ones for the same
+  view. Under every other presentation
   it does nothing at any value. Forced to `0` on a device without ray
-  tracing. `r_rt_stats 1` prints the map's line of lights uploaded,
+  tracing. `r_rt_stats 1` prints the map's lines of lights and emissive
+  faces uploaded,
   `r_rt_stats 2` a line a frame (world pixels, lights in range, shadow
   rays, rays that reached their light, the pixels past the 16 lights,
   the exposure fit's sums and the exposure). Default `0`; not saved with

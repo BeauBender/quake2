@@ -371,6 +371,12 @@ pin_and(int a, int b)
 	"\t\tuint2 px [[thread_position_in_grid]])"
 
 /* the traced light, the whole statement */
+/* rm_rtdir_direct's parameter list, whole (TASK188 slice 2): no texture, no buffer but the scene's and the lights */
+#define DIRECT_PARAMS \
+	"(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_float3 *styles,\n" \
+	"\t\tinstance_acceleration_structure ias, device const uint *inst, device const uchar *tmat, uint ntris,\n" \
+	"\t\tdevice const rm_rtdir_light *lights, thread rm_rtdir_tally &t)"
+
 #define KERNEL_RAW \
 	"const float3 raw = world ? rm_rtdir_direct(v, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), styles, ias,\n" \
 	"\t\t\tinst, tmat, ntris, lights, t) : float3(0.0f);"
@@ -490,6 +496,28 @@ kernel_broken(const char *src)
 	if (!find_fn(text, "static float4\nrm_rtdir_out(", &out))
 	{
 		return "rm_rtdir_out is not defined once";
+	}
+
+	/*
+	 * TASK188 slice 2: the point lights and the emissive faces come in one
+	 * buffer, read twice (the loop's record and the kept one's), through the
+	 * reach test and the dispatch, and nothing else enters the trace: its
+	 * parameters are pinned whole.
+	 */
+	if ((r = pin_is(dir.params, dir.nparams, DIRECT_PARAMS)) != PIN_OK)
+	{
+		return PIN_WHY(r, "rm_rtdir_direct's parameters are not the view, the point, the styles, the scene and the lights");
+	}
+
+	r = pin_and(pin_count(dir.body, dir.nbody, "const rm_rtdir_light l = lights[i];", 1),
+		pin_count(dir.body, dir.nbody, "const rm_rtdir_light l = lights[k.i[j]];", 1));
+	r = pin_and(r, pin_count(dir.body, dir.nbody, "if (!mtl_rtdir_reach(l.pos.w, dist, l.spot.w))", 1));
+	r = pin_and(r, pin_count(dir.body, dir.nbody,
+		"s = mtl_rtdir_contrib(l.pos.w, dist, dot(n, dir), -dot(dir, l.spot.xyz), l.spot.w);", 1));
+
+	if ((r != PIN_OK) || (count_in(dir.body, dir.nbody, "lights[") != 2) || (words_in(dir.body, dir.nbody, "lights") != 2))
+	{
+		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN, "rm_rtdir_direct's lights are not the buffer's two reads, its reach and its dispatch");
 	}
 
 	/* the traced light: no texture in reach */
@@ -637,6 +665,14 @@ test_no_lightmap_kernel(void)
 			"\t\ttexture2d<float, access::write> light_out [[texture(6)]],\n"
 			"\t\ttexture2d<float, access::read> q [[texture(7)]],\n" },
 			{ "lights, t) : float3(0.0f);", "lights, t) + q.read(px).rgb : float3(0.0f);" } } },
+		{ "emit-buffer", { { "device const rm_rtdir_light *lights, thread rm_rtdir_tally &t)",
+			"device const rm_rtdir_light *lights, thread rm_rtdir_tally &t, device const float4 *lmc)" },
+			{ "\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]);\n",
+				"\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]) + lmc[0].rgb;\n" },
+			{ "lights, t) : float3(0.0f);", "lights, t, (device const float4 *)inst) : float3(0.0f);" } } },
+		{ "emit-third-read", { { "\tfor (uint j = 0; j < k.n; j++)\n",
+			"\traw += lights[v.nlights].color.rgb;\n\tfor (uint j = 0; j < k.n; j++)\n" } } },
+		{ "emit-bypass", { { "if (!mtl_rtdir_reach(l.pos.w, dist, l.spot.w))", "if (!(dist > 0.0f))" } } },
 		{ "lmx", { { "\t\ttexture2d<float, access::read> base [[texture(4)]],\n",
 			"\t\ttexture2d<float, access::read> base [[texture(4)]],\n"
 			"\t\ttexture2d<float, access::read> lmx [[texture(7)]],\n" },
@@ -749,7 +785,21 @@ binding_broken(const char *src)
 		r = pin_and(r, pin_count(tr.body, tr.nbody, host_bindings[i], 1));
 	}
 
-	return (r == PIN_OK) ? NULL : PIN_WHY(r, "the direct pass binds a texture beyond its known seven");
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "the direct pass binds a texture beyond its known seven");
+	}
+
+	/* TASK188 slice 2: the lights and the emissive faces in one buffer, bound once at the kernel's index 9 */
+	r = pin_and(pin_count(tr.body, tr.nbody, "[ce setBuffer:lights offset:0 atIndex:9];", 1),
+		pin_count(text, strlen(text), "(n > RM_RTDIR_MAX_UPLOAD)", 1));
+
+	if ((r != PIN_OK) || (count_in(text, strlen(text), "atIndex:9]") != 1))
+	{
+		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN, "the lights are not one buffer at index 9 of the upload's cap");
+	}
+
+	return NULL;
 }
 
 /* a file of the tree, read whole into buf; 0 when it cannot be */
@@ -790,6 +840,9 @@ test_host_binding(void)
 			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTexture:lm atIndex:7];\n" },
 		{ "new-binding-range", "\t\t[ce setTexture:t_light atIndex:6];\n",
 			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTextures:&lm withRange:NSMakeRange(7, 1)];\n" },
+		{ "lights-cap", "(n > RM_RTDIR_MAX_UPLOAD)", "(n > RM_RTL_MAX_LIGHTS)" },
+		{ "lights-twice", "\t\t[ce setBuffer:lights offset:0 atIndex:9];\n",
+			"\t\t[ce setBuffer:lights offset:0 atIndex:9];\n\t\t[ce setBuffer:counts offset:0 atIndex:9];\n" },
 	};
 	const char *why;
 	int i;

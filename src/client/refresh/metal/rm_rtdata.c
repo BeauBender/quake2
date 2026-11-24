@@ -27,8 +27,8 @@
  *   mtexinfo_t drops the texinfo value), each distinct texture's average
  *   colour read once from its .wal through the palette: the raw texel mean,
  *   0.5 for a texture that cannot be read. (qrad3 normalizes the mean and
- *   doubles it when small, and leaves an unread texture at 0; whether
- *   PM6 follows it is open.)
+ *   doubles it when small, and leaves an unread texture at 0; TASK188's
+ *   rm_rtdir_reflectivity takes qrad3's for the emitted light.)
  *   The texels the image loader had are freed after the upload, so this
  *   is one read of textures/<name>.wal a distinct emitter texture, the
  *   path Mod_LoadTexinfo already loads;
@@ -38,7 +38,7 @@
  *
  * None of it runs while r_rt_stats is 0 and the presentation is not
  * RT-primary (TASK188, whose direct light reads the lights through
- * RM_RTD_Lights): the stock path is untouched.
+ * RM_RTD_Lights and RM_RTD_Emitters): the stock path is untouched.
  *
  * =======================================================================
  */
@@ -125,6 +125,18 @@ RM_RTD_Lights(const char **map)
 
 	*map = rtd_map;
 	return &rtd_lights;
+}
+
+const rm_rtl_emitters_t *
+RM_RTD_Emitters(const char **map)
+{
+	if (!rtd_have)
+	{
+		return NULL;
+	}
+
+	*map = rtd_map;
+	return &rtd_emit;
 }
 
 void

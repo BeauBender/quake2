@@ -21,7 +21,8 @@
  * header/rm_rtdir.h, header/rm_rtdirscene.h): the cvars (r_rt_direct,
  * which the mode's overlay reads 1, r_rt_direct_exposure and the
  * development view r_rt_direct_show), the map's lights (TASK187's light
- * entities, rm_rtdata.c) uploaded once a map, the exposure fitted from
+ * entities, rm_rtdata.c) and after them its emissive faces as qrad3's
+ * surface lights (TASK188 slice 2), uploaded once a map, the exposure fitted from
  * each completed frame's sums, the frame's decision (with it the view
  * takes the G-buffer path), the view and the style table handed to the
  * back end before the raster, and the r_rt_stats lines. Under any
@@ -43,7 +44,8 @@ static cvar_t *r_rt_direct_exposure;
 static cvar_t *r_rt_direct_show;
 static cvar_t *r_rt_stats_ref;
 
-static rm_rtdir_light_t dir_lights[RM_RTL_MAX_LIGHTS];
+/* the map's lights, then its emissive faces (TASK188 slice 2) */
+static rm_rtdir_light_t dir_lights[RM_RTDIR_MAX_UPLOAD];
 static float dir_styles[3 * RM_RTL_STYLES];
 
 static int dir_device;              /* rmb_caps_t.raytracing */
@@ -53,7 +55,7 @@ static int dir_active;              /* this frame traces the direct light */
 static int dir_viewed;              /* RM_RTDir_View handed this frame's view to the back end */
 static const rm_world_t *dir_world; /* the map whose lights are uploaded */
 static char dir_map[MAX_QPATH];     /* its model name (a new map's buffers may take the old one's address) */
-static long dir_nlights;            /* the lights uploaded */
+static long dir_nlights;            /* the records uploaded: the lights, then the emissive faces */
 static float dir_fit;               /* the exposure fitted from the last completed frame, 1 at a map's first */
 static unsigned long dir_after;     /* the frame of the fit applied, or the last traced before the map's reset */
 static int dir_fixed;               /* the frame's exposure is r_rt_direct_exposure's */
@@ -88,14 +90,63 @@ RM_RTDir_Shutdown(void)
 	dir_nlights = 0;
 }
 
-/* the map's lights into the back end's buffer, once a map (and after the pass opened again) */
+/*
+ * rm_rtdir_pack_emitters's face: the polygon of face index face from the
+ * world's retained vertices (RM_BuildWorld's, one a polygon point, in the
+ * faces lump's order), its plane normal flipped for SURF_PLANEBACK. 0 for
+ * a face outside the world model's own range (a brush entity's: qrad3
+ * lets only the world's faces emit).
+ */
+static int
+RM_RTDir_Face(void *ctx, long face, rm_rtdir_face_t *out)
+{
+	const model_t *wm = ctx;
+	const msurface_t *fa;
+	long first = 0, num = wm->numsurfaces;
+	int k;
+
+	if (wm->numsubmodels > 0)
+	{
+		first = wm->submodels[0].firstmodelsurface;
+		num = wm->submodels[0].nummodelsurfaces;
+	}
+
+	if ((face < first) || (face >= first + num) || (face < 0) || (face >= wm->numsurfaces) || !wm->world ||
+		!wm->world->verts)
+	{
+		return 0;
+	}
+
+	fa = &wm->surfaces[face];
+
+	if (!fa->plane || ((unsigned long)fa->first_vertex + fa->num_vertices > (unsigned long)wm->world->size.verts))
+	{
+		return 0;
+	}
+
+	out->pts = wm->world->verts[fa->first_vertex].pos;
+	out->stride = (int)(sizeof(rm_wvert_t) / sizeof(float));
+	out->n = (int)fa->num_vertices;
+
+	for (k = 0; k < 3; k++)
+	{
+		out->normal[k] = (fa->flags & SURF_PLANEBACK) ? -fa->plane->normal[k] : fa->plane->normal[k];
+	}
+
+	return 1;
+}
+
+/* the map's lights and emissive faces into the back end's buffer, once a map (and after the pass opened again) */
 static void
 RM_RTDir_Lights(void)
 {
 	const model_t *wm = r_worldmodel;
 	const rm_rtl_lights_t *l;
-	const char *map = NULL;
+	const rm_rtl_emitters_t *e;
+	const char *map = NULL, *emap = NULL;
 	rm_rtdir_pack_t why;
+	rm_rtdir_emitpack_t ewhy;
+	long nemit = 0;
 
 	if ((dir_world == wm->world) && !strcmp(dir_map, wm->name))
 	{
@@ -108,15 +159,25 @@ RM_RTDir_Lights(void)
 	dir_fit = 1.0f;
 	dir_after = rmb_rtdir_last_frame();
 	memset(&why, 0, sizeof(why));
+	memset(&ewhy, 0, sizeof(ewhy));
 
 	/* the data gathered at this map's load, else none: a world with no light entity is lit by nothing here */
 	l = RM_RTD_Lights(&map);
 	dir_nlights = (l && map && !strcmp(map, wm->name)) ? rm_rtdir_pack(l, dir_lights, RM_RTL_MAX_LIGHTS, &why) : 0;
 
-	if (!rmb_rtdir_set_lights(dir_lights, dir_nlights))
+	/* the emissive faces after them, so a point light keeps its index */
+	e = RM_RTD_Emitters(&emap);
+
+	if (e && emap && !strcmp(emap, wm->name))
+	{
+		nemit = rm_rtdir_pack_emitters(e, RM_RTDir_Face, (void *)wm, dir_lights + dir_nlights, RM_RTDIR_MAX_EMITTERS,
+				&ewhy);
+	}
+
+	if (!rmb_rtdir_set_lights(dir_lights, dir_nlights + nemit))
 	{
 		R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: the lights cannot be uploaded; none\n", wm->name);
-		dir_nlights = 0;
+		dir_nlights = nemit = 0;
 	}
 
 	if (r_rt_stats_ref && r_rt_stats_ref->value)
@@ -124,12 +185,20 @@ RM_RTDir_Lights(void)
 		char line[RM_STATS_LINE];
 
 		why.kept = dir_nlights;
+		ewhy.kept = nemit;
 
 		if (rm_rtdir_map_format(wm->name, &why, line, sizeof(line)))
 		{
 			R_Printf(PRINT_ALL, "%s\n", line);
 		}
+
+		if (rm_rtdir_emit_format(wm->name, &ewhy, line, sizeof(line)))
+		{
+			R_Printf(PRINT_ALL, "%s\n", line);
+		}
 	}
+
+	dir_nlights += nemit;
 }
 
 /*
