@@ -2,9 +2,11 @@
 # tests/check-bounded-run.sh -- one bounded-run primitive in the harness
 # (FIX122, finding AR-14 of docs/reviews/2026-11-17-fork-window.md).
 #
-# bench_bounded and bench_stop_group (scripts/bench/core/common.sh) are
-# meant to be the only code under scripts/ that runs a command with a wall
-# time and stops it with TERM, a grace period and KILL. This check holds
+# bench_bounded and bench_stop_group, with its list form bench_stop_groups
+# (scripts/bench/core/common.sh), are meant to be the only code under
+# scripts/ that runs a command with a wall time and stops it with TERM, a
+# grace period and KILL; the gate's scheduler (scripts/gate-checks.sh)
+# stops its checks through bench_stop_groups (FIX186). This check holds
 # that in three parts:
 #
 #   guard   a lint over the common spellings, which a reviewer keeps
@@ -47,7 +49,20 @@
 # 9 as the last argument (a trailing comma allowed), through one level of
 # nested parentheses. A liveness test is kill -0, kill -s 0, kill -n 0,
 # kill -EXIT or kill -s EXIT on a shell line that is not a whole-line
-# comment. A marker followed by a quote is in a string, so it is no marker;
+# comment. A variable signal is kill, pkill or killall whose first argument
+# is a parameter or a command substitution ($ or a backtick), alone or
+# after - or -SIG (kill -"$sig", kill -$sig, kill -SIG"$sig", kill
+# -`cmd`, kill $flag "$p", kill "$@", and so kill "$pid" too), or with -s,
+# -n or --signal followed by one, a SIG prefix allowed (kill -s "$sig",
+# kill -s "${sig}", kill -s SIG"$sig", kill -s `cmd`), anywhere on a shell
+# line, comments included: the guard cannot trace what the variable holds,
+# and it can hold KILL (card FIX186, #699), so every one outside the
+# primitive is refused unless marked. The word is matched wherever it
+# stands, so a KILL passed to a function (bench_signal_group KILL "$p") is
+# refused too, and the primitive's one such line is marked. A group after --
+# (kill -s TERM -- "-$pgid") is no signal; pkill's -s (a session) is
+# refused too.
+# A marker followed by a quote is in a string, so it is no marker;
 # a marked line holds one kill, pkill, killall or timeout word or Python
 # KILL form at most.
 #
@@ -58,9 +73,8 @@
 # which line a reason is on: a KILL removed and another added elsewhere
 # with the same reason passes, and it is the reviewer who reads the diff.
 #
-# What the guard does not see, and so does not claim: a signal named
-# through a variable (kill -s "$sig", the shape of gate_end in
-# scripts/gate-checks.sh, card FIX186, #699); a liveness test through a
+# What the guard does not see, and so does not claim: a variable signal
+# to timeout (timeout -s "$sig"); a liveness test through a
 # function (bench_pid_alive); subprocess.run(..., timeout=), whose KILL is
 # inside Python (rtvar.py, upscale-report/report.py and mfx.py use it);
 # other languages (Perl, Ruby); Python inside a shell -c string; eval'd or
@@ -99,9 +113,10 @@ MARKED='
 scripts/bench/core/common.sh the primitive: bench_pid_alive
 scripts/bench/core/common.sh the primitive: the group a spawn made
 scripts/bench/core/common.sh the primitive: a group still has a member
+scripts/bench/core/common.sh the primitive: bench_signal_group, to the group
+scripts/bench/core/common.sh the primitive: bench_signal_group, to the pid
+scripts/bench/core/common.sh the primitive: bench_stop_groups, the KILL after the grace
 scripts/bench/core/lock.sh the lock: its holder group still has a member; it signals none
-scripts/gate-checks.sh gate_reap: the gate scheduler polls its checks; it signals none
-scripts/gate-checks.sh gate_alive: the group test of gate_end, card FIX186
 scripts/test.sh the gate parent watch: it polls the caller, and sends TERM only
 scripts/ios-sim.sh selftest: the fake xcrun terminate, only the app it started
 scripts/ios-sim.sh selftest: ends the fake hung call it checked
@@ -115,6 +130,7 @@ scripts/ios-sim.sh selftest: ends the fake hung launcher read it checked
 scripts/ios-sim.sh selftest: a hung launcher read ps cannot name
 scripts/ios-sim.sh selftest: ends the decoy it checked
 scripts/ios-sim.sh selftest: a decoy ps cannot name
+scripts/ios-sim.sh selftest: the term mutant signals the decoy the fake started
 scripts/ios-sim.sh selftest: waits for a wrongly sent signal to show
 scripts/ios-sim.sh selftest: the stale pid must still run
 scripts/ios-sim.sh selftest: ends its own sleep
@@ -158,6 +174,12 @@ scan_file() {
 		TOSRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-s" S "*(" K "|" N9 ")|--s(i(g(n(a(l)?)?)?)?)?" S "*=?" S "*(" K "|" N9 "))([^a-z0-9_]|$)"
 		TOKRE = "(^|[^a-z0-9_.-])timeout" S "+[^;&|]*(-k|--k(i(l(l(-(a(f(t(e(r)?)?)?)?)?)?)?)?)?)([^a-z_-]|$)"
 		ZERORE = "(^|[^a-z0-9_.-])kill[ \t]+(-0+|-[sn][ \t]*0+|--signal[ \t=]*0+|-(sig)?exit|-s[ \t]*(sig)?exit)([^a-z0-9_]|$)"
+		# a signal through a variable or a command substitution ($ or a
+		# backtick, a SIG prefix allowed): the first argument -$v, -sig$v
+		# or $v itself, or -s, -n or --signal and $v anywhere on the line
+		# (after -- it is a group, not this)
+		VARSIG1 = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+(-(sig)?)?[$`]"
+		VARSIG2 = "(^|[^a-z0-9_.-])(kill|pkill|killall)" S "+([^;&|]*" S ")?(-[sn]" S "*|--signal" S "*=?" S "*)(sig)?[$`]"
 		ANYRE = "(^|[^a-z0-9_.-])(kill|pkill|killall)([^a-z0-9_-]|$)"
 		WORDRE = "(^|[^a-z0-9_.-])(kill|pkill|killall|timeout)([^a-z0-9_-]|$)"
 		PY1 = "(^|[^a-z0-9_])sigkill([^a-z0-9_]|$)"
@@ -212,6 +234,7 @@ scan_file() {
 		if (lc ~ KILLRE || lc ~ TOSRE || lc ~ TOKRE) say("a KILL outside the bounded-run primitive", ln)
 		else if (py && (lc ~ PY1 || lc ~ PY2 || lc ~ PY3 || lc ~ PY4 || lc ~ PY5))
 			say("a KILL outside the bounded-run primitive", ln)
+		if (!py && (lc ~ VARSIG1 || lc ~ VARSIG2)) say("a signal named through a variable outside the bounded-run primitive (it can hold KILL)", ln)
 		if (!py && line !~ /^[ \t]*#/ && lc ~ ZERORE) say("a kill -0 liveness test outside the bounded-run primitive (the shape of a polling loop)", ln)
 		if (caller && lc ~ ANYRE) say("a caller that sends a signal itself, not through the primitive", ln)
 		if (mk && !hit) printf "%s:%d: a bounded-run marker on a line no rule refuses\n", rel, ln
@@ -747,6 +770,45 @@ os.kill(os.getpid(),
     # why
     9)
 '
+# FIX186: a TERM-then-KILL through a variable signal, in each spelling
+V='a signal named through a variable'
+mutant varsig-s-quoted scripts/gate-checks.sh "$V" '' '
+for sig in TERM KILL; do kill -s "$sig" -- "-$g"; sleep 1; done
+'
+mutant varsig-s-braced scripts/gate-checks.sh "$V" '' '
+for sig in TERM KILL; do kill -s "${sig}" "$p"; sleep 1; done
+'
+mutant varsig-dash-quoted scripts/gate-checks.sh "$V" '' '
+for sig in TERM KILL; do kill -"$sig" "$p"; sleep 1; done
+'
+mutant varsig-dash-bare scripts/gate-checks.sh "$V" '' '
+for sig in TERM KILL; do kill -$sig "$p"; sleep 1; done
+'
+mutant varsig-signal-long scripts/test.sh "$V" '' '
+kill --signal="$sig" "$p"
+'
+# (the SIG prefix, a backtick, and a first argument that is the variable)
+mutant varsig-sig-quoted scripts/gate-checks.sh "$V" '' '
+kill -SIG"$sig" "$p"
+'
+mutant varsig-sig-bare scripts/gate-checks.sh "$V" '' '
+kill -SIG$sig "$p"
+'
+mutant varsig-s-sig-quoted scripts/bench/core/lock.sh "$V" '' '
+kill -s SIG"$sig" "$p"
+'
+mutant varsig-backtick scripts/gate-checks.sh "$V" '' '
+kill -`printf KILL` "$p"
+'
+mutant varsig-s-backtick scripts/test.sh "$V" '' '
+kill -s `printf KILL` "$p"
+'
+mutant varsig-first-flag scripts/gate-checks.sh "$V" '' '
+kill $flag "$p"
+'
+mutant varsig-first-all scripts/bench/core/lock.sh "$V" '' '
+kill "$@"
+'
 # the pinned reasons: a marker is a line whose reason the check pins, once
 mutant marker-in-zero-file scripts/pins.sh 'does not pin: borrowed' '' '
 kill -9 "$$" # bounded-run: allowed: borrowed
@@ -754,16 +816,16 @@ kill -9 "$$" # bounded-run: allowed: borrowed
 mutant marker-one-more scripts/gate-checks.sh 'does not pin: one more' '' '
 kill -0 "$$" # bounded-run: allowed: one more
 '
-mutant marker-reason-twice scripts/gate-checks.sh 'is on 2 lines' '' '
-kill -0 "$$" # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186
+mutant marker-reason-twice scripts/bench/core/lock.sh 'is on 2 lines' '' '
+kill -0 "$$" # bounded-run: allowed: the lock: its holder group still has a member; it signals none
 '
-mutant marker-one-less scripts/gate-checks.sh 'and no line carries it' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' ''
-mutant marker-moved scripts/gate-checks.sh 'no rule refuses' ' # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186' '' 'gate_alive() {' 'gate_alive() { # bounded-run: allowed: gate_alive: the group test of gate_end, card FIX186'
+mutant marker-one-less scripts/bench/core/lock.sh 'and no line carries it' ' # bounded-run: allowed: the lock: its holder group still has a member; it signals none' ''
+mutant marker-moved scripts/bench/core/lock.sh 'no rule refuses' ' # bounded-run: allowed: the lock: its holder group still has a member; it signals none' '' '	bench_pid_alive "$_lv_c" && return 0' '	bench_pid_alive "$_lv_c" && return 0 # bounded-run: allowed: the lock: its holder group still has a member; it signals none'
 mutant marker-joined scripts/ios-device.sh 'a marker covers one' 'if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal
 				kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: ends the script under test that hung' 'if kill -0 "$spid" 2>/dev/null; then kill -9 "$spid" 2>/dev/null # bounded-run: allowed: selftest: the script under test outlived the signal' '' '
 kill -9 "$$" # bounded-run: allowed: selftest: ends the script under test that hung
 '
-mutant marker-appended scripts/gate-checks.sh 'a marker covers one' 'if kill -0 -- "-$_gag" 2> /dev/null; then return 0; fi #' 'if kill -0 -- "-$_gag" 2> /dev/null; then kill -9 -- "-$_gag"; return 0; fi #'
+mutant marker-appended scripts/bench/core/lock.sh 'a marker covers one' 'kill -0 -- "-$_lv_c" 2> /dev/null #' 'kill -0 -- "-$_lv_c" 2> /dev/null && kill -9 -- "-$_lv_c" #'
 mutant marker-in-echo scripts/gate-checks.sh 'followed by a quote' 'gate_end() {' 'gate_end() {
 	kill -9 "$	" 2>/dev/null; echo "# bounded-run: allowed: x"'
 # the source rule
