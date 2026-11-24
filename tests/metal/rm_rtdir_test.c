@@ -392,6 +392,35 @@ static const char *const kernel_defines[] = {
 	"#define RM_RTDIR_C_LIT_HI 9\n", "#define RM_RTDIR_C_CAPPED 10\n",
 };
 
+/*
+ * TASK188 slice 3: rm_rtdir_direct's walk over its candidates, whole: traced
+ * strongest first under mtl_rtdir_walk's bound, one shadow ray each, and a
+ * light counted toward the MTL_RTDIR_MAX_TRACED only once its ray reached it
+ */
+#define KERNEL_WALK \
+	"\tfor (uint j = 0; mtl_rtdir_walk(j, k.n, seen); j++)\n" \
+	"\t{\n" \
+	"\t\tconst rm_rtdir_light l = lights[k.i[j]];\n" \
+	"\n" \
+	"\t\tif (v.show != 3u)\n" \
+	"\t\t{\n" \
+	"\t\t\tconst float3 to = l.pos.xyz - o;\n" \
+	"\t\t\tconst float len = length(to);\n" \
+	"\n" \
+	"\t\t\tt.rays++;\n" \
+	"\n" \
+	"\t\t\tif ((len > 1.0f) && (rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris) < 0.5f))\n" \
+	"\t\t\t{\n" \
+	"\t\t\t\tcontinue;\n" \
+	"\t\t\t}\n" \
+	"\n" \
+	"\t\t\tt.lit++;\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tseen++;\n" \
+	"\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]);\n" \
+	"\t}\n"
+
 #define KERNEL_WORLD_BRANCH \
 	"\t\tif (world)\n" \
 	"\t\t{\n" \
@@ -518,6 +547,24 @@ kernel_broken(const char *src)
 	if ((r != PIN_OK) || (count_in(dir.body, dir.nbody, "lights[") != 2) || (words_in(dir.body, dir.nbody, "lights") != 2))
 	{
 		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN, "rm_rtdir_direct's lights are not the buffer's two reads, its reach and its dispatch");
+	}
+
+	/*
+	 * TASK188 slice 3: the candidates kept once each in the first loop and
+	 * ranked; the walk whole; the one shadow ray of the file inside it (no
+	 * ray before the bound); the cap from the walk's count.
+	 */
+	r = pin_and(pin_count(dir.body, dir.nbody, KERNEL_WALK, 1),
+		pin_count(dir.body, dir.nbody, "k = mtl_rtdir_keep(k, i, s);", 1));
+	r = pin_and(r, pin_count(dir.body, dir.nbody, "k = mtl_rtdir_keep_rank(k);", 1));
+	r = pin_and(r, pin_count(dir.body, dir.nbody, "t.capped = mtl_rtdir_capped(k, seen);", 1));
+
+	if ((r != PIN_OK) || (count_in(text, strlen(text), "rm_rtdir_seen(") != 2) ||
+		(count_in(dir.body, dir.nbody, "mtl_rtdir_keep(") != 1) ||
+		(count_in(dir.body, dir.nbody, "mtl_rtdir_keep_rank(") != 1) || (words_in(dir.body, dir.nbody, "seen") != 4))
+	{
+		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN,
+			"rm_rtdir_direct's walk is not its candidates traced strongest first, one ray each, under the bound");
 	}
 
 	/* the traced light: no texture in reach */
@@ -670,9 +717,16 @@ test_no_lightmap_kernel(void)
 			{ "\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]);\n",
 				"\t\traw += k.s[j] * l.color.rgb * float3(styles[(uint)l.color.w & 255u]) + lmc[0].rgb;\n" },
 			{ "lights, t) : float3(0.0f);", "lights, t, (device const float4 *)inst) : float3(0.0f);" } } },
-		{ "emit-third-read", { { "\tfor (uint j = 0; j < k.n; j++)\n",
-			"\traw += lights[v.nlights].color.rgb;\n\tfor (uint j = 0; j < k.n; j++)\n" } } },
+		{ "emit-third-read", { { "\tfor (uint j = 0; mtl_rtdir_walk(j, k.n, seen); j++)\n",
+			"\traw += lights[v.nlights].color.rgb;\n\tfor (uint j = 0; mtl_rtdir_walk(j, k.n, seen); j++)\n" } } },
 		{ "emit-bypass", { { "if (!mtl_rtdir_reach(l.pos.w, dist, l.spot.w))", "if (!(dist > 0.0f))" } } },
+		{ "trace-in-range", { { "\t\tt.inrange++;\n",
+			"\t\tif (rm_rtdir_seen(ray(o, dir, 0.0f, dist - 1.0f), ias, inst, tmat, ntris) < 0.5f)\n"
+			"\t\t{\n\t\t\tcontinue;\n\t\t}\n\n\t\tt.inrange++;\n" } } },
+		{ "walk-unbounded", { { "mtl_rtdir_walk(j, k.n, seen)", "(j < k.n)" } } },
+		{ "seen-before-ray", { { "\t\tseen++;\n\t\traw +=", "\t\traw +=" },
+			{ "\t\tif (v.show != 3u)\n", "\t\tseen++;\n\n\t\tif (v.show != 3u)\n" } } },
+		{ "vis-ignored", { { "ias, inst, tmat, ntris) < 0.5f))", "ias, inst, tmat, ntris) < -1.0f))" } } },
 		{ "lmx", { { "\t\ttexture2d<float, access::read> base [[texture(4)]],\n",
 			"\t\ttexture2d<float, access::read> base [[texture(4)]],\n"
 			"\t\ttexture2d<float, access::read> lmx [[texture(7)]],\n" },
@@ -1392,7 +1446,8 @@ test_view_lines(void)
 	s.ms = -1;
 	CHECK(rm_rtdir_stats_format(&s, 256, 0, line, sizeof(line)) == 1);
 	CHECK(!strcmp(line, "ref_metal: rt direct: frame 9: 100 pixels, 50 world, 256 lights, 200 in range, 200 shadow rays "
-			"(4.00 a world pixel), 150 lit, 4 pixels past 16 lights, fit 10/5 over 3 samples, exposure 2.0000 (fit), - ms"));
+			"(4.00 a world pixel), 150 lit, 4 pixels past the bound (32 rays, 16 lights), fit 10/5 over 3 samples, "
+			"exposure 2.0000 (fit), - ms"));
 	/* the GPU's 64-bit counts: past 32 bits they print whole */
 	s.inrange = 5000000000ULL;
 	CHECK(rm_rtdir_stats_format(&s, 256, 0, line, sizeof(line)) == 1 && strstr(line, " 5000000000 in range,"));

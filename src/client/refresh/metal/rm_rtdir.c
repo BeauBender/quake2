@@ -360,11 +360,9 @@ rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long samples,
 float
 rm_rtdir_fit_lag(const rm_rtdir_stats_t *lagged, unsigned long frame, unsigned long reset, float prev)
 {
-	/* STUB (red): any record given */
-	(void)frame;
-	(void)reset;
-
-	if (!lagged)
+	/* only the frame exactly the lag behind, of this map: a slot whose last frame did not trace holds an older one */
+	if (!lagged || (frame <= RM_RTDIR_FIT_LAG) || (lagged->frame != frame - RM_RTDIR_FIT_LAG) ||
+		(lagged->frame <= reset))
 	{
 		return prev;
 	}
@@ -447,10 +445,10 @@ rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *b
 	}
 
 	return rtdir_put(snprintf(buf, len, "ref_metal: rt direct: frame %lu: %lu pixels, %lu world, %d lights, "
-			"%llu in range, %llu shadow rays (%.2f a world pixel), %llu lit, %lu pixels past %d lights, "
+			"%llu in range, %llu shadow rays (%.2f a world pixel), %llu lit, %lu pixels past the bound (%d rays, %d lights), "
 			"fit %lu/%lu over %lu samples, exposure %.4f (%s), %s ms", s->frame, s->pixels, s->world, nlights,
 			s->inrange, s->rays, s->world ? (double)s->rays / (double)s->world : 0.0, s->lit, s->capped,
-			MTL_RTDIR_MAX_TRACED, s->fit_lm, s->fit_raw, s->fit_n, (double)s->exposure,
+			MTL_RTDIR_MAX_RAYS, MTL_RTDIR_MAX_TRACED, s->fit_lm, s->fit_raw, s->fit_n, (double)s->exposure,
 			fixed ? "r_rt_direct_exposure" : "fit", ms), buf, len);
 }
 

@@ -282,9 +282,9 @@ typedef struct
 	unsigned long pixels;       /* pixels the kernel ran on */
 	unsigned long world;        /* lightmapped world pixels with a depth and a normal */
 	unsigned long long inrange; /* lights in range and facing, summed over those pixels (64-bit on the GPU too) */
-	unsigned long long rays;    /* shadow rays traced: one each light a pixel takes (0 under r_rt_direct_show 3) */
+	unsigned long long rays;    /* shadow rays traced: one each candidate a pixel tries (0 under r_rt_direct_show 3) */
 	unsigned long long lit;     /* rays that reached their light */
-	unsigned long capped;       /* pixels with more than MTL_RTDIR_MAX_TRACED lights in range: the strongest taken */
+	unsigned long capped;       /* pixels past the bound (mtl_rtdir_capped): fewer lights seen than the cap, more in range */
 	unsigned long fit_lm;       /* the fit's sums and samples (rm_rtdir_fit) */
 	unsigned long fit_raw;
 	unsigned long fit_n;

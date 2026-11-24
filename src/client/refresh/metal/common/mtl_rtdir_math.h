@@ -89,7 +89,7 @@
  * (mtl_rtdir_keep), each ray of at most MTL_RTDIR_LAYERS + 1
  * intersections, whatever the map holds.
  */
-#define MTL_RTDIR_MAX_RAYS 16
+#define MTL_RTDIR_MAX_RAYS 32
 
 /* a pixel's candidates (mtl_rtdir_keep): n of them, their indices in the light buffer and their contributions */
 typedef struct
@@ -138,7 +138,11 @@ mtl_rtdir_keep(mtl_rtdir_keep_t k, unsigned i, float s)
 	return k;
 }
 
-/* STUB (red): k in the buffer's order */
+/*
+ * k's candidates ranked, strongest first: the larger contribution first,
+ * the earlier light in the buffer first on a tie, so the order is the same
+ * whatever order the lights were kept in. The kernel traces them in it.
+ */
 static inline mtl_rtdir_keep_t
 mtl_rtdir_keep_rank(mtl_rtdir_keep_t k)
 {
@@ -146,7 +150,7 @@ mtl_rtdir_keep_rank(mtl_rtdir_keep_t k)
 
 	for (a = 1; a < k.n; a++)
 	{
-		for (b = a; (b > 0) && (k.i[b - 1] > k.i[b]); b--)
+		for (b = a; (b > 0) && ((k.s[b - 1] < k.s[b]) || ((k.s[b - 1] == k.s[b]) && (k.i[b - 1] > k.i[b]))); b--)
 		{
 			const unsigned ti = k.i[b];
 			const float ts = k.s[b];
@@ -161,20 +165,31 @@ mtl_rtdir_keep_rank(mtl_rtdir_keep_t k)
 	return k;
 }
 
-/* STUB (red): every candidate */
+/*
+ * The kernel's walk over the ranked candidates: 1 while candidate j is to
+ * be traced, that is while j is a candidate (below n, and below
+ * MTL_RTDIR_MAX_RAYS whatever n says) and fewer than MTL_RTDIR_MAX_TRACED
+ * of those before it reached the pixel (seen). So a pixel traces at most
+ * MTL_RTDIR_MAX_RAYS shadow rays and sums at most MTL_RTDIR_MAX_TRACED
+ * lights, the strongest of its candidates whose ray reaches it.
+ */
 static inline int
 mtl_rtdir_walk(unsigned j, unsigned n, unsigned seen)
 {
-	(void)seen;
-	return (j < n) ? 1 : 0;
+	return ((j < n) && (j < MTL_RTDIR_MAX_RAYS) && (seen < MTL_RTDIR_MAX_TRACED)) ? 1 : 0;
 }
 
-/* STUB (red): more lights in range than candidates */
+/*
+ * 1 for a pixel past the bound: more lights in range than its
+ * MTL_RTDIR_MAX_RAYS candidates (k.capped), and fewer than
+ * MTL_RTDIR_MAX_TRACED of these reached it (seen), so a weaker light left
+ * out might have been seen. A pixel that found its MTL_RTDIR_MAX_TRACED
+ * is not capped, however many lights were in range.
+ */
 static inline unsigned
 mtl_rtdir_capped(mtl_rtdir_keep_t k, unsigned seen)
 {
-	(void)seen;
-	return k.capped;
+	return (k.capped && (seen < MTL_RTDIR_MAX_TRACED)) ? 1u : 0u;
 }
 
 /*
