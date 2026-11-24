@@ -930,6 +930,114 @@ test_host_binding(void)
 	CHECK(why && strstr(why, "reformatted? the pin is exact"));
 }
 
+/*
+ * TASK188 slice 3, the back end's half of the fixed lag, in rmb_rtdir.m's
+ * text (src) with its comments taken out. In rmb_rtdir_trace the fit is
+ * taken once from the slot's sums, and before the statement that clears
+ * them; the view's exposure is replaced by it only when it is not above 0
+ * (r_rt_direct_exposure's value is kept); and rmb_rtdir_set_lights sets
+ * fit_reset to the last frame, once. NULL when it holds, else the rule
+ * broken.
+ */
+static const char *
+fit_lag_broken(const char *src)
+{
+	static char text[65536], sq[65536];
+	const char *fitp, *clearp;
+	fn_t tr, sl;
+
+	strip_comments(src, text, sizeof(text));
+
+	if (!find_fn(text, "static id<MTLTexture>\nrmb_rtdir_trace(", &tr) || !find_fn(text, "int\nrmb_rtdir_set_lights(", &sl))
+	{
+		return "rmb_rtdir_trace or rmb_rtdir_set_lights is not defined once";
+	}
+
+	if (pin_count(tr.body, tr.nbody, "fit = rm_rtdir_fit_lag(&lag, fno, fit_reset, fit);", 1) != PIN_OK)
+	{
+		return "the lagged fit is not taken once in rmb_rtdir_trace";
+	}
+
+	fitp = strstr(tr.body, "fit = rm_rtdir_fit_lag(");
+	clearp = strstr(tr.body, "memset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS");
+
+	if (!fitp || !clearp || (fitp > clearp))
+	{
+		return "the slot's sums are not read before they are cleared";
+	}
+
+	squeeze(tr.body, tr.nbody, sq, sizeof(sq));
+
+	if ((count_in(sq, strlen(sq), "view.exposure=fit;") != 1) ||
+		(count_in(sq, strlen(sq), "if(!(view.exposure>0.0f)){view.exposure=fit;}") != 1))
+	{
+		return "the view's exposure is not replaced by the fit only when it is not above 0";
+	}
+
+	if ((count_in(text, strlen(text), "fit_reset = last_frame;") != 1) || (count_in(sl.body, sl.nbody, "fit_reset = last_frame;") != 1))
+	{
+		return "fit_reset is not set to last_frame once, in rmb_rtdir_set_lights";
+	}
+
+	return NULL;
+}
+
+/* the fit-lag pin holds on the real file, and each mutant of it is refused */
+static void
+test_fit_lag_binding(void)
+{
+	static const char clear[] = "\t\tmemset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));\n";
+	static char src[65536], m[65536 + 1024], m2[65536 + 1024];
+	static const struct
+	{
+		const char *name, *from, *to, *from2, *to2;
+	} mutants[] = {
+		/* the clear before the fit (the two statements swapped): it reads sums of 0 and the exposure stays 1 */
+		{ "memset-first", "\t\t{\n\t\t\tconst uint32_t *c = (const uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS;",
+			"\t\tmemset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));\n"
+			"\t\t{\n\t\t\tconst uint32_t *c = (const uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS;",
+			"\t\t}\n\n\t\tmemset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));\n",
+			"\t\t}\n" },
+		/* the map's reset dropped: a new map is fitted from the old map's frame still in its slot */
+		{ "reset-dropped", "\tfit_reset = last_frame;\n", "", NULL, NULL },
+		/* the fit always replaces r_rt_direct_exposure's value */
+		{ "exposure-always", "if (!(view.exposure > 0.0f))", "if (1)", NULL, NULL },
+	};
+	const char *why;
+	int i;
+
+	CHECK(read_file("src/client/refresh/metal/rmb_rtdir.m", src, sizeof(src)));
+	CHECK(strstr(src, clear) != NULL);
+	why = fit_lag_broken(src);
+
+	if (why)
+	{
+		printf("rmb_rtdir.m: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+
+	for (i = 0; i < (int)(sizeof(mutants) / sizeof(mutants[0])); i++)
+	{
+		int applied = mutate(src, mutants[i].from, mutants[i].to, m, sizeof(m));
+
+		if (applied && mutants[i].from2)
+		{
+			applied = mutate(m, mutants[i].from2, mutants[i].to2, m2, sizeof(m2));
+			memcpy(m, m2, sizeof(m));
+		}
+
+		why = applied ? fit_lag_broken(m) : NULL;
+
+		if (!applied || !why)
+		{
+			printf("fit-lag mutant %s: %s\n", mutants[i].name, applied ? "passes the fit-lag check" : "does not apply");
+		}
+
+		CHECK(applied && (why != NULL));
+	}
+}
+
 /* the fit's samples: the channel mean, clamped to QMAX, in 1/64 steps; sums exact whatever the order */
 static void
 test_q(void)
@@ -1021,45 +1129,31 @@ test_fit_lag(void)
 
 /*
  * The same: a simulated back end of RM_RTDIR_FIT_LAG slots over 200
- * frames, whose frames in flight complete in another order each run
- * (frame f - RM_RTDIR_FIT_LAG always has, by the frame semaphore), with a
- * map change at frame 100 and frames that do not trace. Every run gives
- * every frame the same exposure: the fit of the frame the lag behind, or
- * the one kept.
+ * frames, with a map change at frame 100 and frames that do not trace,
+ * fed to rm_rtdir_fit_lag as rmb_rtdir_trace feeds it (the slot's frame
+ * and sums, read before the slot is rewritten). It tests the lag's
+ * arithmetic and the slot and reset bookkeeping, not completion order:
+ * the back end's own text is pinned by test_fit_lag_binding, and the order
+ * frames complete in cannot reach the function, which is given only the
+ * slot's record.
  */
 static void
 test_fit_lag_runs(void)
 {
 	static float first[201];
-	int run, same = 1, moved = 0;
+	int moved = 0;
 
-	for (run = 0; run < 4; run++)
 	{
 		unsigned long slot_frame[RM_RTDIR_FIT_LAG], slot_lm[RM_RTDIR_FIT_LAG], last = 0, reset = 0, f;
-		int done[201];
 		float fit = 1.0f;
 
 		memset(slot_frame, 0, sizeof(slot_frame));
 		memset(slot_lm, 0, sizeof(slot_lm));
-		memset(done, 0, sizeof(done));
-		srand((unsigned)run * 7919u + 1u);
 
 		for (f = 1; f <= 200; f++)
 		{
 			const int k = (int)(f % RM_RTDIR_FIT_LAG);
 			rm_rtdir_stats_t lag;
-			unsigned long g;
-
-			/* the frames in flight complete in an order of this run's; the one the lag behind has */
-			for (g = (f > RM_RTDIR_FIT_LAG) ? f - RM_RTDIR_FIT_LAG + 1 : 1; g < f; g++)
-			{
-				done[g] = done[g] || (rand() & 1);
-			}
-
-			if (f > RM_RTDIR_FIT_LAG)
-			{
-				done[f - RM_RTDIR_FIT_LAG] = 1;
-			}
 
 			/* the map changes before frame 100: its lights set, the reset at the last frame traced */
 			if (f == 100)
@@ -1075,13 +1169,8 @@ test_fit_lag_runs(void)
 			lag.fit_n = 50;
 			fit = rm_rtdir_fit_lag(&lag, f, reset, fit);
 
-			if (run == 0)
-			{
-				first[f] = fit;
-				moved += (fit != 1.0f);
-			}
-
-			same = same && (fit == first[f]);
+			first[f] = fit;
+			moved += (fit != 1.0f);
 
 			/* every seventh frame traces nothing (a menu, a frame skipped): its slot keeps the older frame */
 			if (f % 7)
@@ -1091,11 +1180,9 @@ test_fit_lag_runs(void)
 				last = f;
 			}
 		}
-
-		CHECK(done[200 - RM_RTDIR_FIT_LAG]);
 	}
 
-	CHECK(same && (moved > 100));
+	CHECK(moved > 100);
 	/* the first frames of each map keep 1: nothing is the lag behind them yet, or it is the old map's */
 	CHECK((first[1] == 1.0f) && (first[RM_RTDIR_FIT_LAG] == 1.0f) && (first[100] == 1.0f) && (first[102] == 1.0f));
 	/* frame 4 takes frame 1's fit; frame 10 keeps 9's (frame 7 did not trace); 103 takes 100's, the new map's */
@@ -1778,6 +1865,7 @@ main(void)
 	test_light();
 	test_no_lightmap_kernel();
 	test_host_binding();
+	test_fit_lag_binding();
 	test_q();
 	test_fit();
 	test_fit_lag();
