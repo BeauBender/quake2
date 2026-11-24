@@ -816,12 +816,13 @@ test_no_lightmap_kernel(void)
 		{ "emit-third-read", { { "\tfor (uint j = 0; mtl_rtdir_walk(j, k.n, seen); j++)\n",
 			"\traw += lights[v.nlights].color.rgb;\n\tfor (uint j = 0; mtl_rtdir_walk(j, k.n, seen); j++)\n" } } },
 		{ "emit-bypass", { { "if (!mtl_rtdir_reach(l.pos.w, dist, l.spot.w))", "if (!(dist > 0.0f))" } } },
-		{ "trace-in-range", { { "\t\tt.inrange++;\n",
+		{ "trace-in-range", { { "\t\tt.inrange++;\n\t\tk = mtl_rtdir_keep(k, i, s);\n",
 			"\t\tif (rm_rtdir_seen(ray(o, dir, 0.0f, dist - 1.0f), ias, inst, tmat, ntris, 0u) < 0.5f)\n"
-			"\t\t{\n\t\t\tcontinue;\n\t\t}\n\n\t\tt.inrange++;\n" } } },
+			"\t\t{\n\t\t\tcontinue;\n\t\t}\n\n\t\tt.inrange++;\n\t\tk = mtl_rtdir_keep(k, i, s);\n" } } },
 		{ "walk-unbounded", { { "mtl_rtdir_walk(j, k.n, seen)", "(j < k.n)" } } },
 		{ "seen-before-ray", { { "\t\tseen++;\n\t\traw +=", "\t\traw +=" },
-			{ "\t\tif (v.show != 3u)\n", "\t\tseen++;\n\n\t\tif (v.show != 3u)\n" } } },
+			{ "\t\tif (v.show != 3u)\n\t\t{\n\t\t\tconst float3 to = l.pos.xyz - o;\n",
+				"\t\tseen++;\n\n\t\tif (v.show != 3u)\n\t\t{\n\t\t\tconst float3 to = l.pos.xyz - o;\n" } } },
 		{ "vis-ignored", { { "ias, inst, tmat, ntris, 0u) < 0.5f))", "ias, inst, tmat, ntris, 0u) < -1.0f))" } } },
 		/* TASK188 slice 3b: the dynamic lights' term and the emissive faces' own light */
 		{ "dlight-noshadow", { { "\t\t\tif ((len > 1.0f) &&\n\t\t\t\t(rm_rtdir_seen(",
