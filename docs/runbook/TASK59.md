@@ -1,15 +1,16 @@
-Temporal accumulation in `ref_metal` (TASK59, RT7), slice 1
+Temporal accumulation in `ref_metal` (TASK59, RT7), slices 1 and 1b
 
 RT7 accumulates the ray-traced effects over frames
 ([design](../plans/metal-raytracing-design.md), section 2, "Temporal accumulation", the
 "Reset" row of the scaler's inputs, and row RT7 of section 6). Slice 1 adds the history, the
-rejection rule, the blend and the resets, under `r_rt_temporal`, off by default. This file
-holds the slice's results and what it leaves to slice 2.
+rejection rule, the blend and the resets, under `r_rt_temporal`, off by default, and
+accumulates the AO; slice 1b accumulates the shadows and the sun with one reset state for
+the three. This file holds the slices' results and what they leave to slice 2.
 
-**Status.** With `r_rt_temporal 0` (the default) nothing is made, written or read: the AO
-pass's encoder has its one dispatch as before, and the stock pins are byte-identical to the
-base (the hold, below). With it above 0 the AO is accumulated. The shadows and the sun are
-not accumulated yet (*Left for the next slices*).
+**Status.** With `r_rt_temporal 0` (the default) nothing is made, written or read: each
+pass's encoder has its dispatch as before, the shadows' with the stock `rm_rts_trace`, and
+the stock pins are byte-identical to the base (the holds, below). With it above 0 the
+shadows, the sun and the AO are accumulated.
 
 ## What exists in the code, traced
 
@@ -106,13 +107,125 @@ The hold for the final commit repeats every check.
 
 No pin is made of an accumulated scenario in this slice.
 
+## Slice 1b: the shadows, the sun and one reset state
+
+### What it found, traced
+
+- **The shadows' term needs the visibilities before it is made.** `rm_rts_trace` adds each
+  light's add times its visibility to an RGBA16Float term, and the resolve reads only the
+  term. A pass after the trace cannot accumulate the visibilities and make the term again:
+  the adds come from the surface's lightmap axes and plane, found in the trace itself (the
+  G-buffer's surface attachment or an eye ray), and a pixel that is fully shadowed this
+  frame keeps no trace of them in the term. So the accumulation is inside the trace:
+  `rm_rts_temporal` is the trace with the four visibilities blended with their history
+  before the term is made, run in `rm_rts_trace`'s place while `r_rt_temporal` is above 0.
+  Both kernels call one trace (`rm_rts_shade`, the old kernel's body up to its visibility
+  loop) and one store (`rm_rts_finish`: the term, the packed words, the counts), so the stock
+  kernel computes what it did, in the same order.
+- **The sun's light can be made again after the trace.** Its one ray gives a class (lit or
+  shadowed, else not traced: bright, facing away) and the light is the base plus the sun's
+  term where lit (`mtl_rtsun_light`); the base, the normal and the sun's direction are all
+  inputs of the pass. So `rm_rtsun_temporal` follows the trace in its encoder, as the AO's
+  does, and writes the light again from the accumulated visibility. A pixel that was not
+  traced writes a sample count of 0, so its history is not read where it is traced next.
+- **No shared depth and material record.** The three histories each keep their own distance
+  and material id. They are written by three passes in three encoders, each effect can run
+  alone, and one effect's history can be a view behind the others' (its pass skipped a view,
+  below): a record shared by the three would have to be written by whichever pass runs first
+  in the view and read by the others with one ping-pong index, and one effect's skip would
+  then judge the others' histories by a record of another view. Kept apart, a skip resets
+  only that effect. The cost is 8 bytes a pixel in each of an effect's two histories: the distance and the material
+  id of the AO's and the sun's RGBA32Float, the same of the shadows' record.
+
+### What it adds
+
+- The light set (`mtl_rtt_lights`, `common/mtl_rtt_math.h`): the shadow kernel's packed
+  indices (`mtl_rts_pack_idx`) with the in-range and shadowed flags masked off, the four
+  slots' 6-bit indices. A change of the lights reaching the pixel or of their order rejects
+  the history; a pixel shadowed in one frame and lit in the next keeps it. The AO and the sun
+  pass 0 on both sides.
+- The shadows' history: a record, RGBA32Uint (the light set, the distance's bits, the
+  material id, the count's bits), and the four visibilities, RGBA16Float, two of each at the
+  render size. The sun's: RGBA32Float (the visibility, the distance, the material id, the
+  count), as the AO's.
+- One reset state for the three (`RM_RTT_ViewFor`, `rm_rtaoscene.c`): `R_RenderViewGB` calls
+  `RM_RTT_BeginView` before the effects' views, and the first effect that asks steps the state
+  (`rm_rtt_step`) for the view; every effect after it gets the same view, with the same
+  reasons. A map load, a `vid_restart`, a cut, a change of the render size or the rectangle,
+  and a frame after one that accumulated nothing reset the three histories in the same view.
+- The early return (slice 1's note, and the slice 1 reviews' I1 and N1): each history keeps
+  the number of the last view its dispatch encoded (`rm_rtt_hist_t`), and each back end takes
+  the view (`rm_rtt_hist_take`) only where it encodes its temporal dispatch, after every
+  return of its trace: no view or pass open, a size mismatch, no command buffer or encoder,
+  the scene not bound, the motion vectors missing or of another size. A history that did not
+  take the view before this one resets (FIRST) in this one, so a skipped dispatch never leaves
+  a history two views old, and a reset reason of the skipped view is not lost. The same rule
+  covers an effect turned off for views the others accumulated, and histories made again
+  (`rm_rtt_hist_reset`, which replaces slice 1's `hist_fresh`). The views' number
+  (`rm_rtt_state_t`'s `seq`, the view's former `pad`) is kept across a state reset, so it
+  never repeats.
+- `r_rt_temporal 0` and back: at 0 the state is forgotten and every back end releases its
+  histories at its next view; at 0.9 again they are made anew, so the first view resets.
+- A failure is latched (the slice 1 review's N1): a temporal pipeline that cannot be made is
+  not tried again until its pass closes, and histories that cannot be made at a render size
+  are not tried again at that size. Each logs one line.
+- `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the frame's own trace, before
+  the accumulation (the slice 1 review's N5), as `doc/040_cvarlist.md` says.
+
+### Memory
+
+Per pixel of the render size: the AO 32 bytes (two RGBA32Float), the sun 32, the shadows 48
+(two RGBA32Uint and two RGBA16Float), 112 for the three. At 640 x 480 that is 34,406,400
+bytes before the allocator's rounding; at 1920 x 1080, 232,243,200; at 5120 x 2880 (a 5K
+output with the render size equal to it, the largest it can be: `rm_gb_render_size` caps it
+at the frame's size) 1,651,507,200, of which the AO's and the sun's 471,859,200 each and
+the shadows' 707,788,800 (the slice 1 review's N2). Nothing caps the allocation itself: a
+failed one is latched for that size and the frame is the trace's alone. The engine logs
+each effect's `ref_metal: rt temporal ...: N bytes allocated` line.
+
+### Tests
+
+`tests/metal/rm_rttemporal_test.c` adds the light set (the mask holds every index bit and no
+flag; flags masked keep the set; another light, one more, one gone, the slots' order, none
+left each reject; the same set accepts), the reset shared by the three histories (the first
+view and a cut reset all three in the same view), the early return (a history that skipped
+a view resets alone in the next, the others kept; a reason of a skipped reset view is not
+lost), a view taken twice, the views' number kept across a map load, and histories made
+again. `tests/check-ref-metal.sh`:
+
+- The rule mutants must compile: the material, light-set and depth mutants of slice 1 left a
+  parameter unused and failed under `-Werror` (the slice 1 review's I1); they are written as
+  `if ((mat != hmat) && 0)` and so on, and a mutant that does not compile is reported as bad,
+  never counted as refused. Four more: the light set unmasked, a history that skipped a view
+  still read, a history made again still read, the views' number restarting at a map load.
+- The kernels' calls pinned as text, each with its mutants refused: the shadows'
+  `mtl_rtt_reject(t.reset, r.ok, dist, hd, t.move, m, hm, set, hset, hc)` (the reset passed
+  as `0u`, the light sets as `0u, 0u`), its light set from `mtl_rtt_lights` (unmasked), the
+  sun's rule call (the reset, the material compared with itself), and the reprojection
+  `mtl_rtt_reproject(px.x, px.y, mv.x, mv.y, w, hh)` in all three kernels with the motion's
+  sign flipped (the slice 1 review's N4).
+- Each back end's `tv.reset = rm_rtt_hist_take(&thist, &tview);`, with the mutant that
+  passes the view's reasons on alone.
+- Kernel-call pairs for both new kernels (the reprojection, the rule, the blend, the count,
+  the light set) and for both shadow kernels' shared trace and store.
+
+### The hold
+
+One hold on the final commit, as the scratchpad's `task59s1b-hold.sh`: the builds, `make
+test`, `tests/check-ref-metal.sh` and the doc and menu checks; the stock `metal` pins (every
+committed scenario but RT-primary's) by the base and by the branch, compared frame by frame;
+and six scratch scenarios, never committed: `rt-shadows.cfg`, `rt-sun.cfg` and slice 1's view
+with all three effects on (one AO ray a pixel, the noise moving), each at `r_rt_temporal 0.9`
+(run twice) and at 0. Their frames 12 and 22 are for the owner and are kept outside the
+repository.
+
 ## Left for the next slices
 
-- The shadows' and the sun's accumulation, in their kernels or after them, with the
-  shadows' light set (the packed indices) passed to the rule.
 - The 5x5 bilateral denoiser on AO and sun, scaled by the sample count, and the reflections'
   3x3 blur (slice 2).
 - The default of 0.9, set when the denoiser lands and the look is judged, and the
   tuning-screen row with it.
 - RT11's `r_rt_scale` and the `r_rt_stats 1` reset line of the design's RT11 row.
 - The GPU time of the accumulation, recorded as information (decision 0014: no target).
+- A smaller history (the slice 1 review's N2): the AO's and the sun's value and count fit
+  half floats, the distance a float and the material a byte.

@@ -1517,10 +1517,14 @@ is.
   It starts again on a map load, a `vid_restart`, a camera cut or a
   teleport (a move of more than 256 units on an axis), a change of the
   render size or of the view's rectangle, and on the first frame after
-  one that accumulated nothing (every effect off). In this release it
-  accumulates `r_rt_ao` only; the shadows and the sun follow, and the
-  design's default of `0.9` is set once the denoiser lands and the look
-  is judged. Saved with the configuration; applies from the next frame.
+  one that accumulated nothing (every effect off); one effect's history
+  also starts again after a frame whose pass it skipped. It accumulates
+  `r_rt_shadows` (each light's visibility, before the light is added),
+  `r_rt_sun` and `r_rt_ao`, each with its own history and one reset for
+  the three. `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show`
+  show the frame's own trace, before the accumulation. The design's
+  default of `0.9` is set once the denoiser lands and the look is
+  judged. Saved with the configuration; applies from the next frame.
   Not on the Ray tracing screens yet: it joins the tuning screen, the
   presets and the settings optimizer with its default.
 
