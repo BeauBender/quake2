@@ -196,7 +196,7 @@ RM_RTW_Init(const rmb_caps_t *caps)
 	r_rt_water_normal = ri.Cvar_Get("r_rt_water_normal", "0.08", CVAR_ARCHIVE);
 	r_rt_water_reflect = ri.Cvar_Get("r_rt_water_reflect", "0.5", CVAR_ARCHIVE);
 	r_rt_water_show = ri.Cvar_Get("r_rt_water_show", "0", 0);
-	r_rt_water_hits = ri.Cvar_Get("r_rt_water_hits", "0", CVAR_ARCHIVE);   /* TASK158 */
+	r_rt_water_hits = ri.Cvar_Get("r_rt_water_hits", "1", CVAR_ARCHIVE);   /* TASK158 */
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	rtw_device = caps->raytracing != 0;
 	rtw_opened = rtw_refused = rtw_active = rtw_viewed = rtw_ws_told = 0;

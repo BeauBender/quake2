@@ -1089,7 +1089,7 @@ its proportions is the 0.88 ms of one closest-hit ray a pixel at 1080p (of 5.14 
 about five; not held, at the GPU's full clock, `0` is near the bound and `1` at the top of the 0.68
 to 1.20 ms range.
 
-`r_rt_water_hits` (TASK158's rework) picks the hit shading; `0`, the default, is TASK58's pass, its
+`r_rt_water_hits` (TASK158's rework) picks the hit shading; `1`, the default since TASK168 (the owner approved the look on 2026-11-22 under decision 0014, the cost being information only), is the world-space path below; `0` is TASK58's pass, its
 kernel verbatim, with frames byte-identical to main's and the same cost (the first column, within
 0.12 ms of main measured beside it). `1` shades a hit the picture does not show in world space (the
 face's texture and lightmap, the dynamic lights the lightmaps left out, the sky box's texel), so the

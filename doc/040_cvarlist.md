@@ -1408,12 +1408,12 @@ is.
   the rays (at the size `r_rt_ao_scale` traces at), those that met a
   surface and the pass's GPU time; with
   `r_rt_water` on a line for the reflections: the pixels of the view, those
-  it traced (every pixel, or with `r_rt_water_hits 1` the water and the
-  pixels next to it), those of opaque and of translucent water, the rays
+  it traced (with `r_rt_water_hits 1`, the default, the water and the
+  pixels next to it; at `0` every pixel), those of opaque and of translucent water, the rays
   from the eye that looked for translucent water, the water pixels whose
   reflection came from the picture, from a surface drawn on its own, from
   the sky in the picture, from the sky box and from nowhere, and the
-  pass's GPU time; with `r_rt_water_hits 1` also each of its two parts
+  pass's GPU time; at `r_rt_water_hits 1`, the default, also each of its two parts
   (the list of its pixels, the trace) and the time from the first's start
   to the last's end, the pass's time being their sum (the water's marks
   are a draw of the G-buffer raster, timed with it, so there are no
@@ -1494,18 +1494,19 @@ is.
   What it meets is shown as the picture shows it, lightmaps, dynamic
   lights and the other ray-traced effects included; where it meets the
   sky, the sky in that direction. A surface of the world the view does
-  not show (off the screen, or hidden behind something nearer) gives no
-  reflection, and the water there is drawn as before; `r_rt_water_hits
-  1` draws it instead. A model (a player, a monster, an item, a weapon),
+  not show (off the screen, or hidden behind something nearer) is drawn on
+  its own at the default, `r_rt_water_hits 1`; at `0` it gives no
+  reflection, and the water there is drawn as before. A model (a player, a monster, an item, a weapon),
   and at `r_rt_water_hits 0` also a door, a platform or a lift, that the
   view does not show is passed over: the reflection shows what lies
   behind it, as without it, so it does not show its outline. This works
   per face, and up to four hidden faces: past four (one hidden player
   with its weapon is four, a closed door two) the ray is traced against
   the map alone, so a model the view shows behind them is passed too,
-  and the reflection there shows what lies behind it (at `0`, none),
-  while a door or a platform there is met (at `0`, none where the view
-  does not show it). The reflection is mixed into
+  and the reflection there shows what lies behind it (at `0`, nothing of a surface the
+  view does not show),
+  while a door or a platform there is met (at `0` it is passed over where
+  the view does not show it). The reflection is mixed into
   the water's colour by `r_rt_water_reflect`; translucent water keeps
   its transparency. The rays meet the world, the doors and platforms and
   the models, but not the view weapon or the player's own model. Needs a
@@ -1537,21 +1538,22 @@ is.
   Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_water_hits**: How `r_rt_water` shades what a reflection meets.
-  `0` (the default): from the picture alone, as described under
-  `r_rt_water`; a surface of the world the view does not show gives no
-  reflection.
-  `1`: a surface of the map the view does not show (off the screen, or
+  `1` (the default since TASK168, the owner having approved its look
+  under decision 0014): a surface of the map the view does not show (off the screen, or
   hidden behind something nearer) is drawn on its own, its texture and
   lightmap, with the dynamic lights but without their shadows or the
   ambient occlusion; the sky the view does not show comes from the sky
-  box. At both settings a model (a
+  box.
+  `0`: from the picture alone, as described under `r_rt_water`; a
+  surface of the world the view does not show gives no reflection.
+  At both settings a model (a
   player, a monster, an item, a weapon) the view does not show is passed over, so the
   reflection shows what lies behind it, and neither the model nor its
   outline. This works per face (a shown model's unseen far side is
   passed too) and up to four hidden model faces: past four the ray is
   traced against the map alone, so a model the view shows behind them is
   passed too, and the reflection there shows what lies behind it (at
-  `0`, none). A brush
+  `0`, nothing of a surface the view does not show). A brush
   model the view does not show (a door, a platform, a lift) is part of
   the map: at `1` it is drawn on its own like any other surface, so the
   reflection can show where it stands; at `0` it is passed over as a
