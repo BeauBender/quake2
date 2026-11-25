@@ -1265,34 +1265,49 @@ is.
   same for the same view. Under every other presentation
   it does nothing at any value. Forced to `0` on a device without ray
   tracing. `r_rt_stats 1` prints the map's lines of lights and emissive
-  faces uploaded,
+  faces uploaded and of its exposure fit,
   `r_rt_stats 2` a line a frame (world pixels, lights in range, shadow
-  rays, rays that reached their light, the pixels past the bound,
-  the exposure fit's sums and the exposure). Default `0`; not saved with
-  the configuration.
+  rays, rays that reached their light, the pixels past the bound, the
+  view's sums of the lightmap and the traced light at every fourth pixel
+  a row and a column, which are information only, and the exposure).
+  Default `0`; not saved with the configuration.
 
 * **r_rt_direct_exposure**: The exposure of the Metal renderer's direct
-  light (`r_rt_direct`). `0` (the default) takes the fit: the sum of the
-  stock lightmap over the world pixels of the frame three before
-  (a fixed lag, the frames in flight, so every run gives a frame the same
-  exposure), every fourth
-  pixel a row and a column, divided by the sum of the traced light over
-  the same pixels, held between `0.25` and `16`, so the traced frame's
-  mean light is the stock frame's (the lightmap enters this ratio only,
-  never a pixel's own light); `1` at a map's first frames, and kept
-  while no traced light reaches a sampled pixel or the frame three
-  before traced nothing. A value above `0`
-  is a fixed exposure, at most `64`. Saved with the configuration.
+  light (`r_rt_direct`). `0` (the default) takes the map's fit, made once
+  a map, on its first frame under RT-primary, and kept while that map
+  stays loaded (switching `r_rt_direct` or the presentation away and back
+  does not fit it again): the sum of the stock lightmap at a sample of the
+  world's luxels (the centres of about 1024 faces and the points half
+  way to their corners, at most 8192, spread over the whole face list
+  when there are more, every lightstyle at full), divided
+  by the sum of the traced light at the same points (the same choice of
+  lights as a pixel's, each shadow ray a line test against the world's
+  solid brushes), held between `0.25` and `16`, so the traced map's mean
+  light is the stock map's (the lightmap enters this ratio only, never a
+  pixel's own light). A luxel enters only when its lightmap, its styles'
+  maps summed as the stock renderer sums them, is neither
+  near black (every channel under `16` of `255`) nor clipped (a channel of
+  the sum at `255` or more), and the faces of light fixtures (`SURF_LIGHT`), translucent
+  faces, sky and water take none, so a dark room lit by a bright fixture
+  does not darken the rest of the map. `1` when no luxel enters or no
+  traced light reaches one, and `1` (with a console line) when the line
+  tests pass 2^26 node visits in the map, so a crafted map cannot stall
+  the frame. Every development view (`r_rt_direct_show`)
+  is drawn at the same exposure. A value above `0` is a fixed exposure,
+  at most `64`. Saved with the configuration.
 
 * **r_rt_direct_show**: A development view of the Metal renderer's
   direct light, drawn over the 3D view while `r_rt_direct` runs. `0`
   (the default) the picture; `1` the direct term alone (the light, as on
   white walls); `2` the shadow visibility, grey from black (no light in
   range reached) to white (every one reached), dark blue where no light
-  is in range; `3` the direct term with no shadow ray traced (every light
-  in range counts as reached), to compare with `1`; `4` the dynamic
+  is in range; `3` the direct term with no ray traced (every light in
+  range counts as reached, and a light fixture's own light, which needs a
+  ray to find, is left out), to compare with `1`; `4` the dynamic
   lights' term alone (the muzzle flashes, explosions and other lights of
-  the frame, each with its shadow ray), on white walls. Pixels that are
+  the frame, each with its shadow ray), on white walls. Every view is at
+  the map's exposure (`r_rt_direct_exposure`); the `r_rt_stats 2` line's
+  sums under views `3` and `4` are of the term shown. Pixels that are
   not lightmapped world are black. Not saved with the configuration.
 
 * **r_rt_flatlight**: A preview and debug setting of the Metal renderer
