@@ -326,7 +326,7 @@ for m in mat lights depth off reset frameend mapload lightsmask histgap histrese
 			"$rm_dir/rm_rttemporal.c" > "$c" ;;
 		histreset) sed 's/	h->valid = 0;/	h->valid = h->valid;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		seqkeep) sed 's/	st->seq = seq;/	st->seq = seq \& 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
-		wblur) sed 's/return on \&\& !rtprimary;/return on;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		wblur) sed 's/return on \&\& !rtprimary;/return on || (rtprimary \& 0);/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 	esac
 	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$h" && cmp -s "$rm_dir/rm_rttemporal.c" "$c"; then
 		bad "the temporal mutant ($m) changed nothing"
