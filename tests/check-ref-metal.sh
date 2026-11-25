@@ -710,10 +710,13 @@ case $r in
 esac
 # the mutants, each of which must compile and fail the test: the shadedot applied twice, the minlight floor
 # skipped, the glow pulse's sign flipped, the split with the weapon traced, the split with a fullbright model
-# traced, the tag's decode dropping a bit, the weapon unprojected with the view's projection
+# traced, the tag's decode dropping a bit, the weapon unprojected with the view's projection; slice 2's: the
+# weapon's depth hack read as the crosshair's, a glowing or minlight model rastered untagged, a model tagged
+# without its normals
 rtm_mutants=0
 if [ -n "$rtm" ]; then
-	for m in shadedot-twice minlight-skipped glow-sign weapon-traced fullbright-traced tag-bit weapon-view-inv; do
+	for m in shadedot-twice minlight-skipped glow-sign weapon-traced fullbright-traced tag-bit weapon-view-inv \
+		depthhack-weapon untagged-traced tag-no-normals; do
 		rtm_tree "${tmp:?}/rtmm"
 		h=${tmp:?}/rtmm/src/client/refresh/metal/common/mtl_rtm_math.h
 		c=${tmp:?}/rtmm/src/client/refresh/metal/rm_rtmodel.c
@@ -724,8 +727,12 @@ if [ -n "$rtm" ]; then
 				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 			glow-sign) sed 's/const float g = s + scale;/const float g = s - scale;/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 			weapon-traced) sed 's/if (flags & RM_RF_WEAPONMODEL)$/if (0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
-			fullbright-traced) sed 's/(rm_rtm_stock_light(flags, rdflags) || (flags & RM_RF_DEPTHHACK))/((rm_rtm_stock_light(flags, rdflags) \&\& !(flags \& RM_RF_FULLBRIGHT)) || (flags \& RM_RF_DEPTHHACK))/' \
+			fullbright-traced) sed 's/return rm_rtm_stock_light(flags, rdflags) || /return (rm_rtm_stock_light(flags, rdflags) \&\& !(flags \& RM_RF_FULLBRIGHT)) || /' \
 				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			depthhack-weapon) sed 's/((flags & RM_RF_DEPTHHACK) && !(flags & RM_RF_WEAPONMODEL))/(flags \& RM_RF_DEPTHHACK)/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			untagged-traced) sed 's/&& (flags & (RM_RF_GLOW | RM_RF_MINLIGHT)))$/\&\& 0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			tag-no-normals) sed 's/if (!extra_ok)$/if (!extra_ok \&\& 0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
 			tag-bit) sed 's/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) & MTL_RTM_FLAGS;/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) \& 3u;/' \
 				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 			weapon-view-inv) sed 's/rm_weapon_projection(p, w->fovy, w->gunfov, w->hand, w->width/rm_projection(p, w->fovy, w->width/' \
@@ -744,9 +751,17 @@ if [ -n "$rtm" ]; then
 			rtm_mutants=$((rtm_mutants + 1))
 		fi
 	done
-	[ "$rtm_mutants" -eq 7 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 7 model-light mutants"
+	[ "$rtm_mutants" -eq 10 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 10 model-light mutants"
 fi
-seg 7.8 "; model light ${rtm:-host test}, $rtm_mutants of 7 mutants refused"
+# slice 2: under Metal the minlight floor's test is s >= 0.1f, gl1's double test s > 0.1 (the host test holds
+# the two the same for every float near 0.1); the host keeps the double test
+if [ "$(grep -cxF '#define MTL_RTM_ABOVE(s) ((s) >= MTL_RTM_FLOOR)' "$rm_dir/common/mtl_rtm_math.h")" != 1 ] ||
+	[ "$(grep -cxF '#define MTL_RTM_ABOVE(s) ((s) > MTL_RTM_FLOOR)' "$rm_dir/common/mtl_rtm_math.h")" != 1 ] ||
+	! awk '/^#ifdef __METAL_VERSION__$/ { m = 1; next } m && /^#define MTL_RTM_ABOVE/ { print; exit }' \
+		"$rm_dir/common/mtl_rtm_math.h" | grep -qF '>= MTL_RTM_FLOOR'; then
+	bad "common/mtl_rtm_math.h: the minlight floor's test under Metal is not s >= 0.1f"
+fi
+seg 7.8 "; model light ${rtm:-host test}, $rtm_mutants of 10 mutants refused"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)

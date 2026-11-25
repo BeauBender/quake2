@@ -52,14 +52,22 @@
 int rm_rtm_stock_light(int flags, int rdflags);
 
 /*
+ * 1 when an alias model of flags stays stock-lit under the mode for good:
+ * rm_rtm_stock_light's, and a model with RF_DEPTHHACK that is not the
+ * view weapon (the crosshair model; the weapon has RF_DEPTHHACK too, and
+ * slice 3 traces it).
+ */
+int rm_rtm_stock_model(int flags, int rdflags);
+
+/*
  * The pass of a GBUFFER view that draws an entity, as rm_gb_entity_split,
  * under the RT-primary presentation when mode is not 0. With mode 0 it is
  * rm_gb_entity_split(flags, kind, shadows) for every input. Under the
  * mode the raster takes what rm_gb_entity_split's raster takes, less the
- * alias models that stay stock-lit: rm_rtm_stock_light's, and a model
- * with RF_DEPTHHACK that is not the view weapon (the crosshair model).
- * The view weapon, a translucent model, a shell and a beam go forward, as
- * now (slice 3 rasters the weapon).
+ * alias models that stay stock-lit (rm_rtm_stock_model) and, in slice 2,
+ * an RF_GLOW or RF_MINLIGHT model, whose flags no tag carries yet. The
+ * view weapon, a translucent model, a shell and a beam go forward, as now
+ * (slice 3 rasters the weapon and tags the flagged models).
  */
 int rm_rtm_entity_split(int flags, int kind, float shadows, int rdflags, int mode);
 
@@ -88,8 +96,13 @@ float rm_rtm_glow_scale(float time);
 void rm_rtm_color(const float *light, float dot, int flags, int rdflags, float time, float overbright,
 		const unsigned char *minlight, const unsigned char *gamma, unsigned char alpha, float *rgba);
 
-/* overwrites the colour of the n vertices v (rm_alias_emit's) with the tag of flags f (mtl_rtm_tag) */
-void rm_rtm_tag_verts(rm_avert_t *v, long n, unsigned f);
+/*
+ * Overwrites the colour of the n vertices v (rm_alias_emit's) with the
+ * tag of flags f (mtl_rtm_tag) and returns 1, only when extra_ok (the
+ * model's normals were written, rm_gb_alias_extra); else leaves them and
+ * returns 0, since a model without its normals is not traced.
+ */
+int rm_rtm_tag_verts(rm_avert_t *v, long n, unsigned f, int extra_ok);
 
 /* the inputs of the view weapon's projection (rm_weapon_projection) and its jitter (RM_GB_JitterProj) */
 typedef struct

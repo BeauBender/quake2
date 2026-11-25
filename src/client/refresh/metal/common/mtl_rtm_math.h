@@ -82,11 +82,24 @@ mtl_rtm_v3(float x, float y, float z)
 	return v;
 }
 
+/*
+ * A channel above gl1's floor: its double test s > 0.1. Metal has no
+ * double, and no float lies between 0.1 and 0.1f (0.1f is the float
+ * just above 0.1), so there the same test is s >= 0.1f; s > 0.1f would
+ * floor a channel of exactly 0.1f that gl1 keeps, and with it the other
+ * two (TASK191 slice 2; the host test holds the two equal).
+ */
+#ifdef __METAL_VERSION__
+#define MTL_RTM_ABOVE(s) ((s) >= MTL_RTM_FLOOR)
+#else
+#define MTL_RTM_ABOVE(s) ((s) > MTL_RTM_FLOOR)
+#endif
+
 /* RF_MINLIGHT: when no channel is above 0.1, every channel is 0.1 */
 static inline mtl_rtm_v3_t
 mtl_rtm_floor(mtl_rtm_v3_t s)
 {
-	if (!(s.x > MTL_RTM_FLOOR) && !(s.y > MTL_RTM_FLOOR) && !(s.z > MTL_RTM_FLOOR))
+	if (!MTL_RTM_ABOVE(s.x) && !MTL_RTM_ABOVE(s.y) && !MTL_RTM_ABOVE(s.z))
 	{
 		s.x = (float)MTL_RTM_FLOOR;
 		s.y = (float)MTL_RTM_FLOOR;

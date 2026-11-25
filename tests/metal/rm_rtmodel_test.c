@@ -267,11 +267,9 @@ test_split_mode(void)
 	const int gun = RM_RF_MINLIGHT | RM_RF_DEPTHHACK | RM_RF_WEAPONMODEL;
 	int flags, kind, s, rd, bad = 0;
 
-	/* the models that are traced: an opaque alias model, a glowing item, a minlight model, IR without goggles */
+	/* the models that are traced: an opaque alias model, IR without goggles */
 	CHECK(rm_rtm_entity_split(0, A, 0, 0, 1) == R);
 	CHECK(rm_rtm_entity_split(0, A, 1, 0, 1) == (R | S));
-	CHECK(rm_rtm_entity_split(RM_RF_GLOW, A, 0, 0, 1) == R);
-	CHECK(rm_rtm_entity_split(RM_RF_MINLIGHT, A, 0, 0, 1) == R);
 	CHECK(rm_rtm_entity_split(RM_RF_IR_VISIBLE, A, 0, 0, 1) == R);
 	CHECK(rm_rtm_entity_split(0, B, 1, 0, 1) == R);
 
@@ -281,6 +279,19 @@ test_split_mode(void)
 	CHECK(rm_rtm_entity_split(RM_RF_IR_VISIBLE, A, 0, IR, 1) == F);
 	CHECK(rm_rtm_entity_split(RM_RF_DEPTHHACK | RM_RF_FULLBRIGHT, A, 0, 0, 1) == F);
 	CHECK(rm_rtm_entity_split(RM_RF_DEPTHHACK, A, 0, 0, 1) == F);
+
+	/* slice 2: a glowing item and a minlight model go forward, untagged, until slice 3 tags them */
+	CHECK(rm_rtm_entity_split(RM_RF_GLOW, A, 0, 0, 1) == F);
+	CHECK(rm_rtm_entity_split(RM_RF_MINLIGHT, A, 1, 0, 1) == F);
+	CHECK(rm_rtm_entity_split(RM_RF_GLOW, B, 0, 0, 1) == rm_gb_entity_split(RM_RF_GLOW, B, 0));
+
+	/* the stock-lit rule for good: the crosshair model is, the weapon (RF_DEPTHHACK too) is not (slice 3 traces it) */
+	CHECK(rm_rtm_stock_model(RM_RF_DEPTHHACK, 0) == 1);
+	CHECK(rm_rtm_stock_model(RM_RF_DEPTHHACK | RM_RF_FULLBRIGHT, 0) == 1);
+	CHECK(rm_rtm_stock_model(gun, 0) == 0);
+	CHECK(rm_rtm_stock_model(RM_RF_DEPTHHACK | RM_RF_WEAPONMODEL, 0) == 0);
+	CHECK(rm_rtm_stock_model(gun | RM_RF_SHELL_RED, 0) == 1);
+	CHECK(rm_rtm_stock_model(RM_RF_GLOW, 0) == 0);
 
 	/* the weapon goes forward in this slice; so do translucent models, shells and beams, as now */
 	CHECK(rm_rtm_entity_split(gun, A, 0, 0, 1) == F);
@@ -304,9 +315,12 @@ test_split_mode(void)
 		const int rdflags = rd ? IR : 0;
 		const int got = rm_rtm_entity_split(flags, kind, (float)s, rdflags, 1);
 		const int base = rm_gb_entity_split(flags, kind, (float)s);
-		const int stock = (kind == A) && (rm_rtm_stock_light(flags, rdflags) || (flags & RM_RF_DEPTHHACK));
+		const int depthhack = (flags & RM_RF_DEPTHHACK) && !(flags & RM_RF_WEAPONMODEL);
+		const int stock = (kind == A) && (rm_rtm_stock_light(flags, rdflags) || depthhack ||
+				(flags & (RM_RF_GLOW | RM_RF_MINLIGHT)));
 
 		bad += got != (stock ? F : base);
+		bad += rm_rtm_stock_model(flags, rdflags) != (rm_rtm_stock_light(flags, rdflags) || depthhack);
 	}
 
 	CHECK(bad == 0);
@@ -314,9 +328,9 @@ test_split_mode(void)
 	/* traced: what the mode rasters, with its normals written */
 	CHECK(rm_rtm_traced(0, 0, 1) == 1);
 	CHECK(rm_rtm_traced(0, 0, 0) == 0);
-	CHECK(rm_rtm_traced(RM_RF_GLOW, 0, 1) == 1);
+	CHECK(rm_rtm_traced(RM_RF_GLOW, 0, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_GLOW, 0, 0) == 0);
-	CHECK(rm_rtm_traced(RM_RF_MINLIGHT, 0, 1) == 1);
+	CHECK(rm_rtm_traced(RM_RF_MINLIGHT, 0, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_IR_VISIBLE, 0, 1) == 1);
 	CHECK(rm_rtm_traced(RM_RF_IR_VISIBLE, IR, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_FULLBRIGHT, 0, 1) == 0);
@@ -425,7 +439,15 @@ test_tag(void)
 		v[i].uv[1] = 0.5f;
 	}
 
-	rm_rtm_tag_verts(v, 2, MTL_RTM_GLOW | MTL_RTM_WEAPON);
+	/* slice 2: a model without its normals is never tagged */
+	CHECK(rm_rtm_tag_verts(v, 2, MTL_RTM_GLOW | MTL_RTM_WEAPON, 0) == 0);
+
+	for (i = 0; i < 3; i++)
+	{
+		CHECK(v[i].color[0] == 0.0f && v[i].color[1] == 0.0f && v[i].color[2] == 0.0f && v[i].color[3] == 0.0f);
+	}
+
+	CHECK(rm_rtm_tag_verts(v, 2, MTL_RTM_GLOW | MTL_RTM_WEAPON, 1) == 1);
 
 	for (i = 0; i < 2; i++)
 	{
@@ -600,6 +622,34 @@ test_pullback(void)
 	CHECK(fabs(sqrt(q.x * q.x + q.y * q.y) - (5 - MTL_RTM_PULLBACK)) < 1e-5 && fabs(q.x * 8 - q.y * 6) < 1e-5);
 }
 
+/*
+ * The minlight floor's test under Metal (slice 2): MTL_RTM_ABOVE there is
+ * s >= 0.1f, gl1's double test s > 0.1 here. The two are the same test
+ * for every float: here over the 4096 floats on each side of 0.1f, the
+ * two that a float can stand nearest 0.1 among them.
+ */
+static void
+test_floor_metal(void)
+{
+	float s = 0.1f;
+	int i, bad = 0;
+
+	for (i = 0; i < 4096; i++)
+	{
+		s = nextafterf(s, 0.0f);
+	}
+
+	for (i = 0; i < 8193; i++)
+	{
+		bad += ((double)s > 0.1) != (s >= 0.1f);
+		bad += MTL_RTM_ABOVE(s) != (s >= 0.1f);
+		s = nextafterf(s, 1.0f);
+	}
+
+	CHECK(bad == 0);
+	CHECK(MTL_RTM_ABOVE(0.1f) && !MTL_RTM_ABOVE(nextafterf(0.1f, 0.0f)) && !MTL_RTM_ABOVE(NAN));
+}
+
 int
 main(void)
 {
@@ -614,6 +664,7 @@ main(void)
 	test_tag();
 	test_weapon();
 	test_pullback();
+	test_floor_metal();
 
 	printf("rm_rtmodel_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
