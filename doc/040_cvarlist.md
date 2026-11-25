@@ -1363,7 +1363,10 @@ is.
   exposure (`r_rt_direct_exposure`); the sky's, the sun's and the
   bounce's terms are added after it, as RT4's sun is. The `r_rt_stats 2` line's sums under
   views `3` and `4` are of the term shown. Pixels that are not
-  lightmapped world are black. Not saved with the configuration.
+  lightmapped world are black. When `r_rt_temporal` is above `0` the
+  views show the accumulated term, except view `2` (the visibility),
+  which stays the trace's own; changing `r_rt_direct_show` starts the
+  history again. Not saved with the configuration.
 
 * **r_rt_direct_sky**: The scale of the Metal renderer's sky light under
   RT-primary (`r_presentation 3`, TASK189): each lightmapped world pixel
@@ -1520,7 +1523,10 @@ is.
   (the list of its pixels, the trace) and the time from the first's start
   to the last's end, the pass's time being their sum (the water's marks
   are a draw of the G-buffer raster, timed with it, so there are no
-  raster figures). Nothing
+  raster figures); and under the Ray traced presentation with
+  `r_rt_temporal` above `0` a line for its accumulation,
+  `ref_metal: rt direct temporal: frame N: X ms` (`- ms` when no time was
+  measured). Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
@@ -1607,7 +1613,8 @@ is.
   also starts again after a frame whose pass it skipped. It accumulates
   `r_rt_shadows` (each light's visibility, before the light is added),
   `r_rt_sun` and `r_rt_ao`, each with its own history and one reset for
-  the three. Under the Ray traced presentation (`r_presentation 3`) it
+  the three (RT-primary's accumulation, below, shares that reset state
+  too). Under the Ray traced presentation (`r_presentation 3`) it
   also accumulates that presentation's light (TASK190): the direct
   light, the sky light, the sun and the bounce, summed and before the
   albedo, with a history of its own, made only under that presentation
