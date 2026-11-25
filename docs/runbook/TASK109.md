@@ -190,4 +190,14 @@ summary.
 | a still `base1`, 300 frames and more, effects on, `r_metalfx 2` at 0.5: the steps at every 32nd frame and every 5th, and the last against `r_metalfx 0` | @STILL@ |
 | the frames for the owner (captures 12 and 21, at 0.5 and at `r_metalfx 0`) | @FRAMES@ |
 
-Host checks (no lock) on the branch before the hold: @HOSTCHECKS@.
+The host checks (no lock) on the branch before the hold:
+
+| Check | Result |
+|---|---|
+| `tests/check-ref-metal.sh` | ok: `13162 checks, 0 failed`; `MetalFX 392 checks, 0 failed, 3 reset mutants refused` |
+| `make test` | `yq2test: 591 tests, 0 failed` |
+| `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh`, `tests/check-pin-chars.sh` | ok, each |
+| `tests/check-scenario-parsers.sh` | ok: `4 tests, 10 mutants caught` |
+| `scripts/pins.sh check-content` | `content tags ok` |
+
+No code changed, so this slice has no red test and no new mutant.
