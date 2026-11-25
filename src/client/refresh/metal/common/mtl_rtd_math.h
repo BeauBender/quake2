@@ -201,4 +201,54 @@ mtl_rtd_result(mtl_rtd_acc_t a, float v, float n)
 	return v + s * (mean - v);
 }
 
+/*
+ * Slice 2b: the water reflections' blur (the design, section 2: "no
+ * history, the warp moves every frame, and a 3 x 3 depth-guided blur").
+ * No history, so no sample count: the strength is always full, and a
+ * pixel's blurred value is the weighted mean of its 3 x 3 neighbours
+ * that hold a reflection, guided by the same depth rule as the 5 x 5
+ * blur (mtl_rtd_depth_w). It runs while r_rt_temporal is above 0.
+ */
+#define MTL_RTD_REFL_RADIUS 1
+
+/* the spatial weight of the reflections' tap (dx, dy), -1 to 1 each: the binomial 1 2 1 in each axis, over 16; 0 outside */
+static inline float
+mtl_rtd_rtap(int dx, int dy)
+{
+	const int ax = (dx < 0) ? -dx : dx, ay = (dy < 0) ? -dy : dy;
+	const int kx = (ax == 0) ? 2 : (ax == 1) ? 1 : 0;
+	const int ky = (ay == 0) ? 2 : (ay == 1) ? 1 : 0;
+
+	return (float)(kx * ky) / 16.0f;
+}
+
+/*
+ * The weight of the reflection neighbour at (dx, dy) from the pixel: d
+ * and dn the pixel's and the neighbour's distance from the eye, ok 0
+ * when the neighbour holds no reflection to blur (the kernel's class
+ * test). 0 for such a neighbour or across a depth edge.
+ */
+static inline float
+mtl_rtd_rweight(int dx, int dy, float d, float dn, int ok)
+{
+	float w;
+
+	if (!ok)
+	{
+		return 0.0f;
+	}
+
+	w = mtl_rtd_rtap(dx, dy) * mtl_rtd_depth_w(d, dn);
+
+	/* written so that a NaN fails */
+	return (w > 0.0f) ? w : 0.0f;
+}
+
+/* the blurred reflection channel of a pixel whose own value is v: the full-strength result (1 sample) of the sums */
+static inline float
+mtl_rtd_rresult(mtl_rtd_acc_t a, float v)
+{
+	return mtl_rtd_result(a, v, MTL_RTD_COUNT_FULL);
+}
+
 #endif /* MTL_RTD_MATH_H */
