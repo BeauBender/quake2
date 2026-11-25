@@ -974,17 +974,26 @@ TuneMenu_Rules(void)
 				Cvar_VariableValue(e->cvar)) : 1;
 		int over = e && !on && VidRules_RTOverridden(c->effect, s_built_renderer, available, pres);
 
-		/* TASK59 slice 2b: the accumulation's row is on while any effect it acts on runs */
+		/*
+		 * TASK59 slice 2b: the accumulation's row is on while any effect it acts on runs.
+		 * Under RT-primary in force the mode runs the water but not its blur (rm_rtt_wblur),
+		 * so the water is no effect the row acts on there: with shadows, sun and AO read 0,
+		 * the row is the mode's.
+		 */
 		if (c->effect == VIDTUNE_EFFECT_ACCUM)
 		{
+			const int rtp = (VidRules_PresentationIndex(pres) == VIDPRES_RTPRIMARY);
+
 			on = over = 0;
 			for (int k = 0; k < VIDTUNE_ACCUM_ROWS; k++)
 			{
 				const vidrt_control_t *s = VidRules_RTControl(k);
-				const int sk = VidRules_RTEffective(k, s_built_renderer, available, pres, Cvar_VariableValue(s->cvar));
+				const int mode = VidRules_RTOverridden(k, s_built_renderer, available, pres);
+				const int sk = VidRules_RTEffective(k, s_built_renderer, available, pres, Cvar_VariableValue(s->cvar)) &&
+					!(rtp && mode && !strcmp(s->cvar, "r_rt_water"));
 
 				on = on || sk;
-				over = over || (!sk && VidRules_RTOverridden(k, s_built_renderer, available, pres));
+				over = over || (!sk && mode);
 			}
 			over = over && !on;
 		}

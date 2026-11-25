@@ -1457,7 +1457,15 @@ test_tuning_screen(void)
 		"accumulate with sun on says %s", RTItem("accumulate")->statusbar);
 	CHECK(RTItem("accumulate")->type == MTYPE_SLIDER, "accumulate is not a slider");
 	Menu_SlideItem(tm, -1);
-	CHECK(fabsf(Cvar_VariableValue("r_rt_temporal") - 0.85f) < 0.001f, "accumulate wrote %s", Str("r_rt_temporal"));
+	CHECK(fabsf(Cvar_VariableValue("r_rt_temporal") - 0.88f) < 0.001f, "accumulate wrote %s", Str("r_rt_temporal"));
+	/* round 2: the slider reaches the renderer's maximum, RM_RTT_ALPHA_MAX 0.98, and stops there */
+	SetCv("r_rt_temporal", "0.96");
+	Menu_SlideItem(tm, 1);
+	CHECK(fabsf(Cvar_VariableValue("r_rt_temporal") - 0.98f) < 0.001f, "accumulate up from 0.96 wrote %s",
+		Str("r_rt_temporal"));
+	Menu_SlideItem(tm, 1);
+	CHECK(fabsf(Cvar_VariableValue("r_rt_temporal") - 0.98f) < 0.001f, "accumulate past its top wrote %s",
+		Str("r_rt_temporal"));
 	SetCv("r_rt_sun", "0");
 	SetCv("r_rt_water", "1");
 	tm->draw(tm);
@@ -1468,6 +1476,24 @@ test_tuning_screen(void)
 	SetCv("r_rt_temporal", "0.9");
 	SetCv("r_rt_sun", "1");
 	tm->draw(tm);
+	/* round 2: under RT-primary nothing it drives runs (shadows, sun and AO read 0, the water's blur off),
+	   and Retro reads every effect off: greyed by the mode, whatever the user's switches say */
+	SetCv("r_rt_water", "1");
+	SetCv("r_presentation", "3");
+	tm->draw(tm);
+	CHECK(RTGreyed("accumulate") && !strcmp(RTItem("accumulate")->statusbar, "set by the presentation"),
+		"accumulate under RT-primary says %s", RTItem("accumulate")->statusbar);
+	SetCv("r_presentation", "2");
+	tm->draw(tm);
+	CHECK(RTGreyed("accumulate") && !strcmp(RTItem("accumulate")->statusbar, "set by the presentation"),
+		"accumulate under Retro says %s", RTItem("accumulate")->statusbar);
+	SetCv("r_presentation", "1");
+	tm->draw(tm);
+	CHECK(!RTGreyed("accumulate"), "accumulate greyed under Enhanced, where it blends");
+	SetCv("r_presentation", "0");
+	SetCv("r_rt_water", "0");
+	tm->draw(tm);
+	CHECK(!RTGreyed("accumulate"), "accumulate greyed with the sun on after the modes");
 
 	/* 4: the debug view, one at a time */
 	CHECK(NumChoices((menulist_s *)RTItem("debug view")) == VidRules_NumDebugViews(), "debug views: %d",

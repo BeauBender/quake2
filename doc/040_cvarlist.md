@@ -1552,9 +1552,12 @@ is.
   reflections' blur adds 4 bytes a pixel while the water is on. A failed
   allocation is logged once and the frames are then the trace's alone.
   Saved with the configuration; applies from the next frame. The Ray
-  tracing menu's tuning screen has it as "accumulate" (0 to 0.95 in
-  steps of 0.05), greyed "turn on shadows, sun, AO or water first" while
-  none of them runs, and "set by the presentation" under Retro; the
+  tracing menu's tuning screen has it as "accumulate" (0 to 0.98, the
+  renderer's own maximum, in steps of 0.02): live when shadows, sun, AO
+  or water runs, and the presentation is not RT-primary; greyed "turn on
+  shadows, sun, AO or water first" while none of them runs, and "set by
+  the presentation" under Retro and under RT-primary (whose water has
+  no blur and whose other three effects are off); the
   presets and the A/B hold it. The tuning screen has no rule by device
   class: the row and its default are the same on every device (whether a
   default may differ by device class is decision 0014's open question).

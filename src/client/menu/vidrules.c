@@ -780,8 +780,9 @@ static const vidrt_control_t rt_tune[] = {
 	{ "r_rt_sun_angles", "sun azimuth", "55 45", CVAR_ARCHIVE, RT_SUN, 0.0f, 355.0f, 5.0f, "%.0f", NULL, 2, 0 },
 	{ "r_rt_ao_rays", "AO rays", "2", CVAR_ARCHIVE, RT_AO, 1.0f, 2.0f, 1.0f, NULL, tune_rays_names, 0, 0 },
 	{ "r_rt_water_hits", "water hits", "1", CVAR_ARCHIVE, RT_WATER, 0.0f, 1.0f, 1.0f, NULL, tune_hits_names, 0, 0 },
-	/* TASK59 slice 2b: RT7's accumulation (and the denoise and the reflections' blur it runs), 0 off */
-	{ "r_rt_temporal", "accumulate", "0.9", CVAR_ARCHIVE, VIDTUNE_EFFECT_ACCUM, 0.0f, 0.95f, 0.05f, "%.2f", NULL, 0, 0 },
+	/* TASK59 slice 2b: RT7's accumulation (and the denoise and the reflections' blur it runs), 0 off;
+	   up to the renderer's RM_RTT_ALPHA_MAX (0.98), in steps that hold the default 0.9 */
+	{ "r_rt_temporal", "accumulate", "0.9", CVAR_ARCHIVE, VIDTUNE_EFFECT_ACCUM, 0.0f, 0.98f, 0.02f, "%.2f", NULL, 0, 0 },
 	{ "r_rt_flatlight", "flat light", "0", 0, -1, 0.0f, 1.0f, 0.05f, "%.2f", NULL, 0, 0 },
 	{ "r_metalfx", "scaler", "0", CVAR_ARCHIVE, -1, 0.0f, 3.0f, 1.0f, NULL, tune_fx_names, 0, 0 },
 	{ "r_rt_shadows_show", "debug view", "0", 0, -1, 0.0f, 5.0f, 1.0f, NULL, tune_debug_names, VIDTUNE_PART_DEBUG, 0 },

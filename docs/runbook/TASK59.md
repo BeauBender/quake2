@@ -451,11 +451,14 @@ Results of the hold (code commit `@HEAD@`, base main at `@BASE@`, slice 1b at `@
   AO's and the sun's denoiser (slice 2) run inside their effects' passes, and RT-primary
   reads `r_rt_ao` and `r_rt_sun` as 0 (`RM_Effect`, the mode's table, pinned by
   `tests/metal/rm_rtgate_test.c`), so they never run there either.
-- The tuning row: "accumulate", a slider of `r_rt_temporal` from 0 to 0.95 in steps of 0.05,
-  after "water hits". It acts on four effects, so its effect is `VIDTUNE_EFFECT_ACCUM`: live
-  while any of the shadows, the sun, the AO and the water runs as the renderer runs it
-  (`VidRules_RTEffective`), greyed "turn on shadows, sun, AO or water first" while none does,
-  and "set by the presentation" under Retro. The presets and the A/B hold it
+- The tuning row: "accumulate", a slider of `r_rt_temporal` from 0 to 0.98 in steps of 0.02
+  (round 2: the renderer's `RM_RTT_ALPHA_MAX`, so the slider shows every value the renderer
+  runs; it was 0.95), after "water hits". It acts on four effects, so its effect is
+  `VIDTUNE_EFFECT_ACCUM`: live while any of the shadows, the sun, the AO and the water runs as
+  the renderer runs it (`VidRules_RTEffective`) and the presentation is not RT-primary, greyed
+  "turn on shadows, sun, AO or water first" while none does, and "set by the presentation"
+  under Retro and under RT-primary in force (round 2: the mode reads the other three off and
+  keeps the water's blur off, so nothing the row drives runs there). The presets and the A/B hold it
   (`scripts/rt/preset-to-table.sh` now counts 21 tuning cvars). The settings optimizer's
   search (`optsearch.c`) lists eleven of the tuning cvars, not every one, so it is unchanged.
 - Memory (slice 2's security note N1): `doc/040_cvarlist.md` gives the accumulation's 112
