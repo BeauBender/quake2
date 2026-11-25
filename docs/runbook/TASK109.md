@@ -191,18 +191,18 @@ summary.
 
 | Check | Result |
 |---|---|
-| base and branch | slice 1 (`task109s1`, which this slice is stacked on) `@BASE@`, branch `@HEAD@` |
-| stock, `world-metalfx*`, `hdr-metalfx2`, `rt-*` and `rtprimary-*`, byte-identical to the base | @PINS@ |
-| `rt-all-metalfx2`, default scale, three runs | @RTALL_DEF@ |
-| `rtprimary-metalfx2`, default scale, three runs | @RTP_DEF@ |
-| `rt-all-metalfx2`, `r_metalfx_scale 0.5`, three runs | @RTALL_HALF@ |
-| `rtprimary-metalfx2`, `r_metalfx_scale 0.5`, three runs | @RTP_HALF@ |
-| `rt-all-metalfx2` on `water.dm2`, default scale, three runs | @RTALL_WATER_DEF@ |
-| `rt-all-metalfx2` on `water.dm2`, `r_metalfx_scale 0.5`, three runs, and its change against `r_metalfx 0` (water drawn under the scaler) | @RTALL_WATER_HALF@ |
-| the input and output sizes (`metal_stats 1`), default and 0.5 | @SIZES@ |
-| `viewsize 60`: the box of the changing pixels at `r_metalfx 2` and at `r_metalfx 0`, against 384x288 at 128,96 | @VS60@ |
-| a still `base1`, 300 frames and more, effects on, `r_metalfx 2` at 0.5: the steps at every 32nd frame and every 5th, and the last against `r_metalfx 0` | @STILL@ |
-| the frames for the owner (captures 12 and 21, at 0.5 and at `r_metalfx 0`) | @FRAMES@ |
+| base and branch | slice 1 (`task109s1`, which this slice is stacked on) `78d36b87c275`, branch `4f6653edcbdc` (tree clean, base merged) |
+| stock, `world-metalfx*`, `hdr-metalfx2`, `rt-*` and `rtprimary-*`, byte-identical to the base | 34 of 34 scenarios byte-identical to the base (stock 17 of 17, metalfx 5 of 5, rt-* 7 of 7, rtprimary-* 5 of 5); base and branch each 34 scenarios, 0 failed |
+| `rt-all-metalfx2`, default scale, three runs | 23 frames, hash `320411ffa021`, 0 frames differing between runs |
+| `rtprimary-metalfx2`, default scale, three runs | 23 frames, hash `6fdc926a51b2`, 0 frames differing between runs |
+| `rt-all-metalfx2`, `r_metalfx_scale 0.5`, three runs | 23 frames, hash `a915d837d5ba`, 0 frames differing between runs |
+| `rtprimary-metalfx2`, `r_metalfx_scale 0.5`, three runs | 23 frames, hash `106645babbe0`, 0 frames differing between runs |
+| `rt-all-metalfx2` on `water.dm2`, default scale, three runs | 4 frames, hash `9b12cc02843f`, 0 frames differing between runs |
+| `rt-all-metalfx2` on `water.dm2`, `r_metalfx_scale 0.5`, three runs, and its change against `r_metalfx 0` (water drawn under the scaler) | 4 frames, hash `a733326e7c53`, 0 frames differing between runs. Capture 3 against `r_metalfx 0`: at 0.5, mean 0.8454 and 0.000785 of pixels over 8 levels; at the default scale, mean 0.5418 and 0.000146 over 8. The change box at both is the whole frame, x 0..639 y 0..479. `rt-water` is unchanged at `929e43a01e45`, also at `r_metalfx 0` (`water.dm2` recorded by `make-demo`, `6cb7ef4c39c2` twice) |
+| the input and output sizes (`metal_stats 1`), default and 0.5 | `rt-all` and `rtprimary`, the same: default input 640x480, output 640x480 at 0,0 (the default scale clamps to 1 at the pin's 480 lines); at 0.5 input 320x240, output 640x480 at 0,0. `supportsDevice`: spatial, temporal, temporal denoised and frame interpolator all yes (`r_metalfx_modes 31`); the `rtprimary` probes' teardown: 0 presents apart, 0 waits past the bound |
+| `viewsize 60`: the box of the changing pixels at `r_metalfx 2` and at `r_metalfx 0`, against 384x288 at 128,96 | 23 captures each. The changing pixels fill x 128..511 y 96..479 (384x384 at 128,96) at `r_metalfx 0`, at 0.5 and at the default scale. The `r_metalfx 2` frames against `r_metalfx 0`: 0.5, 2307212 differing pixels, all inside 384x288 at 128,96, 0 outside (x 128..511 y 96..383); default, 2135759 differing pixels, 0 outside (same box) |
+| a still `base1`, 300 frames and more, effects on, `r_metalfx 2` at 0.5: the steps at every 32nd frame and every 5th, and the last against `r_metalfx 0` | A made demo `t109still.dm2` (404 messages), recorded twice with the same hash `a11067671f9f`. Every 32nd frame (one jitter cycle), 13 captures, the last five step-to-step mean differences (pixels over 8 levels): `r_metalfx 0`: 0.1382 (0.003932), 0.0000 (0), 0.0041 (0), 0.0000 (0), 0.1382 (0.003932). At 0.5, temporal 0: 0.1386 (0.003727), 0.0227 (0), 0.0234 (0), 0.0231 (0), 0.1368 (0.003711). At 0.5, temporal 0.9: 0.1385 (0.003724), 0.0238 (0), 0.0239 (0), 0.0228 (0), 0.1369 (0.003711). So the step settles to about 0.02 levels with 0 pixels over 8 levels, and the 0.138 steps also appear at `r_metalfx 0`: they belong to the scene, not the scaler. The last capture against `r_metalfx 0`: temporal 0, mean 1.5140 (0.012568 over 8); temporal 0.9, mean 1.5261 (0.013314). Every 5th frame, 80 captures, last five steps: `r_metalfx 0` 0.0777, 0.0014, 0.0792, 0.0777, 0.0000; temporal 0 0.1841, 0.0865, 0.1824, 0.1603, 0.0893; temporal 0.9 0.1806, 0.0843, 0.1791, 0.1583, 0.0867; the last against `r_metalfx 0`: temporal 0 mean 1.4977 (0.012350), temporal 0.9 mean 1.5098 (0.012995) |
+| the frames for the owner (captures 12 and 21, at 0.5 and at `r_metalfx 0`) | Sent to the owner directly, not committed: Enhanced (every effect) capture 12 and Ray traced capture 21, each at `r_metalfx 0` and at 0.5 |
 
 The host checks (no lock) on the branch before the hold:
 
