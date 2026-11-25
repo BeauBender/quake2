@@ -3,7 +3,7 @@
 Status: decided by the owner, 2026-11-25. The owner asked for the root-cause
 work behind this record, and for the cards it produced to be carried through
 to merge; that request is the sign-off, and it covers the change to the
-harness's language rule and to the lock's contract below.
+harness's language rule below.
 Plans: [the bench harness plan](../plans/bench-harness.md) ("Language",
 superseded in part by this record). Card: #752.
 
@@ -66,16 +66,18 @@ and #723.
    dropped. The dash cases and paths stay until the migration card that
    removes them lands. The goal of moving the core to other repositories is withdrawn,
    and can come back later with the supervisor.
-3. **The lock.** The bench lock's guarantee is a kernel lock held by an
-   inherited file descriptor, together with the per-run quiet evidence of
-   TASK166. It is not a holder record with identity checks. A process that
-   escapes with `setsid` keeps the lock, which is the safe direction.
+3. **The lock.** The lock's identity and stale-reclaim code goes when #758
+   lands, and the bench lock's guarantee rests on the per-run quiet evidence
+   of TASK166. This record does not change the lock's acquire or queue
+   contract. Any such change, a kernel lock on an inherited file descriptor
+   included, is decided later on #760, with its own amendment to this record.
 4. **Self-tests.** Harness self-tests synchronise on the supervisor's events
-   or on the shared test helpers (#756). They do not use wall time, `sleep`
+   or on the shared test helpers (#758). They do not use wall time, `sleep`
    or `ps` state.
 5. **The freeze.** Until the migration cards below land, no new FIX card is
    filed to harden `bench_poll`, `bench_spawn`, `bench_watch`,
-   `bench_stop_groups`, `scripts/lib/bounded.py` or the lock's identity code.
+   `bench_stop_groups`, `scripts/lib/bounded.py`, the lock's identity code or
+   the `reap` and watchdog of `tests/check-image-decoder.sh`.
    Review notes and flakes on that code are added to the replacement card. A
    red main run on the frozen code is re-run once. A repeat is recorded on the
    replacement card, with the run id. The gate is never skipped or weakened
@@ -89,25 +91,39 @@ and #723.
 | Card | What it does |
 |---|---|
 | #755 | the supervisor itself, with an event stream and a test clock |
-| #756 | one self-test helper library over the supervisor's events |
-| #758 | the bench core's bounded run goes through it; `bench_poll` and the shell clock and identity reads go |
-| #759 | the lock's run path spawns, watches and stops through it; the `ps` identity layer goes |
-| #760 | the lock is a kernel lock on an inherited fd, arrival order kept, stale reclaim and holder identity deleted |
-| #761 | the gate starts, reaps and stops its checks through it |
-| #757 | the supervisor's pty mode with a bounded drain |
-| #762 | `scripts/lib/bounded.py` becomes a wrapper and `run_engine` uses the pty mode |
-| #763 | the iOS scripts, `pins.sh`, the quake2 adapter and `check-video-menu` use it; the bounded-run lint becomes one rule |
+| #758 | the bench core and the gate's three check-runner functions go through it; `bench_poll` and the shell clock and identity reads go; it absorbs the self-test helpers (#756) and the lock's run path (#759), in two PRs, and closes #726 and #741 |
+| #762 | `scripts/lib/bounded.py` becomes a wrapper; it needs no pty mode and closes #723 |
+| #770 | `check-image-decoder` bounds its runs through it |
+| #764 | the local gate selects harness checks the way CI does |
+
+## Cards closed
+
+| Closed | Why |
+|---|---|
+| #756 | merged into #758 |
+| #759 | merged into #758 |
+| #757 | the pty mode is not needed |
+| #754 | the host contract already exists in a lighter form |
 
 ## Cards parked
 
-Each is hardening of code that a migration card deletes. It stays open and
-unworked; its findings move to the card named.
+Hardening cards that a migration card deletes stay open and unworked; their
+findings move to the card named.
 
 | Parked | Closed by | Why |
 |---|---|---|
 | #726 (the end-group and stop-group clock reads) | #758 | the clock reads and `bench_poll` are deleted |
 | #741 (a `bench-poll` scratch file left by `sign-int-hang`) | #758 | the poll directory goes with `bench_poll` |
-| #723 (signal holds in `run_engine` and `bounded.py`) | #762, with #757 | `bounded.py` becomes a wrapper and the pty drain is the supervisor's |
+| #723 (signal holds in `run_engine` and `bounded.py`) | #762 | `bounded.py` becomes a wrapper |
+
+Three migration cards carry `gate:manual:replan`. They are re-planned with
+measured evidence after #758 and #764.
+
+| Parked | Why |
+|---|---|
+| #760 (the kernel lock) | the lock's contract is decided there, after #758 |
+| #761 (the gate's parent watcher and tty cases) | measured need first |
+| #763 (the other scripts) | measured need first |
 
 ## What it costs
 
@@ -117,8 +133,9 @@ unworked; its findings move to the card named.
 - C adds a memory-safety review class to the harness. The program has no
   untrusted input beyond its arguments and environment.
 - The shell and dash portability of the bench core is gone.
-- The lock no longer reclaims a stale holder by identity. A missed exclusion
-  is possible but rare, and the run that suffers it refuses itself.
+- The lock no longer reclaims a stale holder by identity once #758 lands. A
+  missed exclusion is possible but rare, and the run that suffers it refuses
+  itself.
 
 ## How to reverse it
 
