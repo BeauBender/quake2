@@ -1393,8 +1393,8 @@ test_presentation_item(void)
 static void
 test_tuning_screen(void)
 {
-	static const char *const items[] = { "sun elevation", "sun azimuth", "AO rays", "water hits", "flat light",
-		"scaler", "debug view", "presentation", "HDR", "HDR peak", "scale", "A/B: A: your settings", "B: stock", "preset name",
+	static const char *const items[] = { "sun elevation", "sun azimuth", "AO rays", "water hits", "accumulate",
+		"flat light", "scaler", "debug view", "presentation", "HDR", "HDR peak", "scale", "A/B: A: your settings", "B: stock", "preset name",
 		"save preset", "load preset", "preset as B", "apply (restart)" };
 	menuframework_s *tm;
 	int before;
@@ -1430,6 +1430,9 @@ test_tuning_screen(void)
 	CHECK(RTGreyed("AO rays") && !strcmp(RTItem("AO rays")->statusbar, "turn on ambient occlusion first"),
 		"AO rays says %s", RTItem("AO rays")->statusbar);
 	CHECK(RTGreyed("water hits"), "water hits live with water off");
+	/* TASK59 slice 2b: the accumulation's row, shown and greyed while none of the effects it acts on runs */
+	CHECK(RTGreyed("accumulate") && !strcmp(RTItem("accumulate")->statusbar, "turn on shadows, sun, AO or water first"),
+		"accumulate says %s", RTItem("accumulate")->statusbar);
 	CHECK(!RTGreyed("scaler") && !RTGreyed("scale") && !RTGreyed("flat light") && !RTGreyed("debug view"), "a live row greyed");
 	CHECK(RTGreyed("save preset") && !strcmp(RTItem("save preset")->statusbar, "the name is empty"),
 		"save preset says %s", RTItem("save preset")->statusbar);
@@ -1447,6 +1450,50 @@ test_tuning_screen(void)
 	RTItem("sun azimuth");
 	Menu_SlideItem(tm, -1);
 	CHECK(!strcmp(Str("r_rt_sun_angles"), "60 40"), "sun azimuth wrote %s", Str("r_rt_sun_angles"));
+
+	/* TASK59 slice 2b: any one effect makes the accumulation's row live; a step writes the cvar */
+	CHECK(!RTGreyed("accumulate") &&
+		!strcmp(RTItem("accumulate")->statusbar, "blends the last frames' rays; 0 off; next frame"),
+		"accumulate with sun on says %s", RTItem("accumulate")->statusbar);
+	CHECK(RTItem("accumulate")->type == MTYPE_SLIDER, "accumulate is not a slider");
+	Menu_SlideItem(tm, -1);
+	CHECK(fabsf(Cvar_VariableValue("r_rt_temporal") - 0.88f) < 0.001f, "accumulate wrote %s", Str("r_rt_temporal"));
+	/* round 2: the slider reaches the renderer's maximum, RM_RTT_ALPHA_MAX 0.98, and stops there */
+	SetCv("r_rt_temporal", "0.96");
+	Menu_SlideItem(tm, 1);
+	CHECK(fabsf(Cvar_VariableValue("r_rt_temporal") - 0.98f) < 0.001f, "accumulate up from 0.96 wrote %s",
+		Str("r_rt_temporal"));
+	Menu_SlideItem(tm, 1);
+	CHECK(fabsf(Cvar_VariableValue("r_rt_temporal") - 0.98f) < 0.001f, "accumulate past its top wrote %s",
+		Str("r_rt_temporal"));
+	SetCv("r_rt_sun", "0");
+	SetCv("r_rt_water", "1");
+	tm->draw(tm);
+	CHECK(!RTGreyed("accumulate"), "accumulate greyed with the water on");
+	SetCv("r_rt_water", "0");
+	tm->draw(tm);
+	CHECK(RTGreyed("accumulate"), "accumulate live with every effect off");
+	SetCv("r_rt_temporal", "0.9");
+	SetCv("r_rt_sun", "1");
+	tm->draw(tm);
+	/* round 2: under RT-primary nothing it drives runs (shadows, sun and AO read 0, the water's blur off),
+	   and Retro reads every effect off: greyed by the mode, whatever the user's switches say */
+	SetCv("r_rt_water", "1");
+	SetCv("r_presentation", "3");
+	tm->draw(tm);
+	CHECK(RTGreyed("accumulate") && !strcmp(RTItem("accumulate")->statusbar, "set by the presentation"),
+		"accumulate under RT-primary says %s", RTItem("accumulate")->statusbar);
+	SetCv("r_presentation", "2");
+	tm->draw(tm);
+	CHECK(RTGreyed("accumulate") && !strcmp(RTItem("accumulate")->statusbar, "set by the presentation"),
+		"accumulate under Retro says %s", RTItem("accumulate")->statusbar);
+	SetCv("r_presentation", "1");
+	tm->draw(tm);
+	CHECK(!RTGreyed("accumulate"), "accumulate greyed under Enhanced, where it blends");
+	SetCv("r_presentation", "0");
+	SetCv("r_rt_water", "0");
+	tm->draw(tm);
+	CHECK(!RTGreyed("accumulate"), "accumulate greyed with the sun on after the modes");
 
 	/* 4: the debug view, one at a time */
 	CHECK(NumChoices((menulist_s *)RTItem("debug view")) == VidRules_NumDebugViews(), "debug views: %d",

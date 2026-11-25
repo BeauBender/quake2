@@ -56,7 +56,8 @@ static unsigned long ao_count;  /* the views traced, the noise's frame without a
 /*
  * RT7 (TASK59): r_rt_temporal and the one reset state of the shadows',
  * the sun's and the AO's histories (slice 1b), so that a reset or a cut
- * resets the three in the same view.
+ * resets the three in the same view. It is a tuning row, so it is read
+ * through RM_Effect, the A/B harness's B side included (slice 2b).
  */
 static cvar_t *r_rt_temporal;
 static rm_rtt_state_t rtt_state;
@@ -82,6 +83,12 @@ RM_RTT_BeginView(void)
 	rtt_stepped = 0;
 }
 
+int
+RM_RTT_On(void)
+{
+	return rm_rtt_alpha(r_rt_temporal ? RM_Effect(r_rt_temporal) : 0.0f) > 0.0f;
+}
+
 const rm_rtt_view_t *
 RM_RTT_ViewFor(const rm_view_t *view)
 {
@@ -96,7 +103,7 @@ RM_RTT_ViewFor(const rm_view_t *view)
 	}
 
 	rtt_stepped = 1;
-	alpha = rm_rtt_alpha(r_rt_temporal ? r_rt_temporal->value : 0.0f);
+	alpha = rm_rtt_alpha(r_rt_temporal ? RM_Effect(r_rt_temporal) : 0.0f);
 	rtt_on = alpha > 0.0f;
 
 	/* off: the state forgotten, so the next view with it on resets; the effects release their histories */

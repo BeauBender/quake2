@@ -60,6 +60,9 @@ void RM_RTT_EndFrame(void);
  * for every effect after it; NULL while r_rt_temporal is 0.
  */
 void RM_RTT_BeginView(void);
+
+/* TASK59 slice 2b: 1 while r_rt_temporal is above 0 (rm_rtt_alpha), read alone: the history's state is not stepped */
+int RM_RTT_On(void);
 const rm_rtt_view_t *RM_RTT_ViewFor(const rm_view_t *view);
 
 #endif /* RM_RTAOSCENE_H */
