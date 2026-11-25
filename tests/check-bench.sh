@@ -3907,8 +3907,53 @@ t_cant_tell() {
 	[ "$fails" -eq 0 ]
 }
 
+# A signal to bench.sh in the instant its poll exits (FIX196): the shell has
+# reaped the poll (bash when it exits, dash in its next wait for any child,
+# the wait the signal came in) and no wait has collected it, so its pid is
+# gone. bench_on_signal calls bench_poll_end as a plain command under
+# set -eu, as this trap does: the trap goes on to its stop and its own exit
+# status; a TERM that fails there must not end the shell first (status 1),
+# which left the bounded command unrecorded and the lock freed while it
+# ran. Staged with no race: the poll is a "true" job, and the shell signals
+# itself only once kill -0 fails for that pid (a foreground sleep is a wait
+# for any child in dash). In dash, in bash 3.2, and in bash as sh.
+t_poll_end_reaped() {
+	fresh poll-end
+	printf '%s\n' \
+		'set -eu' \
+		'. "$1/core/common.sh"' \
+		'exec 8>&-' \
+		'on_signal() {' \
+		'	trap "" TERM' \
+		'	bench_poll_end' \
+		'	echo "the stop ran" >&2' \
+		'	exit 143' \
+		'}' \
+		'trap on_signal TERM' \
+		'true &' \
+		'BENCH_POLL_PID=$!' \
+		'_n=0' \
+		'while kill -0 "$BENCH_POLL_PID" 2> /dev/null; do' \
+		'	[ "$_n" -lt 200 ] || { echo "the poll was never reaped" >&2; exit 3; }' \
+		'	sleep 0.05' \
+		'	_n=$((_n + 1))' \
+		'done' \
+		'kill -s TERM "$$"' \
+		'echo "the trap did not run" >&2' \
+		'exit 4' > "${E:?}/reaped.sh"
+	for _sh in dash /bin/bash /bin/sh; do
+		_st=0
+		"$_sh" "${E:?}/reaped.sh" "$R" > "${E:?}/reaped.out" 2>&1 || _st=$?
+		_o=$(tr '\n' '|' < "${E:?}/reaped.out")
+		if [ "$_st" -ne 143 ] || [ "$_o" != "the stop ran|" ]; then
+			bad "poll end: $_sh: a TERM to a poll reaped already ended the trap before its stop: exit $_st (wanted 143), output [$_o] (wanted [the stop ran|])"
+		fi
+	done
+	[ "$fails" -eq 0 ]
+}
+
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_core_id t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle t_cant_tell"
+all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_core_id t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle t_cant_tell t_poll_end_reaped"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -3988,6 +4033,8 @@ mutant signal-no-id core/common.sh '	bench_spawned "$2" || return 1' '	kill -s "
 mutant stop-term-untold core/common.sh '	bench_signal_group TERM "$_sg_p" "$_sg_o" || _sg_r=$?' '	bench_signal_group TERM "$_sg_p" "$_sg_o" || :' t_core_id || mfail=1
 mutant stop-kill-untold core/common.sh '		bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' '		bench_signal_group KILL "$_sg_p" "$_sg_o" || :' t_core_id || mfail=1
 mutant alive-slot-taken core/common.sh '		[ "$_ga_r" -ne 3 ] || return 1' '		:' t_core_id || mfail=1
+# FIX196: the poll's TERM unguarded again, as on 3812dba2.
+mutant poll-end-kill-fails core/common.sh '		kill -s TERM "$_pe_p" || :' '		kill -s TERM "$_pe_p"' t_poll_end_reaped || mfail=1
 mutant end-group-any core/common.sh '	bench_group_alive "$1" group || return 0' '	kill -0 -- "-$1" 2> /dev/null || return 0' t_core_id \
 	'	while bench_group_alive "$1" group; do' '	while kill -0 -- "-$1" 2> /dev/null; do' || mfail=1
 # FIX172, round 1: a leader's group still stopped while ps is silent, the
