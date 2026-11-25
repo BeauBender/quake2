@@ -1298,7 +1298,10 @@ is.
   the light the resolve reads, as the sky light is. The pixel's own
   lightmap is never read. A face the stock renderer has not drawn this
   frame keeps the lightmap it was last drawn with, so a switched light
-  outside the view can still show in the bounce. `1` (the default); `0`
+  outside the view can still show in the bounce. The lightmap is read
+  bilinearly, like the water's and the stock default
+  `metal_lightmap_filter 0`; with the bicubic option on it reads slightly
+  differently from the stock draw. `1` (the default); `0`
   traces no bounce ray; at most `4`; a negative value or one that is not
   a finite number counts as `0`. The ray's noise moves each frame unless
   `r_rt_direct_seed` fixes it. Read each frame. Saved with the
