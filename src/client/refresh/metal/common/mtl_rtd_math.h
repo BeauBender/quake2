@@ -211,6 +211,18 @@ mtl_rtd_result(mtl_rtd_acc_t a, float v, float n)
  */
 #define MTL_RTD_REFL_RADIUS 1
 
+/*
+ * The reflections' blur's view (rmb_rtwater.m fills it from the water's
+ * view, rm_rtw_view_t): GL clip coordinates to world (column-major, as
+ * its inv), the viewport at the render size and the eye. 96 bytes.
+ */
+typedef struct
+{
+	float inv[16];
+	float vp[4];
+	float eye[4];
+} mtl_rtd_rview_t;
+
 /* the spatial weight of the reflections' tap (dx, dy), -1 to 1 each: the binomial 1 2 1 in each axis, over 16; 0 outside */
 static inline float
 mtl_rtd_rtap(int dx, int dy)

@@ -28,7 +28,11 @@
 #     (common/mtl_rtd_math.h, RT7, TASK59 slice 2), with mutants of the
 #     header it must fail and pins of rm_rtdenoise.metal's calls with
 #     mutants (the depth guide and the count scale dropped, a history
-#     written), compiled with the Metal compiler where there is one,
+#     written), compiled with the Metal compiler where there is one, and
+#     the water reflections' 3 x 3 blur (slice 2b) with its rule's mutants
+#     (the depth guide dropped, a neighbour without a reflection blurred
+#     in) and rm_rtwdenoise.metal's pins with mutants (the depth guide
+#     dropped, a history read, a history written),
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
@@ -1265,7 +1269,9 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	"rm_rtsun.metal rm_rtsun_temporal mtl_rtt_blend" "rm_rtsun.metal rm_rtsun_temporal mtl_rtt_count" \
 	"rm_rtdenoise.metal rm_rtd_filter mtl_rtd_weight" "rm_rtdenoise.metal rm_rtd_filter mtl_rtd_add" \
 	"rm_rtdenoise.metal rm_rtd_filter mtl_rtd_result" "rm_rtdenoise.metal rm_rtao_denoise rm_rtd_filter" \
-	"rm_rtdenoise.metal rm_rtsun_denoise rm_rtd_filter"; do
+	"rm_rtdenoise.metal rm_rtsun_denoise rm_rtd_filter" \
+	"rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_rweight" "rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_add" \
+	"rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_rresult"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
 	set -- $pair
 	f=$rm_dir/$1 kn=$2 hp=$3
@@ -1335,7 +1341,7 @@ else
 	case $rtd in *", 0 failed") ;; *) bad "tests/metal/rm_rtdenoise_test.c printed no result line"; rtd="";; esac
 fi
 rtd_mutants=0
-for m in depth normal mat countcut countflat finite; do
+for m in depth normal mat countcut countflat finite rdepth rok; do
 	rtd_tree "${tmp:?}/rtdm"
 	h=${tmp:?}/rtdm/src/client/refresh/metal/common/mtl_rtd_math.h
 	case $m in
@@ -1345,6 +1351,9 @@ for m in depth normal mat countcut countflat finite; do
 		countcut) sed 's/if (!(n >= MTL_RTD_COUNT_FULL) || !(n < MTL_RTD_COUNT_NONE))/if (!(n >= MTL_RTD_COUNT_FULL) || 0)/' ;;
 		countflat) sed 's|return (MTL_RTD_COUNT_NONE - n) / (MTL_RTD_COUNT_NONE - MTL_RTD_COUNT_FULL);|return 1.0f + 0.0f * n;|' ;;
 		finite) sed 's/if (!(w > 0.0f) || !isfinite(w) || !isfinite(v))/if (!(w > 0.0f))/' ;;
+		# slice 2b: the reflections' depth guide dropped; a neighbour without a reflection blurred in
+		rdepth) sed 's/w = mtl_rtd_rtap(dx, dy) \* mtl_rtd_depth_w(d, dn);/w = mtl_rtd_rtap(dx, dy) * (1.0f + 0.0f * (d - dn));/' ;;
+		rok) sed 's/if (!ok)$/if (!ok \&\& 0)/' ;;
 	esac < "$rm_dir/common/mtl_rtd_math.h" > "$h"
 	if cmp -s "$rm_dir/common/mtl_rtd_math.h" "$h"; then
 		bad "the denoiser mutant ($m) changed nothing"
@@ -1403,6 +1412,51 @@ for p in depth count nohist; do
 		bad "the denoiser kernel mutant ($p) does not compile, so it tests nothing"
 	elif rtd_pin "${tmp:?}/rtd-kernel.metal" "$p"; then
 		bad "the denoiser's $p pin passes its mutant"
+	else
+		rtd_kmut=$((rtd_kmut + 1))
+	fi
+done
+# slice 2b: the reflections' blur, rm_rtwdenoise.metal. Its call of mtl_rtd_rweight pinned with the
+# depth guide's mutant (the neighbour's distance replaced by the pixel's own), and no history: its
+# textures are the four it reads and writes, and refl_out is the one it writes. A mutant that reads a
+# history (a fifth texture mixed into the blur) and one that writes one must be refused.
+rtw_pin() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		rdepth) rtd_body "$1" rm_rtw_denoise | grep -qF 'mtl_rtd_rweight(dx, dy, dc, dn, ok)' ;;
+		histread | histwrite)
+			[ "$(rtd_body "$1" rm_rtw_denoise | grep -c '\[\[texture(')" = 4 ] &&
+				! strip "$1" | grep -E '\.write\(|access::(read_)?write>' | grep -vqE 'refl_out' ;;
+	esac
+}
+wdn=$rm_dir/rm_rtwdenoise.metal
+if [ -n "$rtd_metal" ] && ! rtd_compile "$wdn"; then
+	cat "${tmp:?}/metal.out"
+	bad "rm_rtwdenoise.metal does not compile"
+fi
+for p in rdepth histread histwrite; do
+	if ! rtw_pin "$wdn" "$p"; then
+		bad "rm_rtwdenoise.metal does not hold the reflections' blur's $p pin"
+		continue
+	fi
+	rtd_kpins=$((rtd_kpins + 1))
+	case $p in
+		rdepth) sed 's/mtl_rtd_rweight(dx, dy, dc, dn, ok)/mtl_rtd_rweight(dx, dy, dc, dc, ok)/' "$wdn" ;;
+		histread) awk '/^rm_rtw_denoise\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && /texture\(3\)/ { print; print "\t\ttexture2d<float, access::read> hist [[texture(4)]],"; next }
+			b && /n = refl\.read\(uint2\(q\)\);/ { print; print "\t\t\tn = 0.5f * (n + hist.read(uint2(q)));"; next }
+			{ print }' "$wdn" ;;
+		histwrite) awk '/^rm_rtw_denoise\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && /texture\(3\)/ { print; print "\t\ttexture2d<float, access::write> hist_out [[texture(4)]],"; next }
+			b && /^\trefl_out\.write\(float4/ { print; print "\thist_out.write(c, px);"; next }
+			{ print }' "$wdn" ;;
+	esac > "${tmp:?}/rtd-kernel.metal"
+	if cmp -s "$wdn" "${tmp:?}/rtd-kernel.metal"; then
+		bad "the reflections' blur's kernel mutant ($p) changed nothing"
+	elif [ -n "$rtd_metal" ] && ! rtd_compile "${tmp:?}/rtd-kernel.metal"; then
+		cat "${tmp:?}/metal.out"
+		bad "the reflections' blur's kernel mutant ($p) does not compile, so it tests nothing"
+	elif rtw_pin "${tmp:?}/rtd-kernel.metal" "$p"; then
+		bad "the reflections' blur's $p pin passes its mutant"
 	else
 		rtd_kmut=$((rtd_kmut + 1))
 	fi
