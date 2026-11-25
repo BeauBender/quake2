@@ -125,7 +125,8 @@ static int marked;                      /* TASK162: this view's raster drew the 
 static id<MTLComputePipelineState> blur_pipe;
 static id<MTLTexture> t_rblur;          /* the blurred reflection and the class, as t_refl */
 static int blur_on;                     /* the next view blurs */
-static int blur_bad;                    /* its pipeline or output could not be made: latched until the pass closes */
+static int blur_bad;                    /* its pipeline or output could not be made: latched until the size changes or the pass closes */
+static NSUInteger blur_bad_w, blur_bad_h; /* the render size blur_bad was latched at */
 static int blurred;                     /* this view's reflection was blurred into t_rblur */
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
@@ -482,6 +483,7 @@ rmb_rtw_close(void)
 	}
 
 	blur_on = blur_bad = blurred = 0;
+	blur_bad_w = blur_bad_h = 0;
 	rtw_open = 0;
 	made_ws = 0;
 	list_cap = shade_n = 0;
@@ -978,6 +980,12 @@ rmb_rtw_blur(id<MTLCommandBuffer> cmd, id<MTLTexture> depth, NSUInteger w, NSUIn
 	id<MTLComputeCommandEncoder> ce;
 	mtl_rtd_rview_t rv;
 
+	/* round 2: a failure at one render size is tried again, once, at the next */
+	if (blur_bad && ((w != blur_bad_w) || (h != blur_bad_h)))
+	{
+		blur_bad = 0;
+	}
+
 	if (!blur_on || blur_bad || !t_refl || !t_wdist)
 	{
 		return 0;
@@ -993,6 +1001,8 @@ rmb_rtw_blur(id<MTLCommandBuffer> cmd, id<MTLTexture> depth, NSUInteger w, NSUIn
 		if (!blur_pipe)
 		{
 			blur_bad = 1;
+			blur_bad_w = w;
+			blur_bad_h = h;
 			fprintf(stderr, "ref_metal: rt water: no reflection blur pipeline%s%s\n", e ? ": " : "",
 					e ? e.localizedDescription.UTF8String : "");
 			return 0;
@@ -1011,6 +1021,8 @@ rmb_rtw_blur(id<MTLCommandBuffer> cmd, id<MTLTexture> depth, NSUInteger w, NSUIn
 		if (!t_rblur)
 		{
 			blur_bad = 1;
+			blur_bad_w = w;
+			blur_bad_h = h;
 			fprintf(stderr, "ref_metal: rt water: cannot make the reflection blur's %lux%lu output\n",
 					(unsigned long)w, (unsigned long)h);
 			return 0;

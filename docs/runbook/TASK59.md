@@ -504,7 +504,14 @@ index a new row shifts, checks the accumulate row under Retro, and checks
 the row "set by the presentation" under RT-primary and Retro, keeps it live under Enhanced,
 and steps it to 0.98 and no further. The `rdepth` pin also holds the line that computes `dn`
 (`dn = ok ? rm_rtd_rdist(...) : dc;`), with a second mutant, `rdist`, that never computes it
-(`dn = dc;`).
+(`dn = dc;`). The blur's lifetime: `RM_RTW_View` now decides the blur
+(`rmb_rtw_set_blur`) before any of its early returns, so a view that traces nothing (a
+shadows or AO show view, a view or prepare failure) still releases the blur's pipeline and
+`t_rblur` once the blur is off, instead of keeping them until the next view that traces or
+the pass's close. A failed pipeline or `t_rblur` latches `blur_bad` at its render size only:
+the next view at another size tries once more (and logs again if it fails), and the pass's
+close clears it as before. The back end has no host test (it needs a Metal device); both
+files pass a syntax-only compile with `-Wall -Wextra -Werror`.
 
 Run by hand on the branch, with the check's compile lines and no lock: `denoiser 171 checks,
 0 failed, 8 rule mutants, 6 kernel pins with 6 kernel mutants refused and compiled` and `29
