@@ -32,6 +32,10 @@
 #     (rm_rtdir.c and common/mtl_rtdir_math.h, TASK188; eight scratch mutants
 #     of the exposure fit in rm_rtdir.c must fail it; TASK189's sky light and
 #     sun, common/mtl_rtsky_math.h, and the kernel's mutants of them),
+#     tests/metal/rm_rtptemporal_test.c, RT-primary's temporal accumulation
+#     (common/mtl_rtp_math.h, TASK190 slice 1), with five mutants of the
+#     header it must fail and four pins of rm_rtptemporal.metal with seven
+#     mutants, compiled with xcrun metal where it is there,
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -1946,6 +1950,151 @@ for hm in noclear othervp fieldsw fieldss tmfull thtw retclear guardinv nocancel
 	fi
 done
 seg 14 ", tone-map order and probe cancel held, $hdr_mutants order mutants refused"
+
+# RT-primary's temporal accumulation (TASK190 slice 1, PM8): tests/metal/rm_rtptemporal_test.c holds
+# common/mtl_rtp_math.h's rule (the blend of each channel with its own history, the reset, off, depth
+# and material rejects, a history that is not a light, the count's saturation, NaN in and in the
+# history, the pass-through of every pixel that is not a traced world pixel); then the same test
+# against mutants of the header, each of which must compile and fail it: the reset ignored, the count
+# frozen, green blended with red's history, the bad history kept, a non-world pixel not passed through.
+rtp=""
+rtp_tree() { # <dir>: a copy of the test and the headers, laid out as the test includes them
+	rm -rf "${1:?}"
+	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
+	cp "$rm_dir/common/mtl_rtp_math.h" "$rm_dir/common/mtl_rtt_math.h" "$rm_dir/common/mtl_shader_math.h" \
+		"$rm_dir/common/mtl_gbuf_math.h" "$1/src/client/refresh/metal/common/"
+	cp tests/metal/rm_rtptemporal_test.c "$1/tests/metal/"
+}
+rtp_build() { # <tree>: 0 when the tree's test builds
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags -o "$1/t" "$1/tests/metal/rm_rtptemporal_test.c" -lm > "${tmp:?}/cc.out" 2>&1
+}
+rtp_run() { # <tree>: 0 when the tree's test builds and passes
+	rtp_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
+}
+rtp_tree "${tmp:?}/rtp"
+if ! rtp_run "${tmp:?}/rtp"; then
+	cat "${tmp:?}/cc.out" "${tmp:?}/out"
+	bad "tests/metal/rm_rtptemporal_test.c fails on the real files"
+else
+	rtp=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtptemporal_test: //')
+	case $rtp in *", 0 failed") ;; *) bad "tests/metal/rm_rtptemporal_test.c printed no result line"; rtp="";; esac
+fi
+rtp_mutants=0
+rtp_h=$rm_dir/common/mtl_rtp_math.h
+for m in reset count mix bad pass; do
+	rtp_tree "${tmp:?}/rtpm"
+	h=${tmp:?}/rtpm/src/client/refresh/metal/common/mtl_rtp_math.h
+	case $m in
+		reset) sed 's/mtl_rtt_reject(reset, ok,/mtl_rtt_reject(reset \& 0u, ok,/' ;;
+		count) sed 's/p\.hist\.a = mtl_rtt_count(rej, h\.a);/p.hist.a = h.a;/' ;;
+		mix) sed 's/mtl_rtp_clamp(cur\.g), h\.g,/mtl_rtp_clamp(cur.g), h.r,/' ;;
+		bad) sed 's/r |= MTL_RTP_REJ_BAD;/r |= 0u;/' ;;
+		pass) sed 's/		p\.out = cur;/		p.out = h;/' ;;
+	esac < "$rtp_h" > "$h"
+	if cmp -s "$rtp_h" "$h"; then
+		bad "the RT-primary temporal mutant ($m) changed nothing"
+	elif ! rtp_build "${tmp:?}/rtpm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the RT-primary temporal mutant ($m) does not compile, so it tests nothing"
+	elif rtp_run "${tmp:?}/rtpm"; then
+		bad "tests/metal/rm_rtptemporal_test.c passes the RT-primary temporal mutant ($m)"
+	else
+		rtp_mutants=$((rtp_mutants + 1))
+	fi
+done
+[ "$rtp_mutants" = 5 ] || bad "the RT-primary temporal test refused $rtp_mutants of its 5 header mutants"
+# The kernel, rm_rtptemporal.metal, pinned as text: the reprojection with the motion vector as the
+# G-buffer wrote it (mutants: its sign flipped, no motion read), the view's reset and the material
+# reaching the rule (mutants: the reset not passed, a material compared with itself), no lightmap
+# read (mutant: lm read into the output), and the kernel writing only the light, the history and its
+# key, each once (mutants: a fourth output written, the history not written). Where the Metal
+# compiler is there, the kernel and every mutant must compile with it (a mutant it refuses tests
+# nothing). The back end takes the view into the history only where it dispatches (rtt_place, as RT7's
+# back ends), the effect row reads the accumulated light where there is one, and the scene steps the
+# shared reset state with r_rt_temporal as the user set it.
+rtp_metal=""
+if [ "$(uname -s)" = Darwin ] && command -v xcrun >/dev/null 2>&1 && xcrun -f metal >/dev/null 2>&1; then
+	rtp_metal=1
+fi
+rtp_compile() { # <file.metal>: 0 when it compiles as the Makefile compiles rm_rtptemporal.metal
+	xcrun -sdk macosx metal -c -I"$rm_dir" "$1" -o "${tmp:?}/rtp.air" > "${tmp:?}/metal.out" 2>&1
+}
+rtp_body() { # <file>: rm_rtp_temporal's code, comments and literals blanked, whitespace squeezed
+	strip "$1" | awk '/^rm_rtp_temporal\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' | tr -s ' \t' '  '
+}
+rtp_pin() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		motion) rtp_body "$1" | grep -qF 'const float2 mv = motion.read(px).xy;' &&
+			rtp_body "$1" | grep -qF 'mtl_rtt_reproject(px.x, px.y, mv.x, mv.y, w, hh)' ;;
+		reset) rtp_body "$1" | grep -qF 'rej = mtl_rtp_reject(t.reset, r.ok, dist, hd, t.move, m, hm, hv);' ;;
+		nolm) ! strip "$1" | grep -qwE 'lm|lightmap' ;;
+		writes)
+			# exactly three writes, one of each output, and no other texture it can write
+			[ "$(strip "$1" | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.write\(' | sort | tr -d '\n')" = \
+				'hist_out.write(key_out.write(light_out.write(' ] &&
+				! strip "$1" | grep -E 'access::(read_)?write>' | grep -vqE ' (light_out|hist_out|key_out) \[\[texture' ;;
+	esac
+}
+rtp_kpins=0 rtp_kmut=0
+rtp_k=$rm_dir/rm_rtptemporal.metal
+if [ -n "$rtp_metal" ] && ! rtp_compile "$rtp_k"; then
+	cat "${tmp:?}/metal.out"
+	bad "rm_rtptemporal.metal does not compile"
+fi
+for p in motion reset nolm writes; do
+	if ! rtp_pin "$rtp_k" "$p"; then
+		bad "rm_rtptemporal.metal does not hold the accumulation's $p pin"
+		continue
+	fi
+	rtp_kpins=$((rtp_kpins + 1))
+	case $p in
+		motion) kms="sign nomotion" ;;
+		reset) kms="noreset samemat" ;;
+		nolm) kms="lmread" ;;
+		*) kms="extra nohist" ;;
+	esac
+	for m in $kms; do
+		case $m in
+			sign) sed 's/mtl_rtt_reproject(px\.x, px\.y, mv\.x, mv\.y,/mtl_rtt_reproject(px.x, px.y, -mv.x, mv.y,/' ;;
+			nomotion) sed 's/const float2 mv = motion\.read(px)\.xy;/const float2 mv = float2(0.0f);/' ;;
+			noreset) sed 's/rej = mtl_rtp_reject(t\.reset,/rej = mtl_rtp_reject(0u,/' ;;
+			samemat) sed 's/t\.move, m, hm, hv);/t.move, m, m, hv);/' ;;
+			lmread) awk '/texture\(9\)/ { print; print "\t\ttexture2d<float, access::read> lm [[texture(10)]],"; next }
+				/light_out\.write\(/ { sub(/p\.out\.a\)/, "p.out.a) + lm.read(px)") } { print }' ;;
+			extra) awk '/texture\(9\)/ { print; print "\t\ttexture2d<float, access::write> vis_out [[texture(10)]],"; next }
+				/key_out\.write\(/ { print; print "\t\tvis_out.write(float4(1.0f), px);"; next } { print }' ;;
+			nohist) sed '/hist_out\.write(/d' ;;
+		esac < "$rtp_k" > "${tmp:?}/rtp-kernel.metal"
+		if cmp -s "$rtp_k" "${tmp:?}/rtp-kernel.metal"; then
+			bad "the RT-primary temporal kernel mutant ($m) changed nothing"
+		elif [ -n "$rtp_metal" ] && ! rtp_compile "${tmp:?}/rtp-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the RT-primary temporal kernel mutant ($m) does not compile, so it tests nothing"
+		elif rtp_pin "${tmp:?}/rtp-kernel.metal" "$p"; then
+			bad "the accumulation's $p pin passes its mutant ($m)"
+		else
+			rtp_kmut=$((rtp_kmut + 1))
+		fi
+	done
+done
+[ "$rtp_kpins" = 4 ] && [ "$rtp_kmut" = 7 ] ||
+	bad "rm_rtptemporal.metal holds $rtp_kpins of its 4 pins and refuses $rtp_kmut of its 7 mutants"
+# the back end, the effect row and the scene
+if [ "$(grep -cF "$rtt_take" "$rm_dir/rmb_rtdir.m")" != 1 ] || ! rtt_place "$rm_dir/rmb_rtdir.m" rmb_rtdir_accumulate; then
+	bad "rmb_rtdir.m: rmb_rtdir_accumulate does not take the view through $rtt_take after every early return and before its dispatch"
+fi
+if ! awk '/^rmb_rtdir_fx_trace\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$rm_dir/rmb_rtdir.m" |
+	grep -qF 'id<MTLTexture> acc = rmb_rtdir_accumulate(io->depth, io->normal, io->material, dl);' ||
+	! awk '/^rmb_rtdir_fx_trace\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$rm_dir/rmb_rtdir.m" |
+	grep -qF 'io->light = acc ? acc : dl;'; then
+	bad "rmb_rtdir.m: rmb_rtdir_fx_trace does not read the accumulated light after the trace"
+fi
+if [ "$(grep -cF 'rmb_rtdir_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (unsigned long)h);' "$rm_dir/rm_rtdirscene.c")" != 1 ] ||
+	[ "$(grep -cF 'ref_metal/rm_rtptemporal.air' Makefile)" != 2 ]; then
+	bad "the RT-primary accumulation is not stepped by rm_rtdirscene.c or not linked into ref_metal.metallib"
+fi
+seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, $rtp_kpins kernel pins with $rtp_kmut kernel mutants refused${rtp_metal:+ and compiled}"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"
