@@ -650,6 +650,30 @@ test_floor_metal(void)
 	CHECK(MTL_RTM_ABOVE(0.1f) && !MTL_RTM_ABOVE(nextafterf(0.1f, 0.0f)) && !MTL_RTM_ABOVE(NAN));
 }
 
+/* slice 2: the r_rt_stats 2 line, with and without the GPU time, and a buffer it does not fit */
+static void
+test_stats_line(void)
+{
+	rm_rtm_stats_t s;
+	char buf[256];
+
+	memset(&s, 0, sizeof(s));
+	s.frame = 12;
+	s.pixels = 3456;
+	s.rays = 789;
+	s.open = 10;
+	s.ms = 0.25;
+	CHECK(rm_rtm_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(!strcmp(buf, "ref_metal: rt models: frame 12: 3456 model pixels, 789 shadow rays, 10 sky, sun and bounce rays, "
+			"0.250 ms"));
+	s.ms = -1;
+	CHECK(rm_rtm_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(!strcmp(buf, "ref_metal: rt models: frame 12: 3456 model pixels, 789 shadow rays, 10 sky, sun and bounce rays, "
+			"- ms"));
+	CHECK(rm_rtm_stats_format(&s, buf, 16) == 0 && buf[0] == '\0');
+	CHECK(rm_rtm_stats_format(&s, buf, 0) == 0);
+}
+
 int
 main(void)
 {
@@ -665,6 +689,7 @@ main(void)
 	test_weapon();
 	test_pullback();
 	test_floor_metal();
+	test_stats_line();
 
 	printf("rm_rtmodel_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

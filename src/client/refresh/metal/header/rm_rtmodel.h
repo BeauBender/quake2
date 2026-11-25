@@ -25,7 +25,8 @@
  * world pixel takes, at its own point and normal, in place of gl1's light
  * point and shadedots. Slice 1 holds the rules alone: which models are
  * traced, their colour rule, the tag that carries their flags and the
- * view weapon's unprojection. Nothing in the renderer calls them yet.
+ * view weapon's unprojection. Slice 2 lights the rastered models by them
+ * (rm_rtmodelscene.c, rmb_rtmodel.m and rm_rtmodel.metal).
  *
  * The rm_rtm_* functions are plain C with neither SDL nor Metal
  * (rm_rtmodel.c), host-tested by tests/metal/rm_rtmodel_test.c with the

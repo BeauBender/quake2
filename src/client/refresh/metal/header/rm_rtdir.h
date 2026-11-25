@@ -605,4 +605,29 @@ int rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap);
 void rmb_rtdir_fx_trace(rmb_rtfx_io_t *io);
 void rmb_rtdir_fx_show(rmb_rtfx_io_t *io);
 
+#ifdef __OBJC__
+#import <Metal/Metal.h>
+
+/*
+ * TASK191 slice 2: what the model pass (rmb_rtmodel.m) reads of the
+ * frame's direct-light trace, read-only: the view as the trace bound it
+ * (its nself and nbrec the trace's), the lightstyles, the dynamic lights,
+ * the trace's visibility output, the map's buffers and the bounce's
+ * lightmap array (or the empty one). Every object is the pass's own and
+ * lives until rmb_rtdir_close; none is bound here.
+ */
+typedef struct
+{
+	rm_rtdir_view_t view;
+	const float *styles;                        /* 3 x RM_RTL_STYLES */
+	const rm_rtdir_dlight_t *dlights;           /* MTL_RTDIR_MAX_DLIGHTS, all of them bound */
+	__unsafe_unretained id<MTLTexture> vis;     /* the trace's visibility (RGBA8Unorm) */
+	__unsafe_unretained id<MTLTexture> atlas;   /* the bounce's lightmap array, or the empty array */
+	__unsafe_unretained id<MTLBuffer> lights, selftab, tile, brec;   /* selftab and brec nil when none was made */
+} rmb_rtdir_frame_t;
+
+/* 1 with f filled when this frame's trace was encoded (rmb_rtdir_fx_trace), until the show; else 0 */
+int rmb_rtdir_frame(rmb_rtdir_frame_t *f);
+#endif
+
 #endif /* RM_RTDIR_H */

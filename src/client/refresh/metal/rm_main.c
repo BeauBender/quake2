@@ -42,6 +42,8 @@
 #include "header/rm_gbufscene.h"
 #include "header/rm_fxscene.h"
 #include "header/rm_rtgate.h"
+#include "header/rm_rtmodel.h"
+#include "header/rm_rtmodelscene.h"
 #include "common/mtl_matrix.h"
 #include "common/mtl_rate.h"
 #include "common/mtl_retro_math.h"
@@ -1187,6 +1189,12 @@ R_EntitySplit(const entity_t *e)
 	if (m)
 	{
 		kind = (m->type == mod_alias) ? RM_GB_KIND_ALIAS : (m->type == mod_brush) ? RM_GB_KIND_BRUSH : RM_GB_KIND_OTHER;
+	}
+
+	/* TASK191 slice 2: under RT-primary's traced models, the models that keep gl1's light go forward */
+	if (RM_TracedModels())
+	{
+		return rm_rtm_entity_split(e->flags, kind, gl_shadows->value, r_newrefdef.rdflags, 1);
 	}
 
 	return rm_gb_entity_split(e->flags, kind, gl_shadows->value);

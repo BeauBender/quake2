@@ -1005,3 +1005,26 @@ rmb_rtdir_fx_show(rmb_rtfx_io_t *io)
 {
 	rmb_rtdir_show(io->enc);
 }
+
+/* TASK191 slice 2: the frame's trace, read for the model pass (rmb_rtmodel.m); it binds nothing */
+int
+rmb_rtdir_frame(rmb_rtdir_frame_t *f)
+{
+	id<MTLTexture> atlas = (dir_open && brec_lmtex) ? rmb_texture_for_draw(brec_lmtex) : nil;
+
+	if (!dir_open || !traced || !t_vis || !lights || !tile || !white_arr || !f)
+	{
+		return 0;
+	}
+
+	f->view = view;
+	f->styles = styles;
+	f->dlights = dlights;
+	f->vis = t_vis;
+	f->atlas = (atlas && (atlas.textureType == MTLTextureType2DArray)) ? atlas : white_arr;
+	f->lights = lights;
+	f->selftab = selftab;
+	f->tile = tile;
+	f->brec = brec;
+	return 1;
+}

@@ -863,7 +863,7 @@ if [ -n "$rtfx" ]; then
 	for fxm in order tablesw gatesw surf forward aoswap wframe postempty resolvego wantedgo; do
 		cp "$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtgate.c" "${tmp:?}/fxm/"
 		case $fxm in
-			order) sed 's/{ RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER }/{ RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER }/' \
+			order) sed 's/RM_RTFX_DIRECT, RM_RTFX_MODELS, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER/RM_RTFX_DIRECT, RM_RTFX_MODELS, RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER/' \
 				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 			tablesw) sed 's/"ao", "r_rt_ao"/"ao", "r_rt_ambient"/' "$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 			gatesw) sed 's/^	"r_rt_ao",$/	"r_rt_ambient",/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/fxm/rm_rtgate.c" ;;
@@ -2296,6 +2296,136 @@ if [ "$(grep -cF 'rmb_rtdir_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (un
 	bad "the RT-primary accumulation is not stepped by rm_rtdirscene.c or not linked into ref_metal.metallib"
 fi
 seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, $rtp_kpins kernel pins with $rtp_kmut kernel mutants refused${rtp_metal:+ and compiled}"
+
+# RT-primary's light on rastered alias models (TASK191 slice 2): rm_rtmodel.metal pinned as text, each
+# pin with its mutants, each of which must compile with the Metal compiler where it is there and be refused.
+# The file includes rm_rtdir.metal for its helpers with exactly its two entry points renamed (rename-extra:
+# a third #define); the kernel lights material-2 pixels with a normal only (model-writes-world: world
+# pixels; no-normal-traced: the normal's test dropped); the light attachment gives the tag alone
+# (model-from-base: its colour added to the light); no lightmap (model-reads-lm); no fit sum
+# (model-fit-leak); the traced light in place of the shadedot (shadedot-back: a shadedot-like factor); the
+# tag decoded at material 2 only (tag-no-material). The back end binds the view with no own-light table
+# (model-own-ray: nself left as the trace's) and exactly its seven textures (bind-extra), each mutant
+# compiled where the compiler is there.
+rtk_metal=""
+if [ "$(uname -s)" = Darwin ] && command -v xcrun >/dev/null 2>&1 && xcrun -f metal >/dev/null 2>&1; then
+	rtk_metal=1
+fi
+rtk_compile() { # <file.metal>: 0 when it compiles as the Makefile compiles rm_rtmodel.metal
+	xcrun -sdk macosx metal -c -I"$rm_dir" "$1" -o "${tmp:?}/rtk.air" > "${tmp:?}/metal.out" 2>&1
+}
+rtk_body() { # <file>: rm_rtm_trace's code, comments and literals blanked, whitespace squeezed
+	strip "$1" | awk '/^rm_rtm_trace\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' | tr -s ' \t' '  '
+}
+rtk_pin() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		rename) [ "$(grep -cE '^[[:space:]]*#[[:space:]]*define' "$1")" = 2 ] &&
+			grep -qxF '#define rm_rtdir_trace rm_rtm_unused_trace' "$1" &&
+			grep -qxF '#define rm_fragment_rtdir_show rm_rtm_unused_show' "$1" && grep -qxF '#include "rm_rtdir.metal"' "$1" ;;
+		gate) rtk_body "$1" | grep -qF 'if (inside && (m == MTL_GB_MAT_ALIAS))' &&
+			rtk_body "$1" | grep -qF 'model = ((d < 1.0f) && (nn.a > 0.5f)) ? 1u : 0u;' &&
+			[ "$(strip "$1" | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.write\(' | sort | tr -d '\n')" = 'light_out.write(vis_out.write(' ] &&
+			[ "$(rtk_body "$1" | awk '/^ if \(model\)$/ { b = 1 } b && /^ }$/ { b = 0 } b' | grep -cE '(light_out|vis_out)\.write\(')" = 2 ] ;;
+		base) [ "$(strip "$1" | grep -oF 'gbl.' | wc -l | tr -d ' ')" = 1 ] &&
+			rtk_body "$1" | grep -qF 'const uint f = rm_rtm_px_flags(m, gbl.read(px));' ;;
+		nolm) ! strip "$1" | grep -qwE 'lm|lightmap|lms' ;;
+		fit) ! strip "$1" | grep -qE 'RM_RTDIR_C_|rm_rtdir_fit_|rm_rtdir_add64' ;;
+		dot) [ "$(strip "$1" | grep -oF 'mtl_rtm_color(' | wc -l | tr -d ' ')" = 1 ] &&
+			strip "$1" | grep -qF 'mtl_rtm_color(mtl_rtm_v3(l.r, l.g, l.b), MTL_RTM_DOT_TRACED, f, p.glow, p.overbright);' ;;
+		tagmat) strip "$1" | grep -qF 'return (m == MTL_GB_MAT_ALIAS) ? mtl_rtm_tag_flags(t) : 0u;' ;;
+	esac
+}
+rtk_kpins=0 rtk_kmut=0
+rtk_k=$rm_dir/rm_rtmodel.metal
+if [ -n "$rtk_metal" ] && ! rtk_compile "$rtk_k"; then
+	cat "${tmp:?}/metal.out"
+	bad "rm_rtmodel.metal does not compile"
+fi
+for p in rename gate base nolm fit dot tagmat; do
+	if ! rtk_pin "$rtk_k" "$p"; then
+		bad "rm_rtmodel.metal does not hold the model pass's $p pin"
+		continue
+	fi
+	rtk_kpins=$((rtk_kpins + 1))
+	case $p in
+		rename) kms="rename-extra" ;;
+		gate) kms="model-writes-world no-normal-traced" ;;
+		base) kms="model-from-base" ;;
+		nolm) kms="model-reads-lm" ;;
+		fit) kms="model-fit-leak" ;;
+		dot) kms="shadedot-back" ;;
+		*) kms="tag-no-material" ;;
+	esac
+	for m in $kms; do
+		case $m in
+			rename-extra) awk '{ print } /^#define rm_fragment_rtdir_show / { print "#define rm_rtdir_own rm_rtm_own" }' ;;
+			model-writes-world) sed 's/if (inside && (m == MTL_GB_MAT_ALIAS))/if (inside \&\& (m == MTL_GB_MAT_WORLD))/' ;;
+			no-normal-traced) sed 's/model = ((d < 1.0f) && (nn.a > 0.5f)) ? 1u : 0u;/model = (d < 1.0f) ? 1u : 0u;/' ;;
+			model-from-base) sed 's/light_out.write(rm_rtm_out(l.rgb, f, p, tabs), px);/light_out.write(rm_rtm_out(l.rgb + gbl.read(px).rgb, f, p, tabs), px);/' ;;
+			model-reads-lm) awk '/texture\(3\)\]\],$/ { print; print "\t\ttexture2d<float, access::read> lm [[texture(4)]],"; next }
+				/light_out\.write\(rm_rtm_out\(/ { sub(/l\.rgb,/, "l.rgb + lm.read(px).rgb,") } { print }' ;;
+			model-fit-leak) awk '{ print } /counts\[RM_RTM_C_OPEN\], c_o,/ { print "\t\t\tatomic_fetch_add_explicit(&counts[RM_RTDIR_C_FIT_N], c_m, memory_order_relaxed);" }' ;;
+			shadedot-back) sed 's/MTL_RTM_DOT_TRACED, f, p.glow/max(l.r, 0.5f), f, p.glow/' ;;
+			tag-no-material) sed 's/return (m == MTL_GB_MAT_ALIAS) ? mtl_rtm_tag_flags(t) : 0u;/return mtl_rtm_tag_flags(t);/' ;;
+		esac < "$rtk_k" > "${tmp:?}/rtk-kernel.metal"
+		if cmp -s "$rtk_k" "${tmp:?}/rtk-kernel.metal"; then
+			bad "the model pass's kernel mutant ($m) changed nothing"
+		elif [ -n "$rtk_metal" ] && ! rtk_compile "${tmp:?}/rtk-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the model pass's kernel mutant ($m) does not compile, so it tests nothing"
+		elif rtk_pin "${tmp:?}/rtk-kernel.metal" "$p"; then
+			bad "the model pass's $p pin passes its mutant ($m)"
+		else
+			rtk_kmut=$((rtk_kmut + 1))
+		fi
+	done
+done
+[ "$rtk_kpins" = 7 ] && [ "$rtk_kmut" = 8 ] ||
+	bad "rm_rtmodel.metal holds $rtk_kpins of its 7 pins and refuses $rtk_kmut of its 8 mutants"
+# the back end: the view bound with no own-light table (model-own-ray), and exactly the kernel's seven textures
+rtk_bpins=0 rtk_bmut=0
+rtk_b=$rm_dir/rmb_rtmodel.m
+rtk_bind() { # <file> <pin>: 0 when the file (rmb_rtmodel.m) holds the pin
+	case $2 in
+		own) awk '/^\t\tmv\.nself = 0u;$/ { s = NR } /^\t\t\[ce setBytes:&mv length:sizeof\(mv\) atIndex:0\];$/ { b = NR; c++ }
+			END { exit !(s && b && (s < b) && (c == 1)) }' "$1" ;;
+		bind) [ "$(grep -c 'setTexture' "$1")" = 7 ] &&
+			grep -qxF '		[ce setTexture:depth atIndex:0];' "$1" && grep -qxF '		[ce setTexture:normal atIndex:1];' "$1" &&
+			grep -qxF '		[ce setTexture:material atIndex:2];' "$1" && grep -qxF '		[ce setTexture:gbl atIndex:3];' "$1" &&
+			grep -qxF '		[ce setTexture:f.vis atIndex:5];' "$1" && grep -qxF '		[ce setTexture:light atIndex:6];' "$1" &&
+			grep -qxF '		[ce setTexture:f.atlas atIndex:7];' "$1" ;;
+	esac
+}
+for p in own bind; do
+	if ! rtk_bind "$rtk_b" "$p"; then
+		bad "rmb_rtmodel.m does not hold the model pass's $p pin"
+		continue
+	fi
+	rtk_bpins=$((rtk_bpins + 1))
+	case $p in
+		own) sed '/^		mv\.nself = 0u;$/d' ;;
+		*) awk '{ print } /^\t\t\[ce setTexture:gbl atIndex:3\];$/ { print "\t\t[ce setTexture:gbl atIndex:4];" }' ;;
+	esac < "$rtk_b" > "${tmp:?}/rtk-back.m"
+	if cmp -s "$rtk_b" "${tmp:?}/rtk-back.m"; then
+		bad "the model pass's back-end mutant ($p) changed nothing"
+	elif [ -n "$rtk_metal" ] && ! $cc -fsyntax-only -fobjc-arc -I"$rm_dir" -Ithird_party/SDL3/include '-DYQ2OSTYPE="Darwin"' \
+		'-DYQ2ARCH="arm64"' "${tmp:?}/rtk-back.m" > "${tmp:?}/cc.out" 2>&1; then
+		cat "${tmp:?}/cc.out"
+		bad "the model pass's back-end mutant ($p) does not compile, so it tests nothing"
+	elif rtk_bind "${tmp:?}/rtk-back.m" "$p"; then
+		bad "the model pass's back-end $p pin passes its mutant"
+	else
+		rtk_bmut=$((rtk_bmut + 1))
+	fi
+done
+[ "$rtk_bpins" = 2 ] && [ "$rtk_bmut" = 2 ] ||
+	bad "rmb_rtmodel.m holds $rtk_bpins of its 2 pins and refuses $rtk_bmut of its 2 mutants"
+# the wiring: the kernel linked into ref_metal.metallib, the back end and the scene built
+if [ "$(grep -cF 'ref_metal/rm_rtmodel.air' Makefile)" != 2 ] || ! grep -qF 'src/client/refresh/metal/rmb_rtmodel.o' Makefile ||
+	! grep -qF 'src/client/refresh/metal/rm_rtmodelscene.o' Makefile || ! grep -qF 'src/client/refresh/metal/rm_rtmodel.o' Makefile; then
+	bad "the model pass is not linked into ref_metal.metallib or ref_metal"
+fi
+seg 7.9 "; model pass $rtk_kpins kernel pins with $rtk_kmut kernel mutants${rtk_metal:+ compiled and} refused, $rtk_bpins back-end pins with $rtk_bmut mutants refused"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"

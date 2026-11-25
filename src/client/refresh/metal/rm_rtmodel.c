@@ -26,9 +26,11 @@
  */
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "header/rm_rtmodel.h"
+#include "header/rm_rtmodelscene.h"
 
 int
 rm_rtm_stock_light(int flags, int rdflags)
@@ -176,4 +178,34 @@ int
 rm_rtm_weapon_unproject(const rm_rts_view_t *v, float px, float py, float d, float *out)
 {
 	return rm_rts_unproject(v, px, py, mtl_rtm_weapon_depth(d), out);
+}
+
+int
+rm_rtm_stats_format(const rm_rtm_stats_t *s, char *buf, int len)
+{
+	int n;
+
+	if (len <= 0)
+	{
+		return 0;
+	}
+
+	if (s->ms >= 0)
+	{
+		n = snprintf(buf, (size_t)len, "ref_metal: rt models: frame %lu: %lu model pixels, %lu shadow rays, "
+				"%lu sky, sun and bounce rays, %.3f ms", s->frame, s->pixels, s->rays, s->open, s->ms);
+	}
+	else
+	{
+		n = snprintf(buf, (size_t)len, "ref_metal: rt models: frame %lu: %lu model pixels, %lu shadow rays, "
+				"%lu sky, sun and bounce rays, - ms", s->frame, s->pixels, s->rays, s->open);
+	}
+
+	if ((n < 0) || (n >= len))
+	{
+		buf[0] = '\0';
+		return 0;
+	}
+
+	return 1;
 }
