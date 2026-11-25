@@ -160,7 +160,7 @@ RT-primary's sky light and sun on the same three views, joined frame by frame: R
 
 Every committed `metal` scenario but RT-primary's, seeded, the water scenarios on one `water.dm2` copied to
 both, `cinematic` on `idlog.cin` at `PINS_EVERY=7`, base main at `3d02c2ac281a` and the branch at `cab3f0310a06`:
-Round 1: 29 of 29 stock scenarios byte-identical to the base (`3d02c2ac281a`; base and branch each ran 29 scenarios, 0 failed; `water.dm2` hashed 7dbf4e8c202e three times). Round 2, on the runbook-only commit `fbfaa003e05e` against main at `4efcd73b246d`: 29 of 29 byte-identical again (`water.dm2` 85c7fcca4fae twice). At `r_presentation 0` the slice changes no pixel.
+Round 1: 29 of 29 stock scenarios byte-identical to the base (`3d02c2ac281a`; base and branch each ran 29 scenarios, 0 failed; `water.dm2` hashed 7dbf4e8c202e three times). Round 2, on the commit that changed only docs `fbfaa003e05e` against main at `4efcd73b246d`: 29 of 29 byte-identical again (`water.dm2` 85c7fcca4fae twice). At `r_presentation 0` the slice changes no pixel.
 
 ## Checks
 
