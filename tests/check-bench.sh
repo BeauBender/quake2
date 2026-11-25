@@ -3983,7 +3983,7 @@ mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || m
 # form before it (the watch and the signal as on origin/main, the stop and
 # the end of a group taking no notice of what the signal could not send).
 mutant spawn-no-id core/common.sh '	bench_spawn_id "$BENCH_SPAWN_PID"' '	:' t_core_id || mfail=1
-mutant watch-no-id core/common.sh 'bench_proc_same "$_bw_p" "$_bw_s" || _bw_r=$?' 'bench_pid_alive "$_bw_p" || _bw_r=1; BENCH_PS_F=$(ps -o stat= -p "$_bw_p") || :' t_core_id || mfail=1
+mutant watch-no-id core/common.sh 'bench_proc_same "$1" "$2" || _wr_r=$?' 'bench_pid_alive "$1" || _wr_r=1; BENCH_PS_F=$(ps -o stat= -p "$1") || :' t_core_id || mfail=1
 mutant signal-no-id core/common.sh '	bench_spawned "$2" || return 1' '	kill -s "$1" -- "-$2" 2> /dev/null && return 0; [ "${3:-}" = group ] || kill -s "$1" "$2" 2> /dev/null || true; return 0' t_core_id || mfail=1
 mutant stop-term-untold core/common.sh '	bench_signal_group TERM "$_sg_p" "$_sg_o" || _sg_r=$?' '	bench_signal_group TERM "$_sg_p" "$_sg_o" || :' t_core_id || mfail=1
 mutant stop-kill-untold core/common.sh '		bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' '		bench_signal_group KILL "$_sg_p" "$_sg_o" || :' t_core_id || mfail=1

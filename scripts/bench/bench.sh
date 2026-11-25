@@ -81,6 +81,9 @@ bench_on_signal() {
 		return 0
 	fi
 	trap '' INT TERM HUP
+	# The poll the signal came in is stopped first (FIX192), so the exit
+	# leaves none running.
+	bench_poll_end
 	# A signal that comes while bench_watch or bench_stop_group runs lands
 	# here with standard error on /dev/null, and fd 8 the caller's standard
 	# error (FIX172, round 1): the stop's lines and the lock's hold go there.

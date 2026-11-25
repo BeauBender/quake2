@@ -458,7 +458,7 @@ probe_one() {
 		mkdir -p "$_p_a/_CodeSignature" && : > "$_p_a/quake2" && : > "$_p_a/embedded.mobileprovision" && : > "$_p_a/_CodeSignature/CodeResources"
 		printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.example.probe</string></dict></plist>' > "$_p_a/Info.plist"
 		set -- "$1" "$2" "$3" env PATH="$_p_d/bin:$PATH" TMPDIR="$_p_d/tmp" IOS_DEVICE_INSTALL_SECONDS="$_p_lim" IOS_APP="$_p_a" \
-			/bin/bash "$1/scripts/ios-device.sh" install --device 00000000-PROBE
+			FAKE_STATE="$_p_d" /bin/bash "$1/scripts/ios-device.sh" install --device 00000000-PROBE
 		;;
 	ios-sim)
 		cp "$_p_d/bin/standin" "$_p_d/bin/xcrun"
@@ -475,6 +475,9 @@ EOF
 	esac
 	_p_root=$1 _p_who=$2 _p_case=$3
 	shift 3
+	# int-spawn: the record of the first spawn (its pgid read) is staged
+	# before the caller starts (FIX192, round 2)
+	[ "$_p_case" != int-spawn ] || : > "$_p_d/stage-pgid"
 	# SIGINT back to the default first: a background job of this shell starts with it ignored
 	PROBE_DIR=$_p_d python3 -I -c 'import os, signal, sys
 signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -491,14 +494,39 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$@" < /dev/null > "$_p_d/log" 2>&1 &
 		wait "$_p_c" 2> /dev/null
 		return 1
 	fi
+	_p_w=
 	case $_p_case in
 	term) kill -s TERM "$_p_c" ;;
 	int) kill -s INT "$_p_c" ;;
 	kill) kill -s KILL "$_p_c" ;;
+	int-window)
+		# a root made by stage_root: the next ps read of the watch closes
+		# its output and lingers until the INT is sent (FIX192)
+		: > "$_p_d/stage-stat"
+		_p_n=0
+		while [ ! -e "$_p_d/at-ps" ] && [ "$_p_n" -lt 100 ]; do
+			sleep 0.1
+			_p_n=$((_p_n + 1))
+		done
+		[ -e "$_p_d/at-ps" ] || _p_w=" (the staged window did not open)"
+		kill -s INT "$_p_c"
+		: > "$_p_d/sent"
+		;;
+	int-spawn)
+		# the spawn's ps read, staged above, lingers once ps has answered
+		_p_n=0
+		while [ ! -e "$_p_d/at-ps" ] && [ "$_p_n" -lt 100 ]; do
+			sleep 0.1
+			_p_n=$((_p_n + 1))
+		done
+		[ -e "$_p_d/at-ps" ] || _p_w=" (the staged window did not open)"
+		kill -s INT "$_p_c"
+		: > "$_p_d/sent"
+		;;
 	esac
 	_p_n=0
 	_p_h=
-	while kill -0 "$_p_c" 2> /dev/null && [ "$_p_n" -lt 600 ]; do
+	while kill -0 "$_p_c" 2> /dev/null && [ "$_p_n" -lt "${PROBE_HANG:-600}" ]; do
 		sleep 0.1
 		_p_n=$((_p_n + 1))
 	done
@@ -508,7 +536,7 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$@" < /dev/null > "$_p_d/log" 2>&1 &
 	fi
 	_p_rc=0
 	wait "$_p_c" 2> /dev/null || _p_rc=$?
-	printf '%s %s: caller exit %s%s; child %s; grandchild %s\n' "$_p_who" "$_p_case" "$_p_rc" "$_p_h" \
+	printf '%s %s: caller exit %s%s%s; child %s; grandchild %s\n' "$_p_who" "$_p_case" "$_p_rc" "$_p_h" "$_p_w" \
 		"$(verdict "$_p_d/child.pid")" "$(verdict "$_p_d/gc.pid")"
 	# the stand-ins end by themselves once the flag is gone
 	rm -f "$_p_d/flag"
@@ -615,6 +643,29 @@ probe() {
 		done
 	done
 	probe_late "$1"
+}
+
+# stage_root <dir> [<old> <new>]: a copy of scripts/ in <dir> in which the
+# primitive's ps read (bench_proc_read), once $FAKE_STATE/stage-<field>
+# exists (stat: a poll of the watch; pgid: the record of a spawn), closes
+# its output once ps has answered and lingers, INT ignored, until
+# $FAKE_STATE/sent exists (10 s at most), once: the window in which bash
+# 3.2 drops an INT, between the end of a command substitution's output and
+# its reap, opened at will (FIX192). With <old> and <new>, one more edit of
+# the copy's common.sh (a mutant). False when an edit does not apply.
+STAGE_OLD='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null) || return 1'
+STAGE_NEW='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null; _st=$?; exec >&-; if rm "${FAKE_STATE:-/nonexistent}/stage-${2:-stat}" 2> /dev/null; then trap "" INT; : > "$FAKE_STATE/at-ps"; _n=0; while [ ! -e "$FAKE_STATE/sent" ] && [ "$_n" -lt 100 ]; do sleep 0.1; _n=$((_n + 1)); done; fi; exit "$_st") || return 1'
+stage_root() {
+	rm -rf "$1"
+	mkdir -p "$1" && cp -R "$here/scripts" "$1/scripts" || return 1
+	python3 -I -c 'import sys
+p = sys.argv[1]
+s = open(p).read()
+a = sys.argv[2:]
+for old, new in zip(a[0::2], a[1::2]):
+    if s.count(old) != 1: sys.exit("the stage does not apply: %d" % s.count(old))
+    s = s.replace(old, new)
+open(p, "w").write(s)' "$1/scripts/bench/core/common.sh" "$STAGE_OLD" "$STAGE_NEW" ${2+"$2" "$3"}
 }
 
 # ---- the Python helper's disposition probe (FIX186, slice 2) -------------
@@ -1211,6 +1262,112 @@ done
 printf '%s\n' "$pout" | grep -E "^ios-sim late: caller exit [1-9][0-9]*; child gone; grandchild gone; scratch removed$" > /dev/null ||
 	{ echo "$me: FAIL: probe ios-sim late: a second signal in cleanup's late call must leave nothing running and no scratch"; fails="$fails probe-ios-sim-late"; }
 
+# an INT in the window bash 3.2 drops it in (FIX192): the watch's next ps
+# read, staged, closes its output and lingers; the INT comes then. Before
+# the fix the script ignored it to its wall time and left the stand-ins
+# running. The mutant puts the watch's ps read back in the foreground; the
+# same case must then hang (its bound cut to 10 s)
+if stage_root "$W/stage"; then
+	sout=$(probe_one "$W/stage" ios-device int-window)
+	printf '%s\n' "$sout" | sed "s/^/$me: probe: /"
+	printf '%s\n' "$sout" | grep -E "^ios-device int-window: caller exit [1-9][0-9]*; child gone; grandchild gone$" > /dev/null ||
+		{ echo "$me: FAIL: probe ios-device int-window: an INT in the dropped-INT window must stop the caller and leave nothing running"; fails="$fails probe-ios-device-int-window"; }
+else
+	echo "$me: FAIL: probe ios-device int-window: the stage does not apply"
+	fails="$fails probe-ios-device-int-window"
+fi
+if stage_root "$W/stage-fg" '		bench_poll bench_watch_read "$_bw_p" "$_bw_s" || _bw_r=$?' '		bench_watch_read "$_bw_p" "$_bw_s" || _bw_r=$?'; then
+	mout=$(PROBE_HANG=100 probe_one "$W/stage-fg" ios-device int-window)
+	case $mout in
+	"ios-device int-window: caller exit 137 (hung: killed by the probe); "*) echo "$me: mutant watch-foreground-ps: refused ($mout)" ;;
+	*)
+		echo "$me: FAIL: mutant watch-foreground-ps (the watch's ps read in the foreground) passed the int-window case: $mout"
+		fails="$fails watch-foreground-ps"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant watch-foreground-ps does not apply"
+	fails="$fails watch-foreground-ps"
+fi
+
+# an INT in the spawn's record (FIX192, round 2): bench_spawn_id's ps read,
+# staged, closes its output and lingers; the INT comes then, in the window
+# bench_undefer covers. It must reach the trap, which bench_undefer then
+# acts on. The mutant puts the spawn's ps read back in the foreground (a
+# command substitution in this shell); the same case must then hang (its
+# bound cut to 10 s)
+if stage_root "$W/stage"; then
+	sout=$(probe_one "$W/stage" ios-device int-spawn)
+	printf '%s\n' "$sout" | sed "s/^/$me: probe: /"
+	printf '%s\n' "$sout" | grep -E "^ios-device int-spawn: caller exit [1-9][0-9]*; child gone; grandchild gone$" > /dev/null ||
+		{ echo "$me: FAIL: probe ios-device int-spawn: an INT in the spawn's ps read must stop the caller and leave nothing running"; fails="$fails probe-ios-device-int-spawn"; }
+else
+	echo "$me: FAIL: probe ios-device int-spawn: the stage does not apply"
+	fails="$fails probe-ios-device-int-spawn"
+fi
+if stage_root "$W/stage-sp" '		if bench_poll_line bench_spawn_read "$1" && [ -n "$BENCH_POLL_LINE" ]; then' '		if bench_proc_read "$1" pgid && BENCH_POLL_LINE="$BENCH_PS_F|$BENCH_PS_START"; then'; then
+	mout=$(PROBE_HANG=100 probe_one "$W/stage-sp" ios-device int-spawn)
+	case $mout in
+	"ios-device int-spawn: caller exit 137 (hung: killed by the probe); "*) echo "$me: mutant spawn-foreground-ps: refused ($mout)" ;;
+	*)
+		echo "$me: FAIL: mutant spawn-foreground-ps (the spawn's ps read in a command substitution) passed the int-spawn case: $mout"
+		fails="$fails spawn-foreground-ps"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant spawn-foreground-ps does not apply"
+	fails="$fails spawn-foreground-ps"
+fi
+
+# a trap that runs in a bare nap prints its lines (FIX192, round 2): with fd
+# 8 closed, a TERM in bench_nap runs the caller's trap and its EXIT trap,
+# and both lines reach standard error. The mutant puts the nap's /dev/null
+# back on the bench_poll call, which then covers the wait the trap runs in
+nap_trap() {
+	_nt_d=$W/nap-$(basename "$1")
+	rm -rf "$_nt_d"
+	mkdir -p "$_nt_d" || return 1
+	cat > "$_nt_d/nap.sh" << 'EOF'
+. "$1/scripts/bench/core/common.sh"
+exec 8>&-
+on_signal() { bench_deferred 143 || :; echo "on_signal: stopping" >&2; exit 143; }
+trap on_signal TERM
+trap 'echo "cleanup ran" >&2' EXIT
+: > "$2/started"
+bench_nap 5
+echo "nap returned" >&2
+EOF
+	/bin/bash "$_nt_d/nap.sh" "$1" "$_nt_d" 2> "$_nt_d/err" &
+	_nt_p=$!
+	_nt_n=0
+	while [ ! -e "$_nt_d/started" ] && [ "$_nt_n" -lt 100 ]; do
+		sleep 0.1
+		_nt_n=$((_nt_n + 1))
+	done
+	sleep 0.5
+	kill -s TERM "$_nt_p"
+	_nt_rc=0
+	wait "$_nt_p" || _nt_rc=$?
+	printf 'nap trap: exit %s; stderr [%s]\n' "$_nt_rc" "$(tr '\n' '|' < "$_nt_d/err")"
+}
+nout=$(nap_trap "$here")
+echo "$me: $nout"
+[ "$nout" = "nap trap: exit 143; stderr [on_signal: stopping|cleanup ran|]" ] ||
+	{ echo "$me: FAIL: nap trap: a trap in a bare nap must print its lines and its EXIT trap's to standard error"; fails="$fails nap-trap"; }
+if stage_root "$W/stage-nap" '	bench_poll bench_sleep_quiet "${1:-1}" || _bn_st=$?' '	bench_poll sleep "${1:-1}" 2> /dev/null || _bn_st=$?'; then
+	mout=$(nap_trap "$W/stage-nap")
+	case $mout in
+	"nap trap: exit 143; stderr []") echo "$me: mutant nap-quiet-wait: refused ($mout)" ;;
+	*)
+		echo "$me: FAIL: mutant nap-quiet-wait (the nap's /dev/null on the bench_poll call) passed the nap trap case: $mout"
+		fails="$fails nap-quiet-wait"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant nap-quiet-wait does not apply"
+	fails="$fails nap-quiet-wait"
+fi
+
 # 4. the Python helper's probe (scripts/lib/bounded.py): TERM first to the
 # group on a timeout and on the caller's own TERM or INT, KILL after the
 # grace to what ignores TERM, nothing to a pid that is not the child's
@@ -1243,4 +1400,4 @@ if [ -n "$fails" ]; then
 	echo "$me: failed:$fails"
 	exit 1
 fi
-echo "$me: ok (guard, $nmut mutants refused, probe, pyprobe and its 10 mutants)"
+echo "$me: ok (guard, $nmut mutants refused, probe, the dropped-INT window and its mutant, pyprobe and its 10 mutants)"
