@@ -101,16 +101,40 @@ Traced in the code at `origin/task189s2` with main merged:
 Written as the scratchpad's `task190s1-hold.sh` and run by the orchestrator; the numbers below are its
 `task190s1-summary.log`'s.
 
-- Builds, `make test` and the checks: @HOLD_CHECKS@.
-- The stock pins at `r_presentation 0`, against main: @STOCK_PINS@.
-- Every RT-primary record (at `r_rt_temporal 0` by its scenario) against `task189s2`: @RTP_PINS@.
+- Builds, `make test` and the checks: the hold ran at `4c12bcfe94d2`, on main `f10aa5bc3abe` and
+  `task189s2` `0147ff9a412a`, both merged; every build and every check exited 0. `make test`: 591 tests,
+  0 failed. `check-ref-metal`: ok, with RT-primary's temporal pass at 59 checks, 0 failed, 5 rule mutants,
+  and 4 kernel pins with 7 kernel mutants refused and compiled. The cvar-docs, runbook-index, doc-links,
+  video-menu, pin-chars and scenario-parsers checks: ok.
+- The stock pins at `r_presentation 0`, against main: 29 of 29 stock scenarios byte-identical to the base
+  (29 scenarios on each side, 0 failed).
+- Every RT-primary record (at `r_rt_temporal 0` by its scenario) against `task189s2`: 12 of 12 records
+  byte-identical to `task189s2`'s.
 - Scratch scenarios without `r_rt_direct_seed`, three runs each:
-  - `rtprimary-world` at `0.9`: @WORLD_T9@; at `0`: @WORLD_T0@.
-  - `rtprimary-bounce` at `0.9`: @BOUNCE_T9@; at `0`: @BOUNCE_T0@.
-  - At `0.9` against `0`: @T9_VS_T0@.
-- The history's allocation line: @ALLOC_LINE@; the accumulation's GPU time: @TEMPORAL_MS@.
+  - `rtprimary-world` at `0.9`: 23 frames, `2f6e7791f25d` in all three runs, 0 of 23 frames differ between
+    run 1 and 2 and between run 1 and 3; at `0`: 23 frames, `96a043d6d138` in all three runs, 0 of 23 frames
+    differ between the runs.
+  - `rtprimary-bounce` at `0.9`: 23 frames, `6629d6d589f3` in all three runs, 0 of 23 frames differ between
+    the runs; at `0`: 23 frames, `a94e7ce56a82` in all three runs, 0 of 23 frames differ between the runs.
+  - At `0.9` against `0`: 22 of 23 frames differ, for the world and for the bounce.
+- The history's allocation line: `ref_metal: rt temporal direct 640x480: 12369920 bytes allocated`, once at
+  `0.9` and no allocation line at `0`; the accumulation's GPU time: a mean of 0.039 ms a frame for the world
+  and 0.042 ms for the bounce, over 687 `rt direct temporal` lines each, and no time at `0`. Measured with
+  the screen locked during a hold: not a timing measurement, and no conclusion about performance is drawn
+  from it (decision 0014). The cost table is slice 4's.
 - Frames for the owner (base2, `demo1.dm2` captures 21 and 22 outdoors and 12 indoors, at `0` and `0.9`):
-  @OWNER_FRAMES@.
+  the frames of captures 21, 22 and 12, for the world and the bounce scenarios, at `0` and at `0.9` (12
+  frames), went to the owner directly and were not committed.
+
+## Notes from review
+
+- There is no light-set reject, by design (above): RT-primary's light sums every light.
+- The RGBA16Float history can settle up to about 0.0024 short of the mean near 1.0 (half-float rounding),
+  which is under one 8-bit level.
+- The `normal` and `material` sizes are not checked separately before the dispatch: they are G-buffer
+  attachments of one size, and the trace has the same gap.
+- A non-finite history count is not rejected. It is unreachable today because fresh histories always reset
+  first; slice 2 hardens it.
 
 ## Left for the next slices
 
