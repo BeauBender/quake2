@@ -62,4 +62,12 @@ void RM_RTT_EndFrame(void);
 void RM_RTT_BeginView(void);
 const rm_rtt_view_t *RM_RTT_ViewFor(const rm_view_t *view);
 
+/*
+ * TASK109: the reasons (RM_RTT_RESET_*) of the last step taken since the
+ * last call, then 0 until the next step: RM_FX_End reads them once a view,
+ * for the r_rt_stats reset line, so a view that steps nothing (the MOTION
+ * path, r_rt_temporal 0) reports none.
+ */
+unsigned RM_RTT_TakeReasons(void);
+
 #endif /* RM_RTAOSCENE_H */
