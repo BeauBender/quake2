@@ -239,10 +239,171 @@ bench_pid_running() {
 	return 0
 }
 
+BENCH_POLL_PID=
+
+# bench_poll <command...>: runs the command (a function of this shell, or
+# any command) in the background and waits for it with the wait builtin,
+# never as a foreground command or a command substitution (FIX192). With
+# job control off, bash 3.2 swaps its own SIGINT handler in while it waits
+# for a foreground command, and that handler only notes an INT; the note
+# becomes a trap call only when a job is reaped, and a command
+# substitution has no job, so an INT from the end of its output to its
+# reap is dropped. In the wait builtin an INT runs the trap at once. The
+# command runs in this shell's process group with INT and QUIT ignored (a
+# background job without job control), so a Ctrl-C reaches this shell's
+# trap and not the poll, and its pid is BENCH_POLL_PID until it is
+# collected: a trap that ends this shell stops it first (bench_poll_end).
+# A trap that returns ends the wait early with a status above 128 and
+# leaves the command running or uncollected; the wait then goes on while
+# the pid is there (bench_pid_alive: running, or exited and not yet
+# reaped), and once it is not, one more wait collects the status (bash
+# keeps it; a shell that does not says 127, and the status above 128 is
+# kept). At most 100 waits: each one past the first needs a signal that
+# came in the one before, or a pid the system gave again. Returns the
+# command's status (above 128: ended by a signal).
+bench_poll() {
+	"$@" &
+	BENCH_POLL_PID=$!
+	_po_p=$BENCH_POLL_PID
+	_po_st=0
+	wait "$_po_p" 2> /dev/null || _po_st=$?
+	[ "$_po_st" -gt 128 ] || bench_poll_done "$_po_p"
+	_po_n=0
+	while [ "$_po_st" -gt 128 ] && [ "$_po_n" -lt 100 ]; do
+		_po_n=$((_po_n + 1))
+		if bench_pid_alive "$_po_p"; then
+			_po_st=0
+			wait "$_po_p" 2> /dev/null || _po_st=$?
+			[ "$_po_st" -gt 128 ] || bench_poll_done "$_po_p"
+			continue
+		fi
+		_po_s2=0
+		wait "$_po_p" 2> /dev/null || _po_s2=$?
+		bench_poll_done "$_po_p"
+		[ "$_po_s2" -eq 127 ] || _po_st=$_po_s2
+		break
+	done
+	bench_poll_done "$_po_p"
+	return "$_po_st"
+}
+
+# bench_poll_done <pid>: bench_poll's job <pid> is collected: it is
+# BENCH_POLL_PID no more, so bench_poll_end sends nothing to it. Called
+# right after the wait that collects it, before the loop's next test
+# (FIX192, round 2).
+bench_poll_done() {
+	if [ "$BENCH_POLL_PID" = "$1" ]; then BENCH_POLL_PID=; fi
+}
+
+BENCH_POLL_DIR=
+BENCH_POLL_LINE=
+BENCH_POLL_SEQ=0
+
+# bench_poll_line <command...>: bench_poll for a command whose output is
+# wanted: its first line goes to BENCH_POLL_LINE (empty when it printed
+# none), through a file in a directory of this shell's own, made for the
+# call and removed after it (mode 700, under TMPDIR; mkdir makes it or
+# fails, and never follows a name that is there already). So the read
+# waits for no command substitution, and an INT runs the trap at once
+# (FIX192, round 2). When no directory can be made (three names tried),
+# the command runs in a command substitution, as before, with bash 3.2's
+# window. Returns the command's status (above 128: ended by a signal).
+bench_poll_line() {
+	BENCH_POLL_LINE=
+	_pl_n=0
+	_pl_d=
+	while [ "$_pl_n" -lt 3 ]; do
+		_pl_n=$((_pl_n + 1))
+		BENCH_POLL_SEQ=$((BENCH_POLL_SEQ + 1))
+		_pl_d=${TMPDIR:-/tmp}/bench-poll.$$.$BENCH_POLL_SEQ
+		if mkdir -m 700 "$_pl_d" 2> /dev/null; then break; fi
+		_pl_d=
+	done
+	_pl_st=0
+	if [ -z "$_pl_d" ]; then
+		_pl_o=$("$@") || _pl_st=$?
+		BENCH_POLL_LINE=${_pl_o%%"
+"*}
+		return "$_pl_st"
+	fi
+	BENCH_POLL_DIR=$_pl_d
+	bench_poll bench_poll_to "$_pl_d/out" "$@" || _pl_st=$?
+	if [ -s "$_pl_d/out" ]; then
+		{ IFS= read -r BENCH_POLL_LINE < "$_pl_d/out"; } 2> /dev/null || :
+	fi
+	rm -rf "${_pl_d:?}"
+	BENCH_POLL_DIR=
+	return "$_pl_st"
+}
+
+# bench_poll_to <file> <command...>: for bench_poll's job: the command,
+# its standard output to <file>.
+bench_poll_to() {
+	_pt_f=$1
+	shift
+	"$@" > "$_pt_f"
+}
+
+# bench_poll_end: a trap's first step, from bench_deferred (or bench.sh's
+# bench_on_signal) once the signal is not kept for bench_undefer: stops the
+# poll bench_poll was waiting for when the signal came, with TERM, and
+# collects it, so the trap's exit leaves no poll running, and removes
+# bench_poll_line's directory when one is there. The poll is a
+# child of this shell that the wait has not collected (a ps, a date, a
+# sleep of one poll interval at most): its pid is given to no other
+# process while it is uncollected, and once it has exited and bash has
+# reaped it, only after the system has given out its other pids. Its
+# standard error is /dev/null (the shell's notice of a job ended by a
+# signal names an internal path).
+bench_poll_end() {
+	if [ -n "${BENCH_POLL_PID:-}" ]; then
+		_pe_p=$BENCH_POLL_PID
+		BENCH_POLL_PID=
+		kill -s TERM "$_pe_p"
+		wait "$_pe_p" || :
+	fi
+	if [ -n "${BENCH_POLL_DIR:-}" ]; then
+		rm -rf "${BENCH_POLL_DIR:?}"
+		BENCH_POLL_DIR=
+	fi
+} 2> /dev/null
+
 # bench_nap: one poll interval, BENCH_LOCK_POLL seconds (a decimal is
-# allowed where sleep takes one; 1 second where it does not).
+# allowed where sleep takes one; 1 second where it does not). The sleep is
+# waited for through bench_poll (FIX192), so a signal runs the trap at
+# once; a sleep ended by a signal is not slept again. Only the sleep's own
+# standard error is /dev/null (bench_sleep_quiet), not the wait's: a trap
+# that runs in the wait prints its lines to the caller's (FIX192, round 2).
 bench_nap() {
-	sleep "${1:-1}" 2> /dev/null || sleep 1
+	_bn_st=0
+	bench_poll bench_sleep_quiet "${1:-1}" || _bn_st=$?
+	if [ "$_bn_st" -ne 0 ] && [ "$_bn_st" -le 128 ]; then bench_poll sleep 1; fi
+}
+
+# bench_sleep_quiet <seconds>: for bench_poll's job: becomes sleep, its
+# standard error on /dev/null (a sleep that takes no decimal says so).
+bench_sleep_quiet() {
+	exec sleep "$1" 2> /dev/null
+}
+
+BENCH_NOW=
+
+# bench_now: the clock (date +%s) in BENCH_NOW, read through
+# bench_poll_line, so an INT in the read runs the trap at once (FIX192,
+# round 2); a read that gives no number is made again in a command
+# substitution.
+bench_now() {
+	bench_poll_line date +%s || :
+	case $BENCH_POLL_LINE in
+	'' | *[!0-9]*) BENCH_NOW=$(date +%s) ;;
+	*) BENCH_NOW=$BENCH_POLL_LINE ;;
+	esac
+}
+
+# bench_past <seconds>: the clock (date +%s) is past <seconds> since the
+# epoch. For bench_poll: the date is read in the poll, not in this shell.
+bench_past() {
+	[ "$(date +%s)" -gt "$1" ]
 }
 
 # bench_proc_read <pid> [<field>]: one ps call for <pid>: BENCH_PS_F, its
@@ -313,15 +474,17 @@ BENCH_SPAWNED=
 # -<pid> answers: <pid> was this shell's child an instant ago, so a group
 # with its id was made by it, and the system gives no new process the id of
 # a process group that still has a member. Both replace any entry for <pid>
-# in BENCH_SPAWNED.
+# in BENCH_SPAWNED. The ps read waits through bench_poll_line, so an INT
+# in it runs the trap at once (FIX192, round 2): in bench_spawn's window,
+# the trap notes it, and bench_undefer acts on it.
 bench_spawn_id() {
 	BENCH_SPAWN_START='?'
 	BENCH_SPAWN_GROUP=
 	_si_n=0
 	while :; do
-		if bench_proc_read "$1" pgid; then
-			BENCH_SPAWN_START=$BENCH_PS_START
-			if [ "$BENCH_PS_F" = "$1" ]; then BENCH_SPAWN_GROUP=$1; else BENCH_SPAWN_GROUP=-; fi
+		if bench_poll_line bench_spawn_read "$1" && [ -n "$BENCH_POLL_LINE" ]; then
+			BENCH_SPAWN_START=${BENCH_POLL_LINE#*|}
+			if [ "${BENCH_POLL_LINE%%|*}" = "$1" ]; then BENCH_SPAWN_GROUP=$1; else BENCH_SPAWN_GROUP=-; fi
 			break
 		fi
 		if ! bench_pid_alive "$1"; then
@@ -337,6 +500,14 @@ bench_spawn_id() {
 	fi
 	bench_spawn_forget "$1"
 	BENCH_SPAWNED="$BENCH_SPAWNED;$1|$BENCH_SPAWN_GROUP|$BENCH_SPAWN_START"
+}
+
+# bench_spawn_read <pid>: for bench_poll_line: bench_proc_read's process
+# group and start time for <pid>, as "<pgid>|<start>"; false when ps gives
+# no answer.
+bench_spawn_read() {
+	bench_proc_read "$1" pgid || return 1
+	printf '%s|%s\n' "$BENCH_PS_F" "$BENCH_PS_START"
 }
 
 # bench_spawn_forget <pid>: takes <pid>'s entry out of BENCH_SPAWNED, once
@@ -431,11 +602,20 @@ bench_undefer() {
 # once, so a dead leader is not one), and no other process has <pid>.
 # Otherwise (a shell without job control): <pid> itself, while it is still
 # that command and not a zombie, or while this shell cannot tell; with
-# "group" (it is reaped), nothing.
+# "group" (it is reaped), nothing. The identity is read in bench_poll's
+# job (bench_watch_read), so an INT in the read runs the trap at once
+# (FIX192, round 2); a read ended by a signal is "cannot tell".
 bench_group_alive() {
 	bench_spawned "$1" || return 1
 	_ga_r=0
-	bench_proc_same "$1" "$BENCH_ID_START" || _ga_r=$?
+	_ga_z=
+	bench_poll bench_watch_read "$1" "$BENCH_ID_START" || _ga_r=$?
+	case $_ga_r in
+	10) _ga_r=0 _ga_z=1 ;;
+	11) _ga_r=0 ;;
+	0 | 1 | 2 | 3) ;;
+	*) _ga_r=2 ;;
+	esac
 	if [ "$BENCH_ID_GROUP" = "$1" ]; then
 		[ "$_ga_r" -ne 3 ] || return 1
 		kill -0 -- "-$1" 2> /dev/null # bounded-run: allowed: the primitive: a group still has a member
@@ -444,9 +624,7 @@ bench_group_alive() {
 	[ "${2:-}" != group ] || return 1
 	case $_ga_r in
 	0)
-		case $BENCH_PS_F in
-		Z*) return 1 ;;
-		esac
+		[ -z "$_ga_z" ] || return 1
 		return 0
 		;;
 	2) return 0 ;;
@@ -466,11 +644,17 @@ bench_group_alive() {
 # sent; 1 when nothing of the command is left to signal (it is gone,
 # another process has <pid>, or bench_spawn did not start <pid>); 2 when
 # this shell cannot tell (bench_proc_same) whether the pid of a command
-# that led no group is still that command, and then nothing is sent.
+# that led no group is still that command, and then nothing is sent. The
+# identity is read as bench_group_alive reads it (FIX192, round 2).
 bench_signal_group() {
 	bench_spawned "$2" || return 1
 	_sg2_r=0
-	bench_proc_same "$2" "$BENCH_ID_START" || _sg2_r=$?
+	bench_poll bench_watch_read "$2" "$BENCH_ID_START" || _sg2_r=$?
+	case $_sg2_r in
+	10 | 11) _sg2_r=0 ;;
+	0 | 1 | 2 | 3) ;;
+	*) _sg2_r=2 ;;
+	esac
 	if [ "$BENCH_ID_GROUP" = "$2" ]; then
 		[ "$_sg2_r" -ne 3 ] || return 1
 		kill -s "$1" -- "-$2" 2> /dev/null || return 1 # bounded-run: allowed: the primitive: bench_signal_group, to the group
@@ -547,9 +731,10 @@ bench_stop_groups() {
 		esac
 	done
 	[ -n "$_sg_l" ] || return "$_sg_rv"
-	_sg_end=$(($(date +%s) + _sg_g))
+	bench_now
+	_sg_end=$((BENCH_NOW + _sg_g))
 	# shellcheck disable=SC2086 # a list of pids
-	while bench_groups_alive "$_sg_o" $_sg_l && [ "$(date +%s)" -le "$_sg_end" ]; do
+	while bench_groups_alive "$_sg_o" $_sg_l && ! bench_poll bench_past "$_sg_end"; do
 		bench_nap 0.1
 	done
 	_sg_k=
@@ -608,6 +793,14 @@ bench_groups_alive() {
 # command, before the first poll or at any later one, is refused: a line,
 # and status 4 (2 is a stopped command). Its standard error is
 # /dev/null (the shell's job notices), all but that line.
+# Every step of a poll of its own, the ps read, the clock and the nap,
+# runs through bench_poll (FIX192): it waits for no foreground command or
+# command substitution of its own, so a signal runs the trap at once,
+# whatever the poll is doing. The until test is the caller's, and runs in
+# this shell as before (what it sets is kept, and it may unset itself): a
+# foreground command in it keeps bash 3.2's window. A poll ended by a
+# signal (status above 128) is read as no answer, and the next poll asks
+# again.
 bench_watch() {
 	_bw_p=$1
 	_bw_end=$2
@@ -623,14 +816,11 @@ bench_watch() {
 	_bw_s=$BENCH_ID_START
 	while :; do
 		_bw_r=0
-		bench_proc_same "$_bw_p" "$_bw_s" || _bw_r=$?
+		bench_poll bench_watch_read "$_bw_p" "$_bw_s" || _bw_r=$?
 		case $_bw_r in
-		0)
-			case $BENCH_PS_F in
-			Z*) return 0 ;;
-			T*) return 2 ;;
-			esac
-			;;
+		0) ;;
+		10) return 0 ;;
+		11) return 2 ;;
 		2)
 			if [ -z "$_bw_told" ]; then
 				_bw_told=1
@@ -641,7 +831,7 @@ bench_watch() {
 				fi
 			fi
 			;;
-		*) return 0 ;;
+		1 | 3) return 0 ;;
 		esac
 		if [ -n "$_bw_until" ]; then
 			# a test gone since the last poll is refused, not read as false
@@ -651,7 +841,7 @@ bench_watch() {
 			}
 			if "$_bw_until"; then return 3; fi
 		fi
-		if [ -n "$_bw_end" ] && [ "$(date +%s)" -gt "$_bw_end" ]; then
+		if [ -n "$_bw_end" ] && bench_poll bench_past "$_bw_end"; then
 			return 1
 		fi
 		_bw_n=$((_bw_n + 1))
@@ -668,6 +858,22 @@ bench_watch() {
 	return 0
 } 8>&2 2> /dev/null
 
+# bench_watch_read <pid> <start>: one poll of bench_watch, in bench_poll's
+# background job: bench_proc_same's status (1, 2 or 3), or for <pid> still
+# the command (0), 10 when it is a zombie (it has exited), 11 when it is
+# stopped (state T), else 0. The state goes back as the status, since the
+# job's variables do not.
+bench_watch_read() {
+	_wr_r=0
+	bench_proc_same "$1" "$2" || _wr_r=$?
+	[ "$_wr_r" -eq 0 ] || return "$_wr_r"
+	case $BENCH_PS_F in
+	Z*) return 10 ;;
+	T*) return 11 ;;
+	esac
+	return 0
+}
+
 # bench_end_group <pid> <grace>: after the leader <pid> exited and was
 # reaped, gives what it left running in its process group 1 s (by the
 # clock, so 1 to 2 s) to end, then stops it (bench_stop_group with the
@@ -675,12 +881,15 @@ bench_watch() {
 # something. Nothing to do without job control: the command then leads no
 # group. The group is the one it led at spawn (bench_group_alive), so a
 # group another process leads under the same id once the command's group
-# is gone is left alone (FIX172).
+# is gone is left alone (FIX172). Its reads, the group's and the clock's,
+# wait through bench_poll (FIX192, round 2): it runs after the command
+# has exited, with the caller's trap in place.
 bench_end_group() {
 	bench_group_alive "$1" group || return 0
-	_eg_end=$(($(date +%s) + 1))
+	bench_now
+	_eg_end=$((BENCH_NOW + 1))
 	while bench_group_alive "$1" group; do
-		if [ "$(date +%s)" -gt "$_eg_end" ]; then
+		if bench_poll bench_past "$_eg_end"; then
 			bench_stop_group "$1" "$2" group
 			return 1
 		fi
@@ -869,16 +1078,18 @@ bench_await() {
 # bench_spawn or bench_bounded outside bench.sh (FIX122). While bench_spawn
 # starts a command it keeps the signal for bench_undefer, which calls the
 # caller's bench_on_signal <status> with it once the pid is stored, and is
-# true: the trap then returns. Otherwise it puts standard error back to the
-# caller's when the signal came inside bench_watch or bench_stop_group (fd
-# 8, as bench.sh does), and is false: the trap goes on to stop what it
-# started (bench_stop_group) and exit. The caller closes an inherited fd 8
+# true: the trap then returns. Otherwise it stops the poll the signal came
+# in (bench_poll_end), puts standard error back to the caller's when the
+# signal came inside bench_watch or bench_stop_group (fd 8, as bench.sh
+# does), and is false: the trap goes on to stop what it started
+# (bench_stop_group) and exit. The caller closes an inherited fd 8
 # once, before its first spawn (exec 8>&-).
 bench_deferred() {
 	if [ -n "${BENCH_DEFER:-}" ]; then
 		BENCH_DEFERRED=$1
 		return 0
 	fi
+	bench_poll_end
 	if (: >&8) 2> /dev/null; then exec 2>&8; fi
 	return 1
 }
