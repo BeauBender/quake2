@@ -35,6 +35,8 @@
  *   light the resolve reads (RGBA16Unorm): the light it would have read
  *   plus sky_color x r_rt_sunscale x visibility x N.L where the class is
  *   lit (mtl_rtsun_light), every other pixel's as it was; and the counts;
+ * - rm_rtsun_temporal, RT7's accumulation of the sun (TASK59 slice 1b),
+ *   after the trace in the same encoder while r_rt_temporal is above 0;
  * - rm_fragment_rtsun_show, r_rt_sun_show's two views over the resolve.
  *
  * =======================================================================
@@ -49,6 +51,7 @@ using namespace metal::raytracing;
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
 #include "common/mtl_rtsun_math.h"
+#include "common/mtl_rtt_math.h"
 
 /* rm_rtsun.h's rm_rtsun_view_t */
 struct rm_rtsun_view
@@ -239,6 +242,89 @@ rm_rtsun_trace(depth2d<float, access::read> depth [[texture(0)]],
 			atomic_fetch_add_explicit(&counts[RM_RTSUN_C_FACING], c_f, memory_order_relaxed);
 			atomic_fetch_add_explicit(&counts[RM_RTSUN_C_RAYS], c_r, memory_order_relaxed);
 			atomic_fetch_add_explicit(&counts[RM_RTSUN_C_LIT], c_l, memory_order_relaxed);
+		}
+	}
+}
+
+/* rm_rttemporal.h's rm_rtt_view_t (common/mtl_rtt_math.h's mtl_rtt_view_t) */
+struct rm_rtt_view
+{
+	float alpha;
+	float move;
+	uint reset;
+	uint seq;
+};
+
+/*
+ * RT7's temporal accumulation of the sun (TASK59 slice 1b), after the
+ * trace in the same encoder, only while r_rt_temporal is above 0: each
+ * traced pixel's visibility (class lit or shadowed) blended with its
+ * history, read where the unjittered motion vector says the point was
+ * (mtl_rtt_reproject) and rejected by mtl_rtt_reject, then the light
+ * written again from the base with the accumulated visibility. The
+ * history (RGBA32Float): the accumulated visibility, the distance from the
+ * eye, the material id and the sample count, 0 where the pixel was not
+ * traced (at or above the floor, facing away), so it is not read there.
+ * The sun reaches no dynamic light, so its light set is 0 on both sides.
+ */
+kernel void
+rm_rtsun_temporal(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<float, access::read> base [[texture(4)]],
+		texture2d<uint, access::read> cls_in [[texture(5)]],
+		texture2d<float, access::write> light_out [[texture(6)]],
+		texture2d<float, access::read> motion [[texture(7)]],
+		texture2d<float, access::read> hist_in [[texture(8)]],
+		texture2d<float, access::write> hist_out [[texture(9)]],
+		constant rm_rtsun_view &v [[buffer(0)]],
+		constant rm_rtt_view &t [[buffer(9)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint w = hist_out.get_width(), hh = hist_out.get_height();
+
+	if ((px.x >= w) || (px.y >= hh))
+	{
+		return;
+	}
+
+	{
+		const uint m = mat.read(px).r, cls = cls_in.read(px).r;
+		const bool traced = (cls == MTL_RTSUN_C_LIT) || (cls == MTL_RTSUN_C_SHADOW);
+		const float a = (cls == MTL_RTSUN_C_LIT) ? 1.0f : 0.0f;
+		const float d = depth.read(px);
+		const float2 mv = motion.read(px).xy;
+		const mtl_rtt_px_t r = mtl_rtt_reproject(px.x, px.y, mv.x, mv.y, w, hh);
+		const float4 h = r.ok ? hist_in.read(uint2(r.x, r.y)) : float4(0.0f);
+		const uint hm = (uint)h.z;
+		float dist = 0.0f;
+
+		if (d < 1.0f)
+		{
+			dist = distance(rm_rtsun_position(v, px, d), v.eye.xyz);
+		}
+
+		{
+			const uint rej = mtl_rtt_reject(t.reset, r.ok, dist, h.y, t.move, m, hm, 0u, 0u, h.w);
+			const float acc = mtl_rtt_blend(rej, a, h.x, h.w, t.alpha);
+
+			hist_out.write(float4(acc, dist, (float)m, traced ? mtl_rtt_count(rej, h.w) : 0.0f), px);
+
+			if (traced)
+			{
+				const float3 n = normalize(normal.read(px).xyz * 2.0f - 1.0f);
+				const float nl = mtl_rtsun_ndotl(mtl_rtao_v3(n.x, n.y, n.z), mtl_rtao_v3(v.dir.x, v.dir.y, v.dir.z));
+				const float4 b = base.read(px);
+				mtl_rgba_t c;
+
+				c.r = b.r;
+				c.g = b.g;
+				c.b = b.b;
+				c.a = b.a;
+				c = mtl_rtsun_light(c, m, (acc > 0.0f) ? MTL_RTSUN_C_LIT : MTL_RTSUN_C_SHADOW, acc, nl, v.sun.x, v.sun.y,
+						v.sun.z);
+				light_out.write(float4(c.r, c.g, c.b, c.a), px);
+			}
 		}
 	}
 }
