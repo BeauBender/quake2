@@ -354,12 +354,17 @@ bench_poll_to() {
 # process while it is uncollected, and once it has exited and bash has
 # reaped it, only after the system has given out its other pids. Its
 # standard error is /dev/null (the shell's notice of a job ended by a
-# signal names an internal path).
+# signal names an internal path). A poll that has exited may be reaped
+# already, though no wait has collected it: the shell reaps a child when
+# it exits (bash) or in its next wait for any child (dash, in the wait the
+# signal came in), and keeps its status for the wait. Its pid is then gone,
+# and the TERM fails; that failure is not this shell's, and must not end a
+# trap that runs under set -e (bench.sh's) before its stop (FIX196).
 bench_poll_end() {
 	if [ -n "${BENCH_POLL_PID:-}" ]; then
 		_pe_p=$BENCH_POLL_PID
 		BENCH_POLL_PID=
-		kill -s TERM "$_pe_p"
+		kill -s TERM "$_pe_p" || :
 		wait "$_pe_p" || :
 	fi
 	if [ -n "${BENCH_POLL_DIR:-}" ]; then
