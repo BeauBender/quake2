@@ -32,7 +32,12 @@
 #     the water reflections' 3 x 3 blur (slice 2b) with its rule's mutants
 #     (the depth guide dropped, a neighbour without a reflection blurred
 #     in) and rm_rtwdenoise.metal's pins with mutants (the depth guide
-#     dropped, a history read, a history written),
+#     dropped, a history read, a history written, a tap of another layer
+#     or a miss taken),
+#     tests/metal/rm_rttab_test.c, r_rt_temporal through the A/B layer
+#     (slice 2b): the real text of RM_Effect, RM_RTT_On and RM_RTT_ViewFor's
+#     alpha over the real rm_ab_value and rm_rtt_alpha, with mutants that
+#     read r_rt_temporal->value directly,
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
@@ -1422,9 +1427,14 @@ done
 # computes dn pinned with the depth guide's two mutants (the neighbour's distance replaced by the
 # pixel's own in the call, rdepth, and dn never computed, rdist, round 2), and no history: its
 # textures are the four it reads and writes, and refl_out is the one it writes. A mutant that reads a
-# history (a fifth texture mixed into the blur) and one that writes one must be refused.
+# history (a fifth texture mixed into the blur) and one that writes one must be refused. Round 3: the
+# class test of a tap, rm_rtd_rok, pinned whole (water, not a miss, the same MTL_RTW_CLASS_TRANS layer
+# as the pixel), with mutants that drop the same-layer term (rlayer) and the not-a-miss term (rmiss).
+rtw_rok='return (cn & MTL_RTW_CLASS_WATER) && ((cn & MTL_RTW_CLASS_FROM) != MTL_RTW_MISS) && ((cn & MTL_RTW_CLASS_TRANS) == (cc & MTL_RTW_CLASS_TRANS));'
 rtw_pin() { # <file> <pin>: 0 when the file holds the pin
 	case $2 in
+		rlayer | rmiss)
+			rtd_body "$1" rm_rtd_rok | tr -d '\n' | tr -s ' ' | grep -qF "$rtw_rok" ;;
 		# round 2: the pin also holds how dn is computed, so a neighbour's distance never taken fails it
 		rdepth | rdist)
 			rtd_body "$1" rm_rtw_denoise | grep -qF 'dn = ok ? rm_rtd_rdist(v, depth, wdist, uint2(q), cn) : dc;' &&
@@ -1439,13 +1449,15 @@ if [ -n "$rtd_metal" ] && ! rtd_compile "$wdn"; then
 	cat "${tmp:?}/metal.out"
 	bad "rm_rtwdenoise.metal does not compile"
 fi
-for p in rdepth rdist histread histwrite; do
+for p in rdepth rdist histread histwrite rlayer rmiss; do
 	if ! rtw_pin "$wdn" "$p"; then
 		bad "rm_rtwdenoise.metal does not hold the reflections' blur's $p pin"
 		continue
 	fi
 	rtd_kpins=$((rtd_kpins + 1))
 	case $p in
+		rlayer) sed 's/((cn & MTL_RTW_CLASS_TRANS) == (cc & MTL_RTW_CLASS_TRANS))/true/' "$wdn" ;;
+		rmiss) sed 's/ && ((cn & MTL_RTW_CLASS_FROM) != MTL_RTW_MISS)//' "$wdn" ;;
 		rdepth) sed 's/mtl_rtd_rweight(dx, dy, dc, dn, ok)/mtl_rtd_rweight(dx, dy, dc, dc, ok)/' "$wdn" ;;
 		rdist) sed 's/dn = ok ? rm_rtd_rdist(v, depth, wdist, uint2(q), cn) : dc;/dn = dc;/' "$wdn" ;;
 		histread) awk '/^rm_rtw_denoise\(/ { b = 1 } b && /^}/ { b = 0 }
@@ -1496,6 +1508,63 @@ else
 	done
 fi
 seg 5.6 "; denoiser ${rtd:-host test}, $rtd_mutants rule mutants, $rtd_kpins kernel pins with $rtd_kmut kernel mutants refused${rtd_metal:+ and compiled}, the blur's RT-primary gate pinned with $wsc_mut mutants refused"
+# slice 2b, round 3: r_rt_temporal through the A/B layer. It is a tuning row, so r_rt_ab's B side carries
+# it, and both of its sites in rm_rtaoscene.c, the gate (RM_RTT_On) and the view's step (RM_RTT_ViewFor's
+# alpha), must read it through RM_Effect. tests/metal/rm_rttab_test.c runs the real text of RM_Effect
+# (rm_main.c), RM_RTT_On and the alpha line, copied into its rttab_body.c, over the real rm_ab_value and
+# rm_rtt_alpha: a B side holding 0 turns the accumulation off, one holding 0.9 with A at 0 turns it on.
+# Mutants: either site restored to the direct read of r_rt_temporal->value; each must build and fail it.
+rttab_fn() { # <file> <function>: the function's definition, its return type's line to the "}" in column 0
+	awk -v fn="$2" 'b { print; if (/^}/) exit } $0 ~ "^" fn "\\(" { print prev; print; b = 1 } { prev = $0 }' "$1"
+}
+rttab_tree() { # <dir> <rm_rtaoscene.c>: rttab_body.c in <dir> from rm_main.c and the scene file given
+	rm -rf "${1:?}"
+	mkdir -p "$1"
+	al=$(awk '/^RM_RTT_ViewFor\(/ { b = 1 } b && /^}/ { b = 0 } b && /^\talpha = / { print }' "$2")
+	[ -n "$al" ] && [ "$(printf '%s\n' "$al" | wc -l | tr -d ' ')" = 1 ] || return 1
+	{
+		rttab_fn "$rm_dir/rm_main.c" RM_Effect
+		rttab_fn "$2" RM_RTT_On
+		printf '%s\n' '' 'static float' 'rttab_view_alpha(void)' '{' '	float alpha;' '' "$al" '	return alpha;' '}'
+	} > "$1/rttab_body.c"
+	grep -q '^RM_Effect(' "$1/rttab_body.c" && grep -q '^RM_RTT_On(' "$1/rttab_body.c"
+}
+rttab_build() { # <dir>: 0 when the test builds over the dir's rttab_body.c
+	# shellcheck disable=SC2086 # flags and fxhost are word lists
+	$cc $flags $fxhost -I"$1" -o "$1/t" tests/metal/rm_rttab_test.c "$rm_dir/rm_rtgate.c" "$rm_dir/rm_rtfx.c" \
+		"$rm_dir/rm_rttemporal.c" -lm > "${tmp:?}/cc.out" 2>&1
+}
+rttab_run() { # <dir>: 0 when the test builds and passes
+	rttab_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
+}
+rttab="" rttab_mut=0
+aos=$rm_dir/rm_rtaoscene.c
+if ! rttab_tree "${tmp:?}/rttab" "$aos"; then
+	bad "RM_Effect, RM_RTT_On or RM_RTT_ViewFor's one alpha line was not found for tests/metal/rm_rttab_test.c"
+elif ! rttab_run "${tmp:?}/rttab"; then
+	cat "${tmp:?}/cc.out" "${tmp:?}/out"
+	bad "tests/metal/rm_rttab_test.c fails on the real files"
+else
+	rttab=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rttab_test: //')
+	case $rttab in *", 0 failed") ;; *) bad "tests/metal/rm_rttab_test.c printed no result line"; rttab="";; esac
+	for m in ondirect viewdirect; do
+		case $m in
+			ondirect) sed 's/return rm_rtt_alpha(r_rt_temporal ? RM_Effect(r_rt_temporal) : 0\.0f) > 0\.0f;/return rm_rtt_alpha(r_rt_temporal ? r_rt_temporal->value : 0.0f) > 0.0f;/' "$aos" ;;
+			viewdirect) sed 's/alpha = rm_rtt_alpha(r_rt_temporal ? RM_Effect(r_rt_temporal) : 0\.0f);/alpha = rm_rtt_alpha(r_rt_temporal ? r_rt_temporal->value : 0.0f);/' "$aos" ;;
+		esac > "${tmp:?}/rttab-scene.c"
+		if cmp -s "$aos" "${tmp:?}/rttab-scene.c"; then
+			bad "the A/B temporal mutant ($m) changed nothing"
+		elif ! rttab_tree "${tmp:?}/rttabm" "${tmp:?}/rttab-scene.c" || ! rttab_build "${tmp:?}/rttabm"; then
+			cat "${tmp:?}/cc.out"
+			bad "the A/B temporal mutant ($m) does not build, so it tests nothing"
+		elif rttab_run "${tmp:?}/rttabm"; then
+			bad "tests/metal/rm_rttab_test.c passes the A/B temporal mutant ($m)"
+		else
+			rttab_mut=$((rttab_mut + 1))
+		fi
+	done
+fi
+seg 5.65 "; temporal through A/B ${rttab:-host test}, $rttab_mut mutants refused"
 
 # (f) the colour-space probe. probe_run <dir with rmb_device.m or empty> <exe>: builds
 # tests/metal/rmb_cs_probe.m, which includes rmb_device.m (found in <dir> first, else in
