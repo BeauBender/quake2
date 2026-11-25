@@ -36,6 +36,7 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/header/rm_rtmodel.h"
+#include "../../src/client/refresh/metal/header/rm_rtmodelscene.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
 
 /* src/common/shared/shared.c, linked for rm_pure.c, prints through the engine */
