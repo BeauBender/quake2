@@ -15,6 +15,12 @@
 #
 # Every preset that turns on r_rt_ao fixes its noise (r_rt_ao_seed 1), so two runs draw the same
 # frames; the records run with PINS_SEED (default 1) for the dynamic lights' radii.
+#
+# No preset sets r_rt_temporal, so each runs at its default, 0.9 since TASK59 slice 2: the shadows,
+# the sun and the AO are accumulated over the frames, the AO and the sun denoised, and the water
+# reflections blurred (slice 2b). That is the look that ships, and the contact sheets show it;
+# the committed rt-* pin scenarios set r_rt_temporal 0 and show the passes alone. A record made
+# before slice 2 shows the passes alone too, so it does not compare with one made after it.
 
 preset off | off: stock lightmaps, no ray tracing |
 preset shadows | dlight shadows, defaults | r_rt_shadows 1
