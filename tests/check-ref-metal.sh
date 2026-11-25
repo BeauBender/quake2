@@ -299,6 +299,7 @@ seg 7 "; sun ${rtsun:-host test}"
 # rm_rtshadow.c for the view's inverse, rm_rtgate.c for the mode and its overlay (and the effect table's host
 # stubs it takes its switches from), rm_rt.c and rm_pure.c
 rtdir=""
+rtdir_sky=0
 # shellcheck disable=SC2086 # flags is a word list
 if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -DRM_RTFX_HOST -Itests/metal -I"$rm_dir" \
 	-o "${tmp:?}/rm_rtdir_test" tests/metal/rm_rtdir_test.c "$rm_dir/rm_rtdir.c" "$rm_dir/rm_rtgate.c" \
@@ -312,6 +313,9 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtdir_test" > "${tmp:?}/out
 else
 	rtdir=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtdir_test: //')
 	case $rtdir in *", 0 failed") ;; *) bad "tests/metal/rm_rtdir_test.c printed no result line"; rtdir="";; esac
+	# the sky light's and the sun's mutants (TASK189), refused inside the test, which counts them
+	rtdir_sky=$(sed -n 's/^rm_rtdir_test: \([0-9][0-9]*\) sky mutants refused$/\1/p' "${tmp:?}/out" | tail -n 1)
+	case $rtdir_sky in [1-9]*) ;; *) bad "tests/metal/rm_rtdir_test.c printed no sky mutant count"; rtdir_sky=0;; esac
 fi
 seg 7.5 "; direct light ${rtdir:-host test}"
 # Scratch mutants of rm_rtdir.c the test must fail (TASK188 slice 3c): the exposure fit's line test with a
@@ -349,7 +353,7 @@ if [ -n "$rtdir" ]; then
 		fi
 	done
 fi
-seg 7.6 ", $rtdir_mutants fit mutants refused"
+seg 7.6 ", $rtdir_mutants fit mutants and $rtdir_sky sky mutants refused"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)

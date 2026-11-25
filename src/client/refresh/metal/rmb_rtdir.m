@@ -162,6 +162,13 @@ rmb_rtdir_open(char *err, size_t errlen)
 			free(ranks);
 		}
 
+		if (trace_pipe && show_pipe && counts && !tile)
+		{
+			snprintf(err, errlen, "cannot make the sky ray's blue-noise tile");
+			rmb_rtdir_close();
+			return 0;
+		}
+
 		if (!trace_pipe || !show_pipe || !counts || !tile)
 		{
 			snprintf(err, errlen, "cannot build the direct light's pipelines%s%s", e ? ": " : "",
