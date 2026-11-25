@@ -759,10 +759,10 @@ bench_lock_run() {
 	export BENCH_LOCK_TOKEN
 	if [ -n "$_ru_quiet" ]; then bench_quiet_mark "$_ru_label" "$$"; fi
 	# In the background, in its own process group, so the trap reaches the
-	# whole command. The lock shell polls it (bench_watch, below), so a TERM
-	# to the lock shell alone runs its trap once the current nap's sleep
-	# ends, at most 1 s later; a signal to the lock shell's process group
-	# (Ctrl-C) ends that sleep too, so its trap runs at once.
+	# whole command. The lock shell polls it (bench_watch, below), and waits
+	# for each step of a poll with the wait builtin (bench_poll), so a TERM
+	# to the lock shell alone, or a signal to its process group (Ctrl-C),
+	# runs its trap at once (FIX192).
 	if [ -t 0 ]; then
 		bench_spawn "$@" < /dev/null
 	else
