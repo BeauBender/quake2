@@ -1,16 +1,18 @@
-Temporal accumulation in `ref_metal` (TASK59, RT7), slices 1 and 1b
+Temporal accumulation in `ref_metal` (TASK59, RT7), slices 1, 1b and 2
 
 RT7 accumulates the ray-traced effects over frames
 ([design](../plans/metal-raytracing-design.md), section 2, "Temporal accumulation", the
 "Reset" row of the scaler's inputs, and row RT7 of section 6). Slice 1 adds the history, the
 rejection rule, the blend and the resets, under `r_rt_temporal`, off by default, and
 accumulates the AO; slice 1b accumulates the shadows and the sun with one reset state for
-the three. This file holds the slices' results and what they leave to slice 2.
+the three; slice 2 denoises the AO and the sun and sets the design's default of 0.9. This
+file holds the slices' results and what they leave to the next.
 
-**Status.** With `r_rt_temporal 0` (the default) nothing is made, written or read: each
-pass's encoder has its dispatch as before, the shadows' with the stock `rm_rts_trace`, and
-the stock pins are byte-identical to the base (the holds, below). With it above 0 the
-shadows, the sun and the AO are accumulated.
+**Status.** `r_rt_temporal` is 0.9 by default since slice 2. With it at 0 nothing is
+made, written or read: each pass's encoder has its dispatch as before, the shadows' with the
+stock `rm_rts_trace`, and the stock pins, whose `rt-*` scenarios set it to 0, are
+byte-identical to the base (the holds, below). With it above 0 the shadows, the sun and the
+AO are accumulated, and the AO and the sun denoised.
 
 ## What exists in the code, traced
 
@@ -295,12 +297,134 @@ and `7ef2b286` is the fix.
   `check-doc-links: ok`, `check-runbook-index: ok`, `check-video-menu: ok`,
   `check-pin-chars: ok`.
 
+## Slice 2: the denoiser and the default
+
+### What it adds
+
+- The weight rule (`common/mtl_rtd_math.h`, shared by the kernels and the host test): the
+  strength from the pixel's sample count, 1 at 1 sample, 0 from 16, linear between
+  (`(16 - n) / 15`), and 0 for a count below 1 or not finite (`mtl_rtd_strength`); the 5 x 5
+  binomial taps, 1 4 6 4 1 in each axis over 256 (`mtl_rtd_tap`); the depth guide, 1 at the
+  pixel's distance from the eye and falling linearly to 0 at 2 units plus 2 % of it, the
+  temporal rule's tolerance without the eye's move (`mtl_rtd_depth_w`); the normal guide, 1
+  for equal normals and 0 at a cosine of 0.9 or less (`mtl_rtd_normal_w`); the weight of a
+  neighbour, 0 for another material id or a neighbour with no sample (`mtl_rtd_weight`); the
+  running sums, to which a weight not above 0, or a weight or value not finite, adds nothing
+  (`mtl_rtd_add`); and the result, the pixel's value moved toward the weighted mean by its
+  strength, the value itself when nothing was added or the mean is not finite, the mean when
+  the value is not finite (`mtl_rtd_result`).
+- The kernels, `rm_rtdenoise.metal`, a translation unit of its own (slice 1b's warning: a
+  stock kernel's unit that gains a caller of its helpers can compile differently). Both
+  call `rm_rtd_filter`, which reads the 5 x 5 neighbours of the history the temporal kernel
+  has just written (the value, the distance, the material id and the count it already
+  keeps), the G-buffer's normals, and leaves out a neighbour without a normal.
+  `rm_rtao_denoise` writes the light again from the denoised AO on the world's pixels, as
+  `rm_rtao_temporal` does from the accumulated one; `rm_rtsun_denoise` on the pixels the sun
+  traced this frame (a count of 1 or more), as `rm_rtsun_temporal` does. A pixel whose count
+  leaves a strength of 0 is not written again, so a settled history's light is the temporal
+  kernel's. The denoiser writes no history: the history keeps the accumulation alone, so
+  the blur does not feed back into the next frame's blend.
+- The back ends (`rmb_rtao.m`, `rmb_rtsun.m`): a second dispatch after the temporal one in
+  the same encoder, behind a texture barrier, with the history just written at index 8 and
+  the denoiser's view (`mtl_rtd_view_t`: the sun's direction and colour, the AO's floor) at
+  buffer 10. It runs only where the temporal dispatch does, so only while `r_rt_temporal` is
+  above 0, after the blend and before the resolve. Its pipeline is made with the
+  accumulation's; one that cannot be made is latched until the pass closes and logged once
+  (`ref_metal: rt temporal: no AO denoise pipeline`, `no sun denoise pipeline`), and the
+  frames are then accumulated alone. The shadows are not denoised: the design names the AO
+  and the sun only.
+- The default: `r_rt_temporal` is `0.9` (`rm_rtaoscene.c`), the design's value, and
+  `doc/040_cvarlist.md` says it moved from 0 and why. The design runs the effect pins with
+  the accumulation off, so every committed `rt-*` scenario sets `r_rt_temporal 0`, and the
+  scenarios' README says so in each row that said no accumulation existed yet.
+- RT-primary (`r_presentation 3`): its overlay does not set `r_rt_temporal`, which reads as
+  the user's value, 0.9 by default. The overlay reads `r_rt_shadows`, `r_rt_sun` and
+  `r_rt_ao` as 0 (`rm_rtgate.c`'s mode line), so no pass that accumulates runs and the
+  default changes no RT-primary frame (the hold compares them with main's).
+
+### Tests
+
+`tests/metal/rm_rtdenoise_test.c`, run by `tests/check-ref-metal.sh`: the strength at 1, 2,
+8.5, 15, 16, 17 and 255 samples and at 0, a half, a negative, NaN and both infinities; the
+taps' sum, symmetry and values; the depth guide inside, at and past the tolerance and on
+NaN; the normal guide at 1, at a cosine of 0.95 (a half), across a right angle, opposite,
+and on NaN; the weight with each edge alone (material, no sample, NaN count, depth, normal,
+a tap outside the 5 x 5); the sums and the result (nothing added, every bad weight and
+value refused, the mean at 1 sample, half way at 8.5, kept at 16 and past it and on a NaN
+or zero count); and a 5 x 5 blur over a 9 x 7 image as the kernel runs it: a constant kept,
+a checkerboard smoothed toward its mean at 1 sample and kept at 16, 300 and NaN samples, a
+depth edge, a normal edge and a material edge that stop it, a neighbour with no sample or a
+NaN value left out, a NaN pixel given the mean.
+
+The check builds it against six mutants of the header, each of which must compile and fail
+it: the depth guide always 1 (`depth`), the normal guide always 1 (`normal`), the material
+not compared (`mat`), the count's cut at 16 dropped (`countcut`), the strength always 1
+(`countflat`), the sums' guard against a weight or value that is not finite dropped
+(`finite`). The kernels' calls are pinned as text, each with a mutant the pin must refuse,
+and, with the Metal compiler, the real file and every mutant must compile (a mutant that
+does not is reported as bad, never counted): `mtl_rtd_weight(dx, dy, hc.y, hn.y, nc, nn, mc,
+mn, hn.w)` in `rm_rtd_filter` (the depth guide dropped: the neighbour's distance replaced
+by the pixel's own), `return mtl_rtd_result(acc, hc.x, hc.w);` (the count scale dropped:
+the count replaced by 1), and no texture the denoiser can write but `light_out` (a mutant
+that writes the denoised AO into a history at texture 9). The five calls (`rm_rtd_filter`'s
+of `mtl_rtd_weight`, `mtl_rtd_add` and `mtl_rtd_result`, and each kernel's of
+`rm_rtd_filter`) join the kernel-call pins with their ten mutants each.
+
+Run by hand on the branch, with the check's compile lines and no lock:
+`denoiser 119 checks, 0 failed, 6 rule mutants, 3 kernel pins with 3 kernel mutants refused
+and compiled` and `26 kernel calls, 260 kernel-call mutants refused`; `check-cvar-docs: ok`,
+`check-doc-links: ok`, `check-runbook-index: ok`, `check-pin-chars: ok`,
+`check-video-menu: ok` (3383 checks); `xcrun metal -c` of `rm_rtdenoise.metal` and a
+syntax-only compile of both back ends with `-Wall -Wextra -Werror`.
+
+### The hold
+
+One hold on the final commit, as the scratchpad's `task59s2-hold.sh`: the builds, `make
+test`, `tests/check-ref-metal.sh` and the doc, menu and pin-character checks; main and
+slice 1b's code built in scratch; the stock `metal` pins (every committed scenario but
+RT-primary's, the `rt-*` ones at `r_rt_temporal 0`) by main and by the branch, compared
+frame by frame; the RT-primary scenarios likewise, each side at its default; and nine
+scratch scenarios, never committed: `rt-shadows.cfg`, `rt-sun.cfg` and slice 1's view with
+all three effects on, each at `r_rt_temporal 0.9` (run twice), at the default (no
+`r_rt_temporal` line), and at 0, and the 0.9 one run by slice 1b's code. Frames 12 and 22 of
+the 0.9 run, of slice 1b's 0.9 run and of the run at 0 are for the owner and are kept outside
+the repository.
+
+Results of the hold (code commit `8091364e`, base main at `4efcd73b`, slice 1b at `3845abe2`):
+
+- `pins: 29 of 29 stock scenarios byte-identical to the base`,
+  0 differ.
+- `pins: 5 of 5 RT-primary scenarios byte-identical to the base`.
+- The shadows at 0 hash to `2b8d11a25392`, the sun at 0 to `b7e0212dfda8` (main's `rt-shadows`
+  and `rt-sun` digests: `2b8d11a25392`, `b7e0212dfda8`).
+- The default is 0.9: 0, 0 and 0 frames differ between the
+  default runs and the 0.9 runs of the shadows, the sun and all three.
+- Determinism, 23 frames of `demo1.dm2` at 640 x 480, two runs at 0.9 each:
+
+  | Effect | One hash at 0.9 | Frames different between the runs | At 0.9 against 0 | Against slice 1b's code at 0.9 |
+  | --- | --- | --- | --- | --- |
+  | shadows | `721a6ef80b2d` | 0 | 3 | 0 |
+  | sun | `84642945e98e` | 0 | 1 | 1 |
+  | all three | `f262c5f10fa1` | 0 | 23 | 23 |
+
+  The shadows are not denoised, so their column against slice 1b's code is expected to be
+  0.
+- Checks: `check-ref-metal: ok (13162 checks, 0 failed; ray tracing 169 checks, 0 failed; G-buffer 177 checks, 0 failed; shadows 4384 checks, 0 failed; AO 283 checks, 0 failed; temporal 123 checks, 0 failed, 11 rule mutants, 7 kernel pins with 10 kernel mutants and 4 back-end mutants refused, 3 stock-trace pins with 6 mutants refused; denoiser 119 checks, 0 failed, 6 rule mutants, 3 kernel pins with 3 kernel mutants refused and compiled; water 727 checks, 0 failed; sun 711 checks, 0 failed; direct light 680 checks, 0 failed; RT data 170 checks, 0 failed; MetalFX 335 checks, 0 failed; ray-tracing gate 952 checks, 0 failed, Retro textures 197 checks, 0 failed, effect table 464 checks, 0 failed, 10 table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, 4 call mutants refused, tone-map order and probe cancel held, 10 order mutants refused, 35 r_rt_* cvars classified, 4 table mutants refused; 72 vocabulary mutants refused; 3 flush points, 12 flush mutants refused; blend factors once, 4 mutants refused; 5 gate-seat rules, 11 seat mutants refused; 26 kernel calls, 260 kernel-call mutants refused; colour space 736 checks, 0 failed; 12 colour-space mutants refused; metal_rate_start read once, 2 mutants refused; no hand prototype in a .m file, 18 mutants refused, 7 shapes passed; ref_metal built)`; `yq2test: 591 tests, 0 failed`; `check-cvar-docs: ok`, `check-doc-links: ok`,
+  `check-runbook-index: ok`, `check-video-menu: ok`, `check-pin-chars: ok`.
+
 ## Left for the next slices
 
-- The 5x5 bilateral denoiser on AO and sun, scaled by the sample count, and the reflections'
-  3x3 blur (slice 2).
-- The default of 0.9, set when the denoiser lands and the look is judged, and the
-  tuning-screen row with it.
+- The reflections' 3x3 depth-guided blur, with no history (the design, section 2), and its
+  kernel pins with the mutant that blurs them with a history: left by slice 2, which stopped at
+  the denoiser and the default to stay near its size. The design names no cvar for it;
+  `r_rt_temporal` above 0 is the card's reading.
+- The tuning-screen row of `r_rt_temporal`, greyed with its reason when no accumulated effect
+  is on, with the presets table (`scripts/rt/preset-to-table.sh`), the counts that pin the
+  screen (`tests/check-video-menu.sh`, `tests/menu/videomenu_test.c`) and, if
+  `src/client/menu/optsearch.c` lists every tuning cvar, the settings optimizer: left by
+  slice 2 likewise.
+- The look of the accumulated and denoised effects, judged by the owner from the hold's
+  frames and the tuning screen (INFORM11).
 - RT11's `r_rt_scale` and the `r_rt_stats 1` reset line of the design's RT11 row.
 - The GPU time of the accumulation, recorded as information (decision 0014: no target).
 - A smaller history (the slice 1 review's N2): the AO's and the sun's value and count fit
