@@ -1340,7 +1340,9 @@ is.
   point and shading table, through the stock model colour (overbright,
   the minlight and gamma tables). Glowing, minlight, fullbright,
   depth-hacked and translucent models, shells and the view weapon stay
-  stock-lit. `0`: every model stock-lit, as before. It does nothing
+  stock-lit. `0`: every model stock-lit, as before. With `r_rt_stats 2`
+  the model pass prints a line a frame (`ref_metal: rt models: ...`, see
+  `r_rt_stats`). It does nothing
   outside the Ray traced presentation or on a device without ray
   tracing. Saved with the configuration.
 
@@ -1539,7 +1541,11 @@ is.
   raster figures); and under the Ray traced presentation with
   `r_rt_temporal` above `0` a line for its accumulation,
   `ref_metal: rt direct temporal: frame N: X ms` (`- ms` when no time was
-  measured). Nothing
+  measured); and under the Ray traced presentation with
+  `r_rt_direct_models` on a line for the model pass,
+  `ref_metal: rt models: frame N: P model pixels, R shadow rays, O sky, sun and bounce rays, T ms`:
+  the model pixels it traced, their shadow rays, their sky, sun and bounce
+  rays, and the pass's GPU time (`- ms` when no time was measured). Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next

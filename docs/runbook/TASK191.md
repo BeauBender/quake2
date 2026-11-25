@@ -231,14 +231,47 @@ The checks that need no lock:
 - `xcrun metal -c` of `rm_rtmodel.metal`.
 
 The hold script builds the before (`task190s1` with `task191s1` merged) in scratch and
-records:
+records, at commit 25e2ce98:
 
-- the stock scenarios: @STOCK@ of 29 byte-identical to the before;
-- every existing RT-primary record: @RTP@ byte-identical to the before;
-- `rtprimary-models-off` on the branch: @OFF_SELF@ against `rtprimary-models` with
-  `r_rt_direct_models 0`, and @OFF_BEFORE@ against the before's binary on the same scenario
-  (which ignores the cvar);
-- each new scenario three times: @RUNS@;
-- the `r_rt_stats 2` model line: @STATS@;
+- the stock scenarios: 29 of 29 byte-identical to the before;
+- every existing RT-primary record: 12 of 12 byte-identical to the before;
+- `rtprimary-models-off` on the branch: identical (c5ec8f241450) against `rtprimary-models`
+  with `r_rt_direct_models 0`, and identical (c5ec8f241450) against the before's binary on
+  the same scenario (which ignores the cvar);
+- each new scenario three times: each identical across its 3 runs, `rtprimary-models`
+  6054a4952adc, `rtprimary-models-off` c5ec8f241450, `rtprimary-models-vis` fbdc8cbb6ad4;
+  `rtprimary-models` against `rtprimary-models-off` differs in 22 of 23 frames (the pass
+  changes the models);
+- the `r_rt_stats 2` model line: 686 model lines, the first
+  `ref_metal: rt models: frame 18: 4464 model pixels, 24747 shadow rays, 11593 sky, sun and bounce rays, 0.318 ms`,
+  and no refusal line. The times on these lines (0.318 ms on the first, a mean of 0.385 ms
+  over the 686) were measured with the screen locked during a hold. They are not a timing
+  measurement, and no conclusion is drawn from them (decision 0014);
 - the frames for the owner: `rtprimary-models` and `rtprimary-models-off` at captures 12 and
-  21, and the stock `models` scenario's.
+  21, and the stock `models` scenario's. They went to the owner directly and are not
+  committed.
+
+## Review notes
+
+- **The pass runs after TASK190's accumulation**, as a row after `RM_RTFX_DIRECT`. Model
+  pixels are not accumulated; slice 4 does that.
+- **Later rows read the raster lightmap.** Under RT-primary, the rows after the direct
+  light read the raster lightmap, not the traced light. That predates this slice.
+- **The kernel mutants are text pins.** No GPU test runs the kernel; the pins hold its
+  text and each mutant compiles under `xcrun metal`.
+- **The model colour index under fast math.** The Metal shaders build with fast math,
+  where the compare `!(f > 0.0f)` that sent a NaN to index 0 may be folded as if no NaN
+  came. `mtl_rtm_index1` now tests the float's bit pattern with integer compares
+  (`MTL_RTM_BITS`, `as_type<uint>` under Metal): a pattern above +inf's (a NaN, or the
+  sign set) gives 0, one at or above 255.0f's gives 255, and only a finite value in
+  0 .. 255 is truncated. The results equal the float compares' for every input, so the
+  host stays gl1-equal. The host test adds NaN of either sign and several payloads, +inf,
+  -inf, -0 and a sweep of 65536 bit patterns (`rm_rtmodel_test: 3479 checks, 0 failed`),
+  and the `nan-guard` mutant, the guard dropped, is refused (10 failed checks), so
+  check-ref-metal now requires 11 model-light mutants. check-ref-metal also pins the
+  Metal branch's `as_type<uint>`.
+- **`r_rt_stats 2`'s model line** is documented in `doc/040_cvarlist.md`, under
+  `r_rt_stats` and `r_rt_direct_models`.
+- **`rtprimary-models-vis`** shows model pixels in gl1's model colour (overbright, the
+  minlight and gamma tables) and world pixels in the linear term, so the two are not
+  directly comparable; `doc/100_renderpins.md` and the scenarios README say so.
