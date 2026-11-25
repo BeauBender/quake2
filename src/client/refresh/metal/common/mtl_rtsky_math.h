@@ -82,10 +82,12 @@ mtl_rtsky_at(unsigned mat, int layer)
 /*
  * 1 when a world pixel under r_rt_direct_show view show traces term
  * (MTL_RTSKY_TERM_*) whose colour's largest channel is scale: the picture
- * and views 1 and 2 trace both, view 5 the sky alone and view 6 the sun
- * alone; view 3 (no ray at all) and view 4 (the dynamic lights alone)
- * neither. 0 when scale is not above 0, a value that is not a number
- * among them: no ray for a term that adds nothing.
+ * (view 0) traces both, view 5 the sky alone and view 6 the sun alone;
+ * views 1 to 4 neither, so view 1 is the direct term alone, view 2 (the
+ * visibility) traces no ray it would not show, view 3 (no ray at all) is
+ * view 1 without its shadows and view 4 is the dynamic lights alone. 0
+ * when scale is not above 0, a value that is not a number among them: no
+ * ray for a term that adds nothing.
  */
 static inline int
 mtl_rtsky_traces(unsigned show, unsigned term, float scale)
@@ -95,7 +97,7 @@ mtl_rtsky_traces(unsigned show, unsigned term, float scale)
 		return 0;
 	}
 
-	if (show <= 2u)
+	if (show == 0u)
 	{
 		return 1;
 	}

@@ -2715,6 +2715,56 @@ open_broken(const char *src)
 }
 
 /*
+ * mtl_rtsky_traces's body, whole (round 1 of TASK189 slice 1): the picture
+ * traces both terms, views 5 and 6 one each, every other view neither, so
+ * view 1 is the direct term alone and view 3 is view 1 without its shadows
+ */
+#define TRACES_BODY \
+	"{\n" \
+	"\tif (!(scale > 0.0f))\n" \
+	"\t{\n" \
+	"\t\treturn 0;\n" \
+	"\t}\n" \
+	"\n" \
+	"\tif (show == 0u)\n" \
+	"\t{\n" \
+	"\t\treturn 1;\n" \
+	"\t}\n" \
+	"\n" \
+	"\treturn (show == ((term == MTL_RTSKY_TERM_SKY) ? MTL_RTSKY_SHOW_SKY : MTL_RTSKY_SHOW_SUN)) ? 1 : 0;\n" \
+	"}"
+
+/* which views trace the two terms, in the header's text (src) with its comments taken out: NULL when it holds */
+static const char *
+traces_broken(const char *src)
+{
+	static char text[65536];
+	fn_t f;
+	int r;
+
+	strip_comments(src, text, sizeof(text));
+
+	if (!find_fn(text, "static inline int\nmtl_rtsky_traces(", &f))
+	{
+		return "mtl_rtsky_traces is not defined once";
+	}
+
+	r = pin_and(pin_is(f.params, f.nparams, "(unsigned show, unsigned term, float scale)"), pin_is(f.body, f.nbody, TRACES_BODY));
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "mtl_rtsky_traces does not trace the two terms under the picture and their views alone, and nowhere else");
+	}
+
+	if ((count_in(text, strlen(text), "MTL_RTSKY_SHOW_SKY 5u") != 1) || (count_in(text, strlen(text), "MTL_RTSKY_SHOW_SUN 6u") != 1))
+	{
+		return "the views of the two terms alone are not 5 and 6";
+	}
+
+	return NULL;
+}
+
+/*
  * The kernel's file holds the sky's and the sun's rules, and each mutant
  * of one breaks a check (open_broken's, or kernel_broken's for the
  * lightmap): nothing met counts as the sky (sky-miss-lit), any face as
@@ -2724,15 +2774,18 @@ open_broken(const char *src)
  * dropped from the write (open-dropped), the sun without N.L (sun-no-ndotl),
  * toward the normal (sun-dir), from a face turned away (sun-backface), the
  * terms reading the lightmap (open-reads-lm), the views of a term alone
- * ignored (alone-ignored), and the terms added before the exposure
- * (open-exposed).
+ * ignored (alone-ignored), the terms added before the exposure
+ * (open-exposed), and the sky or the sun traced under view 1 (round 1:
+ * sky-view-dropped and sun-view-dropped in the kernel; view1-both,
+ * view1-sun and views-low in mtl_rtsky_math.h, judged by traces_broken),
+ * which would add them to the direct term alone.
  */
 static void
 test_open_kernel(void)
 {
-	static char src[65536], m[65536 + 1024], m2[65536 + 1024];
+	static char src[65536], hdr[65536], m[65536 + 1024], m2[65536 + 1024];
 	const char *why;
-	int i;
+	int i, refused = 0;
 
 	static const struct
 	{
@@ -2759,7 +2812,45 @@ test_open_kernel(void)
 			{ "ntris, tile, t) : float3(0.0f);", "ntris, tile, t, lm) : float3(0.0f);" } } },
 		{ "alone-ignored", { { "mtl_rtsky_alone(show)", "0" } } },
 		{ "open-exposed", { { KERNEL_WRITE, "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + open, v.exposure), open, v.show), px);" } } },
+		{ "sky-view-dropped", { { "mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SKY,", "mtl_rtsky_traces(0u, MTL_RTSKY_TERM_SKY," } } },
+		{ "sun-view-dropped", { { "mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SUN,", "mtl_rtsky_traces(v.show & 4u, MTL_RTSKY_TERM_SUN," } } },
 	};
+
+	/* mutants of mtl_rtsky_math.h that let view 1 trace and add the sky or the sun */
+	static const struct
+	{
+		const char *name, *from, *to;
+	} hmutants[] = {
+		{ "view1-both", "\tif (show == 0u)\n", "\tif (show <= 1u)\n" },
+		{ "view1-sun", "(term == MTL_RTSKY_TERM_SKY) ? MTL_RTSKY_SHOW_SKY : MTL_RTSKY_SHOW_SUN",
+			"(term == MTL_RTSKY_TERM_SKY) ? MTL_RTSKY_SHOW_SKY : ((show == 1u) ? 1u : MTL_RTSKY_SHOW_SUN)" },
+		{ "views-low", "\tif (show == 0u)\n", "\tif (show <= 2u)\n" },
+	};
+
+	CHECK(read_file("src/client/refresh/metal/common/mtl_rtsky_math.h", hdr, sizeof(hdr)));
+	why = traces_broken(hdr);
+
+	if (why)
+	{
+		printf("mtl_rtsky_math.h: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+
+	for (i = 0; i < (int)(sizeof(hmutants) / sizeof(hmutants[0])); i++)
+	{
+		const int applied = mutate(hdr, hmutants[i].from, hmutants[i].to, m, sizeof(m));
+
+		why = applied ? traces_broken(m) : NULL;
+
+		if (!applied || !why)
+		{
+			printf("sky mutant %s: %s\n", hmutants[i].name, applied ? "passes the views' check" : "does not apply");
+		}
+
+		CHECK(applied && (why != NULL));
+		refused += (applied && why) ? 1 : 0;
+	}
 
 	CHECK(read_file("src/client/refresh/metal/rm_rtdir.metal", src, sizeof(src)));
 	why = open_broken(src);
@@ -2815,7 +2906,11 @@ test_open_kernel(void)
 		}
 
 		CHECK(applied && (why != NULL));
+		refused += (applied && why) ? 1 : 0;
 	}
+
+	/* check-ref-metal.sh counts these in its direct-light segment */
+	printf("rm_rtdir_test: %d sky mutants refused\n", refused);
 }
 
 /* a host mirror of rm_rtdir_sky_hit's walk over the faces a ray meets, nearest first (n of them): 1 when it reaches the sky */
@@ -2904,14 +2999,15 @@ test_sky_sun(void)
 	CHECK(mtl_rtsun_ndotl(mtl_rtao_v3(0, 0, 1), mtl_rtao_v3(0, 0, -1)) == 0.0f);
 	CHECK(mtl_rtsun_ndotl(mtl_rtao_v3(0, 0, 1), mtl_rtao_v3(0, 0, 1)) == 1.0f);
 
-	/* which views trace which term */
-	for (i = 0; i <= 2; i++)
+	/* which views trace which term: the picture both, views 1 to 4 neither (view 1 the direct term alone), 5 and 6 one each */
+	CHECK(mtl_rtsky_traces(0, MTL_RTSKY_TERM_SKY, 1) && mtl_rtsky_traces(0, MTL_RTSKY_TERM_SUN, 1));
+
+	for (i = 1; i <= 4; i++)
 	{
-		CHECK(mtl_rtsky_traces((unsigned)i, MTL_RTSKY_TERM_SKY, 1) && mtl_rtsky_traces((unsigned)i, MTL_RTSKY_TERM_SUN, 1));
+		CHECK(!mtl_rtsky_traces((unsigned)i, MTL_RTSKY_TERM_SKY, 1) && !mtl_rtsky_traces((unsigned)i, MTL_RTSKY_TERM_SUN, 1));
 	}
 
-	CHECK(!mtl_rtsky_traces(3, MTL_RTSKY_TERM_SKY, 1) && !mtl_rtsky_traces(3, MTL_RTSKY_TERM_SUN, 1));
-	CHECK(!mtl_rtsky_traces(4, MTL_RTSKY_TERM_SKY, 1) && !mtl_rtsky_traces(4, MTL_RTSKY_TERM_SUN, 1));
+	CHECK(!mtl_rtsky_traces(7, MTL_RTSKY_TERM_SKY, 1) && !mtl_rtsky_traces(7, MTL_RTSKY_TERM_SUN, 1));
 	CHECK(mtl_rtsky_traces(5, MTL_RTSKY_TERM_SKY, 1) && !mtl_rtsky_traces(5, MTL_RTSKY_TERM_SUN, 1));
 	CHECK(!mtl_rtsky_traces(6, MTL_RTSKY_TERM_SKY, 1) && mtl_rtsky_traces(6, MTL_RTSKY_TERM_SUN, 1));
 	CHECK(!mtl_rtsky_traces(0, MTL_RTSKY_TERM_SKY, 0) && !mtl_rtsky_traces(0, MTL_RTSKY_TERM_SUN, NAN));
