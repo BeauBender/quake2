@@ -856,7 +856,7 @@ HdrRule(int item, const char *renderer, char *note, size_t len)
  * (restart)", live only after a row that needs vid_restart changed. As
  * the ray-tracing screen, it keeps the view undimmed and every item shown.
  */
-#define TUNE_MAX_ROWS 12
+#define TUNE_MAX_ROWS VIDTUNE_MAX_ROWS
 #define TUNE_MAX_STEPS 80
 
 static menuframework_s s_tune_menu;
@@ -970,8 +970,33 @@ TuneMenu_Rules(void)
 	{
 		const vidrt_control_t *c = VidRules_TuneControl(i);
 		const vidrt_control_t *e = VidRules_RTControl(c->effect);
-		const int on = e ? VidRules_RTEffective(c->effect, s_built_renderer, available, pres,
+		int on = e ? VidRules_RTEffective(c->effect, s_built_renderer, available, pres,
 				Cvar_VariableValue(e->cvar)) : 1;
+		int over = e && !on && VidRules_RTOverridden(c->effect, s_built_renderer, available, pres);
+
+		/*
+		 * TASK59 slice 2b: the accumulation's row is on while any effect it acts on runs.
+		 * Under RT-primary in force the mode runs the water but not its blur (rm_rtt_wblur),
+		 * so the water is no effect the row acts on there: with shadows, sun and AO read 0,
+		 * the row is the mode's.
+		 */
+		if (c->effect == VIDTUNE_EFFECT_ACCUM)
+		{
+			const int rtp = (VidRules_PresentationIndex(pres) == VIDPRES_RTPRIMARY);
+
+			on = over = 0;
+			for (int k = 0; k < VIDTUNE_ACCUM_ROWS; k++)
+			{
+				const vidrt_control_t *s = VidRules_RTControl(k);
+				const int mode = VidRules_RTOverridden(k, s_built_renderer, available, pres);
+				const int sk = VidRules_RTEffective(k, s_built_renderer, available, pres, Cvar_VariableValue(s->cvar)) &&
+					!(rtp && mode && !strcmp(s->cvar, "r_rt_water"));
+
+				on = on || sk;
+				over = over || (!sk && mode);
+			}
+			over = over && !on;
+		}
 
 		if (VidRules_HdrItem(c->cvar) >= 0)
 		{
@@ -981,8 +1006,7 @@ TuneMenu_Rules(void)
 			continue;
 		}
 		/* TASK188: a row of an effect the mode reads off (Ray traced's sun and AO) is the mode's too */
-		RTSetRule(s_tune_items[i], (VidRules_TuneOverridden(i, s_built_renderer, pres) ||
-			(e && !on && VidRules_RTOverridden(c->effect, s_built_renderer, available, pres))) ?
+		RTSetRule(s_tune_items[i], (VidRules_TuneOverridden(i, s_built_renderer, pres) || over) ?
 			(vidrule_t){ 0, "set by the presentation" } :
 			VidRules_TuneItem(i, s_built_renderer, available, on));
 	}

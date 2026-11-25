@@ -21,7 +21,9 @@
  * rule of common/mtl_rtd_math.h, which the kernels call: the strength
  * from the sample count, the spatial, depth and normal weights, the
  * running sums and the result, and a 5 x 5 blur over a small image as
- * rm_rtdenoise.metal's rm_rtd_filter runs it. Built and run by
+ * rm_rtdenoise.metal's rm_rtd_filter runs it; slice 2b's 3 x 3 blur of
+ * the water reflections, its taps and depth-guided weight and the blur as
+ * rm_rtwdenoise.metal's rm_rtw_denoise runs it. Built and run by
  * tests/check-ref-metal.sh, which also builds it against mutants of the
  * header that it must fail.
  *
@@ -306,6 +308,150 @@ test_blur(void)
 	CHECK(img_blur(4, 3) == 0.0f);
 }
 
+/*
+ * Slice 2b: the reflections' 3 x 3 blur. The image's v is a reflection's
+ * colour channel, d its distance from the eye, m 1 where it holds a
+ * reflection (the kernel's class test, rm_rtd_rok) and 0 where not; the
+ * count and the normal are unused: no history, no normal guide.
+ */
+static float
+img_rblur(int x, int y)
+{
+	mtl_rtd_acc_t a = mtl_rtd_acc();
+	const px_t *c = &img[y][x];
+
+	for (int dy = -MTL_RTD_REFL_RADIUS; dy <= MTL_RTD_REFL_RADIUS; dy++)
+	{
+		for (int dx = -MTL_RTD_REFL_RADIUS; dx <= MTL_RTD_REFL_RADIUS; dx++)
+		{
+			const int qx = x + dx, qy = y + dy;
+			const px_t *q;
+			const int ok = (qx >= 0) && (qy >= 0) && (qx < W) && (qy < H) && img[qy][qx].m;
+
+			if ((qx < 0) || (qy < 0) || (qx >= W) || (qy >= H))
+			{
+				continue;
+			}
+			q = &img[qy][qx];
+			a = mtl_rtd_add(a, mtl_rtd_rweight(dx, dy, c->d, ok ? q->d : c->d, ok), q->v);
+		}
+	}
+
+	return mtl_rtd_rresult(a, c->v);
+}
+
+static void
+test_rtap(void)
+{
+	float sum = 0.0f;
+
+	for (int dy = -1; dy <= 1; dy++)
+	{
+		for (int dx = -1; dx <= 1; dx++)
+		{
+			sum += mtl_rtd_rtap(dx, dy);
+			CHECK(mtl_rtd_rtap(dx, dy) == mtl_rtd_rtap(-dx, dy));
+			CHECK(mtl_rtd_rtap(dx, dy) == mtl_rtd_rtap(dy, dx));
+		}
+	}
+
+	CHECK(near(sum, 1.0f));
+	CHECK(mtl_rtd_rtap(0, 0) == 4.0f / 16.0f);
+	CHECK(mtl_rtd_rtap(1, 0) == 2.0f / 16.0f);
+	CHECK(mtl_rtd_rtap(1, -1) == 1.0f / 16.0f);
+	CHECK(mtl_rtd_rtap(2, 0) == 0.0f);
+	CHECK(mtl_rtd_rtap(0, -2) == 0.0f);
+	CHECK(MTL_RTD_REFL_RADIUS == 1);
+}
+
+static void
+test_rweight(void)
+{
+	/* the tap times the depth guide; nothing for a neighbour without a reflection */
+	CHECK(mtl_rtd_rweight(0, 0, 100.0f, 100.0f, 1) == 0.25f);
+	CHECK(near(mtl_rtd_rweight(1, 0, 100.0f, 100.0f, 1), 0.125f));
+	CHECK(mtl_rtd_rweight(0, 0, 100.0f, 100.0f, 0) == 0.0f);
+	CHECK(mtl_rtd_rweight(1, 1, 100.0f, 100.0f, 0) == 0.0f);
+
+	/* the depth guide: half way inside the tolerance (2 + 2 % of 100 = 4), none at it and past it, none on NaN */
+	CHECK(near(mtl_rtd_rweight(0, 0, 100.0f, 102.0f, 1), 0.125f));
+	CHECK(mtl_rtd_rweight(0, 0, 100.0f, 104.0f, 1) == 0.0f);
+	CHECK(mtl_rtd_rweight(1, 0, 100.0f, 96.0f, 1) == 0.0f);
+	CHECK(mtl_rtd_rweight(1, 0, 100.0f, 300.0f, 1) == 0.0f);
+	CHECK(mtl_rtd_rweight(1, 0, 100.0f, NAN, 1) == 0.0f);
+	CHECK(mtl_rtd_rweight(1, 0, NAN, 100.0f, 1) == 0.0f);
+	CHECK(mtl_rtd_rweight(1, 0, 100.0f, INFINITY, 1) == 0.0f);
+
+	/* outside the 3 x 3 */
+	CHECK(mtl_rtd_rweight(2, 0, 100.0f, 100.0f, 1) == 0.0f);
+
+	/* full strength: the mean itself, the value when nothing was added */
+	{
+		mtl_rtd_acc_t a = mtl_rtd_acc();
+
+		CHECK(mtl_rtd_rresult(a, 0.3f) == 0.3f);
+		a = mtl_rtd_add(a, 0.5f, 1.0f);
+		a = mtl_rtd_add(a, 0.5f, 0.0f);
+		CHECK(near(mtl_rtd_rresult(a, 0.0f), 0.5f));
+		CHECK(near(mtl_rtd_rresult(a, 1.0f), 0.5f));
+		CHECK(near(mtl_rtd_rresult(a, NAN), 0.5f));
+	}
+}
+
+static void
+test_rblur(void)
+{
+	/* a constant is kept */
+	img_fill(0.6f, 100.0f, 1, 0.0f);
+	CHECK(near(img_rblur(4, 3), 0.6f));
+	CHECK(near(img_rblur(0, 0), 0.6f));
+
+	/* a checkerboard is smoothed: the centre 4, the edges 2 x 4, the corners 4 x 1, over 16 */
+	for (int y = 0; y < H; y++)
+	{
+		for (int x = 0; x < W; x++)
+		{
+			img[y][x].v = ((x + y) & 1) ? 1.0f : 0.0f;
+		}
+	}
+	CHECK(near(img_rblur(4, 3), 8.0f / 16.0f));
+	CHECK(near(img_rblur(3, 3), 8.0f / 16.0f));
+
+	/* one bright neighbour: its tap's share */
+	img_fill(0.0f, 100.0f, 1, 0.0f);
+	img[3][5].v = 1.0f;
+	CHECK(near(img_rblur(4, 3), 2.0f / 16.0f));
+	img[3][5].v = 0.0f;
+	img[2][5].v = 1.0f;
+	CHECK(near(img_rblur(4, 3), 1.0f / 16.0f));
+
+	/* a depth edge stops it: the far neighbour is left out */
+	img[2][5].d = 200.0f;
+	CHECK(img_rblur(4, 3) == 0.0f);
+
+	/* a neighbour without a reflection is left out, however near */
+	img[2][5].d = 100.0f;
+	img[2][5].m = 0;
+	CHECK(img_rblur(4, 3) == 0.0f);
+
+	/* a column of bright neighbours across a depth edge: none of it reaches the pixel */
+	img_fill(0.0f, 100.0f, 1, 0.0f);
+	for (int y = 0; y < H; y++)
+	{
+		img[y][5].v = 1.0f;
+		img[y][5].d = 50.0f;
+	}
+	CHECK(img_rblur(4, 3) == 0.0f);
+	CHECK(near(img_rblur(5, 3), 1.0f));
+
+	/* the same column at the pixel's depth: 4 of 16 */
+	for (int y = 0; y < H; y++)
+	{
+		img[y][5].d = 100.0f;
+	}
+	CHECK(near(img_rblur(4, 3), 4.0f / 16.0f));
+}
+
 int
 main(void)
 {
@@ -316,6 +462,9 @@ main(void)
 	test_weight();
 	test_acc();
 	test_blur();
+	test_rtap();
+	test_rweight();
+	test_rblur();
 
 	printf("rm_rtdenoise_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

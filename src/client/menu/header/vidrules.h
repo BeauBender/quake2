@@ -270,6 +270,22 @@ const char *VidRules_RTStatus(const char *renderer, int available, float present
  */
 #define VIDTUNE_PART_DEBUG 3
 
+/*
+ * TASK59 slice 2b: the effect of the r_rt_temporal row (accumulate), which
+ * acts on four effects, not one: it is on while any of shadows, sun,
+ * ambient occlusion and water (the first VIDTUNE_ACCUM_ROWS rows of
+ * rt_controls) runs, and greyed with its reason while none does.
+ */
+#define VIDTUNE_EFFECT_ACCUM -2
+#define VIDTUNE_ACCUM_ROWS 4
+
+/*
+ * The most rows the tuning screen holds (videomenu.c sizes its arrays by
+ * it): vidrules.c asserts at compile time that rt_tune fits, so a row past
+ * it fails the build instead of being left off the screen.
+ */
+#define VIDTUNE_MAX_ROWS 12
+
 int VidRules_TuneNum(void);
 const vidrt_control_t *VidRules_TuneControl(int i);
 vidrule_t VidRules_TuneItem(int i, const char *renderer, int available, int effect_on);

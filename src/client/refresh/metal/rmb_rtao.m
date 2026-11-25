@@ -328,13 +328,14 @@ rmb_rtao_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
 {
 	tview_set = 0;
 
-	/* off: no history is kept */
+	/* off: no history is kept, nor the denoiser's pipeline (slice 2b, review note N3; made again with the accumulation) */
 	if (!t || !(t->alpha > 0.0f) || !ao_open || (w < 1) || (h < 1) || (w > 0xffffffffUL) || (h > 0xffffffffUL))
 	{
-		if (t_hist[0] || t_hist[1])
+		if (t_hist[0] || t_hist[1] || dn_pipe)
 		{
 			RMB_RTAO_SET(t_hist[0], nil);
 			RMB_RTAO_SET(t_hist[1], nil);
+			RMB_RTAO_SET(dn_pipe, nil);
 		}
 
 		rm_rtt_hist_reset(&thist);

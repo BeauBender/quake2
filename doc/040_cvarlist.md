@@ -1618,10 +1618,35 @@ is.
   from `0` to the design's `0.9` (TASK59 slice 2) once the denoiser
   landed: until then `0` kept every frame as before while the
   accumulation was built; the committed `rt-*` pin scenarios set it to
-  `0` so that their frames stay those of the passes alone. Saved with the
-  configuration; applies from the next frame.
-  Not on the Ray tracing screens yet: it joins the tuning screen, the
-  presets and the settings optimizer with its default.
+  `0` so that their frames stay those of the passes alone. While it is
+  above `0`, the water reflections of `r_rt_water`, which have no history
+  (the warp moves every frame), get a 3 x 3 blur guided by the distance
+  from the eye, over the neighbours that hold a reflection on the same
+  water (TASK59 slice 2b); at `0` they are the trace's alone, as before.
+  The blur does not run under RT-primary (`r_presentation 3`), whose
+  water is the trace's alone at any value: RT-primary's denoising is row
+  PM8 of the presentation-modes plan (TASK190, #537), not this one. The
+  AO's and the sun's denoiser do not run there either, since RT-primary
+  reads `r_rt_ao` and `r_rt_sun` as `0`.
+  The accumulation's memory, per pixel of the render size, is 112 bytes
+  for the three effects (the AO 32, the sun 32, the shadows 48), made
+  only for an effect that is on: at 1920 x 1080 that is 232,243,200 bytes
+  with all three on, at 3840 x 2160 928,972,800 (about 0.9 GB); the
+  reflections' blur adds 4 bytes a pixel while the water is on. A failed
+  allocation is logged once and the frames are then the trace's alone;
+  for the reflections' blur, once per render size, since a new size tries
+  it again.
+  Saved with the configuration; applies from the next frame. The Ray
+  tracing menu's tuning screen has it as "accumulate" (0 to 0.98, the
+  renderer's own maximum, in steps of 0.02): live when shadows, sun, AO
+  or water runs, and the presentation is not RT-primary; greyed "turn on
+  shadows, sun, AO or water first" while none of them runs, and "set by
+  the presentation" under Retro and under RT-primary (whose water has
+  no blur and whose other three effects are off); the
+  presets and the A/B hold it. The tuning screen has no rule by device
+  class: the row and its default are the same on every device (whether a
+  default may differ by device class is decision 0014's open question).
+  The settings optimizer does not search it.
 
 * **r_rt_water**: When set to `1`, the Metal renderer gives water a
   ray-traced reflection, one bounce: from each pixel of water (the
