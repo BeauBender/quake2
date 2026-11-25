@@ -107,3 +107,8 @@ changes with this record.
 
 - May default settings still differ by device class, as long as nothing
   is forced or hidden?
+
+Answered. The owner answered on 2026-11-24: yes (reading (a) on #697).
+Shipped cvar defaults may differ by device class, and that covers the
+optimizer's starting point. Nothing may be forced or hidden; a capability
+stays the only reason an item is unavailable.

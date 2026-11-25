@@ -592,12 +592,19 @@ family. What differs comes in through the same capability cvars:
 | The command and cvar names | Confirmed, plus `optimize undo`, `optimize_stat`, `optimize_state`, `metal_presented`, `metal_rt_cost` | section 5.1 |
 | The statistic | `optimize_stat`, default `p95` | section 2.2; reversible, one default |
 | The starting point | The top of each ranked ladder the device can run | section 4.1; the player's values stay as A |
-| May default settings differ by device class? | **The owner's call**; not decided here | section 9 |
+| May default settings differ by device class? | **Yes**, reading (a), answered by the owner on 2026-11-24 | section 9 |
 
-## 9. The owner's open question
+## 9. The owner's question, answered
 
-Decision 0014 leaves one question open: "May default settings still differ
-by device class, as long as nothing is forced or hidden?" This plan does
+**Answered yes, by the owner, on 2026-11-24 (reading (a) on #697).** The
+shipped cvar defaults may differ by device class, and that covers the
+optimizer's starting point too. TASK205 may therefore set shipped defaults
+by device class and the optimizer's starting point. Nothing may be forced
+or hidden: a capability stays the only reason an item is unavailable. The
+text below is the question as it was asked, kept so the history reads.
+
+Decision 0014 left one question open: "May default settings still differ
+by device class, as long as nothing is forced or hidden?" This plan did
 not answer it. Nothing in sections 1 to 8 depends on the answer:
 
 - The search starts from the top of each ladder (section 4.1), not from a
