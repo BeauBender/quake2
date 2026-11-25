@@ -67,8 +67,10 @@ calls them, so no frame changes (the hold, below).
   rastered model is opaque, so its own alpha is 1.
 - **gl1's constants are doubles.** `rm_alias_shade` compares a float against 0.1 and
   multiplies by 0.8, both in double. The header uses doubles on the host and floats under
-  Metal, so the host is gl1's to the bit and the GPU can differ by one float ulp at those
-  edges.
+  Metal, so the host is gl1's to the bit. Under Metal the test `s > 0.1f` can floor a
+  channel that gl1's double test `s > 0.1` keeps, so one input value can change a whole
+  channel. Slice 2 changes the Metal test to `s >= 0.1f`, which equals gl1's double test
+  exactly.
 
 ## The test, red then green
 
@@ -89,7 +91,7 @@ calls them, so no frame changes (the hold, below).
 - the pull-back point.
 
 Green: `model light 3446 checks, 0 failed, 7 of 7 mutants refused` (the hold's
-check-ref-metal line: `@RTM_LINE@`).
+check-ref-metal line: model light 3446 checks, 0 failed, 7 of 7 mutants refused).
 
 Red: seven scratch mutants, each of which compiles and is refused. `check-ref-metal.sh`
 requires all seven:
@@ -112,9 +114,9 @@ and `xcrun metal -c` of a translation unit that includes `mtl_rtm_math.h` and ca
 function. The hold builds main and the branch in scratch, runs `make test` and
 `check-ref-metal`, and records:
 
-- the stock scenarios at `r_presentation 0`: `@STOCK@` byte-identical to main;
+- the stock scenarios at `r_presentation 0`: 29 of 29 stock scenarios byte-identical to the base (main e76c846e) byte-identical to main;
 - every committed `rtprimary-*` record, with `rtprimary-world` on `demo2.dm2` and on the
-  pool demo and `rtprimary-dlights` on `demo2.dm2`: `@RTP@` byte-identical to main.
+  pool demo and `rtprimary-dlights` on `demo2.dm2`: 10 of 10 RT-primary records byte-identical to main's (the 7 rtprimary-* scenarios and the styles, pool and dlights-d2 demo variants) byte-identical to main.
 
 ## Left to the next slices
 
@@ -122,3 +124,9 @@ function. The hold builds main and the branch in scratch, runs `make test` and
 - Slice 3: the view weapon is rastered under the mode, with the tag, the unprojection and
   the pull-back ray, and the glow and minlight flags are applied from the tag.
 - Slice 4: model pixels join TASK190's accumulation.
+
+## Notes for slice 2
+
+- The kernel's tag decode also gates on material 2 (alias).
+- Tag only when the normals were written.
+- The depth-hack forward rule excludes `RF_WEAPONMODEL`.
