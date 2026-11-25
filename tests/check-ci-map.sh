@@ -37,7 +37,9 @@
 #     merge commit as a pull request checkout is: the harness group reads
 #     HEAD^1..HEAD, a push or a HEAD that is not a merge commit runs every
 #     harness check, and a selector that fails or prints a name it was not
-#     given runs every check of tests/ci-checks.txt.
+#     given runs every check of tests/ci-checks.txt. Then two runs through
+#     scripts/gate-checks.sh on stub checks (a push, and the pull request)
+#     pass, with the long checks named first.
 # Then each mutant below must be refused by (a) to (d).
 #
 # Needs bash, awk, git and ruby (its yaml).
@@ -345,6 +347,9 @@ repo() {
 	mkdir -p "$d/scripts" "$d/tests" "$d/src"
 	cp "$2" "$d/scripts/ci-checks.sh"
 	cp "$3" "$d/scripts/ci-select.sh"
+	cp scripts/gate-checks.sh "$d/scripts/"
+	mkdir -p "$d/scripts/bench/core"
+	cp scripts/bench/core/common.sh "$d/scripts/bench/core/"
 	cp tests/ci-checks.txt "$MAP" "$d/tests/"
 	for n in $CI_NAMES; do
 		printf '#!/bin/sh\nexit 0\n' > "$d/tests/$n"
@@ -399,6 +404,21 @@ e2e_cases() {
 	printf '#!/bin/bash\nexit 0\n' > "$d/scripts/ci-select.sh"
 	expect sel-none-fast "$all" "$(cs "$d" pull_request fast)" || cf=1
 	cp "$tmp/sel.keep" "$d/scripts/ci-select.sh"
+	# a run through the scheduler, the long checks named first
+	local o n
+	o=$(cd "$d" && env GITHUB_EVENT_NAME=push CI_CHECKS_GROUP=harness GATE_JOBS=2 sh scripts/ci-checks.sh 2>&1) ||
+		{ printf '%s\n' "$o" | tail -n 3; echo "case run-harness: the run failed"; cf=1; }
+	n=$(printf '%s\n' $HALL | wc -l | tr -d ' ')
+	case $o in
+		*"gate: checks: all $n passed"*) ;;
+		*) echo "case run-harness: no 'all $n passed' line"; cf=1 ;;
+	esac
+	o=$(cd "$d" && env GITHUB_EVENT_NAME=pull_request CI_CHECKS_GROUP=harness GATE_JOBS=2 sh scripts/ci-checks.sh 2>&1) ||
+		{ printf '%s\n' "$o" | tail -n 3; echo "case run-pr: the run failed"; cf=1; }
+	case $o in
+		*"gate: checks: all 1 passed"*) ;;
+		*) echo "case run-pr: no 'all 1 passed' line"; cf=1 ;;
+	esac
 	return $cf
 }
 
@@ -488,6 +508,8 @@ mut scripts/ci-checks.sh "			git diff --no-renames --no-relative --name-only -z 
 refused wrong-parent e2e "case pr-merge:"
 mut scripts/ci-checks.sh '		for n in $cands; do set -- "$@" "tests/$n"; done' '		:'
 refused fallback-none e2e "case sel-fails:"
+mut scripts/ci-checks.sh '	case " $* " in *" tests/$n "*) first="$first${first:+ }$n" ;; esac' '	first="$first${first:+ }$n"'
+refused first-unfiltered e2e "case run-pr:"
 # the workflow: a group that cancels across events, a matrix without harness
 mut .github/workflows/macos.yml "  group: $GROUP" '  group: ${{ github.workflow }}'
 refused group-workflow static "macos.yml: the concurrency group"
