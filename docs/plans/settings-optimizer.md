@@ -3,7 +3,7 @@
 Decision record: [0014, no feature is gated on performance](../decisions/0014-no-performance-gating.md).
 Cards: TASK202 (#694, this plan), TASK203 (#695, the search and the
 `optimize` command), TASK204 (#696, the menu screen), TASK205 (#697,
-starting points per device class, waiting on the owner). Related plans:
+starting points per device class, the owner answered on 2026-11-24, section 9). Related plans:
 [HDR output](hdr-output.md), [the presentation modes](presentation-modes.md)
 and [the ray-tracing design](metal-raytracing-design.md) (section 8).
 
@@ -596,7 +596,8 @@ family. What differs comes in through the same capability cvars:
 
 ## 9. The owner's question, answered
 
-**Answered yes, by the owner, on 2026-11-24 (reading (a) on #697).** The
+**Answered yes, by the owner, on 2026-11-24 (reading (a) on #697, the first of the two
+readings below).** The
 shipped cvar defaults may differ by device class, and that covers the
 optimizer's starting point too. TASK205 may therefore set shipped defaults
 by device class and the optimizer's starting point. Nothing may be forced
@@ -639,7 +640,7 @@ The question decides TASK205, and only TASK205:
 |---|---|---|---|---|
 | 1. The search and the command | TASK203 (#695) | `src/client/menu/optsearch.c`, `header/optsearch.h` (new: the pure search); `src/client/menu/optimize.c` (new: the command, the cvars, the trials); `rtpreset.c` and `header/vidrules.h` (publish a given set as B; save a given set); `vidrules.c` (`r_metalfx_scale` as a preset row); `rm_fxscene.c` (`r_metalfx_scale` through `RM_Effect`); `rm_main.c` (`metal_presented`, `metal_rt_cost`); `cl_view.c`, `cl_network.c` (one call each, only while a run is on); `menu.c` (the init beside `RTPreset_Init`); `Makefile` (the client and `TEST_OBJS`, beside `rtpreset.o` and `vidrules.o`, against `tests/unit/stub_client.c`); `doc/040_cvarlist.md`, `doc/050_commands.md`; its runbook | `tests/unit/test_optsearch.c`, `test_optimize.c` (new), `test_rtpreset.c` (the row list), `test_vidrules.c` (the tuning item count grows by one, for the `r_metalfx_scale` row), pins in `tests/pins/unit/`: meeting the target keeps the most of the highest-ranked; missing gives up the lowest first, the dearest step first by the hints; nothing meets gives the closest with its limit line; the first candidate meeting the target ends the run at one round; a `resolution` step below 1 forces `r_metalfx` to 1 and a candidate is looked up by its coupled values; the worked trace of section 4.2 gives its ten rows; a trial passes when `stat <= target`; deterministic run twice; each cap stops with the best so far; warm-up frames are left out; a false capability is never tried and the report says why; under each presentation (Enhanced, Retro and Ray traced) the rows of its table are left untried with the reason "set by the presentation", Ray traced's being `r_rt_direct` 1, `r_rt_shadows`, `r_rt_sun` and `r_rt_ao` 0 and `r_rt_water` 1; cancel and each failure put back B and A/B, and no tuning cvar is written; a preset without the `r_metalfx_scale` line loads as before | the tests first and failing; one manual run on a bare-metal Mac with the report's lines in `docs/runbook/TASK203.md` and A unchanged; every pin unchanged; no frame rate is a criterion |
 | 2. The menu | TASK204 (#696) | `src/client/menu/videomenu.c` (the Optimize screen and its entry under Video options); `vidrules.c`, `header/vidrules.h` (its rules) | `tests/unit/test_vidrules.c`: each item's rule; a false capability greys its priority with its reason; another renderer greys every item with "the optimizer turns the Metal renderer's settings"; run greyed during a run, cancel when none; review, save, flip and accept greyed until a result exists; the item count is the same under every renderer and capability | a manual walk on a bare-metal Mac: rank, set a target, run, cancel, run again, review, flip A and B, save under a name, accept; console lines in its runbook, no frames committed; A unchanged before accept |
-| 3. Starting points per device class | TASK205 (#697) | waits on section 9; if the answer is yes: the table in `optsearch.c` or a data file beside it, its source rows here | `tests/unit/test_optsearch.c`: with an entry the search starts from it; without one as before; the same inputs give the same result | the owner's answer recorded in the card and this plan first; nothing greyed or hidden by device class |
+| 3. Starting points per device class | TASK205 (#697) | the question is answered yes (section 9); so: the table in `optsearch.c` or a data file beside it, its source rows here | `tests/unit/test_optsearch.c`: with an entry the search starts from it; without one as before; the same inputs give the same result | the owner's answer recorded in the card and this plan first; nothing greyed or hidden by device class |
 
 Every stage keeps the non-goals of section 1. Each passes `scripts/test.sh`.
 TASK204 uses TASK203's command and cvars only through their interface.

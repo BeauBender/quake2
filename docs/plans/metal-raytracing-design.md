@@ -485,8 +485,8 @@ Record 0014 (2026-11-22): the budgets, targets and "holds a cell" of
 this subsection are information and a basis for choosing defaults, never
 a card's acceptance criterion and never a reason to grey, hide or remove
 a setting; a feature is unavailable only where the device lacks the
-capability (section 4). Whether defaults may differ by device class is
-open in record 0014.
+capability (section 4). Record 0014's question, whether defaults may differ
+by device class, was answered yes on 2026-11-24 ([settings-optimizer.md](settings-optimizer.md), section 9).
 
 RT9's single criterion, every effect on at the native output at the
 display's refresh, is replaced by a matrix. A cell is a GPU family, a
