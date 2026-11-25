@@ -47,7 +47,7 @@ is left for the ray-traced path. Its slices:
 | `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh`, `tests/check-pin-chars.sh` | ok, each |
 
 The table above is from the branch before the hold. The hold runs the same checks again on
-its final commit: @T109_HOSTCHECKS@.
+its final commit: all ran again at `c063b41b2c24`, on main `f10aa5bc3abe` merged in, and passed: `make test` (`yq2test: 591 tests, 0 failed`), `tests/check-ref-metal.sh` (`MetalFX 392 checks, 0 failed, 3 reset mutants refused`), and the four doc checks above, each ok.
 
 The tests were red first, at `c73e08df`: the build of `tests/metal/rm_fx_test.c` stopped on
 `rm_fx_step`'s new effect argument. They were green at `b5d1ac15`.
@@ -73,19 +73,31 @@ The hold builds main (the before) and this branch in scratch. Its checks:
 
 | Event | Line |
 |---|---|
-| map load | @T109_MAPLOAD@ |
-| `vid_restart` | @T109_VIDRESTART@ |
-| a camera cut (the game's `teleport`, 300 units away) | @T109_CUT@ |
-| a teleport (the same command, 700 units on; base1 has no teleporter a script can reach) | @T109_TELEPORT@ |
-| `r_metalfx_scale` 0.5 to 0.75 | @T109_SCALE@ |
-| `viewsize 60`, then `viewsize 100` | @T109_VIEWSIZE@ |
-| the window's size (`r_customwidth` and a `vid_restart`: the tooling has no live resize) | @T109_RESIZE@ |
-| the effect off (no line), then on | @T109_EFFECT@ |
-| the player-setup menu's model view (no line) | @T109_MENU@ |
-| `fov` 90 to 30 (no line) | @T109_FOV@ |
+| map load | 1 line: `scaler first, temporal first` |
+| `vid_restart` | 1 line: `scaler first, temporal first` |
+| a camera cut (the game's `teleport`, 300 units away) | 1 line: `scaler cut, temporal cut` |
+| a teleport (the same command, 700 units on; base1 has no teleporter a script can reach) | 1 line: `scaler cut, temporal cut` |
+| `r_metalfx_scale` 0.5 to 0.75 | 1 line: `scaler size, temporal size rect` |
+| `viewsize 60`, then `viewsize 100` | 1 line each: `scaler size rect, temporal size rect` |
+| the window's size (`r_customwidth` and a `vid_restart`: the tooling has no live resize) | 1 line: `scaler first, temporal first` (a `vid_restart` rebuilds the scaler, so it reads as `first`) |
+| the effect off (no line), then on | off: no line; on: 1 line, `scaler effect, temporal first` |
+| the player-setup menu's model view (no line) | no line |
+| `fov` 90 to 30 (no line) | no line |
 
 The menu is closed with the console's toggle, because no command closes a menu by itself.
 The hold does not judge those frames.
 
-The base and the branch: @T109_COMMITS@. Stock and MetalFX records: @T109_STOCK@.
-`rt-*` records: @T109_RT@.
+What the host test cannot show, and the live run does:
+
+- The model-view and `fov` cases of `rm_fx_test.c` pass because the code path never steps the
+  scaler for them: `RM_GB_Begin` returns before `RM_FX_Begin` for the model view, and `fov` is
+  not an argument of `rm_fx_step`. The test alone could not catch a regression there.
+- `RM_FX_End`'s wiring (the take before the `fx_view` early return) has no host test.
+- The effect reason follows each effect's own active flag (`rm_rtfx_active()`), not the
+  `r_rt_*` switch alone. A switch that is on but whose effect cannot run (no ray tracing, or
+  the sun on a map with little sky) does not trigger it, and nor does a second effect added
+  while one is on.
+- `vid_restart` and the resize both reset as `first`, since the tooling has no live resize.
+
+The base and the branch: main `f10aa5bc3abe`, branch `c063b41b2c24`; the hold: 16 events, 0 wrong. Stock and MetalFX records: 29 of 29 scenarios byte-identical to the base (stock 17 of 17, `metalfx` 5 of 5).
+`rt-*` records: 7 of 7 byte-identical to the base.

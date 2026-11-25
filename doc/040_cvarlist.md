@@ -995,7 +995,8 @@ marked `(n/a)` and skipped.
   of the view's rectangle (the screen size, the window's size), and when the
   view moves more than 256 units at once (a teleport or a camera cut,
   the distance the client itself does not smooth), and when a ray-traced
-  effect (an `r_rt_*` switch) comes on after a scaled view with none; a
+  effect becomes active (its `r_rt_*` switch is on and the effect can run) after a scaled
+  view with none; a
   change of `fov`, the player-setup menu's model, an effect kept on and
   an effect turned off do not drop it. `metal_stats` and `r_rt_stats`
   name these reasons as `first`, `mode`, `size`, `rect`, `cut` and
