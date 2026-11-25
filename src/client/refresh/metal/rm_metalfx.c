@@ -299,6 +299,17 @@ rm_fx_reset(const rm_fx_last_t *last, int mode, const rm_fx_size_t *s, const flo
 	return r;
 }
 
+unsigned
+rm_fx_reset_effect(const rm_fx_last_t *last, int rt)
+{
+	if (last->valid && !last->rt && rt)
+	{
+		return RM_FX_RESET_EFFECT;
+	}
+
+	return 0;
+}
+
 void
 rm_fx_keep(rm_fx_last_t *last, int mode, const rm_fx_size_t *s, const float *org)
 {
@@ -322,9 +333,10 @@ rm_fx_state_reset(rm_fx_state_t *st)
 }
 
 unsigned
-rm_fx_step(rm_fx_state_t *st, int mode, const rm_fx_size_t *s, const float *org, float cut, float *jx, float *jy)
+rm_fx_step(rm_fx_state_t *st, int mode, const rm_fx_size_t *s, const float *org, int rt, float cut, float *jx,
+		float *jy)
 {
-	const unsigned reset = rm_fx_reset(&st->last, mode, s, org, cut);
+	const unsigned reset = rm_fx_reset(&st->last, mode, s, org, cut) | rm_fx_reset_effect(&st->last, rt);
 
 	if (reset)
 	{
@@ -334,6 +346,7 @@ rm_fx_step(rm_fx_state_t *st, int mode, const rm_fx_size_t *s, const float *org,
 	rm_fx_jitter(mode, st->n, jx, jy);
 	st->n++;
 	rm_fx_keep(&st->last, mode, s, org);
+	st->last.rt = rt != 0;
 	st->drew = 1;
 	return reset;
 }
@@ -410,11 +423,35 @@ rm_fx_fallback_format(const char *what, int asked, int got, const char *why, cha
 	return ok;
 }
 
+/* the scaler's reasons, bit k of RM_FX_RESET_* named by entry k */
+static const char *const rm_fx_reasons[] = { "first", "mode", "size", "rect", "cut", "effect" };
+
+/* RT7's reasons, bit k of RM_RTT_RESET_* (header/rm_rttemporal.h) named by entry k; the host test holds the two */
+static const char *const rm_rtt_reasons[] = { "first", "size", "rect", "cut" };
+
+/* appends " <name>" for each bit of set that names[] names, or " none" when no bit does */
+static int
+rm_fx_append_names(char *buf, size_t len, size_t *used, const char *const *names, size_t n, unsigned set)
+{
+	size_t k;
+	int ok = 1, any = 0;
+
+	for (k = 0; ok && (k < n); k++)
+	{
+		if (set & (1u << k))
+		{
+			ok = rm_fx_append(buf, len, used, " %s", names[k]);
+			any = 1;
+		}
+	}
+
+	return ok && (any || rm_fx_append(buf, len, used, " none"));
+}
+
 int
 rm_fx_stats_format(int mode, const rm_fx_size_t *s, unsigned resets, double gpu_ms, char *buf, size_t len)
 {
-	static const char *reasons[] = { "first", "mode", "size", "rect", "cut" };
-	size_t used = 0, k;
+	size_t used = 0;
 	int ok;
 
 	if (len == 0)
@@ -425,18 +462,44 @@ rm_fx_stats_format(int mode, const rm_fx_size_t *s, unsigned resets, double gpu_
 	buf[0] = '\0';
 	ok = rm_fx_append(buf, len, &used, "ref_metal: metal_stats: metalfx %s: input %dx%d, output %dx%d at %d,%d, reset",
 			rm_fx_name(mode), s->iw, s->ih, s->ow, s->oh, s->ox, s->oy);
-
-	for (k = 0; ok && (k < sizeof(reasons) / sizeof(reasons[0])); k++)
-	{
-		if (resets & (1u << k))
-		{
-			ok = rm_fx_append(buf, len, &used, " %s", reasons[k]);
-		}
-	}
-
-	ok = ok && (resets || rm_fx_append(buf, len, &used, " none"));
+	ok = ok && rm_fx_append_names(buf, len, &used, rm_fx_reasons, sizeof(rm_fx_reasons) / sizeof(rm_fx_reasons[0]),
+			resets);
 	ok = ok && ((gpu_ms >= 0.0) ? rm_fx_append(buf, len, &used, ", scaler %.3f ms", gpu_ms) :
 			rm_fx_append(buf, len, &used, ", scaler not timed"));
+	return ok;
+}
+
+int
+rm_fx_reset_says(int scaled, float stats, unsigned scaler, unsigned temporal)
+{
+	/* written so that a NaN says nothing */
+	return scaled && isfinite(stats) && (stats >= 1.0f) && (scaler || temporal);
+}
+
+int
+rm_fx_reset_line_format(unsigned scaler, unsigned temporal, char *buf, size_t len)
+{
+	size_t used = 0;
+	int ok;
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	buf[0] = '\0';
+
+	if (!scaler && !temporal)
+	{
+		return 0;
+	}
+
+	ok = rm_fx_append(buf, len, &used, "ref_metal: r_rt_stats: reset: scaler");
+	ok = ok && rm_fx_append_names(buf, len, &used, rm_fx_reasons, sizeof(rm_fx_reasons) / sizeof(rm_fx_reasons[0]),
+			scaler);
+	ok = ok && rm_fx_append(buf, len, &used, ", temporal");
+	ok = ok && rm_fx_append_names(buf, len, &used, rm_rtt_reasons, sizeof(rm_rtt_reasons) / sizeof(rm_rtt_reasons[0]),
+			temporal);
 	return ok;
 }
 
