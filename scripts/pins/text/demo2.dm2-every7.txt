@@ -1,0 +1,8 @@
+// the text demo2.dm2 draws itself in the frames a run captures every 7th rendered frame (PINS_EVERY=7, the
+// dlights scenario's second run and RT-primary's lightstyle record, TASK188), with the console notify lines
+// off: "pin <capture number> <characters>". Anything else in a captured frame is not declared (FIX157).
+pin 2 8
+pin 3 8
+pin 4 8
+pin 5 8
+pin 6 8

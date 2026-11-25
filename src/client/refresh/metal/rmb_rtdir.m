@@ -17,14 +17,16 @@
  *
  * =======================================================================
  *
- * The Metal back end of RT-primary's direct light (TASK188, PM6 slice 1;
+ * The Metal back end of RT-primary's direct light (TASK188, PM6 slices 1 to 3;
  * header/rm_rtdir.h): the kernel's pipeline and the development view's,
  * the map's lights in a buffer, the outputs at the render size (the
  * visibility, RGBA8Unorm, and the light the resolve reads, RGBA16Unorm),
  * the dispatch on the frame's command buffer first among the effects'
  * kernels (rmb_gbuf_resolve's trace walk), the frame's counts and the
  * pass's GPU time, read once the frame completed, in the sun's shape
- * (rmb_rtsun.m). Every object is counted in the ledger as RM_OBJ_RT.
+ * (rmb_rtsun.m), and the exposure fit at a fixed lag of
+ * RMB_FRAMES_IN_FLIGHT frames (slice 3). Every object is counted in the
+ * ledger as RM_OBJ_RT.
  *
  * =======================================================================
  */
@@ -56,6 +58,8 @@ extern rmb_stats_t rmb_counts;
 
 _Static_assert(sizeof(rm_rtdir_view_t) == 112, "the view is rm_rtdir.metal's 112 bytes");
 _Static_assert(sizeof(rm_rtdir_light_t) == 48, "a light is rm_rtdir.metal's 48 bytes");
+/* the fit's lag is the slots' count: the slot frame f takes last held frame f - RM_RTDIR_FIT_LAG */
+_Static_assert(RM_RTDIR_FIT_LAG == RMB_FRAMES_IN_FLIGHT, "the exposure fit's lag is the frames in flight");
 
 static int dir_open;
 static id<MTLComputePipelineState> trace_pipe;
@@ -76,6 +80,8 @@ static float slot_exposure[RMB_FRAMES_IN_FLIGHT];
 static rm_rtdir_stats_t done[RMB_FRAMES_IN_FLIGHT];
 static int ndone;
 static unsigned long last_frame;        /* the frame of the last pass encoded, 0 for none since the open */
+static float fit;                       /* the exposure fit at the lag (rm_rtdir_fit_lag), 1 at a map's first frame */
+static unsigned long fit_reset;         /* the last frame encoded before the map's lights were set */
 
 /* the view and styles the next G-buffer view traces with, and whether this one traced */
 static rm_rtdir_view_t view;
@@ -166,7 +172,11 @@ rmb_rtdir_open(char *err, size_t errlen)
 	{
 		atomic_store(&slot_done[i], ~0UL);   /* no frame */
 		slot_pending[i] = 0;
+		slot_frame[i] = 0;
 	}
+
+	fit = 1.0f;
+	fit_reset = 0;
 
 	ndone = 0;
 	nlights = 0;
@@ -204,6 +214,10 @@ rmb_rtdir_set_lights(const rm_rtdir_light_t *l, long n)
 	const size_t one = sizeof(rm_rtdir_light_t);
 
 	nlights = 0;
+
+	/* a map's lights: its exposure starts at 1, and no frame encoded before (the old map's) is fitted from */
+	fit = 1.0f;
+	fit_reset = last_frame;
 
 	/* the map's lights and its emissive faces (TASK188 slice 2) */
 	if (!dir_open || (n < 0) || (n > RM_RTDIR_MAX_UPLOAD) || ((n > 0) && !l))
@@ -371,12 +385,6 @@ rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap)
 	return n;
 }
 
-unsigned long
-rmb_rtdir_last_frame(void)
-{
-	return dir_open ? last_frame : 0;
-}
-
 /*
  * The kernel on the frame's command buffer over the render-size depth,
  * normal and material attachments, the raster's light (lm, read for the
@@ -425,7 +433,31 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		slot = (int)(fno % RMB_FRAMES_IN_FLIGHT);
 		timed = (samples != nil);
 
-		/* the frame that used this slot before has completed on the GPU (the frame semaphore); see rmb_rtsun.m */
+		/*
+		 * The frame that used this slot before has completed on the GPU (the
+		 * frame semaphore); see rmb_rtsun.m. TASK188 slice 3: the exposure at
+		 * a fixed lag, from that frame's fit sums when it is fno -
+		 * RM_RTDIR_FIT_LAG (rm_rtdir_fit_lag), read here before they are
+		 * cleared, so a frame's exposure never depends on which frame
+		 * completed last; the view's exposure above 0 is r_rt_direct_exposure's.
+		 */
+		{
+			const uint32_t *c = (const uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS;
+			rm_rtdir_stats_t lag;
+
+			memset(&lag, 0, sizeof(lag));
+			lag.frame = slot_frame[slot];
+			lag.fit_lm = c[4];
+			lag.fit_raw = c[5];
+			lag.fit_n = c[6];
+			fit = rm_rtdir_fit_lag(&lag, fno, fit_reset, fit);
+
+			if (!(view.exposure > 0.0f))
+			{
+				view.exposure = fit;
+			}
+		}
+
 		memset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));
 
 		if (timed)

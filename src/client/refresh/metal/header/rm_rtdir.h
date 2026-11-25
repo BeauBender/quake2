@@ -263,7 +263,7 @@ typedef struct
 	float vp[4];        /* the view's viewport at the render size */
 	float eye[4];       /* the view's origin */
 	float bias_k;       /* mtl_rtao_bias's k */
-	float exposure;     /* rm_rtdir_exposure */
+	float exposure;     /* r_rt_direct_exposure's, else 0 for the back end's fit at the lag (rm_rtdir_fit_lag) */
 	unsigned nlights;   /* the lights in the buffer */
 	unsigned show;      /* rm_rtdir_show */
 } rm_rtdir_view_t;
@@ -282,9 +282,9 @@ typedef struct
 	unsigned long pixels;       /* pixels the kernel ran on */
 	unsigned long world;        /* lightmapped world pixels with a depth and a normal */
 	unsigned long long inrange; /* lights in range and facing, summed over those pixels (64-bit on the GPU too) */
-	unsigned long long rays;    /* shadow rays traced: one each light a pixel takes (0 under r_rt_direct_show 3) */
+	unsigned long long rays;    /* shadow rays traced: one each candidate a pixel tries (0 under r_rt_direct_show 3) */
 	unsigned long long lit;     /* rays that reached their light */
-	unsigned long capped;       /* pixels with more than MTL_RTDIR_MAX_TRACED lights in range: the strongest taken */
+	unsigned long capped;       /* pixels past the bound (mtl_rtdir_capped): fewer lights seen than the cap, more in range */
 	unsigned long fit_lm;       /* the fit's sums and samples (rm_rtdir_fit) */
 	unsigned long fit_raw;
 	unsigned long fit_n;
@@ -293,15 +293,21 @@ typedef struct
 } rm_rtdir_stats_t;
 
 /*
- * The exposure after a harvest of completed frames (s, n of them, in any
- * order: the back end reads its slots in slot order): the fit
- * (rm_rtdir_fit, from prev) of the one with the largest frame number
- * after *after, else prev. *after is the frame of the fit last applied
- * or of the map's reset (RM_RTDir_Lights: the last frame traced before
- * it): an entry at or before it is older, a frame of the map before among
- * them, and is ignored. *after moves to the frame applied.
+ * TASK188 slice 3: the exposure fit at a fixed lag. The pass's back end
+ * keeps RM_RTDIR_FIT_LAG slots (RMB_FRAMES_IN_FLIGHT), frame f in slot
+ * f % RM_RTDIR_FIT_LAG, so the slot frame f takes last held frame
+ * f - RM_RTDIR_FIT_LAG, which the frame semaphore has seen complete
+ * before frame f began. lagged is that slot's record (its frame and the
+ * fit's sums; NULL for none). Its fit (rm_rtdir_fit, from prev) is frame
+ * f's exposure when lagged->frame is exactly f - RM_RTDIR_FIT_LAG and
+ * after reset (the last frame traced before the map's lights were set);
+ * else prev, the exposure in use, is kept. So a frame's exposure follows
+ * from the frames traced before it, never from the order in which they
+ * completed.
  */
-float rm_rtdir_fit_latest(const rm_rtdir_stats_t *s, int n, unsigned long *after, float prev);
+#define RM_RTDIR_FIT_LAG 3
+
+float rm_rtdir_fit_lag(const rm_rtdir_stats_t *lagged, unsigned long frame, unsigned long reset, float prev);
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
 int rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *buf, size_t len);
@@ -317,7 +323,10 @@ int rmb_rtdir_open(char *err, size_t errlen);
 /* releases the pipelines, the outputs, the lights and the counters */
 void rmb_rtdir_close(void);
 
-/* the map's lights (copied into a buffer the frames read); 1, or 0 when it cannot be made (n 0 keeps none) */
+/*
+ * the map's lights (copied into a buffer the frames read); 1, or 0 when it cannot be made (n 0 keeps none); the
+ * exposure fit starts again at 1, from the frames encoded after this call (rm_rtdir_fit_lag's reset)
+ */
 int rmb_rtdir_set_lights(const rm_rtdir_light_t *l, long n);
 
 /* before the raster: the outputs at the render size; 1 when the view can trace */
@@ -328,9 +337,6 @@ void rmb_rtdir_set_view(const rm_rtdir_view_t *v, const float *styles);
 
 /* the stats of the frames whose pass completed since the last call, at most cap, in slot order; their number */
 int rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap);
-
-/* the frame number of the last pass encoded since the pass opened; 0 for none */
-unsigned long rmb_rtdir_last_frame(void);
 
 /* TASK179: the effect table's backend rows (rm_rtfx.c): the trace, its light in io's place, and the view */
 void rmb_rtdir_fx_trace(rmb_rtfx_io_t *io);
