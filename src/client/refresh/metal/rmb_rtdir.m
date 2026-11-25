@@ -25,8 +25,10 @@
  * kernels (rmb_gbuf_resolve's trace walk), the frame's counts and the
  * pass's GPU time, read once the frame completed, in the sun's shape
  * (rmb_rtsun.m). The exposure is the view's: r_rt_direct_exposure's or the
- * map's fit at its load (rm_rtdirscene.c, slice 3c). Every object is
- * counted in the ledger as RM_OBJ_RT.
+ * map's fit at its load (rm_rtdirscene.c, slice 3c). TASK189 adds the sky
+ * ray's blue-noise tile (rm_rtao_bluenoise, made again for this pass) and
+ * the sky's and the sun's counts. Every object is counted in the ledger as
+ * RM_OBJ_RT.
  *
  * =======================================================================
  */
@@ -41,6 +43,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rt.h"
 #include "header/rm_rtdir.h"
+#include "header/rm_rtao.h"
 #include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
@@ -53,10 +56,13 @@ extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
 #define RMB_RTDIR_GROUP 8       /* the kernel's threadgroup side */
-/* world, in range, rays, lit (their low words), the fit's lightmap and raw sums and samples, the three high words, capped */
-#define RMB_RTDIR_COUNTS 11
+/*
+ * world, in range, rays, lit (their low words), the fit's lightmap and raw sums and samples, the three high words,
+ * capped; TASK189's sky rays, sky hits, sun rays and sun hits; slice 2's bounce rays and shaded hits
+ */
+#define RMB_RTDIR_COUNTS 17
 
-_Static_assert(sizeof(rm_rtdir_view_t) == 128, "the view is rm_rtdir.metal's 128 bytes");
+_Static_assert(sizeof(rm_rtdir_view_t) == 192, "the view is rm_rtdir.metal's 192 bytes");
 _Static_assert(sizeof(rm_rtdir_light_t) == 48, "a light is rm_rtdir.metal's 48 bytes");
 _Static_assert(sizeof(rm_rtdir_dlight_t) == 32, "a dynamic light is rm_rtdir.metal's 32 bytes");
 /* the frame's dynamic lights go by setBytes, inside its 4 KB */
@@ -71,7 +77,12 @@ static id<MTLBuffer> lights;            /* the map's lights, at least one record
 static unsigned long nlights;
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTDIR_COUNTS */
 static id<MTLBuffer> selftab;           /* the map's per-triangle own light (TASK188 slice 3b), at least one word long */
+static id<MTLBuffer> tile;              /* TASK189: the sky ray's blue-noise ranks, MTL_RTAO_TILE_N ushorts */
 static unsigned long nself;
+static id<MTLBuffer> brec;              /* slice 2: the map's per-triangle bounce records, at least one word long */
+static unsigned long nbrec;
+static int brec_lmtex;                  /* the world's lightmap array the bounce reads, 0 for none */
+static id<MTLTexture> white_arr;        /* a 1 x 1 x 1 array bound when the world has no lightmap array */
 static rm_rtdir_dlight_t dlights[MTL_RTDIR_MAX_DLIGHTS];   /* the frame's dynamic lights, all of them bound */
 static unsigned ndlights;
 static id<MTLCounterSampleBuffer> samples;
@@ -142,7 +153,38 @@ rmb_rtdir_open(char *err, size_t errlen)
 		RMB_RTDIR_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTDIR_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
 
-		if (!trace_pipe || !show_pipe || !counts)
+		/* TASK189: the sky ray's tile, made in code as the AO's (rm_rtao_bluenoise) */
+		{
+			unsigned short *ranks = malloc(MTL_RTAO_TILE_N * sizeof(*ranks));
+
+			if (ranks && rm_rtao_bluenoise(ranks))
+			{
+				RMB_RTDIR_SET(tile, [rmb_device newBufferWithBytes:ranks length:MTL_RTAO_TILE_N * sizeof(*ranks)
+						options:MTLResourceStorageModeShared]);
+			}
+
+			free(ranks);
+		}
+
+		/* slice 2: bound at the bounce's lightmap index when the world has none (the kernel then reads none: view.nbrec 0) */
+		{
+			MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+					width:1 height:1 mipmapped:NO];
+
+			td.textureType = MTLTextureType2DArray;
+			td.arrayLength = 1;
+			td.usage = MTLTextureUsageShaderRead;
+			RMB_RTDIR_SET(white_arr, [rmb_device newTextureWithDescriptor:td]);
+		}
+
+		if (trace_pipe && show_pipe && counts && (!tile || !white_arr))
+		{
+			snprintf(err, errlen, "cannot make the sky ray's blue-noise tile or the bounce's empty lightmap");
+			rmb_rtdir_close();
+			return 0;
+		}
+
+		if (!trace_pipe || !show_pipe || !counts || !tile || !white_arr)
 		{
 			snprintf(err, errlen, "cannot build the direct light's pipelines%s%s", e ? ": " : "",
 					e ? e.localizedDescription.UTF8String : "");
@@ -180,6 +222,8 @@ rmb_rtdir_open(char *err, size_t errlen)
 	ndone = 0;
 	nlights = 0;
 	nself = 0;
+	nbrec = 0;
+	brec_lmtex = 0;
 	ndlights = 0;
 	view_set = traced = 0;
 	dir_open = 1;
@@ -198,6 +242,9 @@ rmb_rtdir_close(void)
 		RMB_RTDIR_SET(t_light, nil);
 		RMB_RTDIR_SET(lights, nil);
 		RMB_RTDIR_SET(selftab, nil);
+		RMB_RTDIR_SET(brec, nil);
+		RMB_RTDIR_SET(white_arr, nil);
+		RMB_RTDIR_SET(tile, nil);
 		RMB_RTDIR_SET(counts, nil);
 		RMB_RTDIR_SET(samples, nil);
 	}
@@ -205,6 +252,8 @@ rmb_rtdir_close(void)
 	dir_open = 0;
 	nlights = 0;
 	nself = 0;
+	nbrec = 0;
+	brec_lmtex = 0;
 	ndlights = 0;
 	view_set = traced = 0;
 	ndone = 0;
@@ -276,6 +325,41 @@ rmb_rtdir_set_self(const unsigned *t, unsigned long n)
 	}
 
 	nself = n;
+	return 1;
+}
+
+int
+rmb_rtdir_set_bounce(const unsigned *t, unsigned long n, int lmtex)
+{
+	nbrec = 0;
+	brec_lmtex = 0;
+
+	if (!dir_open || ((n > 0) && !t) || (n > 0xffffffffUL))
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		/* a new buffer a map, as the own-light table's: one word at least, so index 16 is bound */
+		RMB_RTDIR_SET(brec, [rmb_device newBufferWithLength:(n > 0 ? (size_t)n : 1) * sizeof(uint32_t)
+				options:MTLResourceStorageModeShared]);
+
+		if (!brec)
+		{
+			return 0;
+		}
+
+		memset(brec.contents, 0, sizeof(uint32_t));
+
+		if (n > 0)
+		{
+			memcpy(brec.contents, t, (size_t)n * sizeof(uint32_t));
+		}
+	}
+
+	nbrec = n;
+	brec_lmtex = lmtex;
 	return 1;
 }
 
@@ -396,6 +480,12 @@ rmb_rtdir_read(void)
 		s->fit_raw = c[5];
 		s->fit_n = c[6];
 		s->capped = c[10];
+		s->sky_rays = c[11];
+		s->sky_hits = c[12];
+		s->sun_rays = c[13];
+		s->sun_lit = c[14];
+		s->bounce_rays = c[15];
+		s->bounce_hits = c[16];
 		s->exposure = slot_exposure[k];
 		s->ms = -1;
 
@@ -531,6 +621,30 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		[ce setTexture:base atIndex:4];
 		[ce setTexture:t_vis atIndex:5];
 		[ce setTexture:t_light atIndex:6];
+
+		/*
+		 * slice 2: the bounce's lightmap array (the one the stock draw samples, marked used by this frame), the map's
+		 * buffers and the bounce records; without any of them the kernel reads no record (view.nbrec 0)
+		 */
+		{
+			id<MTLTexture> atlas = brec_lmtex ? rmb_texture_for_draw(brec_lmtex) : nil;
+			const int lm_ok = atlas && (atlas.textureType == MTLTextureType2DArray);
+			const int geom_ok = rmb_rt_bind_geometry(ce, 13, 14, 15);
+
+			if (!geom_ok)
+			{
+				const uint32_t g0[4] = { 0, 0, 0, 0xffffffffu };
+
+				[ce setBuffer:counts offset:0 atIndex:13];
+				[ce setBuffer:counts offset:0 atIndex:14];
+				[ce setBytes:g0 length:sizeof(g0) atIndex:15];
+			}
+
+			[ce setTexture:(lm_ok ? atlas : white_arr) atIndex:7];
+			view.nbrec = (brec && lm_ok && geom_ok) ? (unsigned)nbrec : 0u;
+			[ce setBuffer:(brec ? brec : counts) offset:0 atIndex:16];
+		}
+
 		/* nor a triangle past the table bound at index 11, its count taken here with it (TASK188 slice 3c) */
 		view.nself = selftab ? (unsigned)nself : 0u;
 		[ce setBytes:&view length:sizeof(view) atIndex:0];
@@ -540,6 +654,8 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		[ce setBytes:dlights length:sizeof(dlights) atIndex:10];
 		/* the own-light table, or (none made) a word the kernel does not read: view.nself is then 0 */
 		[ce setBuffer:(selftab ? selftab : counts) offset:0 atIndex:11];
+		/* TASK189: the sky ray's noise */
+		[ce setBuffer:tile offset:0 atIndex:12];
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTDIR_GROUP, RMB_RTDIR_GROUP, 1)];
 		[ce endEncoding];
 

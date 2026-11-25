@@ -799,6 +799,54 @@ rm_rtdir_view(const float *proj, const float *world, const rm_viewport_t *vp, co
 	return 1;
 }
 
+float
+rm_rtdir_sky_scale(float v)
+{
+	if (!isfinite(v) || !(v > 0))
+	{
+		return 0;
+	}
+
+	return (v < MTL_RTSKY_SCALE_MAX) ? v : MTL_RTSKY_SCALE_MAX;
+}
+
+/* a channel of a term's colour: 0 for a value that is not finite or below 0 */
+static float
+rtdir_channel(float c)
+{
+	return (isfinite(c) && (c > 0)) ? c : 0;
+}
+
+void
+rm_rtdir_view_open(rm_rtdir_view_t *v, const float *sky, float sky_scale, const float *sun_dir, const float *sun,
+		unsigned frame)
+{
+	const float k = rm_rtdir_sky_scale(sky_scale);
+	int i, dir_ok = sun_dir != NULL;
+
+	for (i = 0; dir_ok && (i < 3); i++)
+	{
+		dir_ok = isfinite(sun_dir[i]);
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		v->sky[i] = sky ? rtdir_channel(rtdir_channel(sky[i]) * k) : 0;
+		v->sun[i] = (sun && dir_ok) ? rtdir_channel(sun[i]) : 0;
+		v->sun_dir[i] = dir_ok ? sun_dir[i] : 0;
+	}
+
+	v->sky[3] = v->sun[3] = v->sun_dir[3] = 0;
+	v->frame = frame;
+}
+
+void
+rm_rtdir_view_bounce(rm_rtdir_view_t *v, float scale)
+{
+	v->bounce[0] = rm_rtdir_bounce_scale(scale);
+	v->bounce[1] = v->bounce[2] = v->bounce[3] = 0;
+}
+
 /* snprintf into buf: 1 when it fits, else 0 with buf empty */
 static int
 rtdir_put(int n, char *buf, size_t len)
@@ -837,6 +885,89 @@ rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *b
 			s->inrange, s->rays, s->world ? (double)s->rays / (double)s->world : 0.0, s->lit, s->capped,
 			MTL_RTDIR_MAX_RAYS, MTL_RTDIR_MAX_TRACED, s->fit_lm, s->fit_raw, s->fit_n, (double)s->exposure,
 			fixed ? "r_rt_direct_exposure" : "fit", ms), buf, len);
+}
+
+int
+rm_rtdir_open_format(const rm_rtdir_stats_t *s, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	return rtdir_put(snprintf(buf, len, "ref_metal: rt direct sky: frame %lu: %lu world, %lu sky rays (%lu reached the sky), "
+			"%lu sun rays (%lu lit), %lu bounce rays (%lu read a lightmap), at most %d rays a pixel", s->frame, s->world,
+			s->sky_rays, s->sky_hits, s->sun_rays, s->sun_lit, s->bounce_rays, s->bounce_hits, (int)MTL_RTSKY_PIXEL_RAYS),
+			buf, len);
+}
+
+float
+rm_rtdir_bounce_scale(float v)
+{
+	if (!isfinite(v) || !(v > 0))
+	{
+		return 0;
+	}
+
+	return (v < MTL_RTSKY_BOUNCE_MAX) ? v : MTL_RTSKY_BOUNCE_MAX;
+}
+
+/* an albedo channel as a record's byte: 0 for a value that is not finite or below 0, 255 at 1 and above */
+static unsigned
+rtdir_albedo_byte(float a)
+{
+	if (!isfinite(a) || !(a > 0))
+	{
+		return 0;
+	}
+
+	return (a >= 1) ? 255u : (unsigned)(a * 255.0f + 0.5f);
+}
+
+long
+rm_rtdir_bounce_table(const rm_surfrec_t *recs, long nrecs, const float (*albedo)[3], unsigned *out,
+		unsigned long ntris)
+{
+	const unsigned none = mtl_rtsky_brec_pack(0, 0, 0, MTL_RTSKY_NOLM);
+	unsigned long k, lit = 0;
+	long s;
+
+	if (!out || (ntris == 0))
+	{
+		return -1;
+	}
+
+	for (k = 0; k < ntris; k++)
+	{
+		out[k] = none;
+	}
+
+	for (s = 0; recs && albedo && (s < nrecs); s++)
+	{
+		const rm_surfrec_t *r = &recs[s];
+		const unsigned long first = r->first_index, n = r->num_indices;
+		const int nolm = (r->texflags & (RM_TEX_SKY | RM_TEX_WARP | RM_TEX_TRANS33 | RM_TEX_TRANS66)) ||
+			(r->lm_slice < 0) || (r->lm_slice >= (int)MTL_RTSKY_NOLM);
+		unsigned w;
+
+		/* the face's triangles: whole, inside the buffer */
+		if ((first % 3) || (n % 3) || (first / 3 > ntris) || (n / 3 > ntris - first / 3))
+		{
+			continue;
+		}
+
+		w = mtl_rtsky_brec_pack(rtdir_albedo_byte(albedo[s][0]), rtdir_albedo_byte(albedo[s][1]),
+				rtdir_albedo_byte(albedo[s][2]), nolm ? MTL_RTSKY_NOLM : (unsigned)r->lm_slice);
+
+		for (k = 0; k < n / 3; k++)
+		{
+			out[first / 3 + k] = w;
+		}
+
+		lit += nolm ? 0 : n / 3;
+	}
+
+	return (long)lit;
 }
 
 int

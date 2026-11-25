@@ -475,6 +475,16 @@ test_hist(void)
 	CHECK(rm_rtt_hist_take(&sh, &t) == RM_RTT_RESET_FIRST);
 }
 
+/* slice 2b: the water reflections' blur runs while r_rt_temporal is on, and never under RT-primary (PM8's) */
+static void
+test_wblur(void)
+{
+	CHECK(rm_rtt_wblur(1, 0) == 1);
+	CHECK(rm_rtt_wblur(0, 0) == 0);
+	CHECK(rm_rtt_wblur(1, 1) == 0);
+	CHECK(rm_rtt_wblur(0, 1) == 0);
+}
+
 int
 main(void)
 {
@@ -486,6 +496,7 @@ main(void)
 	test_reset();
 	test_lights();
 	test_hist();
+	test_wblur();
 
 	printf("rm_rttemporal_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

@@ -40,6 +40,12 @@ rm_rtt_alpha(float v)
 	return (v < RM_RTT_ALPHA_MAX) ? v : RM_RTT_ALPHA_MAX;
 }
 
+int
+rm_rtt_wblur(int on, int rtprimary)
+{
+	return on && !rtprimary;
+}
+
 void
 rm_rtt_state_reset(rm_rtt_state_t *st)
 {

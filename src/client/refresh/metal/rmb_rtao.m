@@ -39,6 +39,7 @@
 
 #include "header/rm_gbuf.h"
 #include "header/rm_rt.h"
+#include "common/mtl_rtd_math.h"
 #include "header/rm_rtao.h"
 #include "header/rmb_internal.h"
 
@@ -79,6 +80,8 @@ static id<MTLTexture> t_hist[2];
 static int hist_cur;                    /* the history this view reads; the other is written */
 static rm_rtt_hist_t thist;             /* the last view encoded into it (slice 1b): a skipped one resets the next */
 static int tmp_refused;                 /* the pipeline could not be made: not tried again until the AO is closed */
+static id<MTLComputePipelineState> dn_pipe;  /* the denoiser (TASK59 slice 2), made with the accumulation */
+static int dn_refused;                  /* the denoiser's pipeline could not be made: the frames are accumulated alone */
 static unsigned long tmp_bad_w, tmp_bad_h;  /* a render size whose histories could not be made: not tried again */
 static rm_rtt_view_t tview;
 static int tview_set;
@@ -224,13 +227,14 @@ rmb_rtao_close(void)
 		RMB_RTAO_SET(counts, nil);
 		RMB_RTAO_SET(samples, nil);
 		RMB_RTAO_SET(tmp_pipe, nil);
+		RMB_RTAO_SET(dn_pipe, nil);
 		RMB_RTAO_SET(t_hist[0], nil);
 		RMB_RTAO_SET(t_hist[1], nil);
 	}
 
 	ao_open = 0;
 	view_set = traced = 0;
-	tview_set = hist_cur = tmp_refused = 0;
+	tview_set = hist_cur = tmp_refused = dn_refused = 0;
 	tmp_bad_w = tmp_bad_h = 0;
 	rm_rtt_hist_reset(&thist);
 	ndone = 0;
@@ -324,13 +328,14 @@ rmb_rtao_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
 {
 	tview_set = 0;
 
-	/* off: no history is kept */
+	/* off: no history is kept, nor the denoiser's pipeline (slice 2b, review note N3; made again with the accumulation) */
 	if (!t || !(t->alpha > 0.0f) || !ao_open || (w < 1) || (h < 1) || (w > 0xffffffffUL) || (h > 0xffffffffUL))
 	{
-		if (t_hist[0] || t_hist[1])
+		if (t_hist[0] || t_hist[1] || dn_pipe)
 		{
 			RMB_RTAO_SET(t_hist[0], nil);
 			RMB_RTAO_SET(t_hist[1], nil);
+			RMB_RTAO_SET(dn_pipe, nil);
 		}
 
 		rm_rtt_hist_reset(&thist);
@@ -357,6 +362,21 @@ rmb_rtao_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
 				tmp_refused = 1;
 				fprintf(stderr, "ref_metal: rt temporal: no AO accumulation pipeline\n");
 				return 0;
+			}
+		}
+
+		/* TASK59 slice 2: the denoiser; without it the frames are accumulated alone */
+		if (!dn_pipe && !dn_refused)
+		{
+			NSError *e = nil;
+			id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rtao_denoise"];
+
+			RMB_RTAO_SET(dn_pipe, k ? [rmb_device newComputePipelineStateWithFunction:k error:&e] : nil);
+
+			if (!dn_pipe)
+			{
+				dn_refused = 1;
+				fprintf(stderr, "ref_metal: rt temporal: no AO denoise pipeline\n");
 			}
 		}
 
@@ -622,6 +642,25 @@ rmb_rtao_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mater
 				[ce dispatchThreads:MTLSizeMake(w, h, 1)
 						threadsPerThreadgroup:MTLSizeMake(RMB_RTAO_GROUP, RMB_RTAO_GROUP, 1)];
 				hist_cur = 1 - hist_cur;
+
+				/*
+				 * TASK59 slice 2: the 5 x 5 bilateral denoiser of the history just
+				 * written (now t_hist[hist_cur]), the light written again from it;
+				 * the history itself keeps the accumulation alone.
+				 */
+				if (dn_pipe)
+				{
+					mtl_rtd_view_t dv;
+
+					memset(&dv, 0, sizeof(dv));
+					dv.floor_ = view.floor_;
+					[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+					[ce setComputePipelineState:dn_pipe];
+					[ce setTexture:t_hist[hist_cur] atIndex:8];
+					[ce setBytes:&dv length:sizeof(dv) atIndex:10];
+					[ce dispatchThreads:MTLSizeMake(w, h, 1)
+							threadsPerThreadgroup:MTLSizeMake(RMB_RTAO_GROUP, RMB_RTAO_GROUP, 1)];
+				}
 			}
 		}
 

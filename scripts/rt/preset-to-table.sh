@@ -16,7 +16,7 @@
 # output lists them).
 #
 # It reads only `set <name> "<value>"` lines (blank lines and // comments pass), refuses any other line
-# with its number, and refuses a name that is not one of the 20 tuning cvars. It never edits a file.
+# with its number, and refuses a name that is not one of the 21 tuning cvars. It never edits a file.
 # Exit 0 on success, 1 for a refusal, 2 for a usage or source error.
 
 root=$(cd "$(dirname "$0")/../.." && pwd) || exit 2
@@ -42,7 +42,7 @@ case $mode in defaults | enhanced | retro | raytraced) ;; *) usage ;; esac
 [ -r "$preset" ] || { echo "preset-to-table: cannot read $preset" >&2; exit 1; }
 [ -r "$src" ] || { echo "preset-to-table: cannot read $src" >&2; exit 2; }
 
-# the 20 tuning cvars with their default and source line, as cvar<TAB>default<TAB>line, in the order
+# the 21 tuning cvars with their default and source line, as cvar<TAB>default<TAB>line, in the order
 # of VidRules_PresetCvar: every row of rt_controls, then the rt_tune rows that are values
 table=$(awk '
 	/^static const vidrt_control_t rt_controls\[\]/ { in_t = 1; next }
@@ -56,8 +56,8 @@ table=$(awk '
 		if (seen[name]++) next
 		printf "%s\t%s\t%d\n", name, def, NR
 	}' "$src") || exit 2
-[ "$(printf '%s\n' "$table" | wc -l | tr -d ' ')" = 20 ] || {
-	echo "preset-to-table: expected 20 tuning cvars in $rel, found something else" >&2
+[ "$(printf '%s\n' "$table" | wc -l | tr -d ' ')" = 21 ] || {
+	echo "preset-to-table: expected 21 tuning cvars in $rel, found something else" >&2
 	exit 2
 }
 

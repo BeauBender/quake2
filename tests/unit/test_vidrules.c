@@ -39,6 +39,22 @@ why(viditem_t item, const char *ref, int mask, int scaler)
 	return VidRules_Item(item, ref, mask, scaler).text;
 }
 
+/* the tuning row of cvar, -1 when there is none: a check names its row, never an index a new row shifts */
+static int
+tune_row(const char *cvar)
+{
+	for (int i = 0; i < VidRules_TuneNum(); i++)
+	{
+		const vidrt_control_t *c = VidRules_TuneControl(i);
+
+		if (c && !strcmp(c->cvar, cvar))
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
 TEST(vidrules_renderer_names)
 {
 	T_EQ_INT(VidRules_Renderer("metal"), VIDREF_METAL);
@@ -873,8 +889,15 @@ TEST(vidrules_rt_status_names_the_presentation)
 	T_CHECK(VidRules_RTOverridden(4, "metal", 0, 2) && !VidRules_RTOverridden(4, "metal", 1, 1));
 	T_CHECK(!VidRules_RTOverridden(5, "metal", 1, 2) && !VidRules_RTOverridden(0, "gl1", 1, 2));
 	T_CHECK(!VidRules_RTEffective(0, "metal", 1, 2, 1.0f) && VidRules_RTEffective(0, "metal", 1, 1, 0.0f));
-	T_CHECK(VidRules_TuneOverridden(5, "metal", 2) && !VidRules_TuneOverridden(5, "metal", 1));
-	T_CHECK(!VidRules_TuneOverridden(4, "metal", 2));   /* flat light stays the user's */
+	T_REQUIRE(tune_row("r_metalfx") >= 0 && tune_row("r_rt_flatlight") >= 0 && tune_row("r_rt_temporal") >= 0);
+	/* every row fits the screen (vidrules.c also asserts it at compile time) */
+	T_CHECK(VidRules_TuneNum() <= VIDTUNE_MAX_ROWS);
+	T_CHECK(VidRules_TuneOverridden(tune_row("r_metalfx"), "metal", 2) &&
+		!VidRules_TuneOverridden(tune_row("r_metalfx"), "metal", 1));
+	T_CHECK(!VidRules_TuneOverridden(tune_row("r_rt_flatlight"), "metal", 2));   /* flat light stays the user's */
+	/* TASK59 slice 2b: Retro reads the effects the accumulation acts on off, so its row is the mode's */
+	T_CHECK(VidRules_TuneOverridden(tune_row("r_rt_temporal"), "metal", 2) &&
+		!VidRules_TuneOverridden(tune_row("r_rt_temporal"), "metal", 1));
 }
 
 /*
