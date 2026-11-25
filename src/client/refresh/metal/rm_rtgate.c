@@ -164,7 +164,7 @@ rm_rtg_reset_format(const char *name, const rm_rtg_t *g, char *buf, size_t len)
  * what the picture shows. Every other name is a setting, left as it
  * is: it tunes or views an effect and does
  * nothing while the effect is off, or it chooses a raster path that every
- * Metal GPU runs. RT11's r_rt_scale, when it lands, is a setting (it reads
+ * Metal GPU runs. RT11's r_metalfx_scale, when it lands, is a setting (it reads
  * 1 there, which RT11 does).
  */
 static const char *const rtg_cvars[] = {

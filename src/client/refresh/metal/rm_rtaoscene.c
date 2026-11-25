@@ -64,11 +64,22 @@ static rm_rtt_state_t rtt_state;
 static int rtt_stepped;         /* this world view's step is taken: every effect gets rtt_view */
 static int rtt_on;              /* r_rt_temporal was above 0 at it */
 static rm_rtt_view_t rtt_view;
+static unsigned rtt_said;       /* TASK109: the last step's reasons, until RM_RTT_TakeReasons */
 
 void
 RM_RTT_Reset(void)
 {
 	rm_rtt_state_reset(&rtt_state);
+	rtt_said = 0;
+}
+
+unsigned
+RM_RTT_TakeReasons(void)
+{
+	const unsigned r = rtt_said;
+
+	rtt_said = 0;
+	return r;
 }
 
 void
@@ -122,6 +133,7 @@ RM_RTT_ViewFor(const rm_view_t *view)
 	k.vh = (int)view->vp.h;
 	VectorCopy(r_newrefdef.vieworg, k.org);
 	reasons = rm_rtt_step(&rtt_state, &k, &move);
+	rtt_said = reasons;
 	rtt_view = rm_rtt_view(alpha, reasons, move);
 	rtt_view.seq = rtt_state.seq;
 	return &rtt_view;

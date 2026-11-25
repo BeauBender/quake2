@@ -994,8 +994,13 @@ marked `(n/a)` and skipped.
   drawn without the world, a change of the mode, of `r_metalfx_scale` or
   of the view's rectangle (the screen size, the window's size), and when the
   view moves more than 256 units at once (a teleport or a camera cut,
-  the distance the client itself does not smooth); a change of `fov` and
-  the player-setup menu's model do not drop it. With a scaled view the
+  the distance the client itself does not smooth), and when a ray-traced
+  effect becomes active (its `r_rt_*` switch is on and the effect can run) after a scaled
+  view with none; a
+  change of `fov`, the player-setup menu's model, an effect kept on and
+  an effect turned off do not drop it. `metal_stats` and `r_rt_stats`
+  name these reasons as `first`, `mode`, `size`, `rect`, `cut` and
+  `effect`. With a scaled view the
   limit of a smooth particle point (256 pixels) is in the smaller view's
   pixels, so a particle above 256 pixels of the window is drawn smaller
   than without a scaler; this needs `gl1_particle_max_size` above 256.
@@ -1520,7 +1525,14 @@ is.
   (the list of its pixels, the trace) and the time from the first's start
   to the last's end, the pass's time being their sum (the water's marks
   are a draw of the G-buffer raster, timed with it, so there are no
-  raster figures). Nothing
+  raster figures). At `1` and above, with a MetalFX scaler on
+  (`r_metalfx`), a 3D view that drops the scaler's history or that of
+  `r_rt_temporal` prints one line naming both sets of reasons,
+  `ref_metal: r_rt_stats: reset: scaler <reasons>, temporal <reasons>`:
+  the scaler's as `r_metalfx` lists them, the temporal history's as
+  `first` (a map load, a `vid_restart`, a frame that accumulated no view),
+  `size`, `rect` and `cut`, and `none` for a history that is kept; with no
+  scaler it prints nothing. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next

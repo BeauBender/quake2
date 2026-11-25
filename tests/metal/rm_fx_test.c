@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/header/rm_metalfx.h"
+#include "../../src/client/refresh/metal/header/rm_rttemporal.h"   /* RT7's reasons, for the reset line (TASK109) */
 
 static int checks, failures;
 
@@ -544,7 +545,7 @@ test_step(void)
 	CHECK(st.last.valid == 0 && st.n == 0 && st.drew == 0);
 
 	/* the first view: FIRST, the jitter at index 0, the index 1 after it */
-	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 0, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST);
 	rm_fx_jitter(RM_FX_TEMPORAL, 0, &ex, &ey);
 	CHECK(jx == ex && jy == ey && st.n == 1 && st.drew == 1 && st.last.valid == 1);
 	rm_fx_frame_end(&st);
@@ -553,49 +554,195 @@ test_step(void)
 	/* views that keep the history: the index goes on */
 	for (i = 1; i < 5; i++)
 	{
-		CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, RM_FX_CUT_DIST, &jx, &jy) == 0);
+		CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 0, RM_FX_CUT_DIST, &jx, &jy) == 0);
 		rm_fx_jitter(RM_FX_TEMPORAL, i, &ex, &ey);
 		CHECK(jx == ex && jy == ey && st.n == i + 1);
 		rm_fx_frame_end(&st);
 	}
 
 	/* a move over 256: CUT, the index starts again */
-	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_CUT);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, 0, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_CUT);
 	rm_fx_jitter(RM_FX_TEMPORAL, 0, &ex, &ey);
 	CHECK(jx == ex && jy == ey && st.n == 1);
 	rm_fx_frame_end(&st);
-	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 2);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, 0, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 2);
 	rm_fx_frame_end(&st);
 
 	/* a frame without a scaled view (a cinematic, the console, a mode turned off), then a view: FIRST */
 	rm_fx_frame_end(&st);
 	CHECK(st.last.valid == 0);
-	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST && st.n == 1);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, 0, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST && st.n == 1);
 	rm_fx_frame_end(&st);
 
 	/* a mode change: MODE */
-	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &s, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_MODE && st.n == 1);
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &s, far, 0, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_MODE && st.n == 1);
 	CHECK(jx == 0 && jy == 0);
 	rm_fx_frame_end(&st);
 
 	/* the size, then the place of the rectangle */
 	t = s;
 	t.iw = 480;
-	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_SIZE);
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, 0, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_SIZE);
 	rm_fx_frame_end(&st);
 	t.ox = 64;
-	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_RECT);
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, 0, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_RECT);
 	rm_fx_frame_end(&st);
-	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 2);
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, 0, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 2);
 
 	/* two views in one frame (a second world view) keep it, and the frame ends with one drawn */
-	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 3);
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, 0, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 3);
 	rm_fx_frame_end(&st);
 	CHECK(st.last.valid == 1);
 
 	/* a map load or vid_restart: the state forgotten, FIRST */
 	rm_fx_state_reset(&st);
-	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST && st.n == 1);
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, 0, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST && st.n == 1);
+}
+
+/*
+ * TASK109: a ray-traced effect turned on under a running scaler resets it
+ * (EFFECT), only from none to on: kept on or turned off resets nothing
+ */
+static void
+test_effect(void)
+{
+	rm_fx_state_t st;
+	rm_fx_last_t last;
+	rm_fx_size_t s = { 320, 240, 640, 480, 0, 0 }, u;
+	const rm_viewport_t vp = { 0, 0, 640, 480, 0, 1 };
+	float org[3] = { 100, 200, 300 }, far[3] = { 100, 200, 300 + 257 }, jx, jy;
+
+	CHECK(RM_FX_RESET_EFFECT == 32 && RM_FX_RESET_ALL == 63);
+
+	/* the rule on its own: no last view, none to on, on to on, on to off, off to off */
+	memset(&last, 0, sizeof(last));
+	CHECK(rm_fx_reset_effect(&last, 1) == 0);
+	rm_fx_keep(&last, RM_FX_TEMPORAL, &s, org);
+	last.rt = 0;
+	CHECK(rm_fx_reset_effect(&last, 1) == RM_FX_RESET_EFFECT);
+	CHECK(rm_fx_reset_effect(&last, 0) == 0);
+	last.rt = 1;
+	CHECK(rm_fx_reset_effect(&last, 1) == 0);
+	CHECK(rm_fx_reset_effect(&last, 0) == 0);
+
+	/* the first view with an effect on is FIRST alone */
+	rm_fx_state_reset(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 1, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST);
+	CHECK(st.last.rt == 1);
+	rm_fx_frame_end(&st);
+
+	/* none, then on: EFFECT, the jitter's index started again */
+	rm_fx_state_reset(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 0, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST);
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 0, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 2);
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 1, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_EFFECT && st.n == 1);
+	rm_fx_frame_end(&st);
+
+	/* steady on: nothing, over several frames */
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 1, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 2);
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 1, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 3);
+	rm_fx_frame_end(&st);
+
+	/* off: nothing (the sizes are the same); then on again: EFFECT */
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 0, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 4);
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 0, RM_FX_CUT_DIST, &jx, &jy) == 0);
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 1, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_EFFECT && st.n == 1);
+	rm_fx_frame_end(&st);
+
+	/* with another event in the same view, both */
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, 0, RM_FX_CUT_DIST, &jx, &jy) == 0);
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, 1, RM_FX_CUT_DIST, &jx, &jy) ==
+			(RM_FX_RESET_CUT | RM_FX_RESET_EFFECT));
+	rm_fx_frame_end(&st);
+
+	/*
+	 * The player-setup menu's model view (RDF_NOWORLDMODEL) takes the
+	 * forward path and never steps the scaler: a frame with it after the
+	 * world view keeps the history, and the next world view resets nothing
+	 */
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, 1, RM_FX_CUT_DIST, &jx, &jy) == 0);
+	rm_fx_frame_end(&st);
+	CHECK(st.last.valid == 1 && st.last.rt == 1);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, 1, RM_FX_CUT_DIST, &jx, &jy) == 0);
+	rm_fx_frame_end(&st);
+
+	/*
+	 * fov 90 to 30: the projection changes, and nothing the step takes (the
+	 * mode, the sizes of the same rectangle, the origin, the effect) does
+	 */
+	CHECK(rm_fx_sizes(&vp, 0.5f, &u) && rm_fx_same_size(&u, &s));
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &u, far, 1, RM_FX_CUT_DIST, &jx, &jy) == 0);
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &u, far, 1, RM_FX_CUT_DIST, &jx, &jy) == 0);
+	rm_fx_frame_end(&st);
+
+	/* a frame with no scaled view, then a view with an effect: FIRST alone, not EFFECT as well */
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, 1, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST);
+}
+
+/* TASK109: the r_rt_stats reset line, whether it prints and its text */
+static void
+test_reset_line(void)
+{
+	char buf[256];
+
+	/* only a scaled world view, under r_rt_stats 1 and above, that resets either history */
+	CHECK(rm_fx_reset_says(1, 1, RM_FX_RESET_EFFECT, 0));
+	CHECK(rm_fx_reset_says(1, 2, 0, RM_RTT_RESET_CUT));
+	CHECK(rm_fx_reset_says(1, 1, RM_FX_RESET_FIRST, RM_RTT_RESET_FIRST));
+	CHECK(!rm_fx_reset_says(1, 1, 0, 0));
+	/* the effect on and the scaler off: no line, whatever RT7 reset */
+	CHECK(!rm_fx_reset_says(0, 1, 0, RM_RTT_RESET_FIRST));
+	CHECK(!rm_fx_reset_says(0, 1, RM_FX_RESET_FIRST, RM_RTT_RESET_FIRST));
+	CHECK(!rm_fx_reset_says(1, 0, RM_FX_RESET_FIRST, RM_RTT_RESET_FIRST));
+	CHECK(!rm_fx_reset_says(1, 0.5f, RM_FX_RESET_FIRST, 0));
+	CHECK(!rm_fx_reset_says(1, -1, RM_FX_RESET_FIRST, 0));
+	CHECK(!rm_fx_reset_says(1, NAN, RM_FX_RESET_FIRST, 0));
+	CHECK(!rm_fx_reset_says(1, INFINITY, RM_FX_RESET_FIRST, 0));
+
+	/* the names, the scaler's first and RT7's second */
+	CHECK(rm_fx_reset_line_format(RM_FX_RESET_FIRST, RM_RTT_RESET_FIRST, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler first, temporal first") == 0);
+	CHECK(rm_fx_reset_line_format(RM_FX_RESET_EFFECT, 0, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler effect, temporal none") == 0);
+	CHECK(rm_fx_reset_line_format(0, RM_RTT_RESET_SIZE | RM_RTT_RESET_RECT, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler none, temporal size rect") == 0);
+	CHECK(rm_fx_reset_line_format(RM_FX_RESET_CUT | RM_FX_RESET_EFFECT, RM_RTT_RESET_CUT, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler cut effect, temporal cut") == 0);
+	CHECK(rm_fx_reset_line_format(RM_FX_RESET_ALL, RM_RTT_RESET_ALL, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler first mode size rect cut effect, "
+			"temporal first size rect cut") == 0);
+	CHECK(rm_fx_reset_line_format(RM_FX_RESET_MODE | RM_FX_RESET_SIZE | RM_FX_RESET_RECT, 0, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler mode size rect, temporal none") == 0);
+
+	/* bits beyond the known reasons name nothing */
+	CHECK(rm_fx_reset_line_format(RM_FX_RESET_SIZE | 0x40u, RM_RTT_RESET_RECT | 0x10u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler size, temporal rect") == 0);
+	CHECK(rm_fx_reset_line_format(0x40u, 0x10u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler none, temporal none") == 0);
+
+	/* the empty set: nothing to print */
+	buf[0] = 'x';
+	CHECK(rm_fx_reset_line_format(0, 0, buf, sizeof(buf)) == 0 && buf[0] == '\0');
+
+	/* truncation: refused with buf empty; an exact fit leaves no room for the terminator, one byte more fits */
+	{
+		const char *want = "ref_metal: r_rt_stats: reset: scaler first, temporal first";
+
+		CHECK(rm_fx_reset_line_format(RM_FX_RESET_FIRST, RM_RTT_RESET_FIRST, buf, 20) == 0 && buf[0] == '\0');
+		CHECK(rm_fx_reset_line_format(RM_FX_RESET_FIRST, RM_RTT_RESET_FIRST, buf, strlen(want)) == 0 &&
+				buf[0] == '\0');
+		CHECK(rm_fx_reset_line_format(RM_FX_RESET_FIRST, RM_RTT_RESET_FIRST, buf, strlen(want) + 1) &&
+				strcmp(buf, want) == 0);
+	}
+	CHECK(rm_fx_reset_line_format(RM_FX_RESET_FIRST, 0, buf, 0) == 0);
 }
 
 /* the refusal memo: the same mode and sizes are not tried again, another mode or size is */
@@ -651,7 +798,7 @@ test_format(void)
 			"reset none, scaler not timed") == 0);
 	CHECK(rm_fx_stats_format(2, &s, RM_FX_RESET_ALL, 2, buf, sizeof(buf)));
 	CHECK(strcmp(buf, "ref_metal: metal_stats: metalfx temporal: input 320x240, output 640x480 at 64,48, "
-			"reset first mode size rect cut, scaler 2.000 ms") == 0);
+			"reset first mode size rect cut effect, scaler 2.000 ms") == 0);
 	CHECK(rm_fx_stats_format(2, &s, 0, 0, buf, sizeof(buf)) && strstr(buf, ", scaler 0.000 ms"));
 		CHECK(rm_fx_stats_format(2, &s, 0, 1, buf, 30) == 0 && buf[0] == '\0');
 	/* an exact fit leaves no room for the terminator: refused; one byte more fits */
@@ -716,6 +863,8 @@ main(void)
 	test_ratio_bound();
 	test_same_size();
 	test_step();
+	test_effect();
+	test_reset_line();
 	test_refusal();
 	test_format();
 
