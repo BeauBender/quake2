@@ -8,6 +8,7 @@ check-bench-quake2.sh
 check-bench.sh
 check-bounded-run.sh
 check-bsp-loader.sh
+check-card-acceptance.sh
 check-card-close-labels.sh
 check-checkout-current.sh
 check-ci-parity.sh
