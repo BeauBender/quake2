@@ -42,9 +42,15 @@ is left for the ray-traced path. Its slices:
 
 | Check | Result |
 |---|---|
-| `tests/check-ref-metal.sh` (the MetalFX host test and its three mutants) | @T109_REFMETAL@ |
-| `make test` | @T109_MAKETEST@ |
-| `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh`, `tests/check-pin-chars.sh` | @T109_DOCCHECKS@ |
+| `tests/check-ref-metal.sh` (the MetalFX host test and its three mutants) | ok: `MetalFX 392 checks, 0 failed, 3 reset mutants refused` |
+| `make test` | `yq2test: 591 tests, 0 failed` |
+| `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh`, `tests/check-pin-chars.sh` | ok, each |
+
+The table above is from the branch before the hold. The hold runs the same checks again on
+its final commit: @T109_HOSTCHECKS@.
+
+The tests were red first, at `c73e08df`: the build of `tests/metal/rm_fx_test.c` stopped on
+`rm_fx_step`'s new effect argument. They were green at `b5d1ac15`.
 
 These are the mutants of `rm_metalfx.c` that `tests/metal/rm_fx_test.c` must refuse.
 Each one compiles:
@@ -69,14 +75,17 @@ The hold builds main (the before) and this branch in scratch. Its checks:
 |---|---|
 | map load | @T109_MAPLOAD@ |
 | `vid_restart` | @T109_VIDRESTART@ |
-| a camera cut (`setpos` 300 units away) | @T109_CUT@ |
-| a teleport | @T109_TELEPORT@ |
-| `r_metalfx_scale` changed | @T109_SCALE@ |
-| `viewsize 60` | @T109_VIEWSIZE@ |
-| a window resize | @T109_RESIZE@ |
-| the effect off, then on | @T109_EFFECT@ |
-| the player-setup menu's model view | @T109_MENU@ |
-| `fov` 90 to 30 | @T109_FOV@ |
+| a camera cut (the game's `teleport`, 300 units away) | @T109_CUT@ |
+| a teleport (the same command, 700 units on; base1 has no teleporter a script can reach) | @T109_TELEPORT@ |
+| `r_metalfx_scale` 0.5 to 0.75 | @T109_SCALE@ |
+| `viewsize 60`, then `viewsize 100` | @T109_VIEWSIZE@ |
+| the window's size (`r_customwidth` and a `vid_restart`: the tooling has no live resize) | @T109_RESIZE@ |
+| the effect off (no line), then on | @T109_EFFECT@ |
+| the player-setup menu's model view (no line) | @T109_MENU@ |
+| `fov` 90 to 30 (no line) | @T109_FOV@ |
+
+The menu is closed with the console's toggle, because no command closes a menu by itself.
+The hold does not judge those frames.
 
 The base and the branch: @T109_COMMITS@. Stock and MetalFX records: @T109_STOCK@.
 `rt-*` records: @T109_RT@.
