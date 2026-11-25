@@ -16,11 +16,11 @@ work:
   with the foundations (TASK153, TASK154, TASK155, TASK166, FIX72 and FIX60,
   about 11.6k lines of those);
 - 60 of the 347 review rounds;
-- 11 of the 33 failed workflow runs since 11-15, and every red main run that
-  was not infrastructure. The harness self-test runs are 44998168941,
-  45010707695, 45337201551, 45547293056, 45415672331, 45582643870,
-  45621239929 and 44704990185. The rest of the 33 were runner-queue cancels,
-  network failures and `check-runbook-index` conflicts.
+- 8 of the 33 failed workflow runs since 11-15, all red main runs of the
+  harness self-tests: 44998168941, 45010707695, 45337201551, 45547293056,
+  45415672331, 45582643870, 45621239929 and 44704990185. The rest of the 33
+  were runner-queue cancels, network failures, `check-runbook-index`
+  conflicts and other runs.
 
 Three facts point at one cause.
 
@@ -51,9 +51,10 @@ and #723.
 
 ## Decision
 
-1. **The supervisor.** All spawning, bounding, signalling and reaping of
+1. **The supervisor.** The target is that all spawning, bounding, signalling and reaping of
    child processes in the harness goes through one native supervisor,
-   `scripts/lib/supervise.c` (#755), built with the `cc` the harness already
+   `scripts/lib/supervise.c` (#755), carried out by the migration cards below,
+   built with the `cc` the harness already
    uses for its other helpers. It starts the command as the leader of its own
    process group, owns the `waitpid`, keeps the leader unreaped until the
    group is empty, waits on kqueue events instead of polling `ps`, sends
@@ -62,7 +63,8 @@ and #723.
    `kill` a child, or `wait` on a child pid outside the supervisor's wrapper.
 2. **The shells.** The bench core supports `/bin/bash` 3.2 (also as `sh`) as
    its caller shell. Dash and the paths for a shell without job control are
-   dropped. The goal of moving the core to other repositories is withdrawn,
+   dropped. The dash cases and paths stay until the migration card that
+   removes them lands. The goal of moving the core to other repositories is withdrawn,
    and can come back later with the supervisor.
 3. **The lock.** The bench lock's guarantee is a kernel lock held by an
    inherited file descriptor, together with the per-run quiet evidence of
@@ -75,8 +77,12 @@ and #723.
    filed to harden `bench_poll`, `bench_spawn`, `bench_watch`,
    `bench_stop_groups`, `scripts/lib/bounded.py` or the lock's identity code.
    Review notes and flakes on that code are added to the replacement card. A
-   red main run on it is re-run once and then quarantined, named in the
-   replacement card, not fixed forward.
+   red main run on the frozen code is re-run once. A repeat is recorded on the
+   replacement card, with the run id. The gate is never skipped or weakened
+   for it, and a repeat that blocks the gate falls under the exception below.
+   The exception: a security defect, a data-loss or lock-safety defect, or a
+   defect that leaves the gate or the bench lock unusable is fixed in place as
+   usual. Its card names the replacement card that will retire the code.
 
 ## The migration cards
 
