@@ -159,7 +159,9 @@ No pin is made of an accumulated scenario in this slice.
   indices (`mtl_rts_pack_idx`) with the in-range and shadowed flags masked off, the four
   slots' 6-bit indices. A change of the lights reaching the pixel or of their order rejects
   the history; a pixel shadowed in one frame and lit in the next keeps it. The AO and the sun
-  pass 0 on both sides.
+  pass 0 on both sides. The set compares slot indices into the frame's dynamic-light list, not
+  the lights themselves, so a light that takes a dead light's slot in the same frame, in the
+  same order, can inherit its history (the slice 1b review's N2).
 - The shadows' history: a record, RGBA32Uint (the light set, the distance's bits, the
   material id, the count's bits), and the four visibilities, RGBA16Float, two of each at the
   render size. The sun's: RGBA32Float (the visibility, the distance, the material id, the
@@ -182,11 +184,18 @@ No pin is made of an accumulated scenario in this slice.
   never repeats.
 - `r_rt_temporal 0` and back: at 0 the state is forgotten and every back end releases its
   histories at its next view; at 0.9 again they are made anew, so the first view resets.
+  That next view is one that reaches the back end's temporal call: `RM_RTS_View` returns
+  before it while the pass is inactive or the view has no dynamic light, so the shadows' and
+  the sun's histories can stay allocated over such views (the slice 1b review's N1). None is
+  read meanwhile.
 - A failure is latched (the slice 1 review's N1): a temporal pipeline that cannot be made is
   not tried again until its pass closes, and histories that cannot be made at a render size
   are not tried again at that size. Each logs one line.
 - `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the frame's own trace, before
   the accumulation (the slice 1 review's N5), as `doc/040_cvarlist.md` says.
+- The shadow stats describe the raw trace: `MTL_RTS_SHADOWED`, the in-range and shadowed
+  counts and the `r_rt_stats` shadow figures come from `rm_rts_shade`'s visibilities, while
+  the term and the packed visibilities use the blended ones (the slice 1b review's N4).
 
 ### Memory
 
@@ -221,7 +230,10 @@ again. `tests/check-ref-metal.sh`:
   `mtl_rtt_reproject(px.x, px.y, mv.x, mv.y, w, hh)` in all three kernels with the motion's
   sign flipped (the slice 1 review's N4).
 - Each back end's `tv.reset = rm_rtt_hist_take(&thist, &tview);`, with the mutant that
-  passes the view's reasons on alone.
+  passes the view's reasons on alone, and (round 2, the slice 1b review's N3) where it sits:
+  after every early return of the back end's trace function, its one return after the call
+  being the function's last statement, and before a dispatch. A mutant moving it above the
+  `rmb_rt_bind_scene` check in `rmb_rtshadow.m` is refused.
 - Kernel-call pairs for both new kernels (the reprojection, the rule, the blend, the count,
   the light set) and for the shadows' temporal kernel's trace and store.
 - The stock shadow trace (round 1): `rm_rts_trace`'s text, pinned by its `cksum`; the copy
@@ -231,6 +243,15 @@ again. `tests/check-ref-metal.sh`:
   mutants are refused: the stock kernel edited (both the checksum and the copy pin refuse
   it), the copy edited in `rm_rts_shade` or in `rm_rts_finish`, and the guard dropped. Against
   the first hold's file the pins fail; against the fix they pass.
+- The copy pin in order (round 2, the slice 1b review's I1): round 1 compared sets of lines
+  with the braces dropped, so a repeated line of the copy deleted or moved passed it. Now the
+  braces stay, each side-only line must occur exactly once on its side, and with those lines
+  dropped the `diff` of the two sequences must be exactly the pinned one: `float3 t` declared
+  in `rm_rts_finish` at its use instead of at the kernel's top, and the copy closing the
+  trace's two blocks before its loop into `s.vis`, where the stock kernel makes the term
+  inside them. Two more mutants are refused: `slab-continue-dropped` (the `continue;` under
+  `if (!slab)` in `rm_rts_shade` deleted) and `adds-zero-moved` (`adds[i] = 0.0f;` moved
+  below that block). Where a side-only line sits is still not compared.
 
 ### The hold
 
