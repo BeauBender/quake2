@@ -25,8 +25,11 @@
  * surface lights (TASK188 slice 2), uploaded once a map, with the map's
  * exposure fitted then from a sample of its luxels (slice 3c), the frame's decision (with it the view
  * takes the G-buffer path), the view and the style table handed to the
- * back end before the raster, and the r_rt_stats lines. Under any
- * presentation but RT-primary nothing here builds or allocates anything.
+ * back end before the raster, and the r_rt_stats lines. TASK189 (PM7
+ * slice 1) adds the sky light (r_rt_direct_sky, its noise's seed
+ * r_rt_direct_seed) and the sun (TASK56's direction and r_rt_sunscale,
+ * RM_RTSun_Primary) to the view. Under any presentation but RT-primary
+ * nothing here builds or allocates anything.
  *
  * =======================================================================
  */
@@ -37,12 +40,17 @@
 #include "header/rm_rtdirscene.h"
 #include "header/rm_rtdata.h"
 #include "header/rm_rtgate.h"
+#include "header/rm_rtao.h"
+#include "header/rm_rtsunscene.h"
 #include "header/rm_gbufscene.h"
 
 static cvar_t *r_rt_direct;
 static cvar_t *r_rt_direct_exposure;
 static cvar_t *r_rt_direct_show;
+static cvar_t *r_rt_direct_sky;
+static cvar_t *r_rt_direct_seed;
 static cvar_t *r_rt_stats_ref;
+static unsigned long dir_count;     /* TASK189: the views traced, the sky ray's noise frame without a seed */
 
 /* the map's lights, then its emissive faces (TASK188 slice 2) */
 static rm_rtdir_light_t dir_lights[RM_RTDIR_MAX_UPLOAD];
@@ -69,7 +77,11 @@ RM_RTDir_Init(const rmb_caps_t *caps)
 	r_rt_direct = ri.Cvar_Get("r_rt_direct", "0", 0);
 	r_rt_direct_exposure = ri.Cvar_Get("r_rt_direct_exposure", "0", CVAR_ARCHIVE);
 	r_rt_direct_show = ri.Cvar_Get("r_rt_direct_show", "0", 0);
+	/* TASK189: the sky light's scale, and its noise's seed (r_rt_ao_seed's rule) */
+	r_rt_direct_sky = ri.Cvar_Get("r_rt_direct_sky", "1", CVAR_ARCHIVE);
+	r_rt_direct_seed = ri.Cvar_Get("r_rt_direct_seed", "0", 0);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
+	dir_count = 0;
 	dir_device = caps->raytracing != 0;
 	dir_opened = dir_refused = dir_active = dir_viewed = dir_fixed = 0;
 	dir_world = fit_world = NULL;
@@ -438,6 +450,12 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 			{
 				R_Printf(PRINT_ALL, "%s\n", line);
 			}
+
+			/* TASK189: the sky light's and the sun's rays */
+			if (rm_rtdir_open_format(&st[i], line, sizeof(line)))
+			{
+				R_Printf(PRINT_ALL, "%s\n", line);
+			}
 		}
 	}
 }
@@ -510,6 +528,23 @@ RM_RTDir_View(const rm_view_t *view)
 	{
 		rmb_rtdir_set_view(NULL, NULL);
 		return;
+	}
+
+	/*
+	 * TASK189: the sky light, the mean of the sky box's five faces above the
+	 * horizon (gl1's order, dn last) times r_rt_direct_sky, none without a
+	 * sky image; the sun, TASK56's direction and colour
+	 */
+	{
+		float means[6][3], sky[3], sun_dir[3], sun[3];
+		int have[6], has_sky;
+
+		RM_SkyMeans(means, have);
+		has_sky = rm_rtl_sky_mean((const float (*)[3])means, have, 5, sky);
+		RM_RTSun_Primary(sun_dir, sun);
+		rm_rtdir_view_open(&v, has_sky ? sky : NULL, RM_Effect(r_rt_direct_sky), sun_dir, sun,
+				rm_rtao_frame(r_rt_direct_seed->value, dir_count));
+		dir_count++;
 	}
 
 	rmb_rtdir_set_view(&v, dir_styles);

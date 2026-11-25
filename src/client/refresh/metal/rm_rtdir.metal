@@ -35,7 +35,9 @@
  *   lightmap; every other pixel's light as it was. The visibility
  *   (RGBA8Unorm: the share of the lights in range seen, whether any was,
  *   whether the pixel is a traced world pixel) for the development view.
- *   The counts and the exposure fit's sums;
+ *   The counts and the exposure fit's sums. TASK189 (PM7 slice 1) adds
+ *   the sky light and the sun (rm_rtdir_open: one cosine-weighted sky ray
+ *   and one sun ray a pixel, RT2's rule at a face), after the exposure;
  * - rm_fragment_rtdir_show, r_rt_direct_show's views over the resolve.
  *
  * =======================================================================
@@ -52,6 +54,8 @@ using namespace metal::raytracing;
 #include "common/mtl_rtao_math.h"
 #include "common/mtl_rts_math.h"
 #include "common/mtl_rtdir_math.h"
+#include "common/mtl_rtsun_math.h"
+#include "common/mtl_rtsky_math.h"
 
 /* rm_rtdir.h's rm_rtdir_view_t */
 struct rm_rtdir_view
@@ -65,8 +69,11 @@ struct rm_rtdir_view
 	uint show;
 	uint ndlights;
 	uint nself;
+	uint frame;
 	uint pad0;
-	uint pad1;
+	float4 sun_dir;
+	float4 sun;
+	float4 sky;
 };
 
 /* rm_rtdir.h's rm_rtdir_light_t */
@@ -175,14 +182,22 @@ rm_rtdir_seen(ray r, instance_acceleration_structure ias, device const uint *ins
 #define RM_RTDIR_C_RAYS_HI 8
 #define RM_RTDIR_C_LIT_HI 9
 #define RM_RTDIR_C_CAPPED 10
+#define RM_RTDIR_C_SKY_RAYS 11
+#define RM_RTDIR_C_SKY_HITS 12
+#define RM_RTDIR_C_SUN_RAYS 13
+#define RM_RTDIR_C_SUN_LIT 14
 
-/* a pixel's counts: the lights in range and facing, the shadow rays, the ones that reached their light, the cap */
+/* a pixel's counts: the lights in range and facing, the shadow rays, the ones that reached their light, the cap; the sky's and the sun's rays and hits (TASK189) */
 struct rm_rtdir_tally
 {
 	uint inrange;
 	uint rays;
 	uint lit;
 	uint capped;
+	uint sky_rays;
+	uint sky_hits;
+	uint sun_rays;
+	uint sun_lit;
 };
 
 /*
@@ -395,6 +410,122 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
 	}
 }
 
+/*
+ * TASK189: 1 when r reaches the sky, 0 when it is shadowed, by RT2's sun
+ * rule (mtl_rtsky_at): the nearest face decides; a water or translucent
+ * face is passed, the nearest first, up to MTL_RTSUN_LAYERS of them, and
+ * what is behind the last still decides; nothing met, or one more such
+ * face, is shadowed. At most MTL_RTSUN_LAYERS + 1 intersections. inst and
+ * tmat as rm_rtdir_seen's (a map triangle outside the table counts as the
+ * world's). RT2's own loop (rm_rtsun.metal's rm_rtsun_hit)
+ * is left as it is: this is its rule in a function of this file.
+ */
+static float
+rm_rtdir_sky_hit(ray r, instance_acceleration_structure ias, device const uint *inst, device const uchar *tmat, uint ntris)
+{
+	intersector<triangle_data, instancing> isect;
+
+	isect.assume_geometry_type(geometry_type::triangle);
+
+	for (int layer = 0; layer <= MTL_RTSUN_LAYERS; layer++)
+	{
+		intersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);
+		uint b, m = 0xffu, at;
+
+		if (hit.type == intersection_type::none)
+		{
+			return 0.0f;
+		}
+
+		b = inst[2 * hit.instance_id];
+
+		if (b != 0xffffffffu)
+		{
+			m = (b + hit.primitive_id < ntris) ? (uint)tmat[b + hit.primitive_id] : (uint)MTL_GB_MAT_WORLD;
+		}
+
+		at = mtl_rtsky_at(m, layer);
+
+		if (at != MTL_RTSUN_AT_PASS)
+		{
+			return (at == MTL_RTSUN_AT_LIT) ? 1.0f : 0.0f;
+		}
+
+		r.min_distance = hit.distance + 0.01f;
+
+		if (!(r.min_distance < r.max_distance))
+		{
+			return 0.0f;
+		}
+	}
+
+	return 0.0f;
+}
+
+/*
+ * TASK189, the sky light and the sun of RT-primary's light model at the
+ * world point p of unit normal n (pixel px), in the light attachment's
+ * units (mtl_rtsky_light adds them after the exposure): the sky's colour
+ * (v.sky) where one cosine-weighted ray (mtl_rtsky_dir, the blue-noise
+ * tile's numbers at px moved on by v.frame, the AO's noise) reaches a sky
+ * face, and the sun's (v.sun) times max(0, N.L) where one ray toward
+ * v.sun_dir does (rm_rtdir_sky_hit, RT2's rule). Each traced only where
+ * the view and its colour want it (mtl_rtsky_traces), so a pixel traces
+ * at most MTL_RTSKY_RAYS + MTL_RTSKY_SUN_RAYS rays here. No texture is
+ * read: the lightmap never enters.
+ */
+static float3
+rm_rtdir_open(constant rm_rtdir_view &v, uint2 px, float3 p, float3 n, instance_acceleration_structure ias,
+		device const uint *inst, device const uchar *tmat, uint ntris, device const ushort *tile, thread rm_rtdir_tally &t)
+{
+	const float3 o = p + n * mtl_rtao_bias(distance(p, v.eye.xyz), v.bias_k);
+	const mtl_rtao_v3_t nv = mtl_rtao_v3(n.x, n.y, n.z);
+	float3 sum = float3(0.0f);
+
+	if (mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SKY, max(v.sky.r, max(v.sky.g, v.sky.b))))
+	{
+		const float u = mtl_rtao_noise(tile[mtl_rtao_tile_index(px.x, px.y, 0u)], v.frame, 0u);
+		const float w = mtl_rtao_noise(tile[mtl_rtao_tile_index(px.x, px.y, 1u)], v.frame, 1u);
+		const mtl_rtao_v3_t d = mtl_rtsky_dir(nv, u, w);
+		const float hit = rm_rtdir_sky_hit(ray(o, float3(d.x, d.y, d.z), 0.0f, MTL_RTSUN_RANGE), ias, inst, tmat, ntris);
+
+		t.sky_rays++;
+		t.sky_hits += (hit > 0.5f) ? 1u : 0u;
+		sum += float3(mtl_rtsky_term(v.sky.r, hit), mtl_rtsky_term(v.sky.g, hit), mtl_rtsky_term(v.sky.b, hit));
+	}
+
+	if (mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SUN, max(v.sun.r, max(v.sun.g, v.sun.b))))
+	{
+		const float nl = mtl_rtsun_ndotl(nv, mtl_rtao_v3(v.sun_dir.x, v.sun_dir.y, v.sun_dir.z));
+
+		if (nl > 0.0f)
+		{
+			const float vis = rm_rtdir_sky_hit(ray(o, v.sun_dir.xyz, 0.0f, MTL_RTSUN_RANGE), ias, inst, tmat, ntris);
+
+			t.sun_rays++;
+			t.sun_lit += (vis > 0.5f) ? 1u : 0u;
+			sum += float3(mtl_rtsky_term(v.sun.r, vis * nl), mtl_rtsky_term(v.sun.g, vis * nl),
+					mtl_rtsky_term(v.sun.b, vis * nl));
+		}
+	}
+
+	return sum;
+}
+
+/* TASK189: a traced world pixel's light (rm_rtdir_out's) with the sky light and the sun added, the two alone under views 5 and 6 */
+static float4
+rm_rtdir_out_open(float4 c, float3 open, uint show)
+{
+	mtl_rgba_t l;
+
+	l.r = c.r;
+	l.g = c.g;
+	l.b = c.b;
+	l.a = c.a;
+	l = mtl_rtsky_light(l, open.r, open.g, open.b, mtl_rtsky_alone(show));
+	return float4(l.r, l.g, l.b, l.a);
+}
+
 /* the exposure fit's samples: every MTL_RTDIR_FIT_STEP-th pixel a row and a column */
 static bool
 rm_rtdir_fit_at(uint2 px)
@@ -463,13 +594,14 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 		device const rm_rtdir_light *lights [[buffer(9)]],
 		constant rm_rtdir_dlight *dl [[buffer(10)]],
 		device const uint *self [[buffer(11)]],
+		device const ushort *tile [[buffer(12)]],
 		uint2 px [[thread_position_in_grid]])
 {
 	const bool inside = (px.x < light_out.get_width()) && (px.y < light_out.get_height());
 	uint m = MTL_GB_MAT_NONE, world = 0u;
 	float d = 1.0f;
 	float4 nn = float4(0.0f);
-	rm_rtdir_tally t = { 0u, 0u, 0u, 0u };
+	rm_rtdir_tally t = { 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 
 	if (inside)
 	{
@@ -487,6 +619,10 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 	const float3 raw = world ? rm_rtdir_direct(v, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), styles, ias,
 			inst, tmat, ntris, lights, dl, self, t) : float3(0.0f);
 
+	/* TASK189: the sky light and the sun, from their rays alone (no texture reaches rm_rtdir_open) */
+	const float3 open = world ? rm_rtdir_open(v, px, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), ias,
+			inst, tmat, ntris, tile, t) : float3(0.0f);
+
 	/* the fit's sample: the lightmap enters the frame's sums, never a pixel's light */
 	const uint sampled = (world && rm_rtdir_fit_at(px)) ? 1u : 0u;
 	const uint2 fit = sampled ? rm_rtdir_fit_sample(lm, px, raw) : uint2(0u);
@@ -496,7 +632,7 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 		/* a traced world pixel takes the traced light; any other pixel its light as it was, bit for bit */
 		if (world)
 		{
-			light_out.write(rm_rtdir_out(raw, v.exposure), px);
+			light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show), px);
 			vis_out.write(rm_rtdir_vis(v.show, t), px);
 		}
 		else
@@ -510,6 +646,8 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 	{
 		const uint c_w = simd_sum(world), c_i = simd_sum(t.inrange), c_r = simd_sum(t.rays), c_l = simd_sum(t.lit);
 		const uint c_fl = simd_sum(fit.x), c_fr = simd_sum(fit.y), c_fn = simd_sum(sampled), c_c = simd_sum(t.capped);
+		const uint c_sr = simd_sum(t.sky_rays), c_sh = simd_sum(t.sky_hits), c_ur = simd_sum(t.sun_rays);
+		const uint c_ul = simd_sum(t.sun_lit);
 
 		if (simd_is_first())
 		{
@@ -521,6 +659,10 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_FIT_RAW], c_fr, memory_order_relaxed);
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_FIT_N], c_fn, memory_order_relaxed);
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_CAPPED], c_c, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_SKY_RAYS], c_sr, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_SKY_HITS], c_sh, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_SUN_RAYS], c_ur, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_SUN_LIT], c_ul, memory_order_relaxed);
 		}
 	}
 }
@@ -528,7 +670,8 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 /*
  * r_rt_direct_show over the resolved view: 1, 3 and 4, the direct term
  * alone (the light the resolve reads, on white albedo; 4 the dynamic
- * lights' term only); 2, the shadow
+ * lights' term only; TASK189's 5 and 6 the sky light's and the sun's
+ * terms alone, the kernel writing them by themselves); 2, the shadow
  * visibility (grey, the share of the lights in range whose ray reached
  * them; dark blue where no light is in range); black on every pixel that
  * is not a traced world pixel.
