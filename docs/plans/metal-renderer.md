@@ -51,7 +51,7 @@ inside the manifest; each card also carries its group's parent dependencies):
 - TASK60 (#103) — Hardware gating and fallbacks, with ray tracing forced off on the VM — tier T0 and T1; depends on TASK54
 - TASK61 (#104) — Render-stage ray queries on M3 or later, compute path kept for older families, at the traced size of the option in use — tier T2; depends on TASK59, TASK109 and TASK126
 - TASK62 (#105) — Refit against rebuild tuning, and the default option and scale per cell of the target matrix — tier T2 (T1 for apple7); depends on TASK61, TASK110 and TASK106 (#249)
-- TASK109 (#263) — Option A: internal resolution and the MetalFX temporal scaler — tier T0, T1 and T2; depends on TASK59 and TASK60
+- TASK109 (#263) — Option A: internal resolution and the MetalFX temporal scaler for the ray-traced path, on TASK111's `r_metalfx 2` and `r_metalfx_scale` (no `r_rt_scale`) — tier T0, T1 and T2; depends on TASK59 and TASK60
 - TASK110 (#264) — Image quality of options A, E and the hybrids on real ray-traced frames — tier T2; depends on TASK109, INFORM11 and TASK126
 - TASK126 (#285) — Option E and the hybrids: the 3D frame rasterized at its rectangle, each effect traced at its own scale and upsampled by a joint bilateral upsample; with RT11's scaler on, the hybrid — tier T0, T1 and T2; depends on TASK59, TASK60 and TASK109
 - TASK84 (#195) — N1: `ref_metal` skeleton: build target, window seat, clear, present, frame capture, capability report, gate check — tier T0

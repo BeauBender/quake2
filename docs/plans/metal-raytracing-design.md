@@ -251,6 +251,18 @@ builds so that both can be measured. The decision is INFORM12 (#262),
 open: the owner put it on hold on 2026-11-14 until image-quality data
 exists.
 
+**The switch and the scale (TASK109, reconciled).** No `r_rt_scale` is
+added. By the owner's direction of 2026-11-14 (on TASK109, #263, and
+INFORM12), the MetalFX scaler is a property of the 3D view, chosen with or
+without a ray-traced effect: TASK111 (#265) built `r_metalfx` (off,
+spatial, temporal, temporal denoised) and `r_metalfx_scale`, the internal
+size as a fraction of the world refdef's rectangle, and they are the
+internal scale for every path. Option A is `r_metalfx 2` with
+`r_metalfx_scale 0` (the family default) and a ray-traced effect on;
+options E and C have `r_metalfx 0`. Where this document wrote
+`r_rt_scale`, read `r_metalfx_scale` under `r_metalfx 2`, and read
+`r_rt_scale 1` ("no scaler") as `r_metalfx 0`.
+
 Every measured cost in this subsection is quoted from section 8: the M6,
 the compute-dispatch ray queries, the synthetic closed scene, synthetic scaler
 inputs, the later level of a process. Section 8 did not measure the
@@ -274,10 +286,11 @@ of that rectangle, and the internal size is a fraction of it. The scaler
 writes the rectangle at its place in the frame, either through its
 `outputOffsetX` and `outputOffsetY` (declared from macOS 27 in the SDK's
 `MTLFXTemporalScaler.h`) or into a texture of the rectangle's size that is
-copied there; RT11 picks one. 2D (HUD, console, menus, cinematics) draws
-after it at the window size, unscaled. With every `r_rt_*` effect off there
-is no internal resolution and no scaler: the frame renders at the refdef's
-rectangle, as before, so the gl1 pins are untouched.
+copied there; TASK111 picked the copy (`rmb_fx_upscale`). 2D (HUD,
+console, menus, cinematics) draws after it at the window size, unscaled.
+With `r_metalfx 0` (the default) there is no internal resolution and no
+scaler, with or without an effect: the frame renders at the refdef's
+rectangle, as before, so the gl1 pins and the effect pins are untouched.
 
 **A refdef without a world.** In the client, the refdef with
 `RDF_NOWORLDMODEL` is the player-setup menu's model view
@@ -334,44 +347,75 @@ image-quality card (RT12), not decided here.
 | Motion vectors | section 3's `rg16float` attachment, from the unjittered current and previous view, each with its own projection, so a change of the field of view is carried by them | `RG16Float` measured. The scaler's motion-vector scale matches section 3's units, which RT2 fixes. RT7 already needs them, so the scaler adds no attachment. Their raster cost is part of RT2's G-buffer and not measured; RT10's per-pass table records it |
 | Jitter | the Halton (2, 3) sequence minus 0.5, in internal pixels, added to the projection and passed to the scaler each frame | the sequence section 8 drove the scaler with |
 | Exposure | auto exposure off, fixed exposure | the resolve writes the stock display-referred product, not scene light; section 8 also ran with auto exposure off |
-| Reset | set for one frame on a map load, a `vid_restart`, a camera cut, a teleport, a change of `r_rt_scale` or of the world refdef's rectangle, and the first world refdef with an effect on after one with every effect off | the same frame resets RT7's history |
+| Reset | set for one frame on a map load, a `vid_restart`, a camera cut, a teleport, a change of `r_metalfx`, of `r_metalfx_scale` or of the world refdef's rectangle, and the first scaled world refdef with an effect on after one with every effect off | a map load and a `vid_restart` reset RT7's history with it; RT7 judges the other events itself, on the same view (its own reasons, `RM_RTT_RESET_*`) |
 
 The renderer detects these events from what it already receives; the
 renderer API (`ref.h`, `API_VERSION`) does not change. A map load is
-`BeginRegistration`. A `vid_restart`, a change of `r_rt_scale`, a
-change of the world refdef's rectangle and an effect turned back on
-after a world refdef with every effect off create the scaler anew (with
-every effect off nothing writes either history, so what they hold is
-stale); the rectangle changes with `viewsize` and with the window size. A camera cut
-or a teleport is a world refdef whose view origin moved further than a
-threshold from the last world refdef's, or the first world refdef after a
-frame that drew none (a cinematic, the console with no map). The last world
-refdef is the state the cut test compares; a refdef with `RDF_NOWORLDMODEL`
-does not replace it. RT11 sets the threshold and records it here. A change
-of the field of view is not a cut: the client interpolates `fov` across a
-server frame (`cl_entities.c`), so a zoom changes it a little on every
-rendered frame, and the motion vectors already carry it. While a loading
-plaque is up the renderer receives no frame at all; the map load that
-normally ends it is a reset event of its own.
+`BeginRegistration`. A `vid_restart`, a change of `r_metalfx` or of
+`r_metalfx_scale`, a change of the world refdef's rectangle and an effect
+turned back on after a scaled world refdef with every effect off reset the
+scaler's history (with every effect off nothing writes RT7's history, so
+what it holds is stale, and the scaler's history holds frames without the
+effect); the rectangle changes with `viewsize` and with the window size.
+Each reset is a reason of `rm_fx_reset` and `rm_fx_step`
+(`src/client/refresh/metal/rm_metalfx.c`): `first`, `mode`, `size`,
+`rect`, `cut` and, from TASK109, `effect`. Only the change from no effect
+to an effect resets: an effect kept on resets nothing, and an effect
+turned off does not reset (the next world refdef's sizes are the same). A
+camera cut or a teleport is a world refdef whose view origin moved further
+than a threshold from the last world refdef's, or the first world refdef
+after a frame that drew none (a cinematic, the console with no map). The
+last world refdef is the state the cut test compares; a refdef with
+`RDF_NOWORLDMODEL` does not replace it. The threshold is
+`RM_FX_CUT_DIST`, 256 units on any axis (`header/rm_metalfx.h`), the
+client's own teleport distance: `CL_CalcViewValues` (`cl_entities.c`) does
+not interpolate the view across a jump of more than 256 units on an axis.
+RT7 cuts at the same distance (`RM_RTT_CUT_DIST`). A change of the field
+of view is not a cut: the client interpolates `fov` across a server frame
+(`cl_entities.c`), so a zoom changes it a little on every rendered frame,
+and the motion vectors already carry it. While a loading plaque is up the
+renderer receives no frame at all; the map load that normally ends it is
+a reset event of its own. Under `r_rt_stats 1` a scaled world refdef that
+resets either history prints one line with both sets of reasons,
+`ref_metal: r_rt_stats: reset: scaler <reasons>, temporal <reasons>`.
 
-**The scale: `r_rt_scale`.** Named and described here only; no cvar is
-added to the code by TASK105. RT11 adds it, with its entry in
-`doc/040_cvarlist.md`, which every new cvar needs.
+Two clients' paths draw more than one world refdef in a frame, and
+`ref_metal` does nothing special for either. Stereo is ignored:
+`RI_BeginFrame` drops the camera separation, so with `gl1_stereo` set the
+two eyes' world refdefs, whose origins the client moves by half the
+separation each way (`V_RenderView`), are two views of one frame, the
+second drawn over the first; each steps both histories, and a separation
+above 256 units would make every view a cut. `timerefresh` with an
+argument draws 128 world refdefs in one frame, and without one 128 frames
+of one; either way each of its views steps the jitter (its index goes on
+per scaled view, not per frame), and none is a cut, since the origin
+stays.
+
+**The scale: `r_metalfx_scale`.** TASK105 named it `r_rt_scale`; TASK111
+(#265) added it as `r_metalfx_scale`, with its entry in
+`doc/040_cvarlist.md`, and TASK109 uses it for the ray-traced path rather
+than adding a second cvar.
 
 - Archived. Default 0, which picks the family default below.
 - Any other value is the internal width and height as a fraction of the
-  output's, applied only while a ray-traced effect is on. 1 renders at the
-  output size and creates no scaler, and the projection is not jittered.
+  output's, applied whenever `r_metalfx` runs a scaler, with or without a
+  ray-traced effect.
+- At 1 the view renders at the output size and the scaler still runs, at
+  1:1: the temporal scaler then works as temporal anti-aliasing, with the
+  jittered projection and its history. The view runs with no scaler and no
+  jitter only at `r_metalfx 0` (options E and C). TASK105's text said 1
+  meant no scaler; the code keeps the scaler, and this is the behaviour
+  recorded here.
 - The fraction is clamped so that the ratio of output to internal size
-  stays inside the input content scale the scaler reports (1.0 to 3.0 on
-  the M6, section 8, text before the MetalFX table). The aspect ratio is
-  kept.
-- A change takes effect on the next frame, through the path a window
-  resize takes, and resets both histories.
-- It reads 1, with a line in the `vid_restart` output, where the scaler is
-  unavailable or the device has no ray tracing (section 4, "neither"; table
-  below). Unlike the effect cvars, section 4 does not force it to 0,
-  because 0 here means the family default.
+  stays inside the input content scale the scaler reports
+  (`supportedInputContentMaxScale`, 1.0 to 3.0 on the M6, section 8, text
+  before the MetalFX table; `rm_fx_scale`). The aspect ratio is kept.
+- A change takes effect on the next frame and resets the scaler's history
+  (`size`) and RT7's (its own `size`, from the render size).
+- Where the scaler is unsupported, `r_metalfx` is set back to the best mode
+  the device has, with a line (`r_metalfx_modes` names the modes), or to
+  0 where MetalFX is missing; with no scaler the scale does nothing. Unlike the effect cvars, section 4 does not
+  force the scale to 0, because 0 here means the family default.
 
 **Default internal size per family (option A).** A height in rows, so that the
 default follows the output; the fraction is that height over the output's.
@@ -384,7 +428,7 @@ TASK106 (#249) measures apple7.
 |---|---|---|---|
 | apple9 and later (M3 and later; the M6 measured) | hardware intersection; render-stage path | 1080 rows | Measured on the M6 at a 5120 x 2880 output on the compute path, the only device and output measured: the 1080p trace with the temporal scaler is 7.3 ms as a sum and 9.3 ms as one measured frame, which leaves 7.4 to 9.3 ms of the 60 Hz frame for raster, shading and RT7 (section 8, verdicts table, row RT9 (2)). An internal 2560 x 1440 leaves 1.7 to 4.8 ms (same row), too little for work that is not measured yet. For other apple9 devices and outputs this is a default to be measured (RT10) |
 | apple6 to apple8 (M1 is apple7, M2 apple8) | compute path, Metal's software traverser | 720 rows, *assumed* | Not measured: section 8 is the M6 only. Section 2 assumes 8 to 14 ms for the 1080p trace on apple7, a large part of the 60 Hz frame before the scaler, so the default sits below apple9's. TASK106 (#249) measures apple7, the scalers included; RT10 sets the default from it |
-| a device without ray tracing (section 4, "neither"), or one where `MTLFXTemporalScalerDescriptor` `supportsDevice:` is NO | none, or as section 4 | output size; `r_rt_scale` reads 1 | reported in the `vid_restart` output |
+| a device without ray tracing (section 4, "neither"), or one where `MTLFXTemporalScalerDescriptor` `supportsDevice:` is NO | none, or as section 4 | output size; `r_metalfx` set back to the best supported mode (0 where MetalFX is missing) | reported in the console when the renderer starts and when `r_metalfx` is set |
 
 These are option A's design defaults, by family only. The target matrix
 (next subsection) gives each cell, a family and a display class, a
@@ -392,7 +436,7 @@ budget that does depend on the refresh rate: at 120 Hz (an 8.3 ms frame)
 the 1080p path on the M6 is met by the 7.3 ms sum and not by the 9.3 ms
 measured frame (row RT9 (2)). RT10 sets the default per cell by the
 default policy of the next subsection, replacing this table; until then
-a lower `r_rt_scale` is the player's choice. Section 8's host has a 60 Hz
+a lower `r_metalfx_scale` is the player's choice. Section 8's host has a 60 Hz
 display, so a 120 Hz class's presented rate is measured only on the T1
 host's built-in display, for apple7 (TASK106, #249, and RT10). For
 apple9 at the 120 Hz classes RT10 takes GPU times on T2 at those sizes
@@ -427,7 +471,7 @@ cost: with the trace it is
 over the 60 Hz frame at both measured inputs on the M6, before
 rasterization or shading (verdicts table, row RT9 (2): "With the denoised
 scaler, not met at either input"). Two further reasons hold without a
-number. Section 2's denoiser is needed anyway at `r_rt_scale 1` and on a
+number. Section 2's denoiser is needed anyway at `r_metalfx 0` and on a
 device without the scaler, so the denoised scaler would be a second
 denoising path, not a replacement. And it denoises the summed colour, where
 section 2 denoises each effect before it is composed. It was not measured
@@ -452,8 +496,8 @@ apple7 host. It lands before RT11, so the GPU time and `timedemo` rate it
 records with every effect on are taken with no scaler, on the host that
 runs it, as information. RT9's
 measurements are taken in the T2 host's cell (apple9, 5120 x 2880 at 60 Hz) in
-configuration A (the default `r_rt_scale`, every effect scale at 1) and
-in configuration E (every effect scale at 1/2, `r_rt_scale 1`), as the
+configuration A (`r_metalfx 2`, the default `r_metalfx_scale`, every effect scale at 1) and
+in configuration E (every effect scale at 1/2, `r_metalfx 0`), as the
 next subsection names them, ~~held with the default policy's headroom,
 not tracing at native pixels (section 6).~~ Superseded by record 0014:
 recorded against the default policy's headroom, not held to it, and not
@@ -584,9 +628,10 @@ million, the smallest, or above 14.75 million, the largest (only C on
 
 **The options as costed.**
 
-- **C**: every effect traced at the output; no scaler, no upsample. C is
-  A at `r_rt_scale 1` and E with every effect at scale 1: the three are
-  one frame at scale 1.
+- **C**: every effect traced at the output; no scaler, no upsample
+  (`r_metalfx 0`). C is E with every effect at scale 1. A at
+  `r_metalfx_scale 1` traces the same pixels but still runs the scaler at
+  1:1 (temporal anti-aliasing), so it is not the same frame.
 - **A** (TASK105): the whole 3D frame at an internal size, upscaled by
   `MTLFXTemporalScaler`, RT7 at the internal size (the subsection above).
   Costed at the family default of the table above, 1080 rows on apple9,
@@ -621,19 +666,22 @@ million, the smallest, or above 14.75 million, the largest (only C on
 configuration by the two scales, not by "the default", so that the
 hybrid is never left implicit:
 
-- **A**: `r_rt_scale` at its default, 0 (the family default, 1080 rows
-  on apple9 until RT10), and every effect scale at 1.
-- **E**: every effect scale at 1/2, the design point, and `r_rt_scale 1`
+- **A**: `r_metalfx 2` with `r_metalfx_scale` at its default, 0 (the
+  family default, 1080 rows on apple9 until RT10), and every effect scale
+  at 1.
+- **E**: every effect scale at 1/2, the design point, and `r_metalfx 0`
   (no scaler).
-- **H**: `r_rt_scale 0.5` and every effect scale at 1/2.
-- **C**: `r_rt_scale 1` and every effect scale at 1.
+- **H**: `r_metalfx 2`, `r_metalfx_scale 0.5` and every effect scale at
+  1/2.
+- **C**: `r_metalfx 0` and every effect scale at 1.
 
-Before RT13 there are no effect scales, and A is the default
-`r_rt_scale` alone. With both design defaults (`r_rt_scale` 0 and every
-effect scale 1, "The effect scales" below) a frame with an effect on is
-configuration A: the scaler runs wherever the default internal size is
-below the output, and no effect is traced below the internal size, so no
-hybrid is on by default.
+Before RT13 there are no effect scales, and A is `r_metalfx 2` at the
+default `r_metalfx_scale` alone. `r_metalfx` defaults to 0 on every
+device until RT10 sets defaults per cell, so with the design defaults
+(`r_metalfx 0`, `r_metalfx_scale 0` and every effect scale 1, "The effect
+scales" below) a frame with an effect on is configuration C; with
+`r_metalfx 2` it is configuration A, and no effect is traced below the
+internal size, so no hybrid is on by default.
 
 On model R the ray cost depends only on the traced pixel count, so A, E
 and H tracing the same count cost the same in rays. They differ in the
@@ -826,7 +874,7 @@ this section's events that do not concern the scaler (a map load, a
 `vid_restart`, a camera cut, a teleport, a change of the rectangle, an
 effect turned back on after a world refdef with every effect off), and
 an effect's history also on a change of that effect's scale. At every
-effect scale 1, E is C and A at `r_rt_scale 1`: one frame, so the four
+effect scale 1, E is C (`r_metalfx 0`): one frame, so the four
 effect scenarios' pins at scale 1 cover E, and section 5's double-count
 invariant applies to E's output pixels. The render-stage path (section 4)
 puts the shadow and AO queries in the lighting-resolve fragment shader;
@@ -840,11 +888,12 @@ archived cvar per effect, names them, and gives each its entry in
 as a fraction of the output's, or of the internal size while RT11's
 scaler is on (the hybrid). The design default of every effect scale is
 1: E is off, and each effect is traced at the size the 3D frame is
-rasterized at, so with `r_rt_scale` at its default the frame is
-configuration A (above). The 1/2 at which the matrix costs E is a
+rasterized at, so with `r_metalfx 2` and `r_metalfx_scale` at its
+default the frame is configuration A (above), and with `r_metalfx 0` it
+is C. The 1/2 at which the matrix costs E is a
 design point, not a default. RT10 sets the effect scales' defaults per
 cell by the default policy (below), replacing these, as it replaces
-option A's per-family design defaults of `r_rt_scale` (the subsection
+option A's per-family design defaults of `r_metalfx_scale` (the subsection
 above); until then a scale below 1 is the player's choice. Where the
 device has no ray tracing (the VM) the effect scales do nothing, with a
 report line (RT13).
@@ -889,7 +938,7 @@ client feeds the renderer:
   while `cl_paused` is set), so the GPU time is steady and the controller
   settles.
 - Histories: this section resets both histories on a change of
-  `r_rt_scale`. A controller's step is not a change of the cvar. Section
+  `r_metalfx_scale`. A controller's step is not a change of the cvar. Section
   8 reports a supported input content scale of 1.0 to 3.0 for the
   temporal scaler; whether a per-frame change of the input size inside
   that range keeps the scaler's history was neither measured nor read
@@ -897,7 +946,7 @@ client feeds the renderer:
   size would be resampled to the new size or reset. This subsection does
   not change any reset rule; a card that builds the controller would
   narrow them, in every place they are stated (the reset row and the
-  `r_rt_scale` bullets above, RT11's row and card).
+  `r_metalfx_scale` bullets above, RT11's row and card).
 - Pins and measurements run with the controller off, at a fixed scale:
   otherwise a `timedemo` rate measures the controller, not the option.
 
@@ -932,9 +981,9 @@ frames of accumulation take 64 x 36.8 = 2.4 s per reference frame.
 
 *Candidates.* Each option the host supports, run through the same replay
 in sequence as in play, each in a named configuration ("Configurations a
-test names", above): A (the default `r_rt_scale`, every effect scale at
-1) and A at one other `r_rt_scale`, stated, with every effect scale at
-1; E (every effect scale at 1/2, `r_rt_scale 1`); H (`r_rt_scale 0.5`,
+test names", above): A (`r_metalfx 2`, the default `r_metalfx_scale`, every effect scale at
+1) and A at one other `r_metalfx_scale`, stated, with every effect scale at
+1; E (every effect scale at 1/2, `r_metalfx 0`); H (`r_metalfx 2`, `r_metalfx_scale 0.5`,
 every effect scale at 1/2); B and D where the host has them (TASK111
 and TASK113, #265 and #267, make them selectable), each with the scales
 it runs at stated; and the controller if it is built. Frames are captured at the output size, and the 2D layer
@@ -1461,7 +1510,7 @@ struck through in their rows.
 | RT6 | Water reflections, one bounce, warp-perturbed normal | same shape with `rt-water`; non-water pixels byte-identical to RT off |
 | RT7 | Temporal accumulation and denoiser (depends RT3 to RT5) | pins unchanged (pins run with temporal off); ~~fps with everything on ≥ 60 at 1080p on apple7, number recorded~~ (superseded by record 0014: with everything on, the GPU time and `timedemo` rate at 1080p are recorded as information, on the host that runs the card; no frame-rate target and no apple7 host) |
 | RT8 | Hardware gating and fallbacks, `vid_restart` reporting, VM build | every effect cvar forced 0 on the VM with the report line; pins unchanged there (`r_rt_scale` is not RT8's: RT11 adds it, and it reads 1 there, section 4) |
-| RT11 (TASK25) | Option A: internal resolution and `MTLFXTemporalScaler` (section 2, TASK105): the world refdef's 3D frame at `r_rt_scale` with a jittered projection, upscaled to that refdef's rectangle, 2D at the window size, a refdef with `RDF_NOWORLDMODEL` at its own size with no scaler; the cvar with its `doc/040_cvarlist.md` entry; the reset events for the scaler and RT7's history; option A's per-family design defaults of section 2 (depends RT7, RT8) | every effect off: all gl1 pins unchanged and no scaler created; the four effect scenarios carry `r_rt_scale 1` and their pins are unchanged; with an effect on and the scale below 1, each reset event (map load, `vid_restart`, camera cut, teleport, a change of the scale or of the world refdef's rectangle through `viewsize` or the window size, an effect turned back on after a frame with every effect off) resets the scaler and RT7's history on that frame, shown by a `r_rt_stats 1` line, and the player-setup menu's model view open in game and a `fov` change from 90 to 30 reset neither, shown by the same line; at `viewsize` below 100 the upscaled view fills the same centred rectangle as with every effect off; where `supportsDevice:` is NO or the device has no ray tracing (the VM), `r_rt_scale` reads 1 with a report line; for each effect alone and every effect on at the default scale on T1 and T2, the GPU time per presented frame and the `timedemo` rate, the scaler's GPU time at each host's output (cells section 2's target matrix leaves unmeasured) and the internal and output sizes, recorded in `docs/audits/rt-performance.md` |
+| RT11 (TASK25) | Option A: internal resolution and `MTLFXTemporalScaler` (section 2, TASK105) for the ray-traced path, on TASK111's `r_metalfx` and `r_metalfx_scale` (no `r_rt_scale`, the owner's direction of 2026-11-14): the world refdef's 3D frame at `r_metalfx_scale` with a jittered projection, upscaled to that refdef's rectangle, 2D at the window size, a refdef with `RDF_NOWORLDMODEL` at its own size with no scaler; the reset events for the scaler and RT7's history, with the scaler's new reason `effect`; option A's per-family design defaults of section 2 (depends RT7, RT8) | `r_metalfx 0`: all gl1 pins unchanged and no scaler created; the four effect scenarios run at `r_metalfx 0` and their pins are unchanged; at `r_metalfx 2`, with an effect on and the scale below 1, each reset event (map load, `vid_restart`, camera cut, teleport, a change of the scale or of the world refdef's rectangle through `viewsize` or the window size, an effect turned back on after a scaled view with every effect off) resets the scaler and RT7's history on that frame, shown by a `r_rt_stats 1` line naming both sets of reasons, and the player-setup menu's model view open in game and a `fov` change from 90 to 30 reset neither, shown by the absence of the line; at `viewsize` below 100 the upscaled view fills the same centred rectangle as with the scaler off; where `supportsDevice:` is NO, `r_metalfx` is set back to the best supported mode with a report line (TASK111); for each effect alone and every effect on at the default scale on T1 and T2, the GPU time per presented frame and the `timedemo` rate, the scaler's GPU time at each host's output (cells section 2's target matrix leaves unmeasured) and the internal and output sizes, recorded in `docs/audits/rt-performance.md` |
 | RT13 (TASK25) | Option E and the hybrids (section 2, "Targets per GPU family and display, and the options", TASK116): the world refdef's 3D frame rasterized at its rectangle; each effect traced, accumulated and denoised (RT7) at its own scale of that rectangle, one archived cvar per effect, its default as section 2 states ("The effect scales": 1 for every effect, E off, until RT10), with its `doc/040_cvarlist.md` entry; a joint bilateral upsample of each effect to the rectangle on depth, normal and material id, with a counted fallback where no sample matches; with RT11's scaler on, the effect scales apply to the internal size (the hybrid); a refdef with `RDF_NOWORLDMODEL` takes no effect (depends RT7, RT8, RT11) | each effect scale's default as section 2 states (1 for every effect), so that with `r_rt_scale` and every effect scale at their defaults the frame is configuration A; every effect off: all gl1 pins unchanged; every effect scale at 1: the four effect scenarios' pins unchanged, and the frame byte-identical to RT11's at `r_rt_scale 1`; with an effect scale below 1, section 5's double-count invariant holds at the output pixels; the upsample's weights are host-tested with mutants killed (a sample across a depth step or a material-id change gets no weight; the fallback is counted on the `r_rt_stats 1` line); each effect's history resets on section 2's events that do not concern the scaler and on a change of that effect's scale, shown by the same line, and the model view and a `fov` change from 90 to 30 reset nothing; where the device has no ray tracing (the VM) the effect scales do nothing and the report line says so; on T1 and T2 at each host's output, the GPU time of the raster, resolve and forward pass at the output size and of each effect's upsample, and for each effect alone and every effect on in section 2's configuration E (every effect scale at 1/2, `r_rt_scale 1`) and configuration H (`r_rt_scale 0.5`, every effect scale at 1/2), the GPU time per presented frame and the `timedemo` rate, recorded in `docs/audits/rt-performance.md` |
 | RT9 (TASK25) | Render-stage ray queries on apple9, compute path kept for apple6 to apple8, at the traced size of the option in use: under A and the hybrids, shadows and AO in the resolve shader at the internal size; under E, in a fragment pass at each effect's size, since E's resolve runs at the output size (section 4) (depends RT7, RT11, RT13) | identical pins on both paths at 0.005 (pins run at scale 1, `r_rt_scale 1` and every effect scale 1, temporal accumulation off); in the T2 host's cell of the target matrix (apple9, 5120 x 2880 at 60 Hz, section 2), for each effect alone and every effect on, in section 2's configuration A (the default `r_rt_scale`, every effect scale at 1) and configuration E (every effect scale at 1/2, `r_rt_scale 1`), both paths' GPU time per presented frame at the 95th percentile and `timedemo` rate with `r_vsync 1`, the first frames of a process excluded, recorded against the cell's 16.7 ms frame and the default policy's 15.0 ms target; ~~the render-stage path holds the cell by the default policy (section 2) with every effect on in at least one of configurations A and E;~~ (superseded by record 0014: whether the render-stage path holds the cell is recorded, not required) the times, the option and the internal, effect and output sizes recorded in `docs/audits/rt-performance.md`, the compute path beside them. Tracing at native pixels (option C) is not the target: 36.8 ms on the M6 (section 8, verdicts table, row RT9 (1)) |
 | RT12 (TASK25) | Image quality of options A, E and the hybrids on real ray-traced frames, by section 2's image-quality program (depends RT11, RT13 and the owner's acceptance of the RT look, section 5) | for the four effect scenarios and `world`, each case of the program (still and moving camera, fast turns, disocclusion, muzzle flashes, lightstyle changes) is named with its frames from the trace, replayed at 60 and at 120 frames a second; the candidates (each in a configuration section 2 names, "Configurations a test names", with its scales recorded: A (the default `r_rt_scale`, every effect scale at 1) and A at one other `r_rt_scale` with every effect scale at 1; E (every effect scale at 1/2, `r_rt_scale 1`); H (`r_rt_scale 0.5`, every effect scale at 1/2); and B and D where TASK111 and TASK113, #265 and #267, make them selectable) run at the T2 host's output and are compared with the converged reference at the same output from the same replay; PSNR, SSIM, the perceptual metric if it can be built with the toolchain alone (or its absence stated), still-camera stability and event response, per region (textured surfaces, silhouettes and thin geometry, particles, sprites and beams, water, sky, the view weapon, 2D and the HUD), recorded in this document per option, case and region (they include the cases option A's subsection lists); a quality floor proposed from the distributions and recorded here, which the owner may change on INFORM12; nothing derived from game data is committed; a default that should change is a finding for RT10 |
