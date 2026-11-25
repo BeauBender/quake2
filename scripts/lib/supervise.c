@@ -45,7 +45,8 @@
  * the grace and A the after-kill wait (a byte that comes before its timer
  * is set is kept for it), and P answers "probe" once everything the kernel
  * posted before it has been handled; a probe only observes, so a batch of
- * probes alone does not count the group again. SV_MAXPIDS, the size of the
+ * probes alone does not count the group again. H makes the next listing of
+ * the group say "held" and wait for the byte L. SV_MAXPIDS, the size of the
  * watch table (4096), can be set smaller for a test. Built on first use by
  * scripts/lib/supervise.sh; tested by tests/check-supervise.sh.
  */
@@ -103,6 +104,9 @@ static int sv_clock = -1;
 static int sv_armed[T_COUNT];
 static int sv_pending[T_COUNT];
 static int sv_probes;
+static int sv_holds;
+static void sv_byte(char c);
+static void sv_hold(void);
 #endif
 
 static int
@@ -371,8 +375,15 @@ sv_track(pid_t pid)
  * sv_scan: the members of the group other than the leader that still run,
  * each one watched; names each watched process that runs outside the group.
  * A process whose exit was seen is not counted, even while it is still
- * being torn down. A list that fills the buffer counts one more.
+ * being torn down: it exited before this listing, so what it forked is
+ * listed. A watched process whose exit has not been read is counted even
+ * when it no longer answers, since it may have forked after the listing.
+ * A listed process that could not be watched and does not count is put in
+ * sv_fail. A list that fills the buffer counts one more.
  */
+static pid_t sv_fail[SV_MAXPIDS];
+static int sv_nfail;
+
 static int
 sv_scan(void)
 {
@@ -380,22 +391,36 @@ sv_scan(void)
 	int n, i, k, live = 0;
 	pid_t g;
 
+	sv_nfail = 0;
 	n = proc_listpgrppids(sv_leader, list, (int)sizeof(list));
 	if (n < 0)
 	{
 		return 1;
 	}
+#ifdef SUPERVISE_TEST
+	sv_hold();
+#endif
 	for (i = 0; i < n && i < SV_MAXPIDS; i++)
 	{
-		if (list[i] == sv_leader || list[i] <= 0)
+		pid_t p = list[i];
+
+		if (p == sv_leader || p <= 0)
 		{
 			continue;
 		}
-		sv_track(list[i]);
-		k = sv_index(list[i]);
-		if ((k < 0 || !sv_gone[k]) && sv_alive(list[i], &g) && g == sv_leader)
+		sv_track(p);
+		k = sv_index(p);
+		if (k >= 0 && sv_gone[k])
+		{
+			continue;
+		}
+		if (sv_alive(p, &g) ? g == sv_leader : k >= 0)
 		{
 			live++;
+		}
+		else if (k < 0)
+		{
+			sv_fail[sv_nfail++] = p;
 		}
 	}
 	if (n >= SV_MAXPIDS)
@@ -531,6 +556,67 @@ sv_stop(int sig)
 	sv_arm(T_GRACE);
 }
 
+static void sv_batch(const struct kevent *evs, int n);
+
+/*
+ * sv_count: sv_scan, and once the leader has exited, a count of 0 is taken
+ * only when it holds: every process in sv_fail was also gone at the listing
+ * before (one more listing sees what it forked before it went), and no exit
+ * or fork of a watched member is pending in the kqueue. Else the group is
+ * listed again. The events read here are handled as any batch is.
+ */
+static int
+sv_count(void)
+{
+	static pid_t seen[SV_MAXPIDS];
+	static const struct timespec zero = { 0, 0 };
+	struct kevent evs[64];
+	int nseen = 0, live, i, j, k, more, n;
+
+	for (;;)
+	{
+		live = sv_scan();
+		if (live > 0 || !sv_exited)
+		{
+			return live;
+		}
+		more = 0;
+		for (i = 0; i < sv_nfail; i++)
+		{
+			for (j = 0; j < nseen && seen[j] != sv_fail[i]; j++)
+			{
+			}
+			more |= j == nseen;
+		}
+		memcpy(seen, sv_fail, (size_t)sv_nfail * sizeof(seen[0]));
+		nseen = sv_nfail;
+		n = kevent(sv_kq, NULL, 0, evs, (int)(sizeof(evs) / sizeof(evs[0])), &zero);
+		if (n < 0)
+		{
+			if (errno != EINTR)
+			{
+				/* nothing can be told: count one, and the wait on the kqueue says why */
+				return 1;
+			}
+			n = 0;
+			more = 1;
+		}
+		for (i = 0; i < n; i++)
+		{
+			k = evs[i].filter == EVFILT_PROC ? sv_index((pid_t)evs[i].ident) : -1;
+			more |= k >= 0 && !sv_named[k] && (pid_t)evs[i].ident != sv_leader;
+		}
+		if (n > 0)
+		{
+			sv_batch(evs, n);
+		}
+		if (!more)
+		{
+			return 0;
+		}
+	}
+}
+
 /* sv_step: the state after a batch of events; -1 to go on, else the status */
 static int
 sv_step(void)
@@ -548,7 +634,7 @@ sv_step(void)
 	{
 		return -1;
 	}
-	live = sv_scan();
+	live = sv_count();
 	if (sv_exited && live == 0)
 	{
 		return sv_finish();
@@ -567,7 +653,7 @@ sv_step(void)
 	}
 	if (sv_phase == PH_AFTER && sv_fired[T_AFTER])
 	{
-		live = sv_scan();
+		live = sv_count();
 		if (live == 0 && sv_exited)
 		{
 			return sv_finish();
@@ -609,24 +695,67 @@ sv_tick(void)
 	}
 	for (i = 0; i < n; i++)
 	{
-		int t = buf[i] == 'D' ? T_DEADLINE : buf[i] == 'G' ? T_GRACE : buf[i] == 'A' ? T_AFTER : -1;
+		sv_byte(buf[i]);
+	}
+}
 
-		if (buf[i] == 'P')
+/* sv_byte: one byte of the test clock */
+static void
+sv_byte(char c)
+{
+	int t = c == 'D' ? T_DEADLINE : c == 'G' ? T_GRACE : c == 'A' ? T_AFTER : -1;
+
+	if (c == 'P')
+	{
+		/* a probe only observes: it wakes nothing */
+		sv_probes++;
+		return;
+	}
+	sv_woke = 1;
+	if (c == 'H')
+	{
+		sv_holds++;
+	}
+	else if (t >= 0 && sv_armed[t])
+	{
+		sv_armed[t] = 0;
+		sv_fired[t] = 1;
+	}
+	else if (t >= 0)
+	{
+		sv_pending[t]++;
+	}
+}
+
+/*
+ * sv_hold: after an H, the next listing of the group says "held" and waits
+ * for the byte L, so a test can change the group between the listing and
+ * the count; the other bytes that come first are taken as they come
+ */
+static void
+sv_hold(void)
+{
+	char c;
+	ssize_t n;
+
+	if (sv_holds == 0 || sv_clock < 0)
+	{
+		return;
+	}
+	sv_holds--;
+	sv_emit("held");
+	for (;;)
+	{
+		n = read(sv_clock, &c, 1);
+		if (n < 0 && errno == EINTR)
 		{
-			/* a probe only observes: it wakes nothing */
-			sv_probes++;
 			continue;
 		}
-		sv_woke = 1;
-		if (t >= 0 && sv_armed[t])
+		if (n <= 0 || c == 'L')
 		{
-			sv_armed[t] = 0;
-			sv_fired[t] = 1;
+			return;
 		}
-		else if (t >= 0)
-		{
-			sv_pending[t]++;
-		}
+		sv_byte(c);
 	}
 }
 #endif

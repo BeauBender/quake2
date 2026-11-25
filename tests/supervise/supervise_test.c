@@ -1015,6 +1015,86 @@ c_cap(struct run *r)
 	return want_status(r, 0);
 }
 
+/*
+ * a member whose TERM trap starts a background child and exits, between a
+ * listing of the group and the count (the listing is held by the test
+ * clock's H and L): the stop waits for that child, KILLs it after the
+ * grace, and ends with nothing of the group left
+ */
+static int
+c_term_trap(struct run *r)
+{
+	const char *opts[] = { "--timeout", "100", NULL };
+	struct chan *l, *m, *c;
+	const char *a;
+
+	if (start(r, "exec", opts, NULL, NULL) || (l = leader(r)) == NULL || (m = fork_fake(r, l, "member")) == NULL)
+	{
+		return 1;
+	}
+	if ((a = ask(m, "ignore-term")) == NULL || strcmp(a, "ok") != 0)
+	{
+		return fail(r, "ignore-term answered %s", a != NULL ? a : "nothing");
+	}
+	tick(r, 'D');
+	if (ev_wait(r, "term-sent") == NULL || ev_wait(r, "exited") == NULL)
+	{
+		return fail(r, "no term-sent and exited events: %s", r->log);
+	}
+	if (expect_line(r, l, "sig=TERM", "the leader") || expect_gone(r, l, "the leader") ||
+		expect_line(r, m, "sig=TERM ignored", "the member"))
+	{
+		return 1;
+	}
+	/* the trap, while the supervisor holds a listing that has the member and not its child */
+	tick(r, 'H');
+	if (ev_wait(r, "held") == NULL)
+	{
+		return fail(r, "no held event: %s", r->log);
+	}
+	if ((c = fork_fake(r, m, "cleanup")) == NULL)
+	{
+		return 1;
+	}
+	send_line(m, "exit 0\n");
+	if (expect_gone(r, m, "the member"))
+	{
+		return 1;
+	}
+	tick(r, 'L');
+	if (!probe(r) || at(r, "group-empty") >= 0)
+	{
+		return fail(r, "group-empty came while the trap's child ran (events: %s)", r->log);
+	}
+	if ((a = ask(c, "ping")) == NULL || strcmp(a, "alive") != 0)
+	{
+		return fail(r, "the trap's child said %s, want alive", a != NULL ? a : "nothing");
+	}
+	tick(r, 'G');
+	if (ev_wait(r, "kill-sent") == NULL)
+	{
+		return fail(r, "no kill-sent event: %s", r->log);
+	}
+	if (expect_gone(r, c, "the trap's child"))
+	{
+		return 1;
+	}
+	if (ev_wait(r, "group-empty") == NULL || ev_wait(r, "reaped") == NULL)
+	{
+		return fail(r, "no group-empty and reaped events: %s", r->log);
+	}
+	finish(r);
+	if (want_status(r, 124))
+	{
+		return 1;
+	}
+	if (kill(-r->pgid, 0) == 0 || (errno != ESRCH && errno != EPERM))
+	{
+		return fail(r, "something of the group %d is left", (int)r->pgid);
+	}
+	return 0;
+}
+
 static int
 c_closed_std(struct run *r)
 {
@@ -1124,6 +1204,7 @@ static const struct
 	{ "leader-first", c_leader_first, 0 },
 	{ "escaped", c_escaped, 1 },
 	{ "cap", c_cap, 1 },
+	{ "term-trap", c_term_trap, 1 },
 	{ "closed-std", c_closed_std, 0 },
 	{ "stuck", c_stuck, 1 },
 	{ "stderr", c_stderr, 0 },

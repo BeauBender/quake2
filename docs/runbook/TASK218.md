@@ -50,9 +50,10 @@ The events are one line each:
   - `EVFILT_TIMER` for the deadline, the grace and the after-kill wait.
   - `EVFILT_SIGNAL` for INT, TERM and HUP, which `sigprocmask` blocks.
 - **Reap.** At the leader's `NOTE_EXIT`, `waitid(P_PID, leader, WEXITED | WNOWAIT)` reads its status
-  and leaves it a zombie. The group is counted with `proc_listpgrppids`: a member counts while
-  `proc_pidinfo` answers for it, in the group, and no exit has been seen for it. Only at zero is the
-  leader reaped. While a member lives, neither the leader's pid nor the group's id can go to
+  and leaves it a zombie. The group is counted with `proc_listpgrppids`: a listed member counts
+  while no exit has been read for it and `proc_pidinfo` finds it in the group, or, when it is
+  watched, until its exit is read. Only at a zero that holds (see the stated limits) is the leader
+  reaped. While a member lives, neither the leader's pid nor the group's id can go to
   another process.
 - **The watch table.** It holds 4096 processes. A member leaves it when its exit is read and it is
   torn down, and a full table is compacted before a new member is refused, so a long run does not
@@ -74,8 +75,16 @@ The events are one line each:
 - A signal ignored when the supervisor starts (for example SIGINT under a background job, as the
   merge gate starts the gate) stays ignored: it is named (`ignored name=INT`) and not forwarded.
   The command still gets every signal at its default.
-- A watch set on a process in the instant it exits may never fire. The stop's timers rescan the
-  group, so in that case the stop takes longer; it never ends early.
+- A count of zero is taken only once it holds. A watched member counts until its exit is read,
+  even when it no longer answers, because it may have forked after the listing. A listed process
+  that was already gone before its watch could be set is followed by one more listing, which sees
+  what it forked. Pending exit and fork events are read before the leader is reaped. So a member
+  whose TERM trap starts a background child and exits does not end the stop early; the stop waits
+  for the child. Apart from the processes that escape before they are seen (above), the stop does
+  not end early.
+- A member that cannot be watched, because the table is full of processes that still run, wakes
+  nothing when it exits. It is still counted, so the stop waits for its next timer instead of
+  ending at that exit.
 - A group stopped by job control (SIGTTIN, SIGTTOU) is not detected. The deadline's TERM and CONT
   still end it.
 
@@ -102,7 +111,9 @@ No case waits on time. Each waits on one of three things:
 A timeout is a byte on the test clock (`SUPERVISE_TEST_CLOCK_FD`). The runner writes it only when
 the supervisor cannot go on without it. The byte `P` is a barrier: its `probe` event comes once the
 supervisor has handled every kernel event posted before it. A probe only observes: a batch that
-holds nothing but probes does not count the group again. The supervisor handles signals before
+holds nothing but probes does not count the group again. The byte `H` makes the next listing of
+the group say `held` and wait for the byte `L`, so a case can change the group between a listing
+and its count without waiting on time. The supervisor handles signals before
 the clock in each batch. A last step greps the test files and the check for a sleep or `ps`.
 
 | Case | What it shows |
@@ -114,6 +125,7 @@ the clock in each batch. A last step greps the test files and the check for a sl
 | `int-ignored` | `(trap '' INT; exec ...) & wait`: INT is named as ignored, the command has INT at its default, and the deadline (the TERM without the clock) still stops it |
 | `leader-first` | the leader exits with 5 while a member lives: the member gets TERM, `group-empty` comes before `reaped`, and the member is dead when `reaped` is read |
 | `escaped` | a `setsid` member is named before `group-empty`, gets no signal, and still answers |
+| `term-trap` | a member that survives the TERM forks a child and exits while a listing is held (`H`, `L`): no `group-empty` while the child runs; the child is KILLed after the grace; 124 and nothing left |
 | `cap` | 12 short-lived members, then a member the leader's exit stops: with a watch table of 8, the stop still ends at that member's exit (`term-sent`, then `group-empty`), not at the grace |
 | `closed-std` | standard input, output and error closed: status 7, and the command sees all three open |
 | `stuck` | under `sandbox-exec` with `(deny signal)`, nothing can be signalled: `group-left` and 126 |
