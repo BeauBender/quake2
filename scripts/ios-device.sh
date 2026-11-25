@@ -98,7 +98,7 @@ usage()
 # bench_stop_group run a command in its own process group and stop that
 # whole group, by the identity recorded when it started. The command bounded
 # runs is BENCH_BOUNDED_PID while it runs: the timeout and the EXIT, INT,
-# TERM and QUIT handling end it, so the script never leaves it running.
+# TERM, QUIT and HUP handling end it, so the script never leaves it running.
 [ -r "$repo/scripts/bench/core/common.sh" ] || die "no bounded-run primitive at scripts/bench/core/common.sh"
 . "$repo/scripts/bench/core/common.sh"
 exec 8>&-
@@ -136,12 +136,12 @@ bounded()
 	return $status
 }
 
-# on_signal <status>: the INT, TERM and QUIT trap: the running command's
-# group is ended first (grace 2 s), then the script exits <status>
+# on_signal <status>: the INT, TERM, QUIT and HUP trap: the running
+# command's group is ended first (grace 2 s), then the script exits <status>
 on_signal()
 {
 	if bench_deferred "$1"; then return 0; fi
-	trap '' INT TERM QUIT
+	trap '' INT TERM QUIT HUP
 	stop_child 2
 	exit "$1"
 }
@@ -225,6 +225,8 @@ done
 [ "$(stat -f %Lp "$(dirname "$out")")" = 700 ] || { echo "fake security: $(dirname "$out") is readable by others" >&2; exit 1; }
 tail -n +2 "$in" > "$out"
 [ "$FAKE_SCENARIO" = cmsfail ] && { echo "security: the signer is not trusted" >&2; exit 1; }
+# a staged case: the record of the next command's spawn lingers (FIX192)
+[ -z "${FAKE_STAGE_SPAWN:-}" ] || : > "$FAKE_STATE/stage-pgid"
 exit 0
 EOF
 	cat > "${sroot:?}/bin/codesign" <<'EOF'
@@ -341,6 +343,29 @@ EOF
 	mkdir -p "$sroot/repo/scripts/bench/core" "$sroot/repo/build/ios-iphoneos/release" || die "cannot create the scratch repository"
 	cp "$self" "$sroot/repo/scripts/ios-device.sh" && cp "$repo/scripts/bench/core/common.sh" "$sroot/repo/scripts/bench/core/common.sh" && cp -R "$sroot/signed.app" "$sroot/repo/build/ios-iphoneos/release/Quake2.app" \
 		|| die "cannot fill the scratch repository"
+	# a second copy whose primitive is staged (FIX192): its ps read, once
+	# FAKE_STATE/stage-<field> exists (stat: a poll of the watch; pgid: the
+	# record of a spawn), closes its output once ps has answered and
+	# lingers, INT ignored, until FAKE_STATE/sent exists (10 s at most),
+	# once: the window in which bash 3.2 drops an INT (between the end of a
+	# command substitution's output and its reap), or a HUP comes before
+	# the command's pid is stored, opened at will
+	local stage_old stage_new stage_s stage_c
+	stage_old='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null) || return 1'
+	stage_new='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null; _st=$?; exec >&-; if rm "${FAKE_STATE:-/nonexistent}/stage-${2:-stat}" 2> /dev/null; then trap "" INT; : > "$FAKE_STATE/at-ps"; _n=0; while [ ! -e "$FAKE_STATE/sent" ] && [ "$_n" -lt 100 ]; do sleep 0.1; _n=$((_n + 1)); done; fi; exit "$_st") || return 1'
+	stage_s=$(cat "$repo/scripts/bench/core/common.sh") || die "cannot read the primitive"
+	case $stage_s in
+	*"$stage_old"*"$stage_old"*) die "the stage anchor is in the primitive twice" ;;
+	*"$stage_old"*) ;;
+	*) die "the stage anchor is not in the primitive" ;;
+	esac
+	# the replacement quoted, so that bash 5.2 (patsub_replacement) does not
+	# read its & as the match; in an assignment, where bash 3.2 drops the
+	# quotes too
+	stage_c=${stage_s/"$stage_old"/"$stage_new"}
+	mkdir -p "$sroot/stagerepo/scripts/bench/core" || die "cannot create the staged repository"
+	cp "$self" "$sroot/stagerepo/scripts/ios-device.sh" && printf '%s\n' "$stage_c" > "$sroot/stagerepo/scripts/bench/core/common.sh" \
+		|| die "cannot fill the staged repository"
 	# the scratch root as the script sees it (pwd -P); no message names it
 	sroot_p=$(cd "$sroot" && pwd -P) || die "cannot resolve the scratch root"
 
@@ -359,7 +384,7 @@ EOF
 		local name=$1 want=$2 text=$3 sc=$4 app=$5 d rc=0 why= a t0 script=$self
 		local -a envs=() args=() appenv=()
 		shift 5
-		while [ $# -gt 0 ] && [ "$1" != -- ]; do envs+=("${1//@P@/$p}"); shift; done
+		while [ $# -gt 0 ] && [ "$1" != -- ]; do a=${1//@P@/"$p"}; envs+=("$a"); shift; done
 		[ $# -gt 0 ] && shift
 		ncase=$((ncase + 1))
 		d=$sroot/case/$name
@@ -368,7 +393,7 @@ EOF
 		if [ "$app" != - ]; then
 			cp -R "$sroot/$app" "${d:?}/Quake2.app" || die "cannot copy $app"
 		fi
-		for a in "$@"; do a=${a//@APP@/$d/Quake2.app}; args+=("${a//@P@/$p}"); done
+		for a in "$@"; do a=${a//@APP@/"$d/Quake2.app"}; a=${a//@P@/"$p"}; args+=("$a"); done
 		if [ -n "${dt_default:-}" ]; then
 			script=$sroot/repo/scripts/ios-device.sh
 		else
@@ -430,12 +455,16 @@ EOF
 	# HUP, which the exit cleanup handles) within 10 s; the fake's recorded
 	# PID is gone; no scratch file is left; an interrupted sign leaves no
 	# profile and no signature in the bundle, an interrupted install or
-	# launch leaves the signed bundle as it was
+	# launch leaves the signed bundle as it was. With dt_stage, the staged
+	# copy runs (FIX192), and the signal comes inside the staged window:
+	# "stat", once the step hangs, the watch's next ps read lingers; "pgid",
+	# the record of the spawn after the fake security's lingers
 	command -v perl > /dev/null 2>&1 || die "perl not found: the selftest's interrupt cases need it"
 	dt_signal()
 	{
-		local name=$1 sig=$2 sc=$3 app=$4 d why= a hp rc want=1
-		local -a args=()
+		local name=$1 sig=$2 sc=$3 app=$4 d why= a hp rc want=1 left script=$self stage=${dt_stage:-}
+		local -a args=() stagenv=()
+		dt_stage=
 		shift 4
 		[ "${1:-}" = -- ] && shift
 		ncase=$((ncase + 1))
@@ -444,7 +473,11 @@ EOF
 		mkdir -p "${d:?}/state" "${d:?}/tmp" || die "cannot create $d"
 		: > "${d:?}/state/calls"
 		cp -R "$sroot/$app" "${d:?}/Quake2.app" || die "cannot copy $app"
-		for a in "$@"; do a=${a//@APP@/$d/Quake2.app}; args+=("${a//@P@/$p}"); done
+		for a in "$@"; do a=${a//@APP@/"$d/Quake2.app"}; a=${a//@P@/"$p"}; args+=("$a"); done
+		if [ -n "$stage" ]; then
+			script=$sroot/stagerepo/scripts/ios-device.sh
+			[ "$stage" = pgid ] && stagenv=(FAKE_STAGE_SPAWN=1)
+		fi
 		# a foreground subshell: the script inherits this shell's INT, and
 		# set -m starts it in its own process group
 		(
@@ -452,15 +485,21 @@ EOF
 			perl -e '$SIG{INT} = $SIG{QUIT} = "DEFAULT"; exec { $ARGV[0] } @ARGV or exit 127' \
 				env -u IOS_SIGN_IDENTITY -u IOS_PROFILE -u IOS_DEVICE -u IOS_BUNDLE_ID -u IOS_APP \
 				PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" TMPDIR="$d/tmp" HOME="$d" \
-				IOS_APP="$d/Quake2.app" bash "$self" "${args[@]}" > "$d/out" 2>&1 &
+				IOS_APP="$d/Quake2.app" ${stagenv[@]+"${stagenv[@]}"} bash "$script" "${args[@]}" > "$d/out" 2>&1 &
 			spid=$!
 			n=0
 			while [ ! -s "$d/state/hang.pid" ] && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
+			if [ -n "$stage" ]; then
+				[ "$stage" = stat ] && : > "$d/state/stage-stat"
+				n=0
+				while [ ! -e "$d/state/at-ps" ] && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
+			fi
 			if [ "$sig" = INT ]; then
 				kill -INT -- "-$spid" # bounded-run: allowed: selftest: sends INT under test to the group of the script
 			else
 				kill -"$sig" "$spid" # bounded-run: allowed: selftest: sends the signal under test
 			fi
+			: > "$d/state/sent"
 			n=0
 			while kill -0 "$spid" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done # bounded-run: allowed: selftest: waits for the script under test
 			if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal
@@ -474,13 +513,21 @@ EOF
 		) > "${d:?}/rc" 2> "${d:?}/launcher.err"
 		rc=$(cat "${d:?}/rc")
 		hp=$(cat "${d:?}/state/hang.pid" 2>/dev/null) || hp=
+		# a hung script, killed above, leaves the fake running: the verdict
+		# names the hang first, so it is not read as a stop that missed (FIX192)
+		left=
+		if [ -n "$hp" ] && kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: the fake hanging step outlived the script
+			left=1
+			kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hanging step
+		fi
 		if [ -z "$hp" ]; then
 			why="the fake never started its hanging step"
-		elif kill -0 "$hp" 2>/dev/null; then # bounded-run: allowed: selftest: the fake hanging step outlived the script
-			why="the fake (PID $hp) still runs after the script exited"
-			kill -9 "$hp" 2>/dev/null # bounded-run: allowed: selftest: ends the fake hanging step
+		elif [ -n "$stage" ] && [ ! -e "$d/state/at-ps" ]; then
+			why="the staged window did not open"
 		elif [ "$rc" = hung ]; then
-			why="it outlived 10 s after the $sig"
+			why="it outlived 10 s after the $sig${left:+, and so did the fake (PID $hp)}"
+		elif [ -n "$left" ]; then
+			why="the fake (PID $hp) still runs after the script exited"
 		elif [ "$rc" != "$want" ]; then
 			why="it exited $rc, not $want"
 		elif [ -n "$(ls -A "${d:?}/tmp")" ]; then
@@ -587,6 +634,12 @@ codesign|--verify|--strict|@APP@|"
 	dt_signal sign-quit-hang QUIT signhang device.app -- sign --identity "$who" --profile @P@/good
 	dt_signal sign-hup-hang HUP signhang device.app -- sign --identity "$who" --profile @P@/good
 	dt_signal install-int-hang INT devhang signed.app -- install --device "$dev"
+	# the same, the signal inside a window the staged primitive opens
+	# (FIX192): an INT between the end of the watch's ps read and its reap,
+	# which bash 3.2 drops; a HUP before the command's pid is stored
+	dt_stage=stat dt_signal sign-int-window INT signhang device.app -- sign --identity "$who" --profile @P@/good
+	dt_stage=stat dt_signal install-int-window INT devhang signed.app -- install --device "$dev"
+	dt_stage=pgid dt_signal sign-hup-spawn HUP signhang device.app -- sign --identity "$who" --profile @P@/good
 	dt_signal launch-term-hang TERM devhang signed.app -- launch --device "$dev"
 	# install and launch
 	dt_case install-no-device 2 "usage: scripts/ios-device.sh install" "" signed.app -- install
@@ -693,7 +746,7 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/ios-device.XXXXXX") || die "no scratch director
 chmod 700 "${tmp:?}" || die "cannot make the scratch directory private"
 # on any exit: the running command ended first, then a sign that did not
 # finish undone, then the scratch directory removed; INT, TERM and QUIT
-# exit 1 (bash runs no EXIT trap for an untrapped QUIT)
+# exit 1 (bash runs no EXIT trap for an untrapped QUIT), HUP 129
 unsign=
 cleanup()
 {
@@ -706,6 +759,10 @@ cleanup()
 }
 trap cleanup EXIT
 trap 'on_signal 1' INT TERM QUIT
+# HUP is trapped too, so one that comes while a command starts is kept for
+# bench_undefer, which stops it (FIX192); it exits 129, as an untrapped HUP
+# did through the EXIT cleanup
+trap 'on_signal 129' HUP
 
 if [ "$mode" = sign ]; then
 	plat=$(plutil -extract CFBundleSupportedPlatforms.0 raw -o - "$app/Info.plist" 2>/dev/null) || plat=

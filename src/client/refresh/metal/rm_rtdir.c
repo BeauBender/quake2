@@ -461,17 +461,300 @@ rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long samples,
 	return (e > RM_RTDIR_FIT_MAX) ? RM_RTDIR_FIT_MAX : (float)e;
 }
 
-float
-rm_rtdir_fit_lag(const rm_rtdir_stats_t *lagged, unsigned long frame, unsigned long reset, float prev)
+int
+rm_rtdir_fit_enters(const float *lm)
 {
-	/* only the frame exactly the lag behind, of this map: a slot whose last frame did not trace holds an older one */
-	if (!lagged || (frame <= RM_RTDIR_FIT_LAG) || (lagged->frame != frame - RM_RTDIR_FIT_LAG) ||
-		(lagged->frame <= reset))
+	float most = 0.0f;
+	int k;
+
+	for (k = 0; k < 3; k++)
 	{
-		return prev;
+		if (!isfinite(lm[k]) || (lm[k] >= RM_RTDIR_FIT_CLIP))
+		{
+			return 0;
+		}
+
+		most = (lm[k] > most) ? lm[k] : most;
 	}
 
-	return rm_rtdir_fit(lagged->fit_lm, lagged->fit_raw, lagged->fit_n, prev);
+	return most >= RM_RTDIR_FIT_DARK;
+}
+
+void
+rm_rtdir_fit_light(const rm_rtdir_light_t *l, long n, const float *p, const float *nrm, rm_rtdir_clear_fn clear,
+		void *ctx, float *out, unsigned long *rays)
+{
+	mtl_rtdir_keep_t k;
+	float o[3];
+	unsigned seen = 0, j;
+	long i;
+	int c;
+
+	out[0] = out[1] = out[2] = 0.0f;
+	k.n = 0;
+	k.capped = 0;
+
+	for (c = 0; c < 3; c++)
+	{
+		o[c] = p[c] + nrm[c] * RM_RTDIR_FIT_BIAS;
+	}
+
+	/* the kernel's first loop: the candidates among the lights in range and facing */
+	for (i = 0; l && (i < n); i++)
+	{
+		const float dv[3] = { l[i].pos[0] - p[0], l[i].pos[1] - p[1], l[i].pos[2] - p[2] };
+		const float dist = sqrtf(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
+		float s, nl = 0.0f, sd = 0.0f;
+
+		if (!mtl_rtdir_reach(l[i].pos[3], dist, l[i].spot[3]))
+		{
+			continue;
+		}
+
+		for (c = 0; c < 3; c++)
+		{
+			nl += nrm[c] * dv[c] / dist;
+			sd -= dv[c] / dist * l[i].spot[c];
+		}
+
+		s = mtl_rtdir_contrib(l[i].pos[3], dist, nl, sd, l[i].spot[3]);
+
+		if (s > 0.0f)
+		{
+			k = mtl_rtdir_keep(k, (unsigned)i, s);
+		}
+	}
+
+	k = mtl_rtdir_keep_rank(k);
+
+	/* its second: strongest first, one line each, until MTL_RTDIR_MAX_TRACED clear */
+	for (j = 0; mtl_rtdir_walk(j, k.n, seen); j++)
+	{
+		const rm_rtdir_light_t *li = &l[k.i[j]];
+		const float to[3] = { li->pos[0] - o[0], li->pos[1] - o[1], li->pos[2] - o[2] };
+		const float len = sqrtf(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
+		float end[3];
+
+		for (c = 0; c < 3; c++)
+		{
+			end[c] = (len > 0.0f) ? o[c] + to[c] * ((len - 1.0f) / len) : o[c];
+		}
+
+		if (rays)
+		{
+			(*rays)++;
+		}
+
+		if ((len > 1.0f) && !clear(ctx, o, end))
+		{
+			continue;
+		}
+
+		seen++;
+
+		for (c = 0; c < 3; c++)
+		{
+			out[c] += k.s[j] * li->color[c];
+		}
+	}
+}
+
+float
+rm_rtdir_fit_map(const rm_rtdir_light_t *l, long n, const rm_rtdir_fitpt_t *pts, long npts, rm_rtdir_clear_fn clear,
+		void *ctx, rm_rtdir_mapfit_t *out)
+{
+	rm_rtdir_mapfit_t f;
+	long i;
+
+	memset(&f, 0, sizeof(f));
+
+	for (i = 0; pts && clear && (i < npts); i++)
+	{
+		const float *lm = pts[i].lm;
+		float raw[3];
+
+		if (!rm_rtdir_fit_enters(lm))
+		{
+			int clipped = 0, c;
+
+			for (c = 0; c < 3; c++)
+			{
+				clipped |= isfinite(lm[c]) && (lm[c] >= RM_RTDIR_FIT_CLIP);
+			}
+
+			if (clipped)
+			{
+				f.clipped++;
+			}
+			else
+			{
+				f.dark++;
+			}
+
+			continue;
+		}
+
+		rm_rtdir_fit_light(l, n, pts[i].pos, pts[i].normal, clear, ctx, raw, &f.rays);
+		f.lm += mtl_rtdir_q(lm[0] * MTL_RTDIR_UNIT, lm[1] * MTL_RTDIR_UNIT, lm[2] * MTL_RTDIR_UNIT);
+		f.raw += mtl_rtdir_q(raw[0] * MTL_RTDIR_UNIT, raw[1] * MTL_RTDIR_UNIT, raw[2] * MTL_RTDIR_UNIT);
+		f.n++;
+	}
+
+	f.exposure = rm_rtdir_fit(f.lm, f.raw, f.n, 1.0f);
+
+	if (out)
+	{
+		*out = f;
+	}
+
+	return f.exposure;
+}
+
+void
+rm_rtdir_fit_luxel(const unsigned char *samples, int nummaps, int smax, int tmax, float s, float t, float *out)
+{
+	const float half = 0.5f;
+	int i = 0, j = 0, m, c;
+
+	out[0] = out[1] = out[2] = 0.0f;
+
+	if (!samples || (nummaps < 1) || (smax < 1) || (tmax < 1))
+	{
+		return;
+	}
+
+	/* the nearest luxel, held to the face; a coordinate that is not a number reads luxel 0 */
+	if (s + half > 0.0f)
+	{
+		i = (s + half < (float)smax) ? (int)(s + half) : smax - 1;
+	}
+
+	if (t + half > 0.0f)
+	{
+		j = (t + half < (float)tmax) ? (int)(t + half) : tmax - 1;
+	}
+
+	for (m = 0; m < nummaps; m++)
+	{
+		const unsigned char *x = samples + ((size_t)m * smax * tmax + (size_t)j * smax + i) * 3;
+
+		for (c = 0; c < 3; c++)
+		{
+			out[c] += x[c];
+		}
+	}
+}
+
+void
+rm_rtdir_fit_st(const float *pos, const float vecs[2][4], const short *texturemins, float *st)
+{
+	int a;
+
+	for (a = 0; a < 2; a++)
+	{
+		st[a] = (pos[0] * vecs[a][0] + pos[1] * vecs[a][1] + pos[2] * vecs[a][2] + vecs[a][3] - texturemins[a]) / 16.0f;
+	}
+}
+
+int
+rm_rtdir_fit_face_ok(int flags, int has_samples)
+{
+	return has_samples &&
+		!(flags & (RM_RTDIR_SURF_LIGHT | RM_RTDIR_SURF_TRANS33 | RM_RTDIR_SURF_TRANS66 | RM_RTDIR_SURF_SKY | RM_RTDIR_SURF_WARP));
+}
+
+long
+rm_rtdir_fit_every(long total, long cap)
+{
+	if ((total <= cap) || (cap < 1))
+	{
+		return 1;
+	}
+
+	return 1 + (total - 1) / cap;
+}
+
+/* rm_rtdir_tree_clear's walk of the tree under node, depth levels down */
+static int
+rm_rtdir_clear_node(rm_rtdir_tree_t *t, const void *node, const float *a, const float *b, int depth)
+{
+	rm_rtdir_node_t nd;
+	float front, back, frac, mid[3];
+	int side, k;
+
+	if (!node || (depth > RM_RTDIR_FIT_DEPTH))
+	{
+		return 0;
+	}
+
+	if (t->visits >= t->cap)
+	{
+		t->over = 1;
+		return 0;
+	}
+
+	t->visits++;
+	t->read(node, &nd);
+
+	if (nd.leaf)
+	{
+		return !(nd.contents & RM_RTDIR_CONTENTS_SOLID);
+	}
+
+	front = a[0] * nd.normal[0] + a[1] * nd.normal[1] + a[2] * nd.normal[2] - nd.dist;
+	back = b[0] * nd.normal[0] + b[1] * nd.normal[1] + b[2] * nd.normal[2] - nd.dist;
+	side = front < 0;
+
+	if ((back < 0) == side)
+	{
+		return rm_rtdir_clear_node(t, nd.child[side], a, b, depth + 1);
+	}
+
+	frac = front / (front - back);
+
+	for (k = 0; k < 3; k++)
+	{
+		mid[k] = a[k] + (b[k] - a[k]) * frac;
+	}
+
+	return rm_rtdir_clear_node(t, nd.child[side], a, mid, depth + 1) &&
+		rm_rtdir_clear_node(t, nd.child[!side], mid, b, depth + 1);
+}
+
+int
+rm_rtdir_tree_clear(void *ctx, const float *a, const float *b)
+{
+	rm_rtdir_tree_t *t = ctx;
+
+	if (!t || !t->read || t->over)
+	{
+		return 0;
+	}
+
+	return rm_rtdir_clear_node(t, t->root, a, b, 0);
+}
+
+float
+rm_rtdir_fit_tree(const rm_rtdir_light_t *l, long n, const rm_rtdir_fitpt_t *pts, long npts, rm_rtdir_tree_t *tree,
+		rm_rtdir_mapfit_t *out)
+{
+	rm_rtdir_mapfit_t f;
+
+	f.exposure = rm_rtdir_fit_map(l, n, pts, npts, tree ? rm_rtdir_tree_clear : NULL, tree, &f);
+	f.visits = tree ? tree->visits : 0;
+	f.over = tree && tree->over;
+
+	if (f.over)
+	{
+		f.exposure = 1.0f;
+	}
+
+	if (out)
+	{
+		*out = f;
+	}
+
+	return f.exposure;
 }
 
 float
@@ -516,6 +799,47 @@ rm_rtdir_view(const float *proj, const float *world, const rm_viewport_t *vp, co
 	return 1;
 }
 
+float
+rm_rtdir_sky_scale(float v)
+{
+	if (!isfinite(v) || !(v > 0))
+	{
+		return 0;
+	}
+
+	return (v < MTL_RTSKY_SCALE_MAX) ? v : MTL_RTSKY_SCALE_MAX;
+}
+
+/* a channel of a term's colour: 0 for a value that is not finite or below 0 */
+static float
+rtdir_channel(float c)
+{
+	return (isfinite(c) && (c > 0)) ? c : 0;
+}
+
+void
+rm_rtdir_view_open(rm_rtdir_view_t *v, const float *sky, float sky_scale, const float *sun_dir, const float *sun,
+		unsigned frame)
+{
+	const float k = rm_rtdir_sky_scale(sky_scale);
+	int i, dir_ok = sun_dir != NULL;
+
+	for (i = 0; dir_ok && (i < 3); i++)
+	{
+		dir_ok = isfinite(sun_dir[i]);
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		v->sky[i] = sky ? rtdir_channel(rtdir_channel(sky[i]) * k) : 0;
+		v->sun[i] = (sun && dir_ok) ? rtdir_channel(sun[i]) : 0;
+		v->sun_dir[i] = dir_ok ? sun_dir[i] : 0;
+	}
+
+	v->sky[3] = v->sun[3] = v->sun_dir[3] = 0;
+	v->frame = frame;
+}
+
 /* snprintf into buf: 1 when it fits, else 0 with buf empty */
 static int
 rtdir_put(int n, char *buf, size_t len)
@@ -554,6 +878,19 @@ rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *b
 			s->inrange, s->rays, s->world ? (double)s->rays / (double)s->world : 0.0, s->lit, s->capped,
 			MTL_RTDIR_MAX_RAYS, MTL_RTDIR_MAX_TRACED, s->fit_lm, s->fit_raw, s->fit_n, (double)s->exposure,
 			fixed ? "r_rt_direct_exposure" : "fit", ms), buf, len);
+}
+
+int
+rm_rtdir_open_format(const rm_rtdir_stats_t *s, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	return rtdir_put(snprintf(buf, len, "ref_metal: rt direct sky: frame %lu: %lu world, %lu sky rays (%lu reached the sky), "
+			"%lu sun rays (%lu lit), at most %d rays a pixel", s->frame, s->world, s->sky_rays, s->sky_hits, s->sun_rays,
+			s->sun_lit, (int)MTL_RTSKY_PIXEL_RAYS), buf, len);
 }
 
 int

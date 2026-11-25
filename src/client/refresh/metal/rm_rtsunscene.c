@@ -113,14 +113,14 @@ RM_RTSun_Shutdown(void)
 	sun_opened = sun_active = sun_viewed = 0;
 }
 
-/* the direction this frame: the map's line of the table, else r_rt_sun_angles, else the default */
+/* the direction of the map whose line of the table is entry (NULL: none): that line, else r_rt_sun_angles, else the default */
 static void
-RM_RTSun_Angles(float *pitch, float *yaw)
+RM_RTSun_AnglesOf(const rm_rtsun_entry_t *entry, float *pitch, float *yaw)
 {
-	if (sun_entry)
+	if (entry)
 	{
-		*pitch = sun_entry->pitch;
-		*yaw = sun_entry->yaw;
+		*pitch = entry->pitch;
+		*yaw = entry->yaw;
 		return;
 	}
 
@@ -139,6 +139,13 @@ RM_RTSun_Angles(float *pitch, float *yaw)
 
 	*pitch = RM_RTSUN_PITCH;
 	*yaw = RM_RTSUN_YAW;
+}
+
+/* the direction this frame: the measured map's line of the table, else r_rt_sun_angles, else the default */
+static void
+RM_RTSun_Angles(float *pitch, float *yaw)
+{
+	RM_RTSun_AnglesOf(sun_entry, pitch, yaw);
 }
 
 /* the map's sky share and its line of the table, once a map */
@@ -320,4 +327,29 @@ RM_RTSun_View(const rm_view_t *view)
 	rmb_rtsun_set_view(&v);
 	rmb_rtsun_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (unsigned long)h);
 	sun_viewed = 1;
+}
+
+void
+RM_RTSun_Primary(float *dir, float *sun)
+{
+	const rm_rtsun_entry_t *entry = NULL;
+	char key[RM_RTSUN_MAPNAME + 1];
+	float pitch, yaw, sky[3], means[6][3];
+	int have[6], i;
+
+	/* the map in use's line of the table, looked up here: sun_entry is the one RT2 measured, while r_rt_sun ran */
+	if (r_worldmodel && rm_rtsun_map_key(r_worldmodel->name, key, sizeof(key)))
+	{
+		entry = rm_rtsun_table_find(sun_table, sun_ntable, key);
+	}
+
+	RM_RTSun_AnglesOf(entry, &pitch, &yaw);
+	rm_rtsun_dir(pitch, yaw, dir);
+	RM_SkyMeans(means, have);
+	rm_rtsun_sky_color((const float (*)[3])means, have, sky);
+
+	for (i = 0; i < 3; i++)
+	{
+		sun[i] = sky[i] * rm_rtsun_scale(RM_Effect(r_rt_sunscale));
+	}
 }

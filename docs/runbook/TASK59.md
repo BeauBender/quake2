@@ -390,26 +390,26 @@ all three effects on, each at `r_rt_temporal 0.9` (run twice), at the default (n
 the 0.9 run, of slice 1b's 0.9 run and of the run at 0 are for the owner and are kept outside
 the repository.
 
-Results of the hold (code commit `@HEAD@`, base main at `@BASE@`, slice 1b at `@S1B@`):
+Results of the hold (code commit `8091364e`, base main at `4efcd73b`, slice 1b at `3845abe2`):
 
-- `pins: @STOCK_SAME@ of @STOCK_TOTAL@ stock scenarios byte-identical to the base`,
-  @STOCK_DIFF@ differ.
-- `pins: @RTP_SAME@ of @RTP_TOTAL@ RT-primary scenarios byte-identical to the base`.
-- The shadows at 0 hash to `@SH_OFF@`, the sun at 0 to `@SUN_OFF@` (main's `rt-shadows`
-  and `rt-sun` digests: `@SH_STOCK@`, `@SUN_STOCK@`).
-- The default is 0.9: @DEF_SH@, @DEF_SUN@ and @DEF_ALL@ frames differ between the
+- `pins: 29 of 29 stock scenarios byte-identical to the base`,
+  0 differ.
+- `pins: 5 of 5 RT-primary scenarios byte-identical to the base`.
+- The shadows at 0 hash to `2b8d11a25392`, the sun at 0 to `b7e0212dfda8` (main's `rt-shadows`
+  and `rt-sun` digests: `2b8d11a25392`, `b7e0212dfda8`).
+- The default is 0.9: 0, 0 and 0 frames differ between the
   default runs and the 0.9 runs of the shadows, the sun and all three.
 - Determinism, 23 frames of `demo1.dm2` at 640 x 480, two runs at 0.9 each:
 
   | Effect | One hash at 0.9 | Frames different between the runs | At 0.9 against 0 | Against slice 1b's code at 0.9 |
   | --- | --- | --- | --- | --- |
-  | shadows | `@SH_HASH@` | @SH_DET@ | @SH_ACC@ | @SH_DN@ |
-  | sun | `@SUN_HASH@` | @SUN_DET@ | @SUN_ACC@ | @SUN_DN@ |
-  | all three | `@ALL_HASH@` | @ALL_DET@ | @ALL_ACC@ | @ALL_DN@ |
+  | shadows | `721a6ef80b2d` | 0 | 3 | 0 |
+  | sun | `84642945e98e` | 0 | 1 | 1 |
+  | all three | `f262c5f10fa1` | 0 | 23 | 23 |
 
   The shadows are not denoised, so their column against slice 1b's code is expected to be
   0.
-- Checks: `@CHECK_REF_METAL@`; `@YQ2TEST@`; `check-cvar-docs: ok`, `check-doc-links: ok`,
+- Checks: `check-ref-metal: ok (13162 checks, 0 failed; ray tracing 169 checks, 0 failed; G-buffer 177 checks, 0 failed; shadows 4384 checks, 0 failed; AO 283 checks, 0 failed; temporal 123 checks, 0 failed, 11 rule mutants, 7 kernel pins with 10 kernel mutants and 4 back-end mutants refused, 3 stock-trace pins with 6 mutants refused; denoiser 119 checks, 0 failed, 6 rule mutants, 3 kernel pins with 3 kernel mutants refused and compiled; water 727 checks, 0 failed; sun 711 checks, 0 failed; direct light 680 checks, 0 failed; RT data 170 checks, 0 failed; MetalFX 335 checks, 0 failed; ray-tracing gate 952 checks, 0 failed, Retro textures 197 checks, 0 failed, effect table 464 checks, 0 failed, 10 table mutants refused, no effect outside it in rm_main.c or rmb_gbuf.m, 4 call mutants refused, tone-map order and probe cancel held, 10 order mutants refused, 35 r_rt_* cvars classified, 4 table mutants refused; 72 vocabulary mutants refused; 3 flush points, 12 flush mutants refused; blend factors once, 4 mutants refused; 5 gate-seat rules, 11 seat mutants refused; 26 kernel calls, 260 kernel-call mutants refused; colour space 736 checks, 0 failed; 12 colour-space mutants refused; metal_rate_start read once, 2 mutants refused; no hand prototype in a .m file, 18 mutants refused, 7 shapes passed; ref_metal built)`; `yq2test: 591 tests, 0 failed`; `check-cvar-docs: ok`, `check-doc-links: ok`,
   `check-runbook-index: ok`, `check-video-menu: ok`, `check-pin-chars: ok`.
 
 ## Slice 2b: the reflections' blur, the tuning row and the memory

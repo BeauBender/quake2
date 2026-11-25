@@ -83,7 +83,10 @@ test_on(void)
 	CHECK(rm_rtdir_show(1) == RM_RTDIR_SHOW_DIRECT);
 	CHECK(rm_rtdir_show(2.9f) == RM_RTDIR_SHOW_VIS);
 	CHECK(rm_rtdir_show(3) == RM_RTDIR_SHOW_NOSHADOW);
-	CHECK(rm_rtdir_show(4) == RM_RTDIR_SHOW_DLIGHTS && RM_RTDIR_SHOW_MAX == 4);
+	CHECK(rm_rtdir_show(4) == RM_RTDIR_SHOW_DLIGHTS);
+	/* TASK189: the sky light's and the sun's terms alone */
+	CHECK(rm_rtdir_show(5) == RM_RTDIR_SHOW_SKY && RM_RTDIR_SHOW_SKY == 5);
+	CHECK(rm_rtdir_show(6.5f) == RM_RTDIR_SHOW_SUN && RM_RTDIR_SHOW_SUN == 6 && RM_RTDIR_SHOW_MAX == 6);
 	CHECK(rm_rtdir_show(99) == RM_RTDIR_SHOW_MAX);
 	CHECK(rm_rtdir_show(-1) == 0);
 	CHECK(rm_rtdir_show(NAN) == 0);
@@ -375,6 +378,7 @@ pin_and(int a, int b)
 	"\t\tdevice const rm_rtdir_light *lights [[buffer(9)]],\n" \
 	"\t\tconstant rm_rtdir_dlight *dl [[buffer(10)]],\n" \
 	"\t\tdevice const uint *self [[buffer(11)]],\n" \
+	"\t\tdevice const ushort *tile [[buffer(12)]],\n" \
 	"\t\tuint2 px [[thread_position_in_grid]])"
 
 /* the traced light, the whole statement */
@@ -397,7 +401,8 @@ static const char *const kernel_defines[] = {
 	"#define RM_RTDIR_C_WORLD 0\n", "#define RM_RTDIR_C_INRANGE 1\n", "#define RM_RTDIR_C_RAYS 2\n",
 	"#define RM_RTDIR_C_LIT 3\n", "#define RM_RTDIR_C_FIT_LM 4\n", "#define RM_RTDIR_C_FIT_RAW 5\n",
 	"#define RM_RTDIR_C_FIT_N 6\n", "#define RM_RTDIR_C_INRANGE_HI 7\n", "#define RM_RTDIR_C_RAYS_HI 8\n",
-	"#define RM_RTDIR_C_LIT_HI 9\n", "#define RM_RTDIR_C_CAPPED 10\n",
+	"#define RM_RTDIR_C_LIT_HI 9\n", "#define RM_RTDIR_C_CAPPED 10\n", "#define RM_RTDIR_C_SKY_RAYS 11\n",
+	"#define RM_RTDIR_C_SKY_HITS 12\n", "#define RM_RTDIR_C_SUN_RAYS 13\n", "#define RM_RTDIR_C_SUN_LIT 14\n",
 };
 
 /*
@@ -471,7 +476,8 @@ static const char *const kernel_defines[] = {
 #define KERNEL_TERMS \
 	"\t{\n" \
 	"\t\tconst float3 dyn = rm_rtdir_dyn(v, p, n, o, ias, inst, tmat, ntris, dl, t);\n" \
-	"\t\tconst float3 own = rm_rtdir_own(v, p, ias, inst, tmat, ntris, self) * float3(styles[0]);\n" \
+	"\t\tconst float3 own = ((v.show == 3u) || (v.show == 4u)) ? float3(0.0f) :\n" \
+	"\t\t\t\trm_rtdir_own(v, p, ias, inst, tmat, ntris, self) * float3(styles[0]);\n" \
 	"\n" \
 	"\t\treturn ((v.show == 4u) ? dyn : (raw + dyn + own)) * MTL_RTDIR_UNIT;\n" \
 	"\t}\n"
@@ -485,10 +491,13 @@ static const char *const kernel_defines[] = {
 	"\t\t\treturn float3(c.r, c.g, c.b);\n" \
 	"\t\t}\n"
 
+/* the world's write (TASK189: with the sky light and the sun, rm_rtdir_out_open) */
+#define KERNEL_WRITE "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show), px);"
+
 #define KERNEL_WORLD_BRANCH \
 	"\t\tif (world)\n" \
 	"\t\t{\n" \
-	"\t\t\tlight_out.write(rm_rtdir_out(raw, v.exposure), px);\n" \
+	"\t\t\t" KERNEL_WRITE "\n" \
 	"\t\t\tvis_out.write(rm_rtdir_vis(v.show, t), px);\n" \
 	"\t\t}\n" \
 	"\t\telse\n" \
@@ -644,14 +653,20 @@ kernel_broken(const char *src)
 			return "rm_rtdir_dyn or rm_rtdir_own is not defined once";
 		}
 
-		r = pin_and(pin_count(dyn.body, dyn.nbody, KERNEL_DYN, 1), pin_count(dir.body, dir.nbody, KERNEL_TERMS, 1));
+		r = pin_count(dyn.body, dyn.nbody, KERNEL_DYN, 1);
 
 		if ((r != PIN_OK) || (count_in(text, strlen(text), "mtl_rtdir_dlight_walk(") != 1) ||
 			(count_in(dyn.body, dyn.nbody, "rm_rtdir_seen(") != 1) || (count_in(text, strlen(text), "rm_rtdir_dyn(") != 2) ||
 			(count_in(text, strlen(text), "dl[") != 1))
 		{
 			return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN,
-				"rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound, summed in");
+				"rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound");
+		}
+
+		/* TASK188 slice 3c: the sum a check of its own, so a mutant of it is refused for its own reason */
+		if ((r = pin_count(dir.body, dir.nbody, KERNEL_TERMS, 1)) != PIN_OK)
+		{
+			return PIN_WHY(r, "rm_rtdir_direct does not sum its three terms once (the own light's ray not under views 3 and 4)");
 		}
 
 		r = pin_count(own.body, own.nbody, KERNEL_OWN, 1);
@@ -781,15 +796,14 @@ test_no_lightmap_kernel(void)
 	{
 		const char *name, *edit[3][2];
 	} mutants[] = {
-		{ "add-lm", { { "light_out.write(rm_rtdir_out(raw, v.exposure), px);",
-			"light_out.write(rm_rtdir_out(raw, v.exposure) + lm.read(px), px);" } } },
-		{ "reuse-sample", { { "light_out.write(rm_rtdir_out(raw, v.exposure), px);",
-			"light_out.write(rm_rtdir_out(raw + float3(float(fit.x)) / 64.0f, v.exposure), px);" } } },
-		{ "world-from-base", { { "light_out.write(rm_rtdir_out(raw, v.exposure), px);",
-			"light_out.write(base.read(px), px);" } } },
+		{ "add-lm", { { KERNEL_WRITE,
+			"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show) + lm.read(px), px);" } } },
+		{ "reuse-sample", { { KERNEL_WRITE,
+			"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + float3(float(fit.x)) / 64.0f, v.exposure), open, v.show), px);" } } },
+		{ "world-from-base", { { KERNEL_WRITE, "light_out.write(base.read(px), px);" } } },
 		{ "branch-swap", { { KERNEL_WORLD_BRANCH,
 			"\t\tif (world)\n\t\t{\n\t\t\tlight_out.write(base.read(px), px);\n\t\t\tvis_out.write(float4(0.0f), px);\n"
-			"\t\t}\n\t\telse\n\t\t{\n\t\t\tlight_out.write(rm_rtdir_out(raw, v.exposure), px);\n"
+			"\t\t}\n\t\telse\n\t\t{\n\t\t\t" KERNEL_WRITE "\n"
 			"\t\t\tvis_out.write(rm_rtdir_vis(v.show, t), px);\n\t\t}\n" } } },
 		{ "fit-leak", { { "const float3 raw = world ? rm_rtdir_direct(", "float3 raw = world ? rm_rtdir_direct(" },
 			{ "rm_rtdir_fit_sample(lm, px, raw) : uint2(0u);\n",
@@ -836,6 +850,8 @@ test_no_lightmap_kernel(void)
 		{ "self-ignored", { { "mtl_rtdir_self((tri < v.nself) ? self[tri] : 0u)", "mtl_rtdir_self(0u)" } } },
 		{ "self-unbounded", { { "mtl_rtdir_self((tri < v.nself) ? self[tri] : 0u)", "mtl_rtdir_self(self[tri])" } } },
 		{ "self-dropped", { { "(raw + dyn + own)", "(raw + dyn)" } } },
+		/* TASK188 slice 3c: the own light's eye ray cast where it is not used (views 3 and 4) */
+		{ "self-ray-unused", { { "((v.show == 3u) || (v.show == 4u)) ? float3(0.0f) :", "(v.show == 99u) ? float3(0.0f) :" } } },
 		{ "lmx", { { "\t\ttexture2d<float, access::read> base [[texture(4)]],\n",
 			"\t\ttexture2d<float, access::read> base [[texture(4)]],\n"
 			"\t\ttexture2d<float, access::read> lmx [[texture(7)]],\n" },
@@ -904,8 +920,8 @@ test_no_lightmap_kernel(void)
 	}
 
 	/* the spec review's wrap of the world's write: refused, and the message says the pin is exact */
-	CHECK(mutate(src, "light_out.write(rm_rtdir_out(raw, v.exposure), px);",
-		"light_out.write(rm_rtdir_out(raw, v.exposure),\n\t\t\t\tpx);", m, sizeof(m)));
+	CHECK(mutate(src, KERNEL_WRITE,
+		"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show),\n\t\t\t\tpx);", m, sizeof(m)));
 	why = kernel_broken(m);
 	CHECK(why && strstr(why, "reformatted? the pin is exact"));
 }
@@ -972,7 +988,8 @@ binding_broken(const char *src)
 	r = pin_and(r, pin_count(text, strlen(text), "n = (n > MTL_RTDIR_MAX_DLIGHTS) ? MTL_RTDIR_MAX_DLIGHTS : n;", 1));
 	r = pin_and(r, pin_count(text, strlen(text), "static rm_rtdir_dlight_t dlights[MTL_RTDIR_MAX_DLIGHTS];", 1));
 	r = pin_and(r, pin_count(text, strlen(text), "view.ndlights = ndlights;", 1));
-	r = pin_and(r, pin_count(text, strlen(text), "view.nself = selftab ? (unsigned)nself : 0u;", 1));
+	/* TASK188 slice 3c: the table's count taken at the encode, beside its binding, whatever the order of the calls before */
+	r = pin_and(r, pin_count(tr.body, tr.nbody, "view.nself = selftab ? (unsigned)nself : 0u;", 1));
 
 	if ((r != PIN_OK) || (count_in(text, strlen(text), "atIndex:10]") != 1) || (count_in(text, strlen(text), "atIndex:11]") != 1) ||
 		(count_in(text, strlen(text), "view.ndlights") != 1) || (count_in(text, strlen(text), "view.nself") != 1))
@@ -1029,6 +1046,8 @@ test_host_binding(void)
 		{ "dlights-cap", "\tn = (n > MTL_RTDIR_MAX_DLIGHTS) ? MTL_RTDIR_MAX_DLIGHTS : n;\n", "" },
 		{ "dlights-count", "\tview.ndlights = ndlights;\n", "\tview.ndlights = 4096;\n" },
 		{ "self-count", "\tview.nself = selftab ? (unsigned)nself : 0u;\n", "\tview.nself = 0xffffffffu;\n" },
+		/* TASK188 slice 3c: the table's count not taken at the encode */
+		{ "self-count-early", "\t\tview.nself = selftab ? (unsigned)nself : 0u;\n", "" },
 	};
 	const char *why;
 	int i;
@@ -1060,114 +1079,6 @@ test_host_binding(void)
 	CHECK(mutate(src, "[ce setTexture:lm atIndex:3];", "[ce setTexture:lm  atIndex:3];", m, sizeof(m)));
 	why = binding_broken(m);
 	CHECK(why && strstr(why, "reformatted? the pin is exact"));
-}
-
-/*
- * TASK188 slice 3, the back end's half of the fixed lag, in rmb_rtdir.m's
- * text (src) with its comments taken out. In rmb_rtdir_trace the fit is
- * taken once from the slot's sums, and before the statement that clears
- * them; the view's exposure is replaced by it only when it is not above 0
- * (r_rt_direct_exposure's value is kept); and rmb_rtdir_set_lights sets
- * fit_reset to the last frame, once. NULL when it holds, else the rule
- * broken.
- */
-static const char *
-fit_lag_broken(const char *src)
-{
-	static char text[65536], sq[65536];
-	const char *fitp, *clearp;
-	fn_t tr, sl;
-
-	strip_comments(src, text, sizeof(text));
-
-	if (!find_fn(text, "static id<MTLTexture>\nrmb_rtdir_trace(", &tr) || !find_fn(text, "int\nrmb_rtdir_set_lights(", &sl))
-	{
-		return "rmb_rtdir_trace or rmb_rtdir_set_lights is not defined once";
-	}
-
-	if (pin_count(tr.body, tr.nbody, "fit = rm_rtdir_fit_lag(&lag, fno, fit_reset, fit);", 1) != PIN_OK)
-	{
-		return "the lagged fit is not taken once in rmb_rtdir_trace";
-	}
-
-	fitp = strstr(tr.body, "fit = rm_rtdir_fit_lag(");
-	clearp = strstr(tr.body, "memset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS");
-
-	if (!fitp || !clearp || (fitp > clearp))
-	{
-		return "the slot's sums are not read before they are cleared";
-	}
-
-	squeeze(tr.body, tr.nbody, sq, sizeof(sq));
-
-	if ((count_in(sq, strlen(sq), "view.exposure=fit;") != 1) ||
-		(count_in(sq, strlen(sq), "if(!(view.exposure>0.0f)){view.exposure=fit;}") != 1))
-	{
-		return "the view's exposure is not replaced by the fit only when it is not above 0";
-	}
-
-	if ((count_in(text, strlen(text), "fit_reset = last_frame;") != 1) || (count_in(sl.body, sl.nbody, "fit_reset = last_frame;") != 1))
-	{
-		return "fit_reset is not set to last_frame once, in rmb_rtdir_set_lights";
-	}
-
-	return NULL;
-}
-
-/* the fit-lag pin holds on the real file, and each mutant of it is refused */
-static void
-test_fit_lag_binding(void)
-{
-	static const char clear[] = "\t\tmemset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));\n";
-	static char src[65536], m[65536 + 1024], m2[65536 + 1024];
-	static const struct
-	{
-		const char *name, *from, *to, *from2, *to2;
-	} mutants[] = {
-		/* the clear before the fit (the two statements swapped): it reads sums of 0 and the exposure stays 1 */
-		{ "memset-first", "\t\t{\n\t\t\tconst uint32_t *c = (const uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS;",
-			"\t\tmemset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));\n"
-			"\t\t{\n\t\t\tconst uint32_t *c = (const uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS;",
-			"\t\t}\n\n\t\tmemset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));\n",
-			"\t\t}\n" },
-		/* the map's reset dropped: a new map is fitted from the old map's frame still in its slot */
-		{ "reset-dropped", "\tfit_reset = last_frame;\n", "", NULL, NULL },
-		/* the fit always replaces r_rt_direct_exposure's value */
-		{ "exposure-always", "if (!(view.exposure > 0.0f))", "if (1)", NULL, NULL },
-	};
-	const char *why;
-	int i;
-
-	CHECK(read_file("src/client/refresh/metal/rmb_rtdir.m", src, sizeof(src)));
-	CHECK(strstr(src, clear) != NULL);
-	why = fit_lag_broken(src);
-
-	if (why)
-	{
-		printf("rmb_rtdir.m: %s\n", why);
-	}
-
-	CHECK(why == NULL);
-
-	for (i = 0; i < (int)(sizeof(mutants) / sizeof(mutants[0])); i++)
-	{
-		int applied = mutate(src, mutants[i].from, mutants[i].to, m, sizeof(m));
-
-		if (applied && mutants[i].from2)
-		{
-			applied = mutate(m, mutants[i].from2, mutants[i].to2, m2, sizeof(m2));
-			memcpy(m, m2, sizeof(m));
-		}
-
-		why = applied ? fit_lag_broken(m) : NULL;
-
-		if (!applied || !why)
-		{
-			printf("fit-lag mutant %s: %s\n", mutants[i].name, applied ? "passes the fit-lag check" : "does not apply");
-		}
-
-		CHECK(applied && (why != NULL));
-	}
 }
 
 /* the fit's samples: the channel mean, clamped to QMAX, in 1/64 steps; sums exact whatever the order */
@@ -1219,108 +1130,514 @@ test_fit(void)
 }
 
 /*
- * TASK188 slice 3, the exposure at a fixed lag: frame f takes the fit of
- * frame f - RM_RTDIR_FIT_LAG (the last frame of its back-end slot), only
- * when that record is exactly the lag behind and after the map's reset;
- * else the exposure in use is kept.
+ * TASK188 slice 3c, the exposure fit at map load, in the engine's and the
+ * back end's text (scene, back) with their comments taken out: the map's
+ * fit is taken once, in RM_RTDir_Lights, after its reset to 1 there; the
+ * view's exposure is rm_rtdir_exposure of r_rt_direct_exposure and that
+ * fit, once, in RM_RTDir_View; and the back end neither fits nor writes
+ * the view's exposure. NULL when it holds, else the rule broken.
  */
-static void
-test_fit_lag(void)
+static const char *
+fit_rule_broken(const char *scene, const char *back)
 {
-	rm_rtdir_stats_t s;
+	static char text[65536], btext[65536], sq[65536];
+	const char *reset, *taken;
+	fn_t li, vi;
 
-	CHECK(RM_RTDIR_FIT_LAG == 3);
-	memset(&s, 0, sizeof(s));
-	s.frame = 7;
-	s.fit_lm = 300;
-	s.fit_raw = 100;
-	s.fit_n = 10;
+	strip_comments(scene, text, sizeof(text));
+	strip_comments(back, btext, sizeof(btext));
 
-	/* exactly the lag behind, after the reset: its fit */
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 0, 1), 3.0, 1e-6));
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 6, 1), 3.0, 1e-6));
+	if (!find_fn(text, "static void\nRM_RTDir_Lights(", &li) || !find_fn(text, "void\nRM_RTDir_View(", &vi))
+	{
+		return "RM_RTDir_Lights or RM_RTDir_View is not defined once";
+	}
 
-	/* a record nearer or older than the lag (a slot whose last frame did not trace): kept */
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG - 1, 0, 1.5f), 1.5, 1e-6));
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG + 1, 0, 1.5f), 1.5, 1e-6));
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + 2 * RM_RTDIR_FIT_LAG, 0, 1.5f), 1.5, 1e-6));
+	reset = strstr(li.body, "dir_fit = 1.0f;");
+	taken = strstr(li.body, "dir_fit = rm_rtdir_fit_tree(");
 
-	/* at or before the map's reset (the old map's frame, still in its slot): kept */
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 7, 1), 1.0, 1e-6));
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 9, 1), 1.0, 1e-6));
+	if ((count_in(text, strlen(text), "dir_fit = ") != 2) || (count_in(li.body, li.nbody, "dir_fit = 1.0f;") != 1) ||
+		(count_in(li.body, li.nbody, "dir_fit = rm_rtdir_fit_tree(") != 1) || !reset || !taken || (reset > taken))
+	{
+		return "the map's fit is not taken once, in RM_RTDir_Lights, after its reset";
+	}
 
-	/* no record, a slot never used (frame 0), a frame before the lag, no sample: kept */
-	CHECK(near(rm_rtdir_fit_lag(NULL, 10, 0, 2), 2.0, 1e-6));
-	s.frame = 0;
-	CHECK(near(rm_rtdir_fit_lag(&s, RM_RTDIR_FIT_LAG, 0, 2), 2.0, 1e-6));
-	s.frame = 7;
-	CHECK(near(rm_rtdir_fit_lag(&s, 2, 0, 2), 2.0, 1e-6));
-	s.fit_n = 0;
-	CHECK(near(rm_rtdir_fit_lag(&s, 7 + RM_RTDIR_FIT_LAG, 0, 2), 2.0, 1e-6));
+	if ((count_in(text, strlen(text), "rm_rtdir_exposure(") != 1) ||
+		(pin_count(vi.body, vi.nbody, "exposure = rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), dir_fit, &dir_fixed);", 1) !=
+			PIN_OK))
+	{
+		return "the view's exposure is not r_rt_direct_exposure's, else the map's fit";
+	}
+
+	squeeze(btext, strlen(btext), sq, sizeof(sq));
+
+	if ((count_in(sq, strlen(sq), "view.exposure=") != 0) || (count_in(sq, strlen(sq), "view.exposure+=") != 0) ||
+		(count_in(sq, strlen(sq), "view.exposure*=") != 0) || (count_in(btext, strlen(btext), "rm_rtdir_fit") != 0))
+	{
+		return "the back end fits or writes the view's exposure";
+	}
+
+	return NULL;
+}
+
+/* the fit-at-load pin holds on the real files, and each mutant of it is refused */
+static void
+test_fit_binding(void)
+{
+	static char scene[65536], back[65536], m[65536 + 1024];
+	static const struct
+	{
+		const char *name, *file, *from, *to;
+	} mutants[] = {
+		/* the fit computed and not used: every map at 1 */
+		{ "fit-ignored", "scene", "r_rt_direct_exposure), dir_fit, &dir_fixed);", "r_rt_direct_exposure), 1.0f, &dir_fixed);" },
+		/* the reset dropped: a map whose fit is not reached keeps the old map's */
+		{ "reset-dropped", "scene", "\tdir_fit = 1.0f;\n", "" },
+		/* a fit again each view */
+		{ "fit-per-view", "scene", "\texposure = rm_rtdir_exposure(",
+			"\tdir_fit = rm_rtdir_fit_tree(dir_lights, dir_nlights, NULL, 0, NULL, NULL);\n\texposure = rm_rtdir_exposure(" },
+		/* the back end overriding the view's exposure, so the scene's fit never reaches the kernel */
+		{ "back-end-exposure", "back", "\t\t[ce setBytes:&view length:sizeof(view) atIndex:0];",
+			"\t\tview.exposure = 1.0f;\n\t\t[ce setBytes:&view length:sizeof(view) atIndex:0];" },
+	};
+	const char *why;
+	int i;
+
+	CHECK(read_file("src/client/refresh/metal/rm_rtdirscene.c", scene, sizeof(scene)));
+	CHECK(read_file("src/client/refresh/metal/rmb_rtdir.m", back, sizeof(back)));
+	why = fit_rule_broken(scene, back);
+
+	if (why)
+	{
+		printf("the exposure fit: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+
+	for (i = 0; i < (int)(sizeof(mutants) / sizeof(mutants[0])); i++)
+	{
+		const int sc = !strcmp(mutants[i].file, "scene");
+		const int applied = mutate(sc ? scene : back, mutants[i].from, mutants[i].to, m, sizeof(m));
+
+		why = applied ? (sc ? fit_rule_broken(m, back) : fit_rule_broken(scene, m)) : NULL;
+
+		if (!applied || !why)
+		{
+			printf("fit mutant %s: %s\n", mutants[i].name, applied ? "passes the fit check" : "does not apply");
+		}
+
+		CHECK(applied && (why != NULL));
+	}
+}
+
+/* a test's line test: a line that ends at x past fit_wall[0] is blocked; each line's ends recorded */
+static float fit_wall[1] = { 1e30f };
+static float fit_a[3], fit_b[3];
+
+static int
+fit_clear(void *ctx, const float *a, const float *b)
+{
+	(void)ctx;
+	memcpy(fit_a, a, sizeof(fit_a));
+	memcpy(fit_b, b, sizeof(fit_b));
+	return b[0] < fit_wall[0];
+}
+
+static void
+fit_point_light(rm_rtdir_light_t *l, float x, float y, float z, float intensity)
+{
+	memset(l, 0, sizeof(*l));
+	l->pos[0] = x;
+	l->pos[1] = y;
+	l->pos[2] = z;
+	l->pos[3] = intensity;
+	l->color[0] = l->color[1] = l->color[2] = 1.0f;
+	l->spot[3] = MTL_RTDIR_NOSPOT;
+}
+
+static void
+fit_point(rm_rtdir_fitpt_t *p, float x, float lm)
+{
+	memset(p, 0, sizeof(*p));
+	p->pos[0] = x;
+	p->normal[2] = 1.0f;
+	p->lm[0] = p->lm[1] = p->lm[2] = lm;
+}
+
+/* TASK188 slice 3c: which samples enter: not near black, not clipped, a number */
+static void
+test_fit_enters(void)
+{
+	const float in[][3] = { { 20, 10, 5 }, { 16, 0, 0 }, { 0, 0, 16 }, { 254, 254, 254 }, { 100, 254.5f, 3 } };
+	const float out[][3] = { { 15.9f, 15.9f, 15.9f }, { 0, 0, 0 }, { -50, -50, -50 }, { 255, 10, 10 }, { 10, 10, 300 },
+		{ NAN, 50, 50 }, { 50, INFINITY, 50 } };
+	int i;
+
+	CHECK(RM_RTDIR_FIT_DARK == 16.0f && RM_RTDIR_FIT_CLIP == 255.0f);
+
+	for (i = 0; i < (int)(sizeof(in) / sizeof(in[0])); i++)
+	{
+		CHECK(rm_rtdir_fit_enters(in[i]) == 1);
+	}
+
+	for (i = 0; i < (int)(sizeof(out) / sizeof(out[0])); i++)
+	{
+		CHECK(rm_rtdir_fit_enters(out[i]) == 0);
+	}
+}
+
+/* the traced light at a sample: the kernel's rule on the host, with the line test as its shadow ray */
+static void
+test_fit_light(void)
+{
+	static rm_rtdir_light_t l[64];
+	const float p[3] = { 0, 0, 0 }, n[3] = { 0, 0, 1 };
+	float out[3];
+	unsigned long rays = 0;
+	double want = 0;
+	int i;
+
+	/* one point light 100 above, intensity 300: (300 - 100) x 1, its line from 1 off the face to 1 short of the light */
+	fit_point_light(&l[0], 0, 0, 100, 300);
+	l[0].color[1] = 0.5f;
+	fit_wall[0] = 1e30f;
+	rm_rtdir_fit_light(l, 1, p, n, fit_clear, NULL, out, &rays);
+	CHECK(near(out[0], 200, 1e-3) && near(out[1], 100, 1e-3) && near(out[2], 200, 1e-3) && (rays == 1));
+	CHECK(near(fit_a[2], RM_RTDIR_FIT_BIAS, 1e-4) && near(fit_b[2], 99, 1e-3) && near(fit_a[0], 0, 1e-6));
+
+	/* blocked: nothing; out of range or behind: no ray */
+	fit_wall[0] = -1;
+	rays = 0;
+	rm_rtdir_fit_light(l, 1, p, n, fit_clear, NULL, out, &rays);
+	CHECK(out[0] == 0 && out[1] == 0 && out[2] == 0 && (rays == 1));
+	fit_point_light(&l[0], 0, 0, -100, 300);
+	fit_point_light(&l[1], 0, 0, 400, 300);
+	rays = 0;
+	rm_rtdir_fit_light(l, 2, p, n, fit_clear, NULL, out, &rays);
+	CHECK(out[0] == 0 && (rays == 0));
+
+	/* an emissive face 100 above, facing down: intensity / dist^2 */
+	memset(&l[0], 0, sizeof(l[0]));
+	l[0].pos[2] = 100;
+	l[0].pos[3] = 1e6f;
+	l[0].color[0] = l[0].color[1] = l[0].color[2] = 1.0f;
+	l[0].spot[2] = -1;
+	l[0].spot[3] = MTL_RTDIR_EMITTER;
+	fit_wall[0] = 1e30f;
+	rm_rtdir_fit_light(l, 1, p, n, fit_clear, NULL, out, NULL);
+	CHECK(near(out[0], 100, 1e-3));
+
+	/* the bound: 64 visible lights at one place sum the 16 strongest in 16 rays; behind a wall, 32 rays and nothing */
+	for (i = 0; i < 64; i++)
+	{
+		fit_point_light(&l[i], 0, 0, 100, 300 + (float)i);
+	}
+
+	rays = 0;
+	rm_rtdir_fit_light(l, 64, p, n, fit_clear, NULL, out, &rays);
+	CHECK(rays == MTL_RTDIR_MAX_TRACED);
+
+	/* each (300 + i - 100) x 1, the 16 strongest the last 16 */
+	for (i = 48; i < 64; i++)
+	{
+		want += 200.0 + i;
+	}
+
+	CHECK(near(out[0], want, 1e-2));
+	fit_wall[0] = -1;
+	rays = 0;
+	rm_rtdir_fit_light(l, 64, p, n, fit_clear, NULL, out, &rays);
+	CHECK((rays == MTL_RTDIR_MAX_RAYS) && (out[0] == 0));
+	fit_wall[0] = 1e30f;
 }
 
 /*
- * The same: a simulated back end of RM_RTDIR_FIT_LAG slots over 200
- * frames, with a map change at frame 100 and frames that do not trace,
- * fed to rm_rtdir_fit_lag as rmb_rtdir_trace feeds it (the slot's frame
- * and sums, read before the slot is rewritten). It tests the lag's
- * arithmetic and the slot and reset bookkeeping, not completion order:
- * the back end's own text is pinned by test_fit_lag_binding, and the order
- * frames complete in cannot reach the function, which is given only the
- * slot's record.
+ * The map's exposure: a known luxel set and its ratio; an all-dark map
+ * reads 1; a lit room beside a dark one that a very bright fixture
+ * reaches keeps the lit room's ratio (the dark luxels and the clipped
+ * one left out), where a fit over every luxel is crushed to the floor.
  */
 static void
-test_fit_lag_runs(void)
+test_fit_map(void)
 {
-	static float first[201];
-	int moved = 0;
+	static rm_rtdir_light_t l[2];
+	static rm_rtdir_fitpt_t pts[32];
+	rm_rtdir_mapfit_t f;
+	int i;
 
+	fit_wall[0] = 1e30f;
+
+	/* the known set: a light of 300 at 100 above; lightmap 100 and 200 where the traced light is 200 */
+	fit_point_light(&l[0], 0, 0, 100, 300);
+	fit_point(&pts[0], 0, 100);
+	fit_point(&pts[1], 0, 200);
+	CHECK(mtl_rtdir_q(100 / 255.0f, 100 / 255.0f, 100 / 255.0f) == 25 && mtl_rtdir_q(200 / 255.0f, 200 / 255.0f, 200 / 255.0f) == 50);
+	CHECK(near(rm_rtdir_fit_map(l, 1, pts, 2, fit_clear, NULL, &f), 0.75, 1e-6));
+	CHECK((f.lm == 75) && (f.raw == 100) && (f.n == 2) && (f.dark == 0) && (f.clipped == 0) && (f.rays == 2) &&
+		near(f.exposure, 0.75, 1e-6));
+
+	/* the same with the light behind a wall: no traced light, so 1 */
+	fit_wall[0] = -1;
+	CHECK(near(rm_rtdir_fit_map(l, 1, pts, 2, fit_clear, NULL, &f), 1.0, 1e-6) && (f.n == 2) && (f.raw == 0));
+	fit_wall[0] = 1e30f;
+
+	/* an all-dark map: nothing enters, 1 */
+	for (i = 0; i < 8; i++)
 	{
-		unsigned long slot_frame[RM_RTDIR_FIT_LAG], slot_lm[RM_RTDIR_FIT_LAG], last = 0, reset = 0, f;
-		float fit = 1.0f;
-
-		memset(slot_frame, 0, sizeof(slot_frame));
-		memset(slot_lm, 0, sizeof(slot_lm));
-
-		for (f = 1; f <= 200; f++)
-		{
-			const int k = (int)(f % RM_RTDIR_FIT_LAG);
-			rm_rtdir_stats_t lag;
-
-			/* the map changes before frame 100: its lights set, the reset at the last frame traced */
-			if (f == 100)
-			{
-				fit = 1.0f;
-				reset = last;
-			}
-
-			memset(&lag, 0, sizeof(lag));
-			lag.frame = slot_frame[k];
-			lag.fit_lm = slot_lm[k];
-			lag.fit_raw = 1000;
-			lag.fit_n = 50;
-			fit = rm_rtdir_fit_lag(&lag, f, reset, fit);
-
-			first[f] = fit;
-			moved += (fit != 1.0f);
-
-			/* every seventh frame traces nothing (a menu, a frame skipped): its slot keeps the older frame */
-			if (f % 7)
-			{
-				slot_frame[k] = f;
-				slot_lm[k] = 1000 + 37 * (f % 23);
-				last = f;
-			}
-		}
+		fit_point(&pts[i], (float)i, 5);
 	}
 
-	CHECK(moved > 100);
-	/* the first frames of each map keep 1: nothing is the lag behind them yet, or it is the old map's */
-	CHECK((first[1] == 1.0f) && (first[RM_RTDIR_FIT_LAG] == 1.0f) && (first[100] == 1.0f) && (first[102] == 1.0f));
-	/* frame 4 takes frame 1's fit; frame 10 keeps 9's (frame 7 did not trace); 103 takes 100's, the new map's */
-	CHECK(near(first[RM_RTDIR_FIT_LAG + 1], (1000.0 + 37.0) / 1000.0, 1e-6));
-	CHECK(first[10] == first[9]);
-	CHECK(near(first[103], (1000.0 + 37.0 * (100 % 23)) / 1000.0, 1e-6));
+	CHECK(near(rm_rtdir_fit_map(l, 1, pts, 8, fit_clear, NULL, &f), 1.0, 1e-6) && (f.n == 0) && (f.dark == 8) && (f.rays == 0));
+	CHECK(near(rm_rtdir_fit_map(l, 1, NULL, 0, fit_clear, NULL, NULL), 1.0, 1e-6));
+	CHECK(near(rm_rtdir_fit_map(NULL, 0, pts, 8, fit_clear, NULL, NULL), 1.0, 1e-6));
+
+	/* one very bright fixture: 4 lit luxels (100 / 200 = 0.5), 20 dark ones (4) and 1 clipped one under it */
+	fit_point_light(&l[0], 0, 0, 100, 300);
+	memset(&l[1], 0, sizeof(l[1]));
+	l[1].pos[0] = 10000;
+	l[1].pos[2] = 50;
+	l[1].pos[3] = 1e9f;
+	l[1].color[0] = l[1].color[1] = l[1].color[2] = 1.0f;
+	l[1].spot[2] = -1;
+	l[1].spot[3] = MTL_RTDIR_EMITTER;
+
+	for (i = 0; i < 4; i++)
+	{
+		fit_point(&pts[i], 0, 100);
+	}
+
+	for (i = 4; i < 24; i++)
+	{
+		fit_point(&pts[i], 10000, 4);
+	}
+
+	fit_point(&pts[24], 10000, 255);
+	CHECK(near(rm_rtdir_fit_map(l, 2, pts, 25, fit_clear, NULL, &f), 0.5, 1e-6));
+	CHECK((f.n == 4) && (f.dark == 20) && (f.clipped == 1) && (f.lm == 100) && (f.raw == 200));
+
+	/* the same luxels all entered (each lightmap raised to the floor) take the fixture's light: crushed to the floor */
+	for (i = 4; i < 25; i++)
+	{
+		fit_point(&pts[i], 10000, 16);
+	}
+
+	CHECK(near(rm_rtdir_fit_map(l, 2, pts, 25, fit_clear, NULL, &f), RM_RTDIR_FIT_MIN, 1e-6) && (f.n == 25));
+}
+
+/* a face's lightmap at the nearest luxel, its maps summed, the luxel held to the face */
+static void
+test_fit_luxel(void)
+{
+	/* two maps of 2 x 2 luxels, 3 bytes each */
+	static const unsigned char s[2 * 4 * 3] = {
+		1, 2, 3, 10, 20, 30, 4, 5, 6, 40, 50, 60,
+		100, 100, 100, 101, 101, 101, 102, 102, 102, 103, 103, 103,
+	};
+	float out[3];
+
+	rm_rtdir_fit_luxel(s, 1, 2, 2, 0.4f, 0.6f, out);
+	CHECK(out[0] == 4 && out[1] == 5 && out[2] == 6);
+	rm_rtdir_fit_luxel(s, 2, 2, 2, 0.4f, 0.6f, out);
+	CHECK(out[0] == 106 && out[1] == 107 && out[2] == 108);
+	rm_rtdir_fit_luxel(s, 2, 2, 2, 0.6f, 0.4f, out);
+	CHECK(out[0] == 111 && out[1] == 121 && out[2] == 131);
+	rm_rtdir_fit_luxel(s, 1, 2, 2, -3.0f, 9.0f, out);
+	CHECK(out[0] == 4 && out[1] == 5 && out[2] == 6);
+	rm_rtdir_fit_luxel(s, 1, 2, 2, 2.6f, -0.2f, out);
+	CHECK(out[0] == 10 && out[1] == 20 && out[2] == 30);
+	rm_rtdir_fit_luxel(s, 1, 2, 2, NAN, NAN, out);
+	CHECK(out[0] == 1 && out[1] == 2 && out[2] == 3);
+	rm_rtdir_fit_luxel(s, 0, 2, 2, 0, 0, out);
+	CHECK(out[0] == 0 && out[1] == 0 && out[2] == 0);
+	rm_rtdir_fit_luxel(NULL, 1, 2, 2, 0, 0, out);
+	CHECK(out[0] == 0);
+	rm_rtdir_fit_luxel(s, 1, 0, 2, 0, 0, out);
+	CHECK(out[0] == 0);
+}
+
+/* the fit's tree tests: the nodes are rm_rtdir_node_t themselves */
+static void
+tree_read(const void *p, rm_rtdir_node_t *out)
+{
+	memcpy(out, p, sizeof(*out));
+}
+
+static int
+tree_line(rm_rtdir_tree_t *t, float ax, float ay, float bx, float by)
+{
+	const float a[3] = { ax, ay, 0 }, b[3] = { bx, by, 0 };
+
+	return rm_rtdir_tree_clear(t, a, b);
+}
+
+/*
+ * TASK188 slice 3c: the fit's line test on a tree of two nodes and three
+ * leaves. The root splits at x = 0: in front (x >= 0) a node splitting at
+ * y = 0, whose front leaf is empty and whose back leaf is solid; behind
+ * it an empty leaf.
+ */
+static void
+test_fit_tree(void)
+{
+	static rm_rtdir_node_t chain[RM_RTDIR_FIT_DEPTH + 2];
+	rm_rtdir_node_t empty = { 1, 0, { 0, 0, 0 }, 0, { NULL, NULL } };
+	rm_rtdir_node_t solid = { 1, RM_RTDIR_CONTENTS_SOLID | 0x40, { 0, 0, 0 }, 0, { NULL, NULL } };
+	rm_rtdir_node_t back = { 1, 0x20, { 0, 0, 0 }, 0, { NULL, NULL } };
+	rm_rtdir_node_t ynode = { 0, 0, { 0, 1, 0 }, 0, { &empty, &solid } };
+	rm_rtdir_node_t root = { 0, 0, { 1, 0, 0 }, 0, { &ynode, &back } };
+	rm_rtdir_tree_t t = { &root, tree_read, 0, 1000, 0 };
+	int i, n;
+
+	/* on one side of every plane: the empty leaf in front, the one behind */
+	CHECK(tree_line(&t, 1, 1, 2, 5) == 1);
+	CHECK(tree_line(&t, -1, 1, -3, -4) == 1);
+	CHECK(tree_line(&t, 1, -1, 2, -5) == 0);
+	CHECK(t.visits == 3 + 2 + 3);
+
+	/* across y = 0 into the solid leaf, either way */
+	CHECK(tree_line(&t, 1, 1, 1, -1) == 0);
+	CHECK(tree_line(&t, 1, -1, 1, 1) == 0);
+
+	/* across x = 0 into empty space, either way */
+	CHECK(tree_line(&t, 1, 1, -1, 1) == 1);
+	CHECK(tree_line(&t, -1, 1, 1, 1) == 1);
+
+	/* out of the solid leaf across x = 0: its half is solid, wherever the other half goes */
+	CHECK(tree_line(&t, 1, -1, -1, -1) == 0);
+	CHECK(tree_line(&t, -1, -1, 1, -1) == 0);
+
+	/* a point at 0 is in front: on x = 0 below y = 0 is the solid leaf, not the empty one behind */
+	CHECK(tree_line(&t, 0, -1, 0, -2) == 0);
+	CHECK(tree_line(&t, 0, 1, 0, 2) == 1);
+	CHECK(tree_line(&t, 0, -1, -1, -1) == 0);
+
+	/* a missing child is blocked */
+	root.child[1] = NULL;
+	CHECK(tree_line(&t, -1, 1, -2, 1) == 0);
+	root.child[1] = &back;
+	CHECK(!t.over);
+
+	/* the depth cap: a chain of n nodes, each with the line in front, then an empty leaf at depth n */
+	t.root = chain;
+	t.cap = 1UL << 20;
+
+	for (n = RM_RTDIR_FIT_DEPTH; n <= RM_RTDIR_FIT_DEPTH + 1; n++)
+	{
+		for (i = 0; i < n; i++)
+		{
+			memset(&chain[i], 0, sizeof(chain[i]));
+			chain[i].normal[0] = 1;
+			chain[i].dist = -1000;
+			chain[i].child[0] = &chain[i + 1];
+			chain[i].child[1] = &solid;
+		}
+
+		chain[n] = empty;
+		CHECK(tree_line(&t, 1, 1, 2, 2) == (n == RM_RTDIR_FIT_DEPTH));
+	}
+
+	CHECK(!t.over);
+
+	/* the visit cap: the crossing line visits four nodes; at three it is blocked, and every line after it */
+	t.root = &root;
+	t.visits = 0;
+	t.cap = 4;
+	CHECK(tree_line(&t, 1, 1, -1, 1) == 1 && t.visits == 4 && !t.over);
+	t.visits = 0;
+	t.cap = 3;
+	CHECK(tree_line(&t, 1, 1, -1, 1) == 0 && t.over);
+	t.visits = 0;
+	CHECK(tree_line(&t, 1, 1, 2, 5) == 0 && t.visits == 0);
+
+	/* no tree, no read */
+	CHECK(rm_rtdir_tree_clear(NULL, (const float[3]){ 0, 0, 0 }, (const float[3]){ 1, 1, 1 }) == 0);
+	t.over = 0;
+	t.read = NULL;
+	CHECK(tree_line(&t, 1, 1, 2, 5) == 0);
+}
+
+/* the fit over a tree: the fit_map of rm_rtdir_tree_clear, and 1 past the visit cap */
+static void
+test_fit_tree_map(void)
+{
+	rm_rtdir_node_t empty = { 1, 0, { 0, 0, 0 }, 0, { NULL, NULL } };
+	rm_rtdir_tree_t t = { &empty, tree_read, 0, RM_RTDIR_FIT_VISITS, 0 };
+	rm_rtdir_light_t l;
+	rm_rtdir_fitpt_t p[2];
+	rm_rtdir_mapfit_t f, g;
+	float e;
+
+	fit_wall[0] = 1e30f;
+	fit_point_light(&l, 0, 0, 100, 300);
+	fit_point(&p[0], 0, 100);
+	fit_point(&p[1], 10, 120);
+	e = rm_rtdir_fit_map(&l, 1, p, 2, fit_clear, NULL, &g);
+	CHECK(e != 1.0f && g.n == 2);
+	CHECK(rm_rtdir_fit_tree(&l, 1, p, 2, &t, &f) == e);
+	CHECK(f.exposure == e && f.n == 2 && f.rays == 2 && f.visits == 2 && !f.over);
+
+	/* past the cap: the exposure 1, and the cap said */
+	t.visits = 0;
+	t.cap = 1;
+	CHECK(rm_rtdir_fit_tree(&l, 1, p, 2, &t, &f) == 1.0f);
+	CHECK(f.exposure == 1.0f && f.over && f.visits == 1);
+	CHECK(rm_rtdir_fit_tree(&l, 1, p, 2, NULL, NULL) == 1.0f);
+}
+
+/* the faces that take samples: a lightmap, and no fixture, translucent, sky or warp flag */
+static void
+test_fit_face(void)
+{
+	static const int skip[] = { 0x1, 0x4, 0x8, 0x10, 0x20 };
+	int i;
+
+	CHECK(rm_rtdir_fit_face_ok(0, 1) == 1);
+	CHECK(rm_rtdir_fit_face_ok(0, 0) == 0);
+	CHECK(rm_rtdir_fit_face_ok(0x2 | 0x40 | 0x80 | 0x100 | 0x200, 1) == 1);  /* slick, flowing, nodraw, hint, skip */
+
+	for (i = 0; i < (int)(sizeof(skip) / sizeof(skip[0])); i++)
+	{
+		CHECK(rm_rtdir_fit_face_ok(skip[i], 1) == 0);
+		CHECK(rm_rtdir_fit_face_ok(skip[i] | 0x40, 1) == 0);
+	}
+}
+
+/* a sample's luxel coordinates, texturemins taken off both, and the sample stride past the cap */
+static void
+test_fit_st(void)
+{
+	const float vecs[2][4] = { { 1, 0, 0, 8 }, { 0, 1, 0, -2 } };
+	const float diag[2][4] = { { 0.5f, 0.5f, 0, 0 }, { 0, 0, 2, 4 } };
+	const float pos[3] = { 40, 50, 3 };
+	const short mins[2] = { 32, 16 }, zero[2] = { 0, 0 }, neg[2] = { -48, -64 };
+	float st[2];
+
+	rm_rtdir_fit_st(pos, vecs, mins, st);
+	CHECK(st[0] == 1.0f && st[1] == 2.0f);
+	rm_rtdir_fit_st(pos, vecs, zero, st);
+	CHECK(st[0] == 3.0f && st[1] == 3.0f);
+	rm_rtdir_fit_st(pos, vecs, neg, st);
+	CHECK(st[0] == 6.0f && st[1] == 7.0f);
+	rm_rtdir_fit_st(pos, diag, mins, st);
+	CHECK(st[0] == 0.8125f && st[1] == -0.375f);
+
+	CHECK(rm_rtdir_fit_every(0, 8192) == 1);
+	CHECK(rm_rtdir_fit_every(8192, 8192) == 1);
+	CHECK(rm_rtdir_fit_every(8193, 8192) == 2);
+	CHECK(rm_rtdir_fit_every(16384, 8192) == 2);
+	CHECK(rm_rtdir_fit_every(16385, 8192) == 3);
+	CHECK(rm_rtdir_fit_every(100, 0) == 1);
+
+	/* every k-th of total points is at most cap of them */
+	{
+		long total, k;
+
+		for (total = 1; total < 40000; total += 997)
+		{
+			k = rm_rtdir_fit_every(total, 8192);
+			CHECK((total + k - 1) / k <= 8192);
+			CHECK((k == 1) || ((total + k - 2) / (k - 1) > 8192));
+		}
+	}
 }
 
 /* a pixel's candidates: all of them up to MTL_RTDIR_MAX_RAYS; past it the strongest; ranked strongest first */
@@ -1643,7 +1960,7 @@ test_view_lines(void)
 	rm_rtdir_pack_t p;
 	char line[512];
 
-	CHECK(sizeof(rm_rtdir_view_t) == 128);
+	CHECK(sizeof(rm_rtdir_view_t) == 176);
 	CHECK(sizeof(rm_rtdir_dlight_t) == 32);
 	CHECK(sizeof(rm_rtdir_light_t) == 48);
 	CHECK(rm_rtdir_view(ident, ident, &vp, eye, 4, 2.0f, 7, 2, &v) == 1);
@@ -2222,6 +2539,551 @@ test_self(void)
 	CHECK(rm_rtdir_self_table(NULL, self_face, NULL, recs, 6, table, 10) == 0 && table[0] == 0 && table[9] == 0);
 }
 
+/* ---- TASK189, PM7 slice 1: the sky light and the sun ------------------------------------ */
+
+/* the kernel's statement of the two terms: from their rays alone, the same point and normal as the traced light's */
+#define KERNEL_OPEN \
+	"const float3 open = world ? rm_rtdir_open(v, px, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), ias,\n" \
+	"\t\t\tinst, tmat, ntris, tile, t) : float3(0.0f);"
+
+/* rm_rtdir_open's parameters: the view, the pixel and its point, the scene, the noise tile and the tally; no texture */
+#define OPEN_PARAMS \
+	"(constant rm_rtdir_view &v, uint2 px, float3 p, float3 n, instance_acceleration_structure ias,\n" \
+	"\t\tdevice const uint *inst, device const uchar *tmat, uint ntris, device const ushort *tile, thread rm_rtdir_tally &t)"
+
+/*
+ * rm_rtdir_open's body, whole: one sky ray, cosine-weighted from the
+ * tile's numbers moved on by the view's frame, its term the sky's colour
+ * where it reached the sky; one sun ray toward the sun where the pixel
+ * faces it, its term the sun's colour times its visibility and N.L; each
+ * under mtl_rtsky_traces
+ */
+#define OPEN_BODY \
+	"{\n" \
+	"\tconst float3 o = p + n * mtl_rtao_bias(distance(p, v.eye.xyz), v.bias_k);\n" \
+	"\tconst mtl_rtao_v3_t nv = mtl_rtao_v3(n.x, n.y, n.z);\n" \
+	"\tfloat3 sum = float3(0.0f);\n" \
+	"\n" \
+	"\tif (mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SKY, max(v.sky.r, max(v.sky.g, v.sky.b))))\n" \
+	"\t{\n" \
+	"\t\tconst float u = mtl_rtao_noise(tile[mtl_rtao_tile_index(px.x, px.y, 0u)], v.frame, 0u);\n" \
+	"\t\tconst float w = mtl_rtao_noise(tile[mtl_rtao_tile_index(px.x, px.y, 1u)], v.frame, 1u);\n" \
+	"\t\tconst mtl_rtao_v3_t d = mtl_rtsky_dir(nv, u, w);\n" \
+	"\t\tconst float hit = rm_rtdir_sky_hit(ray(o, float3(d.x, d.y, d.z), 0.0f, MTL_RTSUN_RANGE), ias, inst, tmat, ntris);\n" \
+	"\n" \
+	"\t\tt.sky_rays++;\n" \
+	"\t\tt.sky_hits += (hit > 0.5f) ? 1u : 0u;\n" \
+	"\t\tsum += float3(mtl_rtsky_term(v.sky.r, hit), mtl_rtsky_term(v.sky.g, hit), mtl_rtsky_term(v.sky.b, hit));\n" \
+	"\t}\n" \
+	"\n" \
+	"\tif (mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SUN, max(v.sun.r, max(v.sun.g, v.sun.b))))\n" \
+	"\t{\n" \
+	"\t\tconst float nl = mtl_rtsun_ndotl(nv, mtl_rtao_v3(v.sun_dir.x, v.sun_dir.y, v.sun_dir.z));\n" \
+	"\n" \
+	"\t\tif (nl > 0.0f)\n" \
+	"\t\t{\n" \
+	"\t\t\tconst float vis = rm_rtdir_sky_hit(ray(o, v.sun_dir.xyz, 0.0f, MTL_RTSUN_RANGE), ias, inst, tmat, ntris);\n" \
+	"\n" \
+	"\t\t\tt.sun_rays++;\n" \
+	"\t\t\tt.sun_lit += (vis > 0.5f) ? 1u : 0u;\n" \
+	"\t\t\tsum += float3(mtl_rtsky_term(v.sun.r, vis * nl), mtl_rtsky_term(v.sun.g, vis * nl),\n" \
+	"\t\t\t\t\tmtl_rtsky_term(v.sun.b, vis * nl));\n" \
+	"\t\t}\n" \
+	"\t}\n" \
+	"\n" \
+	"\treturn sum;\n" \
+	"}"
+
+/* rm_rtdir_sky_hit's walk: RT2's rule at each face (mtl_rtsky_at), nothing met shadowed, at most MTL_RTSUN_LAYERS + 1 */
+#define SKY_HIT_BODY \
+	"{\n" \
+	"\tintersector<triangle_data, instancing> isect;\n" \
+	"\n" \
+	"\tisect.assume_geometry_type(geometry_type::triangle);\n" \
+	"\n" \
+	"\tfor (int layer = 0; layer <= MTL_RTSUN_LAYERS; layer++)\n" \
+	"\t{\n" \
+	"\t\tintersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);\n" \
+	"\t\tuint b, m = 0xffu, at;\n" \
+	"\n" \
+	"\t\tif (hit.type == intersection_type::none)\n" \
+	"\t\t{\n" \
+	"\t\t\treturn 0.0f;\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tb = inst[2 * hit.instance_id];\n" \
+	"\n" \
+	"\t\tif (b != 0xffffffffu)\n" \
+	"\t\t{\n" \
+	"\t\t\tm = (b + hit.primitive_id < ntris) ? (uint)tmat[b + hit.primitive_id] : (uint)MTL_GB_MAT_WORLD;\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tat = mtl_rtsky_at(m, layer);\n" \
+	"\n" \
+	"\t\tif (at != MTL_RTSUN_AT_PASS)\n" \
+	"\t\t{\n" \
+	"\t\t\treturn (at == MTL_RTSUN_AT_LIT) ? 1.0f : 0.0f;\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tr.min_distance = hit.distance + 0.01f;\n" \
+	"\n" \
+	"\t\tif (!(r.min_distance < r.max_distance))\n" \
+	"\t\t{\n" \
+	"\t\t\treturn 0.0f;\n" \
+	"\t\t}\n" \
+	"\t}\n" \
+	"\n" \
+	"\treturn 0.0f;\n" \
+	"}"
+
+/* the write's addition: mtl_rtsky_light of the exposed light and the two terms, alone under views 5 and 6 */
+#define OUT_OPEN_BODY \
+	"{\n" \
+	"\tmtl_rgba_t l;\n" \
+	"\n" \
+	"\tl.r = c.r;\n" \
+	"\tl.g = c.g;\n" \
+	"\tl.b = c.b;\n" \
+	"\tl.a = c.a;\n" \
+	"\tl = mtl_rtsky_light(l, open.r, open.g, open.b, mtl_rtsky_alone(show));\n" \
+	"\treturn float4(l.r, l.g, l.b, l.a);\n" \
+	"}"
+
+/*
+ * The sky light's and the sun's rules in the kernel's text (src) with its
+ * comments taken out: the two terms come from rm_rtdir_open alone, whose
+ * parameters hold no texture and whose body is pinned whole (one sky ray
+ * and one sun ray, each under its view's and colour's test, the sky ray's
+ * noise moved on by the view's frame); their rays walk rm_rtdir_sky_hit,
+ * RT2's sun rule, pinned whole; they join the exposed light once, in the
+ * world's write, through rm_rtdir_out_open. NULL when it holds, else the
+ * first rule broken.
+ */
+static const char *
+open_broken(const char *src)
+{
+	static char text[65536];
+	fn_t k, open, hit, out;
+	int r;
+
+	strip_comments(src, text, sizeof(text));
+
+	if (!find_fn(text, "kernel void\nrm_rtdir_trace(", &k) || !find_fn(text, "static float3\nrm_rtdir_open(", &open) ||
+		!find_fn(text, "static float\nrm_rtdir_sky_hit(", &hit) || !find_fn(text, "static float4\nrm_rtdir_out_open(", &out))
+	{
+		return "rm_rtdir_open, rm_rtdir_sky_hit or rm_rtdir_out_open is not defined once";
+	}
+
+	r = pin_and(pin_count(k.body, k.nbody, KERNEL_OPEN, 1), pin_count(k.body, k.nbody, KERNEL_WRITE, 1));
+
+	if ((r != PIN_OK) || (words_in(k.body, k.nbody, "open") != 2) || (count_in(text, strlen(text), "rm_rtdir_open(") != 2) ||
+		(count_in(text, strlen(text), "rm_rtdir_out_open(") != 2))
+	{
+		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN, "the sky light and the sun do not join the exposed light once, in the world's write");
+	}
+
+	if ((r = pin_is(open.params, open.nparams, OPEN_PARAMS)) != PIN_OK)
+	{
+		return PIN_WHY(r, "rm_rtdir_open's parameters are not the view, the point, the scene, the tile and the tally");
+	}
+
+	if ((r = pin_is(open.body, open.nbody, OPEN_BODY)) != PIN_OK)
+	{
+		return PIN_WHY(r, "rm_rtdir_open is not one sky ray and one sun ray by their rules");
+	}
+
+	if ((r = pin_is(hit.body, hit.nbody, SKY_HIT_BODY)) != PIN_OK)
+	{
+		return PIN_WHY(r, "rm_rtdir_sky_hit is not RT2's sun rule at each face");
+	}
+
+	r = pin_and(pin_is(out.params, out.nparams, "(float4 c, float3 open, uint show)"), pin_is(out.body, out.nbody, OUT_OPEN_BODY));
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "rm_rtdir_out_open is not mtl_rtsky_light of the exposed light and the terms");
+	}
+
+	/* the rays and the noise: the two calls of the walk, the tile read twice and named nowhere else */
+	if ((count_in(text, strlen(text), "rm_rtdir_sky_hit(") != 3) || (count_in(text, strlen(text), "tile[") != 2) ||
+		(words_in(text, strlen(text), "tile") != 5) || (count_in(text, strlen(text), "mtl_rtsky_at(") != 1))
+	{
+		return "the sky's and the sun's rays are not rm_rtdir_open's two, on the tile's noise";
+	}
+
+	return NULL;
+}
+
+/*
+ * mtl_rtsky_traces's body, whole (round 1 of TASK189 slice 1): the picture
+ * traces both terms, views 5 and 6 one each, every other view neither, so
+ * view 1 is the direct term alone and view 3 is view 1 without its shadows
+ */
+#define TRACES_BODY \
+	"{\n" \
+	"\tif (!(scale > 0.0f))\n" \
+	"\t{\n" \
+	"\t\treturn 0;\n" \
+	"\t}\n" \
+	"\n" \
+	"\tif (show == 0u)\n" \
+	"\t{\n" \
+	"\t\treturn 1;\n" \
+	"\t}\n" \
+	"\n" \
+	"\treturn (show == ((term == MTL_RTSKY_TERM_SKY) ? MTL_RTSKY_SHOW_SKY : MTL_RTSKY_SHOW_SUN)) ? 1 : 0;\n" \
+	"}"
+
+/* which views trace the two terms, in the header's text (src) with its comments taken out: NULL when it holds */
+static const char *
+traces_broken(const char *src)
+{
+	static char text[65536];
+	fn_t f;
+	int r;
+
+	strip_comments(src, text, sizeof(text));
+
+	if (!find_fn(text, "static inline int\nmtl_rtsky_traces(", &f))
+	{
+		return "mtl_rtsky_traces is not defined once";
+	}
+
+	r = pin_and(pin_is(f.params, f.nparams, "(unsigned show, unsigned term, float scale)"), pin_is(f.body, f.nbody, TRACES_BODY));
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "mtl_rtsky_traces does not trace the two terms under the picture and their views alone, and nowhere else");
+	}
+
+	if ((count_in(text, strlen(text), "MTL_RTSKY_SHOW_SKY 5u") != 1) || (count_in(text, strlen(text), "MTL_RTSKY_SHOW_SUN 6u") != 1))
+	{
+		return "the views of the two terms alone are not 5 and 6";
+	}
+
+	return NULL;
+}
+
+/*
+ * The kernel's file holds the sky's and the sun's rules, and each mutant
+ * of one breaks a check (open_broken's, or kernel_broken's for the
+ * lightmap): nothing met counts as the sky (sky-miss-lit), any face as
+ * the sky (sky-any-face), the layers unbounded (sky-layers), a second sky
+ * ray (sky-two-rays, the ray bound), the noise's frame left out (the seed,
+ * sky-no-frame), the sky traced under any view (sky-ungated), the terms
+ * dropped from the write (open-dropped), the sun without N.L (sun-no-ndotl),
+ * toward the normal (sun-dir), from a face turned away (sun-backface), the
+ * terms reading the lightmap (open-reads-lm), the views of a term alone
+ * ignored (alone-ignored), the terms added before the exposure
+ * (open-exposed), and the sky or the sun traced under view 1 (round 1:
+ * sky-view-dropped and sun-view-dropped in the kernel; view1-both,
+ * view1-sun and views-low in mtl_rtsky_math.h, judged by traces_broken),
+ * which would add them to the direct term alone.
+ */
+static void
+test_open_kernel(void)
+{
+	static char src[65536], hdr[65536], m[65536 + 1024], m2[65536 + 1024];
+	const char *why;
+	int i, refused = 0;
+
+	static const struct
+	{
+		const char *name, *edit[3][2];
+	} mutants[] = {
+		{ "sky-miss-lit", { { "\t\t\treturn 0.0f;\n\t\t}\n\n\t\tb = inst[2 * hit.instance_id];\n\n\t\tif (b != 0xffffffffu)",
+			"\t\t\treturn 1.0f;\n\t\t}\n\n\t\tb = inst[2 * hit.instance_id];\n\n\t\tif (b != 0xffffffffu)" } } },
+		{ "sky-any-face", { { "at = mtl_rtsky_at(m, layer);", "at = (m == m) ? MTL_RTSUN_AT_LIT : MTL_RTSUN_AT_LIT;" } } },
+		{ "sky-layers", { { "for (int layer = 0; layer <= MTL_RTSUN_LAYERS; layer++)\n\t{\n\t\tintersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);\n\t\tuint b, m = 0xffu, at;",
+			"for (int layer = 0; layer <= 64; layer++)\n\t{\n\t\tintersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);\n\t\tuint b, m = 0xffu, at;" } } },
+		{ "sky-two-rays", { { "\t\tt.sky_rays++;\n",
+			"\t\tt.sky_rays++;\n\t\tsum += v.sky.rgb * rm_rtdir_sky_hit(ray(o, n, 0.0f, MTL_RTSUN_RANGE), ias, inst, tmat, ntris);\n" } } },
+		{ "sky-no-frame", { { "v.frame, 0u)", "0u, 0u)" } } },
+		{ "sky-ungated", { { "mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SKY, max(v.sky.r, max(v.sky.g, v.sky.b)))",
+			"(max(v.sky.r, max(v.sky.g, v.sky.b)) > 0.0f)" } } },
+		{ "open-dropped", { { "rm_rtdir_out(raw, v.exposure), open, v.show)", "rm_rtdir_out(raw, v.exposure), float3(0.0f), v.show)" } } },
+		{ "sun-no-ndotl", { { "mtl_rtsky_term(v.sun.r, vis * nl)", "mtl_rtsky_term(v.sun.r, vis)" } } },
+		{ "sun-dir", { { "ray(o, v.sun_dir.xyz, 0.0f, MTL_RTSUN_RANGE)", "ray(o, n, 0.0f, MTL_RTSUN_RANGE)" } } },
+		{ "sun-backface", { { "\t\tif (nl > 0.0f)\n", "\t\tif (nl > -2.0f)\n" } } },
+		{ "open-reads-lm", { { "device const ushort *tile, thread rm_rtdir_tally &t)\n{",
+			"device const ushort *tile, thread rm_rtdir_tally &t, texture2d<float, access::read> lm)\n{" },
+			{ "\tconst mtl_rtao_v3_t nv = mtl_rtao_v3(n.x, n.y, n.z);\n\tfloat3 sum = float3(0.0f);\n",
+				"\tconst mtl_rtao_v3_t nv = mtl_rtao_v3(n.x, n.y, n.z);\n\tfloat3 sum = lm.read(px).rgb;\n" },
+			{ "ntris, tile, t) : float3(0.0f);", "ntris, tile, t, lm) : float3(0.0f);" } } },
+		{ "alone-ignored", { { "mtl_rtsky_alone(show)", "0" } } },
+		{ "open-exposed", { { KERNEL_WRITE, "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + open, v.exposure), open, v.show), px);" } } },
+		{ "sky-view-dropped", { { "mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SKY,", "mtl_rtsky_traces(0u, MTL_RTSKY_TERM_SKY," } } },
+		{ "sun-view-dropped", { { "mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SUN,", "mtl_rtsky_traces(v.show & 4u, MTL_RTSKY_TERM_SUN," } } },
+	};
+
+	/* mutants of mtl_rtsky_math.h that let view 1 trace and add the sky or the sun */
+	static const struct
+	{
+		const char *name, *from, *to;
+	} hmutants[] = {
+		{ "view1-both", "\tif (show == 0u)\n", "\tif (show <= 1u)\n" },
+		{ "view1-sun", "(term == MTL_RTSKY_TERM_SKY) ? MTL_RTSKY_SHOW_SKY : MTL_RTSKY_SHOW_SUN",
+			"(term == MTL_RTSKY_TERM_SKY) ? MTL_RTSKY_SHOW_SKY : ((show == 1u) ? 1u : MTL_RTSKY_SHOW_SUN)" },
+		{ "views-low", "\tif (show == 0u)\n", "\tif (show <= 2u)\n" },
+	};
+
+	CHECK(read_file("src/client/refresh/metal/common/mtl_rtsky_math.h", hdr, sizeof(hdr)));
+	why = traces_broken(hdr);
+
+	if (why)
+	{
+		printf("mtl_rtsky_math.h: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+
+	for (i = 0; i < (int)(sizeof(hmutants) / sizeof(hmutants[0])); i++)
+	{
+		const int applied = mutate(hdr, hmutants[i].from, hmutants[i].to, m, sizeof(m));
+
+		why = applied ? traces_broken(m) : NULL;
+
+		if (!applied || !why)
+		{
+			printf("sky mutant %s: %s\n", hmutants[i].name, applied ? "passes the views' check" : "does not apply");
+		}
+
+		CHECK(applied && (why != NULL));
+		refused += (applied && why) ? 1 : 0;
+	}
+
+	CHECK(read_file("src/client/refresh/metal/rm_rtdir.metal", src, sizeof(src)));
+	why = open_broken(src);
+
+	if (why)
+	{
+		printf("rm_rtdir.metal: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+	CHECK(kernel_broken(src) == NULL);
+
+	for (i = 0; i < (int)(sizeof(mutants) / sizeof(mutants[0])); i++)
+	{
+		int applied = 1, e;
+
+		strcpy(m, src);
+
+		for (e = 0; applied && (e < 3) && mutants[i].edit[e][0]; e++)
+		{
+			strcpy(m2, m);
+			applied = mutate(m2, mutants[i].edit[e][0], mutants[i].edit[e][1], m, sizeof(m));
+		}
+
+		why = applied ? open_broken(m) : NULL;
+
+		if (applied && !why)
+		{
+			why = kernel_broken(m);
+		}
+
+		/* by hand: RM_RTDIR_MUTANTS=<dir> writes each mutant to <dir>/<name>.metal, to compile it */
+		if (applied && getenv("RM_RTDIR_MUTANTS"))
+		{
+			char path[1024];
+			FILE *o;
+
+			snprintf(path, sizeof(path), "%s/%s.metal", getenv("RM_RTDIR_MUTANTS"), mutants[i].name);
+			o = fopen(path, "wb");
+
+			if (o)
+			{
+				fputs(m, o);
+				fclose(o);
+			}
+
+			printf("sky mutant %s: %s\n", mutants[i].name, why ? why : "passes the sky check");
+		}
+
+		if (!applied || !why)
+		{
+			printf("sky mutant %s: %s\n", mutants[i].name, applied ? "passes the sky check" : "does not apply");
+		}
+
+		CHECK(applied && (why != NULL));
+		refused += (applied && why) ? 1 : 0;
+	}
+
+	/* check-ref-metal.sh counts these in its direct-light segment */
+	printf("rm_rtdir_test: %d sky mutants refused\n", refused);
+}
+
+/* a host mirror of rm_rtdir_sky_hit's walk over the faces a ray meets, nearest first (n of them): 1 when it reaches the sky */
+static float
+sky_walk(const unsigned *mats, int n)
+{
+	int layer;
+
+	for (layer = 0; layer <= MTL_RTSUN_LAYERS; layer++)
+	{
+		unsigned at;
+
+		if (layer >= n)
+		{
+			return 0.0f;
+		}
+
+		at = mtl_rtsky_at(mats[layer], layer);
+
+		if (at != MTL_RTSUN_AT_PASS)
+		{
+			return (at == MTL_RTSUN_AT_LIT) ? 1.0f : 0.0f;
+		}
+	}
+
+	return 0.0f;
+}
+
+/* the sky light's and the sun's arithmetic, the ray bound, the view, the line, and the AO off under the mode */
+static void
+test_sky_sun(void)
+{
+	static const float ident[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+	static const unsigned sky[] = { 4 }, world[] = { 1 }, alias[] = { 0xff }, water_sky[] = { 3, 5, 4 };
+	static const unsigned four_sky[] = { 3, 3, 5, 3, 4 }, five_sky[] = { 3, 3, 5, 3, 3, 4 }, water_wall[] = { 3, 1, 4 };
+	const rm_viewport_t vp = { 0, 0, 640, 480, 0, 1 };
+	const float eye[3] = { 0, 0, 0 }, skyc[3] = { 0.2f, 0.4f, 0.6f }, dir[3] = { 0, 0, 1 }, sunc[3] = { 0.35f, 0.3f, 0.2f };
+	const float bad[3] = { NAN, 0, 1 }, neg[3] = { -1, INFINITY, 0.5f };
+	const mtl_rgba_t zero = { 0, 0, 0, 0 }, half = { 0.5f, 0.5f, 0.5f, 1 };
+	rm_rtdir_view_t v;
+	rm_rtdir_stats_t s;
+	mtl_rgba_t c;
+	char line[512];
+	double mz = 0, mx = 0, my = 0;
+	int i, j, ok = 1;
+
+	/* a sky hit gives the sky's colour, any other face or nothing gives 0 */
+	CHECK(sky_walk(sky, 1) == 1.0f && mtl_rtsky_term(0.3f, sky_walk(sky, 1)) == 0.3f);
+	CHECK(sky_walk(world, 1) == 0.0f && mtl_rtsky_term(0.3f, sky_walk(world, 1)) == 0.0f);
+	CHECK(sky_walk(alias, 1) == 0.0f);
+	CHECK(sky_walk(NULL, 0) == 0.0f);
+	CHECK(sky_walk(water_sky, 3) == 1.0f);
+	CHECK(sky_walk(water_wall, 3) == 0.0f);
+	/* behind MTL_RTSUN_LAYERS water and translucent faces the sky is reached, behind one more it is not */
+	CHECK(sky_walk(four_sky, 5) == 1.0f && MTL_RTSUN_LAYERS == 4);
+	CHECK(sky_walk(five_sky, 6) == 0.0f);
+	CHECK(mtl_rtsky_term(NAN, 1) == 0.0f && mtl_rtsky_term(0.5f, NAN) == 0.0f && mtl_rtsky_term(-1, 1) == 0.0f);
+
+	/* RT2's rule at every face and layer, unchanged */
+	for (i = 0; i < 256; i++)
+	{
+		for (j = 0; j <= MTL_RTSUN_LAYERS + 1; j++)
+		{
+			ok = ok && (mtl_rtsky_at((unsigned)i, j) == mtl_rtsun_step(mtl_rtsun_at((unsigned)i), j));
+		}
+	}
+
+	CHECK(ok);
+
+	/* the sun lit against occluded, as RT2 adds its term (mtl_rtsun_light on a black base), without the floor */
+	for (i = 0; i < 2; i++)
+	{
+		for (j = 0; j <= 4; j++)
+		{
+			const float vis = (float)i, nl = (float)j / 4.0f;
+			const mtl_rgba_t rt2 = mtl_rtsun_light(zero, 1u, MTL_RTSUN_C_LIT, vis, nl, sunc[0], sunc[1], sunc[2]);
+
+			c = mtl_rtsky_light(zero, mtl_rtsky_term(sunc[0], vis * nl), mtl_rtsky_term(sunc[1], vis * nl),
+					mtl_rtsky_term(sunc[2], vis * nl), 0);
+			CHECK(fabsf(c.r - rt2.r) < 1e-6f && fabsf(c.g - rt2.g) < 1e-6f && fabsf(c.b - rt2.b) < 1e-6f);
+			CHECK((i == 0) ? (c.r == 0.0f) : (fabsf(c.r - sunc[0] * nl) < 1e-6f));
+		}
+	}
+
+	/* a face turned from the sun takes nothing, as RT2's N.L */
+	CHECK(mtl_rtsun_ndotl(mtl_rtao_v3(0, 0, 1), mtl_rtao_v3(0, 0, -1)) == 0.0f);
+	CHECK(mtl_rtsun_ndotl(mtl_rtao_v3(0, 0, 1), mtl_rtao_v3(0, 0, 1)) == 1.0f);
+
+	/* which views trace which term: the picture both, views 1 to 4 neither (view 1 the direct term alone), 5 and 6 one each */
+	CHECK(mtl_rtsky_traces(0, MTL_RTSKY_TERM_SKY, 1) && mtl_rtsky_traces(0, MTL_RTSKY_TERM_SUN, 1));
+
+	for (i = 1; i <= 4; i++)
+	{
+		CHECK(!mtl_rtsky_traces((unsigned)i, MTL_RTSKY_TERM_SKY, 1) && !mtl_rtsky_traces((unsigned)i, MTL_RTSKY_TERM_SUN, 1));
+	}
+
+	CHECK(!mtl_rtsky_traces(7, MTL_RTSKY_TERM_SKY, 1) && !mtl_rtsky_traces(7, MTL_RTSKY_TERM_SUN, 1));
+	CHECK(mtl_rtsky_traces(5, MTL_RTSKY_TERM_SKY, 1) && !mtl_rtsky_traces(5, MTL_RTSKY_TERM_SUN, 1));
+	CHECK(!mtl_rtsky_traces(6, MTL_RTSKY_TERM_SKY, 1) && mtl_rtsky_traces(6, MTL_RTSKY_TERM_SUN, 1));
+	CHECK(!mtl_rtsky_traces(0, MTL_RTSKY_TERM_SKY, 0) && !mtl_rtsky_traces(0, MTL_RTSKY_TERM_SUN, NAN));
+	CHECK(mtl_rtsky_alone(5) && mtl_rtsky_alone(6) && !mtl_rtsky_alone(0) && !mtl_rtsky_alone(1) && !mtl_rtsky_alone(4));
+
+	/* the ray bound: one sky ray and one sun ray a pixel, beside the direct light's */
+	CHECK(MTL_RTSKY_RAYS == 1 && MTL_RTSKY_SUN_RAYS == 1);
+	CHECK(MTL_RTSKY_PIXEL_RAYS == MTL_RTDIR_MAX_RAYS + MTL_RTDIR_MAX_DLIGHTS + 3 && MTL_RTSKY_PIXEL_RAYS == 67);
+
+	/* the sky ray: unit, above the plane by MTL_RTAO_MIN_COS, cosine-weighted (mean cosine 2/3), the whole circle */
+	for (i = 0; i < 64; i++)
+	{
+		for (j = 0; j < 64; j++)
+		{
+			const mtl_rtao_v3_t d = mtl_rtsky_dir(mtl_rtao_v3(0, 0, 1), ((float)i + 0.5f) / 64.0f, ((float)j + 0.5f) / 64.0f);
+			const mtl_rtao_v3_t e = mtl_rtsky_dir(mtl_rtao_v3(0.6f, 0, -0.8f), ((float)i + 0.5f) / 64.0f, ((float)j + 0.5f) / 64.0f);
+			const float len = sqrtf(d.x * d.x + d.y * d.y + d.z * d.z), le = sqrtf(e.x * e.x + e.y * e.y + e.z * e.z);
+
+			ok = ok && (fabsf(len - 1) < 1e-4f) && (fabsf(le - 1) < 1e-4f) && (d.z >= MTL_RTAO_MIN_COS - 1e-5f) &&
+				(0.6f * e.x - 0.8f * e.z >= MTL_RTAO_MIN_COS - 1e-5f);
+			mz += d.z;
+			mx += d.x;
+			my += d.y;
+		}
+	}
+
+	CHECK(ok);
+	CHECK(fabs(mz / 4096 - 2.0 / 3.0) < 0.01 && fabs(mx / 4096) < 0.01 && fabs(my / 4096) < 0.01);
+
+	/* the light the resolve reads with the terms: after the exposure, clamped, the terms alone under views 5 and 6 */
+	c = mtl_rtsky_light(half, 0.25f, 0.0f, 0.75f, 0);
+	CHECK(c.r == 0.75f && c.g == 0.5f && c.b == 1.0f && c.a == 1.0f);
+	c = mtl_rtsky_light(half, 0.25f, 0.0f, 0.75f, 1);
+	CHECK(c.r == 0.25f && c.g == 0.0f && c.b == 0.75f && c.a == 1.0f);
+	c = mtl_rtsky_light(half, NAN, -2.0f, INFINITY, 0);
+	CHECK(c.r == 0.0f && c.g == 0.0f && c.b == 1.0f);
+
+	/* the sky's scale, and the view's terms */
+	CHECK(rm_rtdir_sky_scale(NAN) == 0 && rm_rtdir_sky_scale(-1) == 0 && rm_rtdir_sky_scale(INFINITY) == 0);
+	CHECK(rm_rtdir_sky_scale(2) == 2 && rm_rtdir_sky_scale(99) == MTL_RTSKY_SCALE_MAX);
+	CHECK(offsetof(rm_rtdir_view_t, frame) == 120 && offsetof(rm_rtdir_view_t, sun_dir) == 128);
+	CHECK(offsetof(rm_rtdir_view_t, sun) == 144 && offsetof(rm_rtdir_view_t, sky) == 160);
+	CHECK(rm_rtdir_view(ident, ident, &vp, eye, 4, 1.0f, 3, 0, &v) == 1);
+	/* rm_rtdir_view alone traces neither term: their colours 0 */
+	CHECK(v.sky[0] == 0 && v.sky[2] == 0 && v.sun[0] == 0 && v.sun[2] == 0 && v.frame == 0);
+	rm_rtdir_view_open(&v, skyc, 2, dir, sunc, 77);
+	CHECK(fabsf(v.sky[0] - 0.4f) < 1e-6f && fabsf(v.sky[1] - 0.8f) < 1e-6f && fabsf(v.sky[2] - 1.2f) < 1e-6f && v.sky[3] == 0);
+	CHECK(v.sun[0] == sunc[0] && v.sun[2] == sunc[2] && v.sun_dir[2] == 1 && v.sun_dir[3] == 0 && v.frame == 77);
+	rm_rtdir_view_open(&v, NULL, 2, bad, sunc, 1);
+	CHECK(v.sky[0] == 0 && v.sky[1] == 0 && v.sun[0] == 0 && v.sun[1] == 0 && v.sun_dir[0] == 0);
+	rm_rtdir_view_open(&v, neg, 1, dir, neg, 1);
+	CHECK(v.sky[0] == 0 && v.sky[1] == 0 && v.sky[2] == 0.5f && v.sun[0] == 0 && v.sun[1] == 0 && v.sun[2] == 0.5f);
+	rm_rtdir_view_open(&v, skyc, NAN, dir, NULL, 1);
+	CHECK(v.sky[1] == 0 && v.sun[1] == 0 && v.sun_dir[2] == 1);
+
+	/* the r_rt_stats 2 line */
+	memset(&s, 0, sizeof(s));
+	s.frame = 9;
+	s.world = 50;
+	s.sky_rays = 50;
+	s.sky_hits = 20;
+	s.sun_rays = 30;
+	s.sun_lit = 10;
+	CHECK(rm_rtdir_open_format(&s, line, sizeof(line)) && !strcmp(line,
+		"ref_metal: rt direct sky: frame 9: 50 world, 50 sky rays (20 reached the sky), 30 sun rays (10 lit), at most 67 rays a pixel"));
+	CHECK(!rm_rtdir_open_format(&s, line, 16) && line[0] == 0);
+
+	/* the AO off under RT-primary and on under enhanced, as the overlay reads r_rt_ao; RT2's sun likewise, its scale the user's */
+	CHECK(rm_pres_value(RM_PRES_RTPRIMARY, "r_rt_ao", 1) == 0 && rm_pres_value(RM_PRES_RTPRIMARY, "r_rt_ao", 0) == 0);
+	CHECK(rm_pres_value(RM_PRES_ENHANCED, "r_rt_ao", 0) == 1 && rm_pres_value(RM_PRES_ENHANCED, "r_rt_ao", 1) == 1);
+	CHECK(rm_pres_value(RM_PRES_STOCK, "r_rt_ao", 0) == 0 && rm_pres_value(RM_PRES_STOCK, "r_rt_ao", 1) == 1);
+	CHECK(rm_pres_value(RM_PRES_RTPRIMARY, "r_rt_sun", 1) == 0 && rm_pres_value(RM_PRES_ENHANCED, "r_rt_sun", 0) == 1);
+	CHECK(rm_pres_value(RM_PRES_RTPRIMARY, "r_rt_sunscale", 0.5f) == 0.5f);
+	CHECK(rm_pres_value(RM_PRES_RTPRIMARY, "r_rt_direct_sky", 0.5f) == 0.5f);
+}
+
 int
 main(void)
 {
@@ -2231,11 +3093,18 @@ main(void)
 	test_light();
 	test_no_lightmap_kernel();
 	test_host_binding();
-	test_fit_lag_binding();
+	test_open_kernel();
+	test_fit_binding();
 	test_q();
 	test_fit();
-	test_fit_lag();
-	test_fit_lag_runs();
+	test_fit_enters();
+	test_fit_light();
+	test_fit_map();
+	test_fit_luxel();
+	test_fit_tree();
+	test_fit_tree_map();
+	test_fit_face();
+	test_fit_st();
 	test_keep();
 	test_visible_choice();
 	test_pack();
@@ -2250,6 +3119,7 @@ main(void)
 	test_dlight_bound();
 	test_self();
 	test_mode();
+	test_sky_sun();
 	printf("rm_rtdir_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

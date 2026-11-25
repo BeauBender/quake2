@@ -24,9 +24,11 @@
  * the dispatch on the frame's command buffer first among the effects'
  * kernels (rmb_gbuf_resolve's trace walk), the frame's counts and the
  * pass's GPU time, read once the frame completed, in the sun's shape
- * (rmb_rtsun.m), and the exposure fit at a fixed lag of
- * RMB_FRAMES_IN_FLIGHT frames (slice 3). Every object is counted in the
- * ledger as RM_OBJ_RT.
+ * (rmb_rtsun.m). The exposure is the view's: r_rt_direct_exposure's or the
+ * map's fit at its load (rm_rtdirscene.c, slice 3c). TASK189 adds the sky
+ * ray's blue-noise tile (rm_rtao_bluenoise, made again for this pass) and
+ * the sky's and the sun's counts. Every object is counted in the ledger as
+ * RM_OBJ_RT.
  *
  * =======================================================================
  */
@@ -41,6 +43,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rt.h"
 #include "header/rm_rtdir.h"
+#include "header/rm_rtao.h"
 #include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
@@ -53,16 +56,17 @@ extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
 #define RMB_RTDIR_GROUP 8       /* the kernel's threadgroup side */
-/* world, in range, rays, lit (their low words), the fit's lightmap and raw sums and samples, the three high words, capped */
-#define RMB_RTDIR_COUNTS 11
+/*
+ * world, in range, rays, lit (their low words), the fit's lightmap and raw sums and samples, the three high words,
+ * capped; TASK189's sky rays, sky hits, sun rays and sun hits
+ */
+#define RMB_RTDIR_COUNTS 15
 
-_Static_assert(sizeof(rm_rtdir_view_t) == 128, "the view is rm_rtdir.metal's 128 bytes");
+_Static_assert(sizeof(rm_rtdir_view_t) == 176, "the view is rm_rtdir.metal's 176 bytes");
 _Static_assert(sizeof(rm_rtdir_light_t) == 48, "a light is rm_rtdir.metal's 48 bytes");
 _Static_assert(sizeof(rm_rtdir_dlight_t) == 32, "a dynamic light is rm_rtdir.metal's 32 bytes");
 /* the frame's dynamic lights go by setBytes, inside its 4 KB */
 _Static_assert(MTL_RTDIR_MAX_DLIGHTS * sizeof(rm_rtdir_dlight_t) <= 4096, "the dynamic lights fit in setBytes");
-/* the fit's lag is the slots' count: the slot frame f takes last held frame f - RM_RTDIR_FIT_LAG */
-_Static_assert(RM_RTDIR_FIT_LAG == RMB_FRAMES_IN_FLIGHT, "the exposure fit's lag is the frames in flight");
 
 static int dir_open;
 static id<MTLComputePipelineState> trace_pipe;
@@ -73,6 +77,7 @@ static id<MTLBuffer> lights;            /* the map's lights, at least one record
 static unsigned long nlights;
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTDIR_COUNTS */
 static id<MTLBuffer> selftab;           /* the map's per-triangle own light (TASK188 slice 3b), at least one word long */
+static id<MTLBuffer> tile;              /* TASK189: the sky ray's blue-noise ranks, MTL_RTAO_TILE_N ushorts */
 static unsigned long nself;
 static rm_rtdir_dlight_t dlights[MTL_RTDIR_MAX_DLIGHTS];   /* the frame's dynamic lights, all of them bound */
 static unsigned ndlights;
@@ -86,9 +91,6 @@ static unsigned long slot_frame[RMB_FRAMES_IN_FLIGHT], slot_pixels[RMB_FRAMES_IN
 static float slot_exposure[RMB_FRAMES_IN_FLIGHT];
 static rm_rtdir_stats_t done[RMB_FRAMES_IN_FLIGHT];
 static int ndone;
-static unsigned long last_frame;        /* the frame of the last pass encoded, 0 for none since the open */
-static float fit;                       /* the exposure fit at the lag (rm_rtdir_fit_lag), 1 at a map's first frame */
-static unsigned long fit_reset;         /* the last frame encoded before the map's lights were set */
 
 /* the view and styles the next G-buffer view traces with, and whether this one traced */
 static rm_rtdir_view_t view;
@@ -147,7 +149,27 @@ rmb_rtdir_open(char *err, size_t errlen)
 		RMB_RTDIR_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTDIR_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
 
-		if (!trace_pipe || !show_pipe || !counts)
+		/* TASK189: the sky ray's tile, made in code as the AO's (rm_rtao_bluenoise) */
+		{
+			unsigned short *ranks = malloc(MTL_RTAO_TILE_N * sizeof(*ranks));
+
+			if (ranks && rm_rtao_bluenoise(ranks))
+			{
+				RMB_RTDIR_SET(tile, [rmb_device newBufferWithBytes:ranks length:MTL_RTAO_TILE_N * sizeof(*ranks)
+						options:MTLResourceStorageModeShared]);
+			}
+
+			free(ranks);
+		}
+
+		if (trace_pipe && show_pipe && counts && !tile)
+		{
+			snprintf(err, errlen, "cannot make the sky ray's blue-noise tile");
+			rmb_rtdir_close();
+			return 0;
+		}
+
+		if (!trace_pipe || !show_pipe || !counts || !tile)
 		{
 			snprintf(err, errlen, "cannot build the direct light's pipelines%s%s", e ? ": " : "",
 					e ? e.localizedDescription.UTF8String : "");
@@ -182,14 +204,10 @@ rmb_rtdir_open(char *err, size_t errlen)
 		slot_frame[i] = 0;
 	}
 
-	fit = 1.0f;
-	fit_reset = 0;
-
 	ndone = 0;
 	nlights = 0;
 	nself = 0;
 	ndlights = 0;
-	last_frame = 0;
 	view_set = traced = 0;
 	dir_open = 1;
 	return 1;
@@ -207,6 +225,7 @@ rmb_rtdir_close(void)
 		RMB_RTDIR_SET(t_light, nil);
 		RMB_RTDIR_SET(lights, nil);
 		RMB_RTDIR_SET(selftab, nil);
+		RMB_RTDIR_SET(tile, nil);
 		RMB_RTDIR_SET(counts, nil);
 		RMB_RTDIR_SET(samples, nil);
 	}
@@ -215,7 +234,6 @@ rmb_rtdir_close(void)
 	nlights = 0;
 	nself = 0;
 	ndlights = 0;
-	last_frame = 0;
 	view_set = traced = 0;
 	ndone = 0;
 }
@@ -226,10 +244,6 @@ rmb_rtdir_set_lights(const rm_rtdir_light_t *l, long n)
 	const size_t one = sizeof(rm_rtdir_light_t);
 
 	nlights = 0;
-
-	/* a map's lights: its exposure starts at 1, and no frame encoded before (the old map's) is fitted from */
-	fit = 1.0f;
-	fit_reset = last_frame;
 
 	/* the map's lights and its emissive faces (TASK188 slice 2) */
 	if (!dir_open || (n < 0) || (n > RM_RTDIR_MAX_UPLOAD) || ((n > 0) && !l))
@@ -367,9 +381,8 @@ rmb_rtdir_set_view(const rm_rtdir_view_t *v, const float *st)
 		view.nlights = (unsigned)nlights;
 	}
 
-	/* nor a dynamic light past the frame's, nor a triangle past the table (TASK188 slice 3b) */
+	/* nor a dynamic light past the frame's (TASK188 slice 3b) */
 	view.ndlights = ndlights;
-	view.nself = selftab ? (unsigned)nself : 0u;
 
 	memcpy(styles, st, sizeof(styles));
 	view_set = 1;
@@ -411,6 +424,10 @@ rmb_rtdir_read(void)
 		s->fit_raw = c[5];
 		s->fit_n = c[6];
 		s->capped = c[10];
+		s->sky_rays = c[11];
+		s->sky_hits = c[12];
+		s->sun_rays = c[13];
+		s->sun_lit = c[14];
 		s->exposure = slot_exposure[k];
 		s->ms = -1;
 
@@ -453,7 +470,8 @@ rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap)
 /*
  * The kernel on the frame's command buffer over the render-size depth,
  * normal and material attachments, the raster's light (lm, read for the
- * fit's sums only) and the light the resolve would read (base, kept on
+ * view's fit sums on the r_rt_stats 2 line only) and the light the
+ * resolve would read (base, kept on
  * every pixel that is not a traced world pixel); out, the light with the
  * world's lightmap replaced by the direct light, or nil when nothing was
  * traced.
@@ -498,31 +516,7 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		slot = (int)(fno % RMB_FRAMES_IN_FLIGHT);
 		timed = (samples != nil);
 
-		/*
-		 * The frame that used this slot before has completed on the GPU (the
-		 * frame semaphore); see rmb_rtsun.m. TASK188 slice 3: the exposure at
-		 * a fixed lag, from that frame's fit sums when it is fno -
-		 * RM_RTDIR_FIT_LAG (rm_rtdir_fit_lag), read here before they are
-		 * cleared, so a frame's exposure never depends on which frame
-		 * completed last; the view's exposure above 0 is r_rt_direct_exposure's.
-		 */
-		{
-			const uint32_t *c = (const uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS;
-			rm_rtdir_stats_t lag;
-
-			memset(&lag, 0, sizeof(lag));
-			lag.frame = slot_frame[slot];
-			lag.fit_lm = c[4];
-			lag.fit_raw = c[5];
-			lag.fit_n = c[6];
-			fit = rm_rtdir_fit_lag(&lag, fno, fit_reset, fit);
-
-			if (!(view.exposure > 0.0f))
-			{
-				view.exposure = fit;
-			}
-		}
-
+		/* the frame that used this slot before has completed on the GPU (the frame semaphore); see rmb_rtsun.m */
 		memset((uint32_t *)counts.contents + slot * RMB_RTDIR_COUNTS, 0, RMB_RTDIR_COUNTS * sizeof(uint32_t));
 
 		if (timed)
@@ -569,6 +563,8 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		[ce setTexture:base atIndex:4];
 		[ce setTexture:t_vis atIndex:5];
 		[ce setTexture:t_light atIndex:6];
+		/* nor a triangle past the table bound at index 11, its count taken here with it (TASK188 slice 3c) */
+		view.nself = selftab ? (unsigned)nself : 0u;
 		[ce setBytes:&view length:sizeof(view) atIndex:0];
 		[ce setBytes:styles length:sizeof(styles) atIndex:1];
 		[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTDIR_COUNTS * sizeof(uint32_t) atIndex:6];
@@ -576,13 +572,14 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		[ce setBytes:dlights length:sizeof(dlights) atIndex:10];
 		/* the own-light table, or (none made) a word the kernel does not read: view.nself is then 0 */
 		[ce setBuffer:(selftab ? selftab : counts) offset:0 atIndex:11];
+		/* TASK189: the sky ray's noise */
+		[ce setBuffer:tile offset:0 atIndex:12];
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTDIR_GROUP, RMB_RTDIR_GROUP, 1)];
 		[ce endEncoding];
 
 		slot_pending[slot] = 1;
 		slot_timed[slot] = timed;
 		slot_frame[slot] = fno;
-		last_frame = fno;
 		slot_pixels[slot] = (unsigned long)(w * h);
 		slot_exposure[slot] = view.exposure;
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {

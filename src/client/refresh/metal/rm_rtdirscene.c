@@ -22,11 +22,14 @@
  * which the mode's overlay reads 1, r_rt_direct_exposure and the
  * development view r_rt_direct_show), the map's lights (TASK187's light
  * entities, rm_rtdata.c) and after them its emissive faces as qrad3's
- * surface lights (TASK188 slice 2), uploaded once a map (the back end
- * fits the exposure at a fixed lag, slice 3), the frame's decision (with it the view
+ * surface lights (TASK188 slice 2), uploaded once a map, with the map's
+ * exposure fitted then from a sample of its luxels (slice 3c), the frame's decision (with it the view
  * takes the G-buffer path), the view and the style table handed to the
- * back end before the raster, and the r_rt_stats lines. Under any
- * presentation but RT-primary nothing here builds or allocates anything.
+ * back end before the raster, and the r_rt_stats lines. TASK189 (PM7
+ * slice 1) adds the sky light (r_rt_direct_sky, its noise's seed
+ * r_rt_direct_seed) and the sun (TASK56's direction and r_rt_sunscale,
+ * RM_RTSun_Primary) to the view. Under any presentation but RT-primary
+ * nothing here builds or allocates anything.
  *
  * =======================================================================
  */
@@ -37,12 +40,17 @@
 #include "header/rm_rtdirscene.h"
 #include "header/rm_rtdata.h"
 #include "header/rm_rtgate.h"
+#include "header/rm_rtao.h"
+#include "header/rm_rtsunscene.h"
 #include "header/rm_gbufscene.h"
 
 static cvar_t *r_rt_direct;
 static cvar_t *r_rt_direct_exposure;
 static cvar_t *r_rt_direct_show;
+static cvar_t *r_rt_direct_sky;
+static cvar_t *r_rt_direct_seed;
 static cvar_t *r_rt_stats_ref;
+static unsigned long dir_count;     /* TASK189: the views traced, the sky ray's noise frame without a seed */
 
 /* the map's lights, then its emissive faces (TASK188 slice 2) */
 static rm_rtdir_light_t dir_lights[RM_RTDIR_MAX_UPLOAD];
@@ -58,6 +66,9 @@ static const rm_world_t *dir_world; /* the map whose lights are uploaded */
 static char dir_map[MAX_QPATH];     /* its model name (a new map's buffers may take the old one's address) */
 static long dir_nlights;            /* the records uploaded: the lights, then the emissive faces */
 static int dir_fixed;               /* the frame's exposure is r_rt_direct_exposure's */
+static float dir_fit;               /* the map's exposure, fitted at its load (TASK188 slice 3c, rm_rtdir_fit_tree) */
+static const rm_world_t *fit_world; /* the map dir_fit is of: kept across a reopen of the pass, reset by a new map */
+static char fit_map[MAX_QPATH];
 
 void
 RM_RTDir_Init(const rmb_caps_t *caps)
@@ -66,11 +77,15 @@ RM_RTDir_Init(const rmb_caps_t *caps)
 	r_rt_direct = ri.Cvar_Get("r_rt_direct", "0", 0);
 	r_rt_direct_exposure = ri.Cvar_Get("r_rt_direct_exposure", "0", CVAR_ARCHIVE);
 	r_rt_direct_show = ri.Cvar_Get("r_rt_direct_show", "0", 0);
+	/* TASK189: the sky light's scale, and its noise's seed (r_rt_ao_seed's rule) */
+	r_rt_direct_sky = ri.Cvar_Get("r_rt_direct_sky", "1", CVAR_ARCHIVE);
+	r_rt_direct_seed = ri.Cvar_Get("r_rt_direct_seed", "0", 0);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
+	dir_count = 0;
 	dir_device = caps->raytracing != 0;
 	dir_opened = dir_refused = dir_active = dir_viewed = dir_fixed = 0;
-	dir_world = NULL;
-	dir_map[0] = '\0';
+	dir_world = fit_world = NULL;
+	dir_map[0] = fit_map[0] = '\0';
 	dir_nlights = 0;
 }
 
@@ -83,7 +98,8 @@ RM_RTDir_Shutdown(void)
 	}
 
 	dir_opened = dir_active = dir_viewed = 0;
-	dir_world = NULL;
+	dir_world = fit_world = NULL;
+	fit_map[0] = '\0';
 	dir_nlights = 0;
 }
 
@@ -133,6 +149,116 @@ RM_RTDir_Face(void *ctx, long face, rm_rtdir_face_t *out)
 	return 1;
 }
 
+/* the engine's values of the fit's copies (rm_rtdir.h) */
+typedef char rm_rtdir_surf_same[((RM_RTDIR_SURF_LIGHT == SURF_LIGHT) && (RM_RTDIR_SURF_SKY == SURF_SKY) &&
+	(RM_RTDIR_SURF_WARP == SURF_WARP) && (RM_RTDIR_SURF_TRANS33 == SURF_TRANS33) &&
+	(RM_RTDIR_SURF_TRANS66 == SURF_TRANS66) && (RM_RTDIR_CONTENTS_SOLID == CONTENTS_SOLID)) ? 1 : -1];
+
+/* rm_rtdir_tree_t's read: a node or a leaf of the world's tree (mleaf_t shares mnode_t's contents) */
+static void
+RM_RTDir_Node(const void *p, rm_rtdir_node_t *out)
+{
+	const mnode_t *node = p;
+
+	memset(out, 0, sizeof(*out));
+	out->leaf = node->contents != CONTENTS_NODE;
+	out->contents = node->contents;
+
+	if (!out->leaf)
+	{
+		VectorCopy(node->plane->normal, out->normal);
+		out->dist = node->plane->dist;
+		out->child[0] = node->children[0];
+		out->child[1] = node->children[1];
+	}
+}
+
+/*
+ * TASK188 slice 3c: the exposure fit's samples, at most cap: of every
+ * n-th world face (about RM_RTDIR_FIT_FACES of them) that takes samples
+ * (rm_rtdir_fit_face_ok: a lightmap, not a fixture, whose own luxels
+ * qrad3 fills with its own light, nor translucent), its centre and the
+ * points half way from it to each corner, each with the face's lightmap
+ * at its luxel (rm_rtdir_fit_st, rm_rtdir_fit_luxel, every style at 1).
+ * Past cap, every k-th of those points (rm_rtdir_fit_every), so the
+ * samples cover the whole face list. In the faces' order, so the samples
+ * are a function of the map alone. With pts NULL, the points counted.
+ */
+static long
+RM_RTDir_FitPoints(const model_t *wm, rm_rtdir_fitpt_t *pts, long cap, long every)
+{
+	long first = 0, num = wm->numsurfaces, face, stride, n = 0, g = 0;
+
+	if (wm->numsubmodels > 0)
+	{
+		first = wm->submodels[0].firstmodelsurface;
+		num = wm->submodels[0].nummodelsurfaces;
+	}
+
+	stride = 1 + num / RM_RTDIR_FIT_FACES;
+
+	for (face = first; (face < first + num) && (face < wm->numsurfaces) && (!pts || (n < cap)); face += stride)
+	{
+		const msurface_t *fa;
+		const mtexinfo_t *tex;
+		rm_rtdir_face_t f;
+		float c[3] = { 0, 0, 0 };
+		int smax, tmax, v, k;
+
+		if (face < 0)
+		{
+			continue;
+		}
+
+		fa = &wm->surfaces[face];
+		tex = fa->texinfo;
+
+		if (!tex || !rm_rtdir_fit_face_ok(tex->flags, fa->samples != NULL) ||
+			!rm_lm_size(fa->extents[0], fa->extents[1], &smax, &tmax) || !RM_RTDir_Face((void *)wm, face, &f) || (f.n < 3))
+		{
+			continue;
+		}
+
+		if (!pts)
+		{
+			n += f.n + 1;
+			continue;
+		}
+
+		for (v = 0; v < f.n; v++)
+		{
+			for (k = 0; k < 3; k++)
+			{
+				c[k] += f.pts[v * f.stride + k] / (float)f.n;
+			}
+		}
+
+		for (v = -1; (v < f.n) && (n < cap); v++, g++)
+		{
+			rm_rtdir_fitpt_t *p;
+			float st[2];
+
+			if (g % every)
+			{
+				continue;
+			}
+
+			p = &pts[n++];
+
+			for (k = 0; k < 3; k++)
+			{
+				p->pos[k] = (v < 0) ? c[k] : 0.5f * (c[k] + f.pts[v * f.stride + k]);
+				p->normal[k] = f.normal[k];
+			}
+
+			rm_rtdir_fit_st(p->pos, tex->vecs, fa->texturemins, st);
+			rm_rtdir_fit_luxel(fa->samples, rm_lm_nummaps(fa->styles), smax, tmax, st[0], st[1], p->lm);
+		}
+	}
+
+	return n;
+}
+
 /* the map's lights and emissive faces into the back end's buffer, once a map (and after the pass opened again) */
 static void
 RM_RTDir_Lights(void)
@@ -172,6 +298,39 @@ RM_RTDir_Lights(void)
 	{
 		R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: the lights cannot be uploaded; none\n", wm->name);
 		dir_nlights = nemit = 0;
+	}
+
+	/*
+	 * TASK188 slice 3c: the map's exposure, once a map, from a sample of its luxels (rm_rtdir_fit_tree); a
+	 * reopen of the pass on the same map (r_rt_direct or the presentation away and back) keeps it
+	 */
+	if ((fit_world != wm->world) || strcmp(fit_map, wm->name))
+	{
+		const long every = rm_rtdir_fit_every(RM_RTDir_FitPoints(wm, NULL, 0, 1), RM_RTDIR_FIT_POINTS);
+		rm_rtdir_fitpt_t *pts = malloc(RM_RTDIR_FIT_POINTS * sizeof(*pts));
+		const long npts = (pts && wm->nodes) ? RM_RTDir_FitPoints(wm, pts, RM_RTDIR_FIT_POINTS, every) : 0;
+		rm_rtdir_tree_t tree = { wm->nodes, RM_RTDir_Node, 0, RM_RTDIR_FIT_VISITS, 0 };
+		rm_rtdir_mapfit_t f;
+
+		/* the old map's fit never survives into a new one's */
+		fit_world = wm->world;
+		Q_strlcpy(fit_map, wm->name, sizeof(fit_map));
+		dir_fit = 1.0f;
+		dir_fit = rm_rtdir_fit_tree(dir_lights, dir_nlights + nemit, pts, npts, &tree, &f);
+		free(pts);
+
+		if (f.over)
+		{
+			R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: the exposure fit's line tests passed %lu node visits; "
+					"exposure 1\n", wm->name, (unsigned long)RM_RTDIR_FIT_VISITS);
+		}
+
+		if (r_rt_stats_ref && r_rt_stats_ref->value)
+		{
+			R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: exposure fit %.4f over %lu luxels of %ld (%lu near black, "
+					"%lu clipped), %lu lines, %lu node visits, every %ld-th point\n", wm->name, (double)dir_fit, f.n,
+					npts, f.dark, f.clipped, f.rays, f.visits, every);
+		}
 	}
 
 	if (r_rt_stats_ref && r_rt_stats_ref->value)
@@ -278,7 +437,7 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 		return;
 	}
 
-	/* the lines of the frames completed since; the fit is the back end's, at a fixed lag (rm_rtdir_fit_lag) */
+	/* the lines of the frames completed since */
 	n = rmb_rtdir_stats(st, RMB_FRAMES_IN_FLIGHT);
 
 	for (i = 0; i < n; i++)
@@ -288,6 +447,12 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 			char line[RM_STATS_LINE];
 
 			if (rm_rtdir_stats_format(&st[i], (int)dir_nlights, dir_fixed, line, sizeof(line)))
+			{
+				R_Printf(PRINT_ALL, "%s\n", line);
+			}
+
+			/* TASK189: the sky light's and the sun's rays */
+			if (rm_rtdir_open_format(&st[i], line, sizeof(line)))
 			{
 				R_Printf(PRINT_ALL, "%s\n", line);
 			}
@@ -352,8 +517,8 @@ RM_RTDir_View(const rm_view_t *view)
 
 		rmb_rtdir_set_dlights(dl, k);
 	}
-	/* r_rt_direct_exposure's, else 0: the back end then takes its fit at the lag, at the trace */
-	exposure = rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), 0.0f, &dir_fixed);
+	/* r_rt_direct_exposure's, else the map's fit (TASK188 slice 3c) */
+	exposure = rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), dir_fit, &dir_fixed);
 
 	RM_GB_TargetSize(&w, &h);
 
@@ -363,6 +528,23 @@ RM_RTDir_View(const rm_view_t *view)
 	{
 		rmb_rtdir_set_view(NULL, NULL);
 		return;
+	}
+
+	/*
+	 * TASK189: the sky light, the mean of the sky box's five faces above the
+	 * horizon (gl1's order, dn last) times r_rt_direct_sky, none without a
+	 * sky image; the sun, TASK56's direction and colour
+	 */
+	{
+		float means[6][3], sky[3], sun_dir[3], sun[3];
+		int have[6], has_sky;
+
+		RM_SkyMeans(means, have);
+		has_sky = rm_rtl_sky_mean((const float (*)[3])means, have, 5, sky);
+		RM_RTSun_Primary(sun_dir, sun);
+		rm_rtdir_view_open(&v, has_sky ? sky : NULL, RM_Effect(r_rt_direct_sky), sun_dir, sun,
+				rm_rtao_frame(r_rt_direct_seed->value, dir_count));
+		dir_count++;
 	}
 
 	rmb_rtdir_set_view(&v, dir_styles);
