@@ -69,12 +69,12 @@ calls them, so no frame changes (the hold, below).
   multiplies by 0.8, both in double. The header uses doubles on the host and floats under
   Metal, so the host is gl1's to the bit. Under Metal the test `s > 0.1f` can floor a
   channel that gl1's double test `s > 0.1` keeps, so one input value can change a whole
-  channel. Slice 2 changes the Metal test to `s >= 0.1f`, which equals gl1's double test
-  exactly.
+  channel, not one float ulp. Slice 2 changes the Metal test to `s >= 0.1f`, which equals
+  gl1's double test exactly, since no float lies between 0.1 and 0.1f.
 
 ## The test, red then green
 
-`tests/metal/rm_rtmodel_test.c`, built by `tests/check-ref-metal.sh` (segment 7.7) with
+`tests/metal/rm_rtmodel_test.c`, built by `tests/check-ref-metal.sh` (segment 7.8) with
 `rm_gbuf.c`, `rm_rtshadow.c`, `rm_rt.c` and `rm_pure.c`, under ASAN and UBSAN:
 
 - colour parity over 1024 flag combinations (minlight, glow, fullbright, weapon, IR and the
@@ -130,3 +130,115 @@ function. The hold builds main and the branch in scratch, runs `make test` and
 - The kernel's tag decode also gates on material 2 (alias).
 - Tag only when the normals were written.
 - The depth-hack forward rule excludes `RF_WEAPONMODEL`.
+
+# Slice 2: rastered alias models lit by traced light
+
+Slice 2 lights the rastered alias models under RT-primary with the terms a world pixel
+takes, at the model pixel's own point and normal. `r_rt_direct_models 0` keeps every
+model stock-lit.
+
+## What slice 2 adds
+
+- **Slice 1's review notes.**
+  - Under Metal the minlight floor's test is `s >= 0.1f` (`MTL_RTM_ABOVE`). The host test
+    shows it equals `s > 0.1` for the 8193 floats around 0.1f, and check-ref-metal pins
+    the Metal branch.
+  - `rm_rtm_stock_model` is the depth-hack forward rule. It keeps the crosshair model
+    stock-lit and leaves out `RF_WEAPONMODEL`.
+  - `rm_rtm_tag_verts` tags only when `extra_ok` holds.
+  - The kernel decodes a tag at material 2 only (`rm_rtm_px_flags`).
+- **The kernel**, `rm_rtm_trace` in the new `rm_rtmodel.metal`:
+  - The file includes `rm_rtdir.metal` for its static helpers and renames its two entry
+    points with exactly two `#define`s. `rm_rtdir.metal` is unchanged.
+  - It runs on material-2 pixels with a normal. It calls `rm_rtdir_direct`, `rm_rtdir_open`
+    and `rm_rtdir_bounce` at the pixel's point and normal, and then `rm_rtdir_out_open`
+    under the world's exposure and view.
+  - It converts that light to the model colour with `mtl_rtm_color` at
+    `MTL_RTM_DOT_TRACED`, through the host's minlight and gamma tables (one 512-byte
+    buffer, from `R_Minlight` and `gammatable`).
+  - It writes the light and the visibility of model pixels only. Its counts are its own,
+    so nothing reaches the exposure fit.
+  - The light attachment is read for the tag alone. Nothing tags a model before slice 3,
+    so every pixel decodes to no flags.
+- **The back end**, `rmb_rtmodel.m`:
+  - It holds the pipeline, the dispatch, the counts and the GPU time.
+  - It reads the frame's trace through `rmb_rtdir_frame`, a read-only getter in
+    `rmb_rtdir.m` that binds nothing. TASK188's and TASK190's binding pins in
+    `rm_rtdir_test.c` hold unchanged.
+  - It binds the trace's view with `nself` 0, so `rm_rtdir_own` returns at once.
+- **The scene**, `rm_rtmodelscene.c`:
+  - `r_rt_direct_models`: default 1, archived. It is a setting of the direct light in
+    `rm_rtgate.c`, because the gate's effect switches must default to 0.
+  - The frame's glow pulse, overbright and tables.
+  - The `r_rt_stats 2` line, `ref_metal: rt models: frame N: P model pixels, R shadow rays,
+    O sky, sun and bounce rays, T ms`.
+- **Wiring.**
+  - The effect row `RM_RTFX_MODELS` comes after `RM_RTFX_DIRECT` and shares its switch,
+    `r_rt_direct`. `rm_rtfx_test.c` now counts the gate's effect switches as the table's
+    distinct switches.
+  - `R_EntitySplit` uses `rm_rtm_entity_split` while `RM_TracedModels()` holds.
+  - The Makefile builds the new `.metal`, `.m` and the two `.c` objects.
+- **Scenarios**, all seeded like `models`:
+  - `rtprimary-models`;
+  - `rtprimary-models-off` (`r_rt_direct_models 0`);
+  - `rtprimary-models-vis` (`r_rt_direct_show 1`).
+
+## Choices and where the plan differs
+
+- **The dispatch order.** The model row runs after the direct light's row, and so after
+  TASK190's accumulation inside it. It writes the model pixels of the light the resolve
+  reads (the trace's, or the accumulated light when `r_rt_temporal` is above 0), never the
+  history. The accumulation copies every pixel that is not a traced world pixel, so it
+  still accumulates world pixels only. Slice 4 moves the dispatch before the accumulation,
+  as the plan says.
+- **Glow and minlight models go forward** in this slice, through `rm_rtm_entity_split`,
+  until slice 3 tags them. So the real gun (`RF_MINLIGHT`) still goes forward even under
+  the `weapon-traced` mutant. That mutant is refused by the bare `RF_WEAPONMODEL` case,
+  and the new `depthhack-weapon` mutant holds the weapon's exclusion.
+- **The light's range.** The light is the world's after its clamp to 1, so a model's
+  light above 1 times overbright saturates as a world pixel's does.
+
+## The tests, red then green
+
+- **Host.** `rm_rtmodel_test.c` (`model light 3466 checks, 0 failed, 10 of 10
+  mutants refused`) adds three mutants, `depthhack-weapon`, `untagged-traced` and
+  `tag-no-normals`, plus the floor test and the stats line. `rm_rtfx_test.c` covers the
+  order, the walks, the shared switch, and `r_rt_direct_models` as a setting.
+- **Kernel pins.** check-ref-metal segment 7.9 holds seven pins on `rm_rtmodel.metal`, and
+  each mutant compiles under `xcrun metal` and is refused:
+
+  | Pin | Mutants |
+  | --- | --- |
+  | `rename` | `rename-extra` |
+  | `gate` | `model-writes-world`, `no-normal-traced` |
+  | `base` | `model-from-base` |
+  | `nolm` | `model-reads-lm` |
+  | `fit` | `model-fit-leak` |
+  | `dot` | `shadedot-back` |
+  | `tagmat` | `tag-no-material` |
+
+- **Back-end pins.** Two pins on `rmb_rtmodel.m`: `own`, with the `model-own-ray` mutant
+  (`nself` left as the trace's), and `bind`, with an extra texture binding.
+- Green: `model pass 7 kernel pins with 8 kernel mutants compiled and refused, 2 back-end pins with 2 mutants refused`.
+
+## The hold
+
+The checks that need no lock:
+
+- `make test`: `yq2test: 591 tests, 0 failed`;
+- check-ref-metal, check-cvar-docs, check-doc-links, check-runbook-index, check-pin-chars
+  and check-scenario-parsers;
+- `xcrun metal -c` of `rm_rtmodel.metal`.
+
+The hold script builds the before (`task190s1` with `task191s1` merged) in scratch and
+records:
+
+- the stock scenarios: @STOCK@ of 29 byte-identical to the before;
+- every existing RT-primary record: @RTP@ byte-identical to the before;
+- `rtprimary-models-off` on the branch: @OFF_SELF@ against `rtprimary-models` with
+  `r_rt_direct_models 0`, and @OFF_BEFORE@ against the before's binary on the same scenario
+  (which ignores the cvar);
+- each new scenario three times: @RUNS@;
+- the `r_rt_stats 2` model line: @STATS@;
+- the frames for the owner: `rtprimary-models` and `rtprimary-models-off` at captures 12 and
+  21, and the stock `models` scenario's.
