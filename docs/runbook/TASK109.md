@@ -111,11 +111,13 @@ Two scenarios run the effects through `MTLFXTemporalScaler` (`r_metalfx 2`) at t
 
 - `rt-all-metalfx2` is `dlights` with every ray-traced effect on, each at its `rt-*`
   scenario's values: `r_rt_shadows`, `r_rt_ao`, `r_rt_sun` and `r_rt_water`. It is
-  recorded with `PINS_SEED`, as `dlights`.
+  recorded with `PINS_SEED`, as `dlights`. `demo1.dm2` shows no warped water, so
+  `r_rt_water` is exercised by recording it a second time on `skywater`'s camera path
+  (`PINS_DEMO=water.dm2`), as `rt-water` is.
 - `rtprimary-metalfx2` is `rtprimary-world` under the scaler.
 
-Both set `r_rt_temporal 0`, as the `rt-*` pins do, so a later change of RT7's default does
-not move them. At the harness's 480 lines the default scale is the view's own size: the
+Both set `r_rt_temporal 0`, explicit so a later change of RT7's default cannot move them
+(the `rt-*` pins rely on the default of 0). At the harness's 480 lines the default scale is the view's own size: the
 family's default rows are 720 or 1080, and the scale is kept at 1 or below. So the committed
 records run the scaler as temporal anti-aliasing. The hold records `r_metalfx_scale 0.5` from
 scratch copies, which are never committed.
@@ -185,6 +187,8 @@ summary.
 | `rtprimary-metalfx2`, default scale, three runs | @RTP_DEF@ |
 | `rt-all-metalfx2`, `r_metalfx_scale 0.5`, three runs | @RTALL_HALF@ |
 | `rtprimary-metalfx2`, `r_metalfx_scale 0.5`, three runs | @RTP_HALF@ |
+| `rt-all-metalfx2` on `water.dm2`, default scale, three runs | @RTALL_WATER_DEF@ |
+| `rt-all-metalfx2` on `water.dm2`, `r_metalfx_scale 0.5`, three runs, and its change against `r_metalfx 0` (water drawn under the scaler) | @RTALL_WATER_HALF@ |
 | the input and output sizes (`metal_stats 1`), default and 0.5 | @SIZES@ |
 | `viewsize 60`: the box of the changing pixels at `r_metalfx 2` and at `r_metalfx 0`, against 384x288 at 128,96 | @VS60@ |
 | a still `base1`, 300 frames and more, effects on, `r_metalfx 2` at 0.5: the steps at every 32nd frame and every 5th, and the last against `r_metalfx 0` | @STILL@ |
