@@ -1418,13 +1418,17 @@ for p in depth count nohist; do
 		rtd_kmut=$((rtd_kmut + 1))
 	fi
 done
-# slice 2b: the reflections' blur, rm_rtwdenoise.metal. Its call of mtl_rtd_rweight pinned with the
-# depth guide's mutant (the neighbour's distance replaced by the pixel's own), and no history: its
+# slice 2b: the reflections' blur, rm_rtwdenoise.metal. Its call of mtl_rtd_rweight and the line that
+# computes dn pinned with the depth guide's two mutants (the neighbour's distance replaced by the
+# pixel's own in the call, rdepth, and dn never computed, rdist, round 2), and no history: its
 # textures are the four it reads and writes, and refl_out is the one it writes. A mutant that reads a
 # history (a fifth texture mixed into the blur) and one that writes one must be refused.
 rtw_pin() { # <file> <pin>: 0 when the file holds the pin
 	case $2 in
-		rdepth) rtd_body "$1" rm_rtw_denoise | grep -qF 'mtl_rtd_rweight(dx, dy, dc, dn, ok)' ;;
+		# round 2: the pin also holds how dn is computed, so a neighbour's distance never taken fails it
+		rdepth | rdist)
+			rtd_body "$1" rm_rtw_denoise | grep -qF 'dn = ok ? rm_rtd_rdist(v, depth, wdist, uint2(q), cn) : dc;' &&
+				rtd_body "$1" rm_rtw_denoise | grep -qF 'mtl_rtd_rweight(dx, dy, dc, dn, ok)' ;;
 		histread | histwrite)
 			[ "$(rtd_body "$1" rm_rtw_denoise | grep -c '\[\[texture(')" = 4 ] &&
 				! strip "$1" | grep -E '\.write\(|access::(read_)?write>' | grep -vqE 'refl_out' ;;
@@ -1435,7 +1439,7 @@ if [ -n "$rtd_metal" ] && ! rtd_compile "$wdn"; then
 	cat "${tmp:?}/metal.out"
 	bad "rm_rtwdenoise.metal does not compile"
 fi
-for p in rdepth histread histwrite; do
+for p in rdepth rdist histread histwrite; do
 	if ! rtw_pin "$wdn" "$p"; then
 		bad "rm_rtwdenoise.metal does not hold the reflections' blur's $p pin"
 		continue
@@ -1443,6 +1447,7 @@ for p in rdepth histread histwrite; do
 	rtd_kpins=$((rtd_kpins + 1))
 	case $p in
 		rdepth) sed 's/mtl_rtd_rweight(dx, dy, dc, dn, ok)/mtl_rtd_rweight(dx, dy, dc, dc, ok)/' "$wdn" ;;
+		rdist) sed 's/dn = ok ? rm_rtd_rdist(v, depth, wdist, uint2(q), cn) : dc;/dn = dc;/' "$wdn" ;;
 		histread) awk '/^rm_rtw_denoise\(/ { b = 1 } b && /^}/ { b = 0 }
 			b && /texture\(3\)/ { print; print "\t\ttexture2d<float, access::read> hist [[texture(4)]],"; next }
 			b && /n = refl\.read\(uint2\(q\)\);/ { print; print "\t\t\tn = 0.5f * (n + hist.read(uint2(q)));"; next }

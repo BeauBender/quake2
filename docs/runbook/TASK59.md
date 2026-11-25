@@ -497,6 +497,15 @@ fail it. It pins the call in `rm_rtwaterscene.c` as text, with three mutants it 
 while the real file passes: the gate dropped (`rmb_rtw_set_blur(RM_RTT_On())`), the mode
 compared with stock's, and the call commented out.
 
+Round 2: `tests/unit/test_vidrules.c` finds the tuning rows by cvar (`tune_row`), not by an
+index a new row shifts, checks the accumulate row under Retro, and checks
+`VidRules_TuneNum() <= VIDTUNE_MAX_ROWS`, which `vidrules.c` also asserts at compile time
+(the bound moved from `videomenu.c` to `vidrules.h`). `tests/menu/videomenu_test.c` greys
+the row "set by the presentation" under RT-primary and Retro, keeps it live under Enhanced,
+and steps it to 0.98 and no further. The `rdepth` pin also holds the line that computes `dn`
+(`dn = ok ? rm_rtd_rdist(...) : dc;`), with a second mutant, `rdist`, that never computes it
+(`dn = dc;`).
+
 Run by hand on the branch, with the check's compile lines and no lock: `denoiser 171 checks,
 0 failed, 8 rule mutants, 6 kernel pins with 6 kernel mutants refused and compiled` and `29
 kernel calls, 290 kernel-call mutants refused`; `check-cvar-docs: ok`, `check-doc-links: ok`,
