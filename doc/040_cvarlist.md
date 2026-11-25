@@ -1520,6 +1520,32 @@ is.
   next frame.
   Can be set from Video options > Ray tracing (TASK194), live.
 
+* **r_rt_temporal**: The Metal renderer's temporal accumulation of the
+  ray-traced effects (RT7): the weight of a pixel's history in the
+  exponential blend with the frame's own value, so that the effects are
+  steady at low ray counts. `0` (the default) turns it off: no history is
+  made, written or read, and every frame is the same as without it. A
+  value above `0` blends; one above `0.98` counts as `0.98`, and a
+  negative one or one that is not a finite number as `0`. A young history
+  is the plain mean of its samples. The history is read where the
+  G-buffer's motion vectors say the point was, and dropped where that is
+  off the screen, where the distance from the eye differs by more than the
+  eye's move plus 2 units plus 2 % of the distance, where the material id
+  differs, or where the set of dynamic lights reaching the pixel changed.
+  It starts again on a map load, a `vid_restart`, a camera cut or a
+  teleport (a move of more than 256 units on an axis), a change of the
+  render size or of the view's rectangle, and on the first frame after
+  one that accumulated nothing (every effect off); one effect's history
+  also starts again after a frame whose pass it skipped. It accumulates
+  `r_rt_shadows` (each light's visibility, before the light is added),
+  `r_rt_sun` and `r_rt_ao`, each with its own history and one reset for
+  the three. `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show`
+  show the frame's own trace, before the accumulation. The design's
+  default of `0.9` is set once the denoiser lands and the look is
+  judged. Saved with the configuration; applies from the next frame.
+  Not on the Ray tracing screens yet: it joins the tuning screen, the
+  presets and the settings optimizer with its default.
+
 * **r_rt_water**: When set to `1`, the Metal renderer gives water a
   ray-traced reflection, one bounce: from each pixel of water (the
   opaque water and the translucent water in front of the rest of the
