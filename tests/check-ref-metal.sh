@@ -746,7 +746,7 @@ if [ -n "$rtm" ]; then
 	done
 	[ "$rtm_mutants" -eq 7 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 7 model-light mutants"
 fi
-seg 7.7 "; model light ${rtm:-host test}, $rtm_mutants of 7 mutants refused"
+seg 7.8 "; model light ${rtm:-host test}, $rtm_mutants of 7 mutants refused"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)
