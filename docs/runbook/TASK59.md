@@ -534,23 +534,26 @@ twice: the water's warp follows the client clock, so the second run at 0 is the 
 floor), and the 0.9 one run by slice 2's code. Two frames each of the 0.9 run, of slice 2's
 0.9 run and of the run at 0 are for the owner and are kept outside the repository.
 
-Results of the hold (code commit `@HEAD@`, base main at `@BASE@`, slice 2 at `@S2@`):
+Results of the hold (code commit `4f1c66df453c`, base main at `4efcd73b246d`, slice 2 at `8091364ea2e5`):
 
-- `pins: @STOCK_SAME@ of @STOCK_TOTAL@ stock scenarios byte-identical to the base`,
-  @STOCK_DIFF@ differ; `rt-water` and `rt-water-entities`: @RTW_STOCK@.
-- `pins: @RTP_SAME@ of @RTP_TOTAL@ RT-primary scenarios byte-identical to the base`
-  (@RTP_DIFF@ differ; all must be identical, since the blur does not run under RT-primary).
-- The water, `water.dm2` at 640 x 480:
+- `pins: 29 of 29 stock scenarios byte-identical to the base`,
+  0 differ; `rt-water` and `rt-water-entities`: identical (digest `929e43a01e45` on both sides).
+- `pins: 5 of 5 RT-primary scenarios byte-identical to the base`
+  (0 differ; all must be identical, since the blur does not run under RT-primary).
+- The water, `water.dm2` at 640 x 480 (4 frames):
 
   | Run | Hash | Frames different |
   | --- | --- | --- |
-  | 0.9, two runs | `@ACC_HASH@` | @ACC_DET@ between the runs |
-  | 0, two runs | `@OFF_HASH@` | @OFF_DET@ between the runs (the floor) |
-  | 0.9 against 0 | | @ACC_OFF@ |
-  | 0.9 against slice 2's code at 0.9 | | @ACC_S2@ |
-  | 0 against the stock `rt-water` record | | @OFF_STOCK@ |
+  | 0.9, two runs | `64cb6e9116dc` | 0 between the runs |
+  | 0, two runs | `929e43a01e45` | 0 between the runs (the floor) |
+  | 0.9 against 0 | | 4 |
+  | 0.9 against slice 2's code at 0.9 | | 4 |
+  | 0 against the stock `rt-water` record | | 0 |
 
-- Checks: `@CHECK_REF_METAL@`; `@YQ2TEST@`; `check-cvar-docs: ok`, `check-doc-links: ok`,
+  The engine log shows the blur's allocation (`rt water blur 640x480: 1327104 bytes`)
+  only in the runs at 0.9. The frames for the owner (two each of the 0.9 run, of slice 2's
+  0.9 run and of the run at 0) went to the owner directly and were not committed.
+- Checks: `check-ref-metal: ok (13162 checks, 0 failed)`, with the denoiser line `denoiser 171 checks, 0 failed, 8 rule mutants, 9 kernel pins with 9 kernel mutants refused and compiled, the blur's RT-primary gate pinned with 3 mutants refused` and `29 kernel calls, 290 kernel-call mutants refused`; `yq2test: 591 tests, 0 failed`; `check-cvar-docs: ok`, `check-doc-links: ok`,
   `check-runbook-index: ok`, `check-video-menu: ok`, `check-pin-chars: ok`.
 
 ## Left for the next slices
