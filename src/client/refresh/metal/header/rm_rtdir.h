@@ -76,7 +76,10 @@ int rm_rtdir_on(int pres, float direct, int device_rt, float fullbright);
  * the direct term alone with no shadow ray traced (every light in range
  * counts as seen), 4 the dynamic lights' term alone, with their shadow
  * rays (TASK188 slice 3b), 5 the sky light's term alone and 6 the sun's
- * term alone, each with its ray (TASK189). v clamped to 0 to
+ * term alone, each with its ray (TASK189). Only the picture adds the
+ * sky's and the sun's terms: views 1 to 4 trace neither ray, so 1 is the
+ * direct term alone and 3 differs from it by its shadows only
+ * (mtl_rtsky_traces). v clamped to 0 to
  * RM_RTDIR_SHOW_MAX before it is cut to an int; 0 for a value that is not
  * finite.
  */

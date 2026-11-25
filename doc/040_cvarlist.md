@@ -1325,9 +1325,13 @@ is.
   lights' term alone (the muzzle flashes, explosions and other lights of
   the frame, each with its shadow ray), on white walls; `5` the sky
   light's term alone (`r_rt_direct_sky`, with its ray), on white walls;
-  `6` the sun's term alone (with its ray), on white walls. Views `3` and
-  `4` trace neither the sky's nor the sun's ray, and `5` and `6` each
-  trace only their own. Every view of the map's lights is at the map's
+  `6` the sun's term alone (with its ray), on white walls. Only the
+  picture (`0`) adds the sky's and the sun's terms to the direct term:
+  views `1` to `4` trace neither the sky's nor the sun's ray, so `1` is
+  the direct term alone and `3` differs from it by its shadows only, and
+  `5` and `6` each trace only their own. Views `5` and `6` still trace
+  the map's and the dynamic lights' shadow rays, and count them on the
+  `r_rt_stats 2` line, though they show none of that light. Every view of the map's lights is at the map's
   exposure (`r_rt_direct_exposure`); the sky's and the sun's terms are
   added after it, as RT4's sun is. The `r_rt_stats 2` line's sums under
   views `3` and `4` are of the term shown. Pixels that are not

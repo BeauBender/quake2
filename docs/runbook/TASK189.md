@@ -52,7 +52,10 @@ its lightmap (TASK188 slice 3c), so it does not scale the two terms. The arithme
   each of at most five intersections. With the direct light's 32, the dynamic lights' 32 and the own
   light's eye ray, a pixel traces at most 67 rays (`MTL_RTSKY_PIXEL_RAYS`), whatever the map holds.
 - **The views.** `r_rt_direct_show 5` is the sky light's term alone and `6` the sun's alone, on white albedo.
-  Views `3` and `4` trace neither ray, and `5` and `6` each trace only their own (`mtl_rtsky_traces`).
+  Only the picture (`0`) adds the two terms to the direct term. Views `1` to `4` trace neither ray, so view
+  `1` is the direct term alone and view `3` differs from it by its shadows only; `5` and `6` each trace
+  only their own (`mtl_rtsky_traces`). Views `5` and `6` still trace the map's and the dynamic lights'
+  shadow rays and count them on the `r_rt_stats 2` line, though they do not show that light.
 - **The line.** `r_rt_stats 2` prints a second line a frame:
   `ref_metal: rt direct sky: frame N: W world, S sky rays (H reached the sky), U sun rays (L lit), at most 67 rays a pixel`.
 
@@ -67,16 +70,22 @@ asset is added.
 - `test_sky_sun`: a sky hit gives the sky's colour and a world face, a model or nothing gives 0, through a
   host mirror of `rm_rtdir_sky_hit`'s walk (the sky behind four water or translucent faces reached, behind
   five not); `mtl_rtsky_at` against RT2's rule at all 256 materials and every layer; the sun lit against
-  occluded against `mtl_rtsun_light` on a black base; which views trace which term; the ray bound (67); the
+  occluded against `mtl_rtsun_light` on a black base; which views trace which term (the picture both, views
+  1 to 4 and 7 neither, 5 and 6 their own); the ray bound (67); the
   sky ray unit, above the plane and cosine-weighted (the mean cosine over a 64 x 64 grid within 0.01 of
   2/3, the azimuth's mean within 0.01 of 0); the light with the terms, clamped, and the terms alone; the
   view's fields and their offsets against the kernel's struct; the line; the AO and RT2's sun read `0` under
   mode 3 and `1` under mode 1, and `r_rt_sunscale` and `r_rt_direct_sky` left the user's.
 - `test_open_kernel`: the kernel's text pins `rm_rtdir_open`, `rm_rtdir_sky_hit` and `rm_rtdir_out_open`
-  whole, and the kernel's statement of the terms and its write. Thirteen mutants, each refused (and each
-  compiled with `xcrun metal -c` in scratch): `sky-miss-lit`, `sky-any-face`, `sky-layers`, `sky-two-rays`,
-  `sky-no-frame`, `sky-ungated`, `open-dropped`, `sun-no-ndotl`, `sun-dir`, `sun-backface`, `open-reads-lm`,
-  `alone-ignored` and `open-exposed`.
+  whole, and the kernel's statement of the terms and its write. Fifteen kernel mutants, each refused (and
+  each compiled with `xcrun metal -c` in scratch): `sky-miss-lit`, `sky-any-face`, `sky-layers`,
+  `sky-two-rays`, `sky-no-frame`, `sky-ungated`, `open-dropped`, `sun-no-ndotl`, `sun-dir`, `sun-backface`,
+  `open-reads-lm`, `alone-ignored`, `open-exposed`, and `sky-view-dropped` and `sun-view-dropped` (the
+  sky's or the sun's gate not given the view, so view 1 adds the term). It also pins `mtl_rtsky_traces`'s
+  body in `common/mtl_rtsky_math.h` (`traces_broken`), with three mutants refused that let view 1 trace the
+  sky or the sun: `view1-both`, `view1-sun` and `views-low` (the round-0 gate, views 0 to 2). The test
+  prints the eighteen as `rm_rtdir_test: 18 sky mutants refused`, and `check-ref-metal.sh` shows the count
+  in its direct-light segment.
 - The slice 1 to 3c pins (`test_no_lightmap_kernel`) follow the new write and the kernel's new tile buffer;
   their mutants are refused as before.
 
@@ -127,3 +136,5 @@ No frame was looked at by the agent.
 | A view of an emissive face's own light alone | PM7, a later slice. |
 | The sky light's noise, one ray a pixel | PM8 (TASK190), the denoiser. |
 | `r_rt_direct_sky`'s default and whether the sun keeps RT2's `r_rt_sunscale` under the mode | The owner, from the frames (PM11). |
+| Outdoor brightness against stock: the exposure is fitted to the map's point and emissive lights against a lightmap that, in qrad3, already holds the light from sky faces (sky faces are not emitters), and the sky's and the sun's terms are added after the fit, so an outdoor area can be brighter than stock | The owner judges it from the frames (PM11); no code change in this slice. |
+| Views `5` and `6` still trace the map's and the dynamic lights' shadow rays they do not show (a development view's cost only; the 67-ray bound holds) | Left as it is: skipping them would change `rm_rtdir_direct`'s pinned walk and the fit's sample under those views. |
