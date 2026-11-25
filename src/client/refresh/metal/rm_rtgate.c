@@ -185,8 +185,9 @@ static const char *const rtg_cvars[] = {
 	/* TASK188's direct light of RT-primary (PM6): a ray each light in range and pixel, only under
 	   r_presentation 3, whose overlay reads it 1 */
 	"r_rt_direct",
-	/* its fixed exposure, the sky ray's noise seed, its development view and the sky light's scale (TASK189):
-	   read only while the direct light runs */
+	/* the bounce's scale (TASK189 slice 2), its fixed exposure, the sky ray's noise seed, its development view
+	   and the sky light's scale (TASK189): read only while the direct light runs */
+	"r_rt_direct_bounce",
 	"r_rt_direct_exposure",
 	"r_rt_direct_seed",
 	"r_rt_direct_show",
