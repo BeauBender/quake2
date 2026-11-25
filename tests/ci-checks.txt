@@ -47,6 +47,7 @@ check-savegame-tables.sh
 check-scenario-parsers.sh
 check-static-modules.sh
 check-stop-invariants.sh
+check-supervise.sh
 check-title-fit.sh
 check-tvos.sh
 check-unit-sanitizers.sh
