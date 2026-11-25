@@ -84,6 +84,22 @@ static rm_rts_light_t lights[MTL_RTS_MAX_LIGHTS];
 static int view_set, traced;
 static unsigned view_show;
 
+/*
+ * RT7's accumulation (TASK59 slice 1b), made only while r_rt_temporal is
+ * above 0: rm_rts_temporal's pipeline, at the first view that accumulates,
+ * and the two histories at the render size, read and written in turn,
+ * each a record (RGBA32Uint: the light set, the distance, the material,
+ * the count) and the four visibilities (RGBA16Float).
+ */
+static id<MTLComputePipelineState> tmp_pipe;
+static id<MTLTexture> t_rec[2], t_vis[2];
+static int hist_cur;                    /* the history this view reads; the other is written */
+static rm_rtt_hist_t thist;             /* the last view encoded into it: a skipped one resets the next */
+static int tmp_refused;                 /* the pipeline could not be made: not tried again until the pass is closed */
+static unsigned long tmp_bad_w, tmp_bad_h;  /* a render size whose histories could not be made: not tried again */
+static rm_rtt_view_t tview;
+static int tview_set;
+
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTS_SET(slot, obj) \
 	do \
@@ -195,8 +211,16 @@ rmb_rts_close(void)
 		RMB_RTS_SET(m_ents, nil);
 		RMB_RTS_SET(counts, nil);
 		RMB_RTS_SET(samples, nil);
+		RMB_RTS_SET(tmp_pipe, nil);
+		RMB_RTS_SET(t_rec[0], nil);
+		RMB_RTS_SET(t_rec[1], nil);
+		RMB_RTS_SET(t_vis[0], nil);
+		RMB_RTS_SET(t_vis[1], nil);
 	}
 
+	tview_set = hist_cur = tmp_refused = 0;
+	tmp_bad_w = tmp_bad_h = 0;
+	rm_rtt_hist_reset(&thist);
 	rts_open = 0;
 	view_set = traced = 0;
 	view_show = 0;
@@ -241,6 +265,91 @@ rmb_rts_prepare(unsigned long w, unsigned long h)
 				(unsigned long)(t_out.allocatedSize + t_term.allocatedSize));
 	}
 
+	return 1;
+}
+
+/* releases the histories: the next made are not a history */
+static void
+rmb_rts_hist_release(void)
+{
+	if (t_rec[0] || t_rec[1] || t_vis[0] || t_vis[1])
+	{
+		RMB_RTS_SET(t_rec[0], nil);
+		RMB_RTS_SET(t_rec[1], nil);
+		RMB_RTS_SET(t_vis[0], nil);
+		RMB_RTS_SET(t_vis[1], nil);
+	}
+
+	rm_rtt_hist_reset(&thist);
+}
+
+int
+rmb_rts_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
+{
+	tview_set = 0;
+
+	/* off: no history is kept */
+	if (!t || !(t->alpha > 0.0f) || !rts_open || (w < 1) || (h < 1) || (w > 0xffffffffUL) || (h > 0xffffffffUL))
+	{
+		rmb_rts_hist_release();
+		return 0;
+	}
+
+	/* a failure is latched: the pipeline until the pass is closed, the histories for that size */
+	if (tmp_refused || ((w == tmp_bad_w) && (h == tmp_bad_h)))
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		if (!tmp_pipe)
+		{
+			NSError *e = nil;
+			id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rts_temporal"];
+
+			RMB_RTS_SET(tmp_pipe, k ? [rmb_device newComputePipelineStateWithFunction:k error:&e] : nil);
+
+			if (!tmp_pipe)
+			{
+				tmp_refused = 1;
+				fprintf(stderr, "ref_metal: rt temporal: no shadow accumulation pipeline\n");
+				return 0;
+			}
+		}
+
+		if (!t_rec[0] || !t_rec[1] || !t_vis[0] || !t_vis[1] || (t_rec[0].width != w) || (t_rec[0].height != h))
+		{
+			MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Uint
+					width:w height:h mipmapped:NO];
+
+			rmb_rts_hist_release();
+			d.storageMode = MTLStorageModePrivate;
+			d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+			RMB_RTS_SET(t_rec[0], [rmb_device newTextureWithDescriptor:d]);
+			RMB_RTS_SET(t_rec[1], [rmb_device newTextureWithDescriptor:d]);
+			d.pixelFormat = MTLPixelFormatRGBA16Float;
+			RMB_RTS_SET(t_vis[0], [rmb_device newTextureWithDescriptor:d]);
+			RMB_RTS_SET(t_vis[1], [rmb_device newTextureWithDescriptor:d]);
+
+			if (!t_rec[0] || !t_rec[1] || !t_vis[0] || !t_vis[1])
+			{
+				rmb_rts_hist_release();
+				tmp_bad_w = w;
+				tmp_bad_h = h;
+				fprintf(stderr, "ref_metal: rt temporal %lux%lu: the shadows' histories cannot be made\n", w, h);
+				return 0;
+			}
+
+			hist_cur = 0;
+			fprintf(stderr, "ref_metal: rt temporal shadows %lux%lu: %lu bytes allocated\n", w, h,
+					(unsigned long)(t_rec[0].allocatedSize + t_rec[1].allocatedSize + t_vis[0].allocatedSize +
+					t_vis[1].allocatedSize));
+		}
+	}
+
+	tview = *t;
+	tview_set = 1;
 	return 1;
 }
 
@@ -405,9 +514,11 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 	id<MTLCommandBuffer> cmd;
 	id<MTLComputeCommandEncoder> ce;
 	const NSUInteger w = depth.width, h = depth.height;
-	int slot, timed;
+	const int acc_set = tview_set;  /* RT7: this view accumulates, when everything it needs is at this size */
+	int slot, timed, acc;
 
 	traced = 0;
+	tview_set = 0;
 
 	if (!rts_open || !view_set || !depth || !normal || !material)
 	{
@@ -463,7 +574,24 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 			return 0;
 		}
 
-		[ce setComputePipelineState:trace_pipe];
+		/*
+		 * RT7 (TASK59 slice 1b): rm_rts_temporal in rm_rts_trace's place, only
+		 * while r_rt_temporal is above 0 and the histories and the motion
+		 * vectors are at the render size; otherwise the stock trace alone.
+		 */
+		{
+			id<MTLTexture> mv = acc_set ? rmb_gbuf_motion() : nil;
+
+			acc = acc_set && tmp_pipe && t_rec[0] && t_rec[1] && t_vis[0] && t_vis[1] && (t_rec[0].width == w) &&
+				(t_rec[0].height == h) && mv && (mv.width == w) && (mv.height == h);
+
+			if (acc)
+			{
+				[ce setTexture:mv atIndex:6];
+			}
+		}
+
+		[ce setComputePipelineState:(acc ? tmp_pipe : trace_pipe)];
 
 		if (!rmb_rt_bind_scene(ce, fno, 2, 3, 4, 5))
 		{
@@ -499,8 +627,27 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 		[ce setBytes:m_n length:sizeof(m_n) atIndex:9];
 		[ce setBuffer:(m_vert ? m_vert : counts) offset:0 atIndex:10];
 		[ce setBuffer:m_ents offset:(NSUInteger)slot * sizeof(ents) atIndex:11];
+
+		if (acc)
+		{
+			rm_rtt_view_t tv = tview;
+
+			/* the view is encoded into the history here, and only here */
+			tv.reset = rm_rtt_hist_take(&thist, &tview);
+			[ce setTexture:t_rec[hist_cur] atIndex:7];
+			[ce setTexture:t_vis[hist_cur] atIndex:8];
+			[ce setTexture:t_rec[1 - hist_cur] atIndex:9];
+			[ce setTexture:t_vis[1 - hist_cur] atIndex:10];
+			[ce setBytes:&tv length:sizeof(tv) atIndex:12];
+		}
+
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTS_GROUP, RMB_RTS_GROUP, 1)];
 		[ce endEncoding];
+
+		if (acc)
+		{
+			hist_cur = 1 - hist_cur;
+		}
 
 		slot_pending[slot] = 1;
 		slot_timed[slot] = timed;

@@ -43,6 +43,7 @@
 #include "rm_rtfx.h"
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_rtao_math.h"
+#include "rm_rttemporal.h"
 
 /* ---- rm_rtao.c: no SDL, no Metal ------------------------------------------------------ */
 
@@ -179,6 +180,14 @@ int rmb_rtao_prepare(unsigned long w, unsigned long h, unsigned div);
 
 /* the view the next G-buffer view traces with (copied); NULL turns the pass off for that view */
 void rmb_rtao_set_view(const rm_rtao_view_t *v);
+
+/*
+ * RT7 (TASK59 slice 1): the next traced view accumulates its AO with t
+ * (copied), at the render size w x h; its pipeline and the two histories
+ * are made at the first such view. NULL, or t's alpha 0, releases the
+ * histories and accumulates nothing. 1 when the view accumulates.
+ */
+int rmb_rtao_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h);
 
 /* the stats of the frames whose pass completed since the last call, at most cap; their number */
 int rmb_rtao_stats(rm_rtao_stats_t *s, int cap);
