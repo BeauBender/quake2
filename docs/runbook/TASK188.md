@@ -1,4 +1,4 @@
-# RT-primary direct light from the map's point lights and emissive faces, one shadow ray each (TASK188, PM6 slices 1 and 2)
+# RT-primary direct light from the map's point lights and emissive faces, one shadow ray each (TASK188, PM6 slices 1, 2 and 3a)
 
 Card: TASK188 (#535). Plan: `docs/plans/presentation-modes.md`, section 4.1 and row PM6 of section 7.
 Under `r_presentation 3` (*Ray traced*) the lightmap is off at the visible world surface, and each
@@ -38,7 +38,8 @@ record below shows it: three runs of `rtprimary-world` give the same 23 frames b
   refdef's rgb times `r_modulate` as the lightmap takes it. The sum is in the lightmap's units (a byte of
   255 reads 1), so it is what the direct part of a qrad3 lightmap holds, before the 196 clamp and without
   the bounces and the surface lights.
-- **The bounds on a pixel's work.** A pixel with more than `MTL_RTDIR_MAX_TRACED` (16) lights in range
+- **The bounds on a pixel's work** (slice 1's; slice 3a chooses the 16 among the visible lights, under a
+  bound of 32 rays, see there). A pixel with more than `MTL_RTDIR_MAX_TRACED` (16) lights in range
   takes the 16 strongest (the largest `(intensity - dist) x N.L`, `mtl_rtdir_keep`), summed in the
   buffer's order, so it traces at most 16 shadow rays of at most 5 intersections each, whatever the map
   holds (round 0 traced every light in range: up to 2048 a pixel). The intensity is packed at most
@@ -62,7 +63,7 @@ record below shows it: three runs of `rtprimary-world` give the same 23 frames b
   bit for bit.
 - **The exposure, the stated rule.** `exposure = sum of the stock lightmap / sum of the traced light` over
   the same sampled world pixels (every fourth pixel a row and a column) of the latest completed frame of
-  the map, clamped to 0.25 to 16; 1 at a map's first frame and kept while no traced light reaches a
+  the map (slices 1 and 2; from slice 3a the frame three before, a fixed lag, see there), clamped to 0.25 to 16; 1 at a map's first frame and kept while no traced light reaches a
   sample. The back end hands over the frames completed since the last read in slot order;
   `rm_rtdir_fit_latest` applies the one with the largest frame number only, and ignores every frame at or
   before the map's reset (`RM_RTDir_Lights` records the last frame traced before it), so the old map's
@@ -86,8 +87,9 @@ record below shows it: three runs of `rtprimary-world` give the same 23 frames b
 
 New cvars: `r_rt_direct` (the effect switch, default 0, read 1 by the mode), `r_rt_direct_exposure` and
 `r_rt_direct_show`, in `doc/040_cvarlist.md` and classified in `rm_rtgate.c`. New scenarios:
-`rtprimary-world`, `rtprimary-direct`, `rtprimary-vis`, `rtprimary-noshadow` (not pinned: they are
-recorded against `ref_metal` itself once the owner accepts the look, PM11).
+`rtprimary-world`, `rtprimary-direct`, `rtprimary-vis`, `rtprimary-noshadow`: pins of `ref_metal` itself
+from slice 3a, whose fixed lag makes them the same run to run (see there); the look is the owner's to accept
+(PM11).
 
 ## Host tests
 
@@ -209,7 +211,7 @@ Determinism: `rtprimary-world` recorded three times (two commits, and `--run 2`)
 frames' hashes, `000b429ec38e`; `rtprimary-direct` `dd451ee5650d`, `rtprimary-vis` `be8d223522ca` and
 `rtprimary-noshadow` `6495fa432ad0`, each the same twice. The fit reads earlier frames, so a run whose
 frames completed in another order could differ in its first frames; none did here. That held for slice 1's
-light only: from slice 2 on the records are not reproducible run to run (see slice 2's checks).
+light only: slice 2's records varied run to run, until slice 3a fixed the fit's frame (see there).
 
 **Round 1** (the kernel's new structure, the cap, the intensity clamp, the 64-bit counts and the fit's
 frame, at `c18902fd`): the four records give the same hashes, `000b429ec38e`, `dd451ee5650d`,
@@ -284,8 +286,8 @@ retained vertices (`rm_rtdirscene.c`, `RM_RTDir_Face`), its plane normal flipped
   range is where `intensity / dist^2` falls under one lightmap step (`MTL_RTDIR_EMIT_CUT`, 1): `sqrt(intensity)`.
   The kernel's light loop calls `mtl_rtdir_reach` (the cheap test) and `mtl_rtdir_contrib` (the
   dispatch) for every record; a point or spot light takes slice 1's arithmetic unchanged.
-- **The bounds stay slice 1's**: at most 16 lights a pixel (`mtl_rtdir_keep`, the same deterministic choice:
-  the strongest, ties to the first, summed in the buffer's order), one shadow ray each. A face's intensity
+- **The bounds stay slice 1's** (until slice 3a): at most 16 lights a pixel (`mtl_rtdir_keep`, the same deterministic choice:
+  the strongest, summed in the buffer's order; of equal strengths which one is kept is by position, see the 32 below), one shadow ray each. A face's intensity
   is held to `16384^2` (`RM_RTDIR_MAX_EMIT_INTENSITY`), so it reaches no farther than the strongest point
   light, and at most 2048 faces are packed (`RM_RTDIR_MAX_EMITTERS`, the rest counted); the buffer holds
   at most `RM_RTDIR_MAX_UPLOAD` (4096) records. The shadow ray stops a unit short of the light, which is a
@@ -309,11 +311,11 @@ slice 1, every light the pixel keeps, up to the 16, is traced, so the term is no
 (TASK59) is needed. It is not exact for its model once the cap bites, because the 16 are chosen before
 visibility (next paragraph).
 
-**The 16 are chosen before the shadow test.** The kernel keeps the 16 strongest contributions at a pixel
+**The 16 are chosen before the shadow test** (slice 2; slice 3a chooses them among the visible ones). The kernel keeps the 16 strongest contributions at a pixel
 (`mtl_rtdir_keep`, before the colour and the lightstyle, which only enter the sum) and only then traces
 them, so an occluded light, or one whose style is dark, can hold a place while a visible one is dropped
 without a ray. The choice is deterministic (a light replaces the weakest kept one only when strictly
-stronger, ties going to the earlier light) and stable in time, so it does not flicker. Seams can show
+stronger, and it takes the place of the first weakest by position in the kept set, not of the lowest index) and stable in time, so it does not flicker. Seams can show
 where an occluded light's strength crosses a visible one's at neighbouring pixels: the sum steps by the
 difference between the two. How often the cap bites is in the lines below: on `base2` a mean of 40 % of
 the world pixels over 686 frames (6 % at frame 18, 34 % at frame 704), and about 30 to 37 % of the shadow
@@ -431,10 +433,10 @@ hashes of the four records: `rtprimary-world` `3e45a102fc0a`, `rtprimary-direct`
 `20ea6cbf` (the same kernel, the finite emitter term changing no frame of these) they read
 `3e45a102fc0a`, `896c04dfc674`, `8eab56606653` and `d58e06da3c7f`: two of the four differ.
 
-**RT-primary records are not reproducible run to run** (by a few levels in some frames), because the
-exposure fit reads whichever frame completed last (`rm_rtdir_fit_latest`), and slice 2's heavier pass
-makes the completion order vary. Their hashes are a record of a run, not pins; only the stock records
-above are. Slice 1's determinism paragraph held for slice 1's lighter pass.
+**Slice 2's RT-primary records varied run to run** (by a few levels in some frames), because the
+exposure fit read whichever frame completed last (`rm_rtdir_fit_latest`), and slice 2's heavier pass
+made the completion order vary. Slice 1's determinism paragraph held for slice 1's lighter pass. Slice 3a
+takes the fit from a fixed frame, and its records are pins.
 
 **The lightstyles** (`demo2.dm2`, every 7th frame, 89 frames, the map `waste2`, with a scratch text table
 for the demo's opening text in captures 2 to 6, removed after the run):
@@ -450,21 +452,193 @@ ref_metal: rt direct: frame 487: 307200 pixels, 307200 world, 494 lights, 822349
 Its two styled lights are kept with their styles (the packing keeps `style`, `test_pack` and
 `test_styles` hold the table), and the record's captures 61 and 67, which the `dlights` scenario names as
 frames an animated style changes, are the two style states the owner reviews. No style is lost on the
-way: the record holds 89 frames (hash `d54969fcd1a3` at `20ea6cbf`, `065e6a52034e` at `66fa02ed`; not a
-pin, see above) and nothing needed fixing. The style state of a
+way: the record holds 89 frames (hash `d54969fcd1a3` at `20ea6cbf`, `065e6a52034e` at `66fa02ed`, before
+slice 3a's fixed lag) and nothing needed fixing. The style state of a
 capture is not in the lines (the stats line has no style column), so the check that the light follows
 the style is the owner's, from those frames.
 
-## Left for slice 3 (and later rows)
+## Slice 3a: a deterministic exposure fit, and the 16 lights chosen among the visible ones
+
+Card comment: "Slice 3a pulled: a deterministic exposure fit, so RT-primary records become pins, and the 16 lights
+chosen among the visible ones under a fixed ray bound." The rest of "Left for slice 3" stays below.
+
+### The exposure fit at a fixed lag
+
+Slices 1 and 2 took the exposure from whichever frame completed last (`rm_rtdir_fit_latest`), so a frame's
+exposure depended on the GPU's completion order, and slice 2's heavier pass made the records vary by a few
+levels run to run. Now the frame numbered `f` takes the fit of frame `f - 3`, exactly:
+
+- The back end keeps `RMB_FRAMES_IN_FLIGHT` (3) count slots, frame `f` in slot `f % 3`, so the slot frame `f`
+  takes last held frame `f - 3`. The frame semaphore has seen that frame complete before frame `f` began
+  (the clearing of the slot already relies on it). `rmb_rtdir_trace` reads the slot's fit sums there, before
+  it clears them, and `rm_rtdir_fit_lag` (`rm_rtdir.c`) applies them when the slot's frame is exactly
+  `f - RM_RTDIR_FIT_LAG` and after the map's reset; else the exposure in use is kept. `RM_RTDIR_FIT_LAG` is
+  held to `RMB_FRAMES_IN_FLIGHT` by a `_Static_assert` in `rmb_rtdir.m`.
+- The assumption under "frame `f - 3` is complete" is that every begun frame signals the semaphore only when
+  its command buffer completes. In `rmb_encode.m` a begun frame whose target, depth target, command buffer
+  or ring buffer failed to allocate still counts as begun and signals at once, so after such a failure a frame
+  can begin while the frame three before it is in flight. It is an older gap (the ring buffer and the slot
+  clearing rest on the same rule), reachable only when an allocation fails, and not changed here.
+- A map's lights (`rmb_rtdir_set_lights`) start the fit again at 1, and its reset is the last frame encoded
+  before them, so a frame of the old map still in its slot is not fitted from. So the first three frames of a
+  map read 1, and a frame whose frame three before traced nothing (a menu, a skipped frame) keeps the
+  exposure in use.
+- `r_rt_direct_exposure` above 0 still fixes the exposure: the view carries it, and 0 there means "the back
+  end's fit". The fit itself runs on either way (its sums are the lightmap's and the traced light's, before
+  the exposure).
+- The `r_rt_stats 2` lines still print in completion order (they are information); only the exposure was
+  bound to it. The scene (`rm_rtdirscene.c`) no longer holds a fit, and `rmb_rtdir_last_frame` is gone.
+
+So the frames are a function of the demo alone, and the RT-primary records are pins (below).
+
+### The 16 lights chosen among the visible ones
+
+Slice 2 kept the 16 strongest contributions and only then traced them, so an occluded light could hold a
+place a visible one went without (a seam where their strengths cross). Now (`rm_rtdir_direct`,
+`common/mtl_rtdir_math.h`):
+
+- Of the lights in range, the **N = 32** strongest are the pixel's candidates (`MTL_RTDIR_MAX_RAYS`;
+  `mtl_rtdir_keep`, the same deterministic choice as before: a light replaces the weakest kept one only when
+  strictly stronger, and it evicts the first weakest by position in the kept set, not the one with the
+  lowest index). So at equal strength the choice is deterministic but not "the earlier light": with lights
+  0 to 31 kept, light 0 at 1, light 1 at 0.5 and the rest at 5, light 32 at 1 takes light 1's place, and a
+  later light at 5 then evicts light 0, so light 32 is kept over the earlier light 0.
+- Once kept, they are ranked strongest first, ties to the earlier light in the buffer (`mtl_rtdir_keep_rank`; the
+  ranking is exact, which 32 are kept is as above), and
+  traced in that order until 16 of them (`MTL_RTDIR_MAX_TRACED`) reach the pixel (`mtl_rtdir_walk`). Those 16
+  are summed, in that order; an occluded light takes no place. So a pixel traces at most 32 shadow rays of at
+  most 5 intersections each, whatever the map holds.
+- **Past the bound**: a pixel with more than 32 lights in range of which fewer than 16 are seen does not try
+  the weaker ones. Its sum is the visible lights among the 32 strongest, so a visible light ranked 33rd or
+  lower is left out. Such a pixel is counted as capped (`mtl_rtdir_capped`) and the stats line reads
+  `<n> pixels past the bound (32 rays, 16 lights)`. A pixel that finds its 16 is not capped, however many
+  lights were in range. Before this slice the count was the pixels with more than 16 lights in range.
+- It stays deterministic: the same view gives the same candidates, the same order and the same rays.
+- Under `r_rt_direct_show 3` (no shadow ray) the first 16 ranked are summed, the 16 strongest as before.
+- The choice is still made before the lightstyle: a switched-off light that is visible can take a place.
+
+### Tests
+
+`tests/metal/rm_rtdir_test.c`, written first against stubs that kept the old behaviour (the fit applying any
+record it is given, the candidates in the buffer's order, every candidate walked, `MTL_RTDIR_MAX_RAYS` 16):
+`rm_rtdir_test: 492 checks, 18 failed`. Green: `rm_rtdir_test: 496 checks, 0 failed` with the kernel pins
+below.
+
+- `test_fit_lag`: a record exactly the lag behind is applied; one nearer, older or two lags behind is not;
+  one at or before the reset is not; no record, a slot never used, a frame before the lag and no sample keep
+  the exposure.
+- `test_fit_lag_runs`: a simulated back end of 3 slots over 200 frames, its frames in flight completing in
+  another order each of four runs, a map change at frame 100 and every seventh frame tracing nothing: every
+  run gives every frame the same exposure, frame 4 takes frame 1's fit, frame 10 keeps frame 9's (frame 7
+  traced nothing), and frames 100 to 102 of the new map read 1.
+- `test_keep`: the 32 candidates, the weaker and equal ones past the bound dropped, a stronger one taking the
+  weakest's place, of 2048 rising lights the 32 strongest, ranked strongest first, ties by the buffer's order.
+- `test_visible_choice`, a host model of the kernel's two loops over the same header functions: 20 lights
+  whose 4 strongest are occluded sum the next 16 in 20 rays; with every other light occluded the first 16
+  visible in 31 rays; with none visible 32 rays and the pixel capped; a visible light ranked 33rd is not tried
+  and one ranked 32nd is; 10 lights with 3 occluded sum 7, not capped; 2048 visible lights take 16 rays, 2048
+  occluded ones 32; equal lights give the buffer's first 16, the same twice.
+- `test_mixed_choice` follows the ranking (the 20 points, then the 12 nearest faces).
+
+**The kernel pin** (`kernel_broken`) holds the walk whole (`KERNEL_WALK`: the loop head with
+`mtl_rtdir_walk(j, k.n, seen)`, the shadow ray, `continue` on a blocked one, then `seen++` and the sum), the
+one `mtl_rtdir_keep(` and one `mtl_rtdir_keep_rank(` in the trace, `t.capped = mtl_rtdir_capped(k, seen);`,
+the word `seen` four times there, and `rm_rtdir_seen(` twice in the file (its definition and the walk's one
+call), so no ray is traced before the bound. Four new mutants, each refused, each compiling with
+`xcrun metal`:
+
+```
+mutant trace-in-range: rm_rtdir_direct's walk is not its candidates traced strongest first, one ray each, under the bound
+mutant walk-unbounded: rm_rtdir_direct's walk is not its candidates traced strongest first, one ray each, under the bound
+mutant seen-before-ray: rm_rtdir_direct's walk is not its candidates traced strongest first, one ray each, under the bound
+mutant vis-ignored: rm_rtdir_direct's walk is not its candidates traced strongest first, one ray each, under the bound
+```
+
+`trace-in-range` is the bound's: a shadow ray for every light in range in the first loop (up to 4096 a
+pixel). `seen-before-ray` is the visibility test's: a light counted toward the 16 before its ray, which is
+slice 2's choice. `walk-unbounded` drops the stop at 16 seen; `vis-ignored` lets a blocked ray count. The
+`emit-third-read` mutant follows the new loop head. Red first: slice 2's kernel against the new rule,
+`rm_rtdir.metal: rm_rtdir_direct's walk is not its candidates traced strongest first, one ray each, under the
+bound`, `rm_rtdir_test: 496 checks, 5 failed` (the new mutants do not apply to its text).
+
+### The records are pins (M6, apple9, 640 x 480)
+
+Recorded at `cfd8d3ba` (the code of the final commit), three runs each (`--run 2`, `--run 3`), hashed as the
+hash of the frames' sha256s:
+
+| Record | Frames | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|---|
+| `rtprimary-world` (`demo1.dm2`, `base2`) | 23 | `e6caa48ee013` | `e6caa48ee013` | `e6caa48ee013` |
+| `rtprimary-direct` | 23 | `a3a554b71cdf` | `a3a554b71cdf` | `a3a554b71cdf` |
+| `rtprimary-vis` | 23 | `469ce42fec8c` | `469ce42fec8c` | `469ce42fec8c` |
+| `rtprimary-noshadow` | 23 | `b9206ff8cb45` | `b9206ff8cb45` | `b9206ff8cb45` |
+| `rtprimary-world`, `PINS_DEMO=demo2.dm2 PINS_EVERY=7` (`waste2`, the lightstyles) | 89 | `0c678f1b2ea1` | `0c678f1b2ea1` | `0c678f1b2ea1` |
+
+The `r_rt_stats 2` runs below (scratch copies of `rtprimary-world`, the stats changing no pixel) are a fourth
+run of each map and give the same hashes, `e6caa48ee013` and `0c678f1b2ea1`. So each record is one set of
+frames, byte for byte, and these hashes are the RT-primary pins from here (the scenarios README), provisional:
+the plan (`docs/plans/presentation-modes.md` section 6, item 4) pins a mode's scenarios at the commit where the
+owner accepts the look (PM11) and compares at 0.02 after it, so these are recorded again then; a later
+slice that changes the look says so and records them again. The harness cannot carry a scenario's threshold:
+`--threshold` and `--bad-threshold` are options of `pins.sh compare` (default 0.02 and 0.005, per run),
+and no scenario file sets one, so the 0.02 is the default of the compare and needs no change; these records
+are compared by hash for now, which is stricter. The demo's own text in the `demo2.dm2` captures
+2 to 6 is declared in `scripts/pins/text/demo2.dm2-every7.txt`, committed now (slice 2 used a scratch copy).
+The look itself is still the owner's to accept (PM11), from the `base2` capture 12 and the `waste2` captures
+61 and 67, which are for the owner and not in the repository.
+
+### Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
+
+The base is main at `9f1d6d64`, built in a scratch copy and run by `PINS_BIN`; the branch is `cfd8d3ba`. Its
+"pixels past" counts the pixels with more than 16 lights in range (slice 2's line); the branch's counts the
+pixels past the bound (more than 32 in range and fewer than 16 seen). The means are over every frame line of
+the run (687 on `demo1.dm2`, 617 on `demo2.dm2` every 7th):
+
+| Map | Side | Pixels past (mean share) | Shadow rays a world pixel (mean) | Pass GPU time (mean) |
+|---|---|---|---|---|
+| `base2` | base | 40.6 % (past 16 in range) | 12.86 | 6.09 ms |
+| `base2` | branch | 5.5 % (past the bound) | 15.69 | 7.81 ms |
+| `waste2` | base | 88.4 % (past 16 in range) | 15.73 | 6.46 ms |
+| `waste2` | branch | 34.5 % (past the bound) | 26.10 | 10.75 ms |
+
+The lines at frame 447 of `base2` show the trade:
+
+```
+base:   frame 447: 307200 pixels, 307200 world, 665 lights, 6916616 in range, 4800299 shadow rays (15.63 a world pixel), 1024409 lit, 227989 pixels past 16 lights, fit 159204/71321 over 19200 samples, exposure 2.2663 (fit), 6.985 ms
+branch: frame 447: 307200 pixels, 307200 world, 665 lights, 6916616 in range, 6841409 shadow rays (22.27 a world pixel), 1417470 lit, 35474 pixels past the bound (32 rays, 16 lights), fit 159204/71879 over 19200 samples, exposure 2.2396 (fit), 9.570 ms
+```
+
+The same lights are in range. The branch traces 43 % more rays, 38 % more of them reach their light
+(1417470 against 1024409), and the traced sum rises 0.8 % (71879 against 71321); the exposures the two frames used (each the fit of its frame
+three before, or in the base the latest completed) read 2.27 and 2.24. On `waste2` at frame 447 the branch reads `9674097 in range, 9078373 shadow rays (29.55 a world
+pixel), 1996346 lit, 126870 pixels past the bound`, against the base's `4912217 shadow rays (15.99 a world
+pixel), 1483298 lit, 303436 pixels past 16 lights`. A third of the `waste2` pixels still find fewer than 16
+visible lights among their 32 strongest: the faces' ranges run far past the walls between (slice 2), and a
+PVS cull of emitters is what would let those pixels reach their visible lights within the bound. The GPU
+times were read in the hold, on a quiet host. They are information, not a gate (decision 0014).
+
+### Stock is unchanged
+
+The same method as slice 2 (every committed `metal` scenario but RT-primary's, seeded, the water scenarios on
+one `water.dm2` copied to both, `cinematic` on `idlog.cin` at `PINS_EVERY=7`), base main at `9f1d6d64` and the
+branch at `cfd8d3ba`: 29 of 29 stock scenarios byte-identical, no failures. At `r_presentation 0` the slice
+changes no pixel.
+
+### Checks
+
+In one hold on the code of the final commit (`cfd8d3ba`): `make ref_metal`, `make`, `make test`
+(`yq2test: 591 tests, 0 failed`), `tests/check-ref-metal.sh` (`direct light 496 checks, 0 failed`),
+`tests/check-cvar-docs.sh`, `tests/check-runbook-index.sh`, `tests/check-doc-links.sh`,
+`tests/check-video-menu.sh` and `tests/check-pin-chars.sh`, all ok; the stock pin compare (29 of 29) and the
+RT-primary records, three runs each with one hash. No frame was looked at by the agent.
+
+## Left for slice 3b (and later rows)
 
 - **An emissive face drawn at its own emission** (see above): a material bit in the G-buffer or a
   per-triangle table, under RT-primary only.
 - **A face cut into qrad3's 64-unit patches**, if the frames near a fixture call for it.
 - **RT3's dlights as a term** of the light model, in place of the layer this mode turns off.
-- **The 16 chosen among the visible lights**, under a fixed ray bound, or a PVS cull of emitters, in place
-  of the choice before occlusion (see above).
-- **The exposure fit's frame lag**: the fit reads the latest completed frame (`rm_rtdir_fit_latest`), so
-  which frame sets a frame's exposure depends on completion order.
+- **A PVS cull of emitters**, as qrad3 has, if the share of pixels past slice 3a's bound calls for it.
 - **A finer exposure fit**: at map load from a sample of luxels (the plan's wording), or a fixed value the
   owner picks from frames, and a fit that leaves out the near-black parts the emissive faces now light.
 - **The water reflections** (`rmb_rtwater.m`) still shade the reflected world from the lightmap array
@@ -476,8 +650,8 @@ the style is the owner's, from those frames.
 
 ## Checks
 
-In one hold on the code of the final commit (`20ea6cbf`): `make ref_metal`, `make`, `make test`
+Slice 2, in one hold on the code of the final commit (`20ea6cbf`): `make ref_metal`, `make`, `make test`
 (`yq2test: 563 tests, 0 failed`), `tests/check-ref-metal.sh` (`rm_rtdir_test` 465 checks, 0 failed),
 `tests/check-cvar-docs.sh`, `tests/check-runbook-index.sh`, `tests/check-doc-links.sh` and
-`tests/check-video-menu.sh`, all ok; the stock `metal` pin run (29 of 29, above) and the RT-primary frame
-records, which are records, not pins.
+`tests/check-video-menu.sh`, all ok; the stock `metal` pin run (29 of 29, above) and slice 2's RT-primary
+frame records, which varied run to run until slice 3a.
