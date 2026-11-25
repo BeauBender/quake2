@@ -179,10 +179,196 @@ No frame was looked at by the agent.
 
 | Item | Taken by |
 |---|---|
-| The bounce, one cosine-weighted closest-hit ray reading the lightmap at its hit | PM7 slice 2. |
 | The water reflections under RT-primary (`rmb_rtwater.m` shades the reflected world from the lightmap) | PM7, a later slice. |
 | A view of an emissive face's own light alone | PM7, a later slice. |
 | The sky light's noise, one ray a pixel | PM8 (TASK190), the denoiser. |
 | `r_rt_direct_sky`'s default and whether the sun keeps RT2's `r_rt_sunscale` under the mode | The owner, from the frames (PM11). |
 | Outdoor brightness against stock: the exposure is fitted to the map's point and emissive lights against a lightmap that, in qrad3, already holds the light from sky faces (sky faces are not emitters), and the sky's and the sun's terms are added after the fit, so an outdoor area can be brighter than stock | The owner judges it from the frames (PM11); no code change in this slice. |
 | Views `5` and `6` still trace the map's and the dynamic lights' shadow rays they do not show (a development view's cost only; the 67-ray bound holds) | Left as it is: skipping them would change `rm_rtdir_direct`'s pinned walk and the fit's sample under those views. |
+
+# Slice 2: one bounce of indirect light, reading the lightmap at its hit
+
+Plan: section 4.1 ("One bounce of indirect light"), the data table of section 4.2 (the lightmap: "the bounce at
+the hit; the exposure fit"), section 6 and row PM7. The owner's call of 2026-11-18: the bounce reads the stock
+lightmap at its hit. Stacked on slice 1 (`origin/task189s1`).
+
+## What it is
+
+Under `r_presentation 3` each traced world pixel now takes a third term beside the sky light and the sun, computed
+in `rm_rtdir_bounce` (`rm_rtdir.metal`) and added in the world's write with them
+(`rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open + bounce, v.show)`). The arithmetic is in
+`common/mtl_rtsky_math.h`.
+
+- **The ray.** One cosine-weighted closest-hit ray a pixel, `mtl_rtsky_dir` (slice 1's sky-ray direction, the AO's
+  one ray), on the blue-noise tile's third and fourth numbers at the pixel (`mtl_rtao_tile_index` and
+  `mtl_rtao_noise` with dimensions 2 and 3, the AO's second ray's), moved on by the view's frame
+  (`r_rt_direct_seed`, the AO's rule). Not slice 1's numbers: the bounce and the sky light estimate two parts of
+  one hemisphere's light, and their own numbers keep the two estimates independent instead of retracing the sky
+  ray. Its origin and bias are the direct light's (`mtl_rtao_bias`), its range RT2's `MTL_RTSUN_RANGE`.
+- **At a face** (`mtl_rtsky_bounce_at`): water (3) and translucent faces (5) are passed, as the shadow rays pass
+  them, up to `MTL_RTDIR_LAYERS` of them (the stock renderer gives them no lightmap, and the face behind holds the
+  light); a lightmapped world face (1) is shaded; anything else gives 0.
+- **The read at the hit.** The hit triangle's lightmap coordinates, its vertices' (`rm_wvert_t.lmuv`, the second
+  float4's `zw`, as `rm_model.c` makes them) by the hit's barycentrics (`rm_rtdir_tri_lm`, RT6's
+  `rm_rtw_tri_uv`), sampled bilinearly in its slice of the world's lightmap array (`rm_world_t.lmtex`), the array
+  the stock draw samples. Its lightstyles: that array is what `R_RegenAllLightmaps` rebuilds on the CPU with the
+  frame's `refdef.lightstyles`, as gl1 does, so the read is the stock lightmap with its styles applied, as the
+  stock renderer shades that surface. The slice comes from the triangle's bounce record (`rm_rtdir_bounce_table`,
+  built at map load from the surface records): `MTL_RTSKY_NOLM` for the sky, warped and translucent faces and a
+  face without a lightmap, which give 0.
+- **The albedo.** The plan says "times the hit's albedo", so the read is multiplied by the hit face's albedo: the
+  mean of its texture's texels, read once a map from its `.wal` through the palette (`rm_rtl_wal_mean`, as
+  TASK187 reads an emitter's; `RM_RTL_UNREAD_GREY` for an image that is not a `.wal` or cannot be read), 8 bits a
+  channel in the record. That is qrad3's reflectivity of the face, the colour its patches reflect, without qrad3's
+  doubling of a dim texture (the stock picture's texel mean, what the player sees). A per-texel albedo at the hit
+  would need RT6's texture table in this pass; the mean is the radiosity's own quantity.
+- **No second shadow ray.** The lightmap at the hit already holds qrad3's light there, shadows and bounces
+  included, so the bounce is one ray and one read.
+- **The sky.** A ray that reaches a sky face gives 0, not the sky's colour: slice 1's sky ray is the same
+  cosine-weighted estimate of the light from the sky's solid angle, so the bounce counting it too would add it
+  twice. The two rays split the hemisphere's light between them: the sky ray counts the sky, the bounce the faces.
+- **Models and water.** The plan lights alias models by `R_LightPoint` until PM9 and is silent on the bounce at a
+  model: a model has no lightmap, so a bounce ray that meets one gives 0 (it occludes, as it does the AO's rays).
+  Water and glass are passed (above); the plan is silent there too, and passing them is the shadow rays' rule.
+- **Where it lands: after the exposure.** The exposure scales the traced light from qrad3's light units into the
+  lightmap's (the light attachment's). The lightmap read at the hit is already in those units, so the bounce is
+  added after the exposure, in the light attachment's units, as the sky light and the sun are; scaling it again
+  would apply the exposure twice.
+- **Double brightness.** The pixel's own lightmap never enters (section 6, item 5): the array is read at the hit's
+  coordinates alone (the pin below). But the exposure is fitted, at map load, from the traced direct light against
+  the whole lightmap, which holds qrad3's direct light and its bounces; so the fitted exposure already lifts the
+  direct term by the map's mean indirect share, and the bounce adds indirect light on top. On a map whose stock
+  light is mostly bounced, RT-primary at `r_rt_direct_bounce 1` can be brighter than stock by up to that share.
+  The slice leaves the fit as it is (the fit reads the lightmap at map load, before any ray, and cannot subtract
+  a per-pixel bounce) and the owner judges it from the frames; `r_rt_direct_bounce` and a fixed
+  `r_rt_direct_exposure` are the two knobs. The `r_rt_stats 2` lines below give the exposure on both sides.
+- **The bound.** One bounce ray a pixel (`MTL_RTSKY_BOUNCE_RAYS`) of at most `MTL_RTDIR_LAYERS + 1`
+  intersections: a pixel traces at most 68 rays (`MTL_RTSKY_PIXEL_RAYS`), whatever the map holds.
+- **The views.** `r_rt_direct_show 7` is the bounce alone, on white albedo. Only the picture (`0`) adds it to the
+  direct term; views `1` to `6` trace no bounce ray (`mtl_rtsky_bounces`), so view `1` stays the direct term
+  alone (slice 1's round-1 Important) and views `5` and `6` their terms alone. View `7` traces neither the sky's
+  nor the sun's ray; like `5` and `6` it still traces the map's and the dynamic lights' shadow rays.
+- **The scale.** `r_rt_direct_bounce`, default `1`, at most `4` (`MTL_RTSKY_BOUNCE_MAX`), `0` traces no ray,
+  documented in `doc/040_cvarlist.md` and classified as a setting in `rm_rtgate.c`.
+- **The line.** `r_rt_stats 2`'s sky line counts the bounce:
+  `ref_metal: rt direct sky: frame N: W world, S sky rays (H reached the sky), U sun rays (L lit), B bounce rays (R read a lightmap), at most 68 rays a pixel`;
+  and once a map: `ref_metal: rt direct: <map>: N of M triangles read a lightmap at a bounce's hit`.
+- **The host side.** `rmb_rtdir.m` binds the world's lightmap array at texture 7 (a 1 x 1 x 1 array when the
+  world has none, and the view's record count `nbrec` 0 then), the map's buffers (`rmb_rt_bind_geometry`) at 13
+  to 15 and the records at 16; the view grows from 176 to 192 bytes (`nbrec` in the old pad, `bounce` at 176).
+
+The renderer API, the protocol, savegames and the game module do not change; no asset is added. Stock and RT2
+kernels are unchanged; at `r_presentation 0` none of this runs (the records are built only where the direct
+light uploads its lights, under RT-primary).
+
+## A known limit
+
+`R_RegenAllLightmaps` rebuilds only the lightmaps of the surfaces the frame draws (gl1's chains). A face the
+stock renderer has not drawn this frame keeps the lightmap it was last built with: at map load, every style at
+`1`. So a bounce that lands on such a face sees a switched or flickering light as it was when that face was last
+in view (or fully on). Fixing it means rebuilding the style-changed lightmaps of faces outside the view under
+RT-primary, a change to the lightmap path itself; it is left to a later card (see the table below).
+
+## Host tests (slice 2)
+
+`tests/metal/rm_rtdir_test.c`:
+
+- `test_bounce`: `mtl_rtsky_bounce_at` at all 256 materials and every layer (the world shaded, water and glass
+  passed up to the layers, the sky, a model and nothing dark); which views trace the bounce (the picture and `7`;
+  `1` to `6`, `8` and `9` not; a scale of `0`, below `0` or not a number none) and that `7` is a term alone and
+  traces neither the sky's nor the sun's ray; the bound (68); the direction on the tile's third and fourth numbers
+  over a 64 x 64 grid, unit and above the plane, at another place in the tile than the sky ray's; the records
+  (the albedo's bytes, the slice, none for the sky, warped, translucent and slice-less faces, a record past the
+  buffer marking nothing); the term; the scale and the view's field and offset; the scale left the user's under
+  the mode; and **the lightmap read at a hit against the stock rule**: a face at luxel (40, 70) of a slice, its
+  triangle's vertices' lightmap coordinates made as `rm_model.c` makes them, interpolated at six hit points by
+  their barycentrics, land on the luxel the stock rule gives each point (`rm_rtdir_fit_st`, the fit's), and a
+  bilinear read there gives that luxel (`rm_rtdir_fit_luxel`) at four luxel centres and the mean of two luxels
+  half way between them.
+- `test_bounce_kernel`: pins `rm_rtdir_bounce` and `rm_rtdir_tri_lm` whole (parameters and bodies), the kernel's
+  statement of the bounce and its write, the lightmap array named only in the kernel's parameter, the bounce's
+  call and the bounce (read once, by `atlas.sample`), and `mtl_rtsky_bounces`, `mtl_rtsky_bounce_at` and
+  `mtl_rtsky_alone` whole in the header, with the one-ray bound and view `7`. Nineteen mutants, each refused:
+  in the kernel `bounce-shadow-ray` (a second shadow ray at the hit), `bounce-unstyled` (the hit's light a
+  constant, not the frame's styled lightmap), `bounce-view1` (traced and added under every view, view 1 among
+  them), `bounce-own-lm` (the pixel's own lightmap read), `bounce-exposed` (the term before the exposure),
+  `bounce-no-albedo`, `bounce-unbounded` (the faces passed unbounded), `bounce-sky-numbers` (the sky ray's
+  numbers), `bounce-sky-lit` (the sky's colour at a sky hit, counted twice), `bounce-unbounded-rec` and
+  `bounce-dropped`; in the header `view1-bounce`, `bounce-sky-shade`, `bounce-not-alone`, `bounce-layers` and
+  `bounce-two-rays`; on the host side `bounce-white-array` and `bounce-other-texture` (`rmb_rtdir.m` binding
+  another texture than the world's lightmap array) and `bounce-no-lmtex` (`rm_rtdirscene.c` handing it none).
+  Each of the eleven kernel mutants, and every earlier kernel mutant of the file, compiles with `xcrun metal -c`
+  (52 in all; slice 0's two new-binding mutants moved to texture index 8, which the array now holds). The test
+  prints `rm_rtdir_test: 19 bounce mutants refused`, and `check-ref-metal.sh` shows the count.
+- Slice 1's pins follow the new write (`open + bounce`), the kernel's new parameters, the two new count slots and
+  the tile read twice more; their mutants are refused as before.
+
+## The records (M6, apple9, 640 x 480, in the hold)
+
+Recorded at `@COMMIT@`, three runs each, hashed as the hash of the frames' sha256s:
+
+| Record | Frames | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|---|
+| `rtprimary-world` | 23 | `@WORLD1@` | `@WORLD2@` | `@WORLD3@` |
+| `rtprimary-direct` | 23 | `@DIRECT1@` | `@DIRECT2@` | `@DIRECT3@` |
+| `rtprimary-vis` | 23 | `@VIS1@` | `@VIS2@` | `@VIS3@` |
+| `rtprimary-noshadow` | 23 | `@NOSHADOW1@` | `@NOSHADOW2@` | `@NOSHADOW3@` |
+| `rtprimary-sky` | 23 | `@SKY1@` | `@SKY2@` | `@SKY3@` |
+| `rtprimary-sun` | 23 | `@SUN1@` | `@SUN2@` | `@SUN3@` |
+| `rtprimary-bounce` | 23 | `@BOUNCE1@` | `@BOUNCE2@` | `@BOUNCE3@` |
+| `rtprimary-styles` (`waste2`) | 89 | `@STYLES1@` | `@STYLES2@` | `@STYLES3@` |
+| `rtprimary-bounce` on `waste2` | 89 | `@BOUNCED21@` | `@BOUNCED22@` | `@BOUNCED23@` |
+| `rtprimary-pool` (`water.dm2`) | 4 | `@POOL1@` | `@POOL2@` | `@POOL3@` |
+| `rtprimary-bounce` on `water.dm2` | 4 | `@BOUNCEW1@` | `@BOUNCEW2@` | `@BOUNCEW3@` |
+| `rtprimary-dlights` | 23 | `@DL1@` | `@DL2@` | `@DL3@` |
+| `rtprimary-dlights` on `waste2` | 89 | `@DLD21@` | `@DLD22@` | `@DLD23@` |
+
+Views 1, 2, 3, 5 and 6 against slice 1's code (`@S1@`), which trace no bounce: `rtprimary-direct` @VSDIRECT@,
+`rtprimary-vis` @VSVIS@, `rtprimary-noshadow` @VSNOSHADOW@, `rtprimary-sky` @VSSKY@, `rtprimary-sun` @VSSUN@.
+
+For the owner's look, not in the repository: `base2`'s `demo1.dm2` captures 21 and 22 (outdoors) and 12
+(indoors), of `rtprimary-world` from the branch and from slice 1's code and of `rtprimary-bounce` from the branch
+(slice 1 has no view 7: `r_rt_direct_show 7` reads its maximum, 6, there). The shaded frames scored against slice
+1: 21 @SCORE21@, 22 @SCORE22@, 12 @SCORE12@. No frame was looked at by the agent.
+
+## Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
+
+The before is slice 1 (`@S1@`), built in a scratch copy and run by `PINS_BIN`; the after is `@COMMIT@`.
+Information only (decision 0014), not a gate:
+
+| Map (scenario, `cl_lights`) | Side | Exposure (mean) | Shadow rays a world pixel | Bounce rays a world pixel, read a lightmap | Pass time (mean) |
+|---|---|---|---|---|---|
+| `base2` (`rtprimary-dlights`) | slice 1 | @EXP_B2_S1@ | @RAYS_B2_S1@ | n/a | @MS_B2_S1@ ms |
+| `base2` (`rtprimary-dlights`) | branch | @EXP_B2@ | @RAYS_B2@ | @BNC_B2@ | @MS_B2@ ms |
+| `waste2` (`rtprimary-styles`) | slice 1 | @EXP_W2_S1@ | @RAYS_W2_S1@ | n/a | @MS_W2_S1@ ms |
+| `waste2` (`rtprimary-styles`) | branch | @EXP_W2@ | @RAYS_W2@ | @BNC_W2@ | @MS_W2@ ms |
+| `base1` pool (`rtprimary-outdoor`, `water.dm2`) | slice 1 | @EXP_B1_S1@ | @RAYS_B1_S1@ | n/a | @MS_B1_S1@ ms |
+| `base1` pool (`rtprimary-outdoor`, `water.dm2`) | branch | @EXP_B1@ | @RAYS_B1@ | @BNC_B1@ | @MS_B1@ ms |
+
+The map lines: @MAPLINES@.
+
+## Stock is unchanged (slice 2)
+
+Every committed `metal` scenario but RT-primary's, seeded, the water scenarios on one `water.dm2` copied to every
+tree, `cinematic` on `idlog.cin` at `PINS_EVERY=7`, base main at `@BASE@` and the branch at `@COMMIT@`:
+@PINS@.
+
+## Checks (slice 2)
+
+In one hold on the code of the final commit (`@COMMIT@`; main merged: @MERGED@), each check's last line:
+
+- make ref_metal: `@MAKE_RM@`; make: `@MAKE@`.
+- `make test`: `@MAKE_TEST@`.
+- `check-ref-metal`: `@CHECK_RM@`.
+- `check-cvar-docs`, `check-runbook-index`, `check-doc-links`, `check-video-menu`, `check-pin-chars`,
+  `check-scenario-parsers`: @CHECKS@.
+
+## Left for later rows (slice 2)
+
+| Item | Taken by |
+|---|---|
+| The lightmaps of faces outside the view keep their last-built styles, so a switched light out of view can still show in the bounce (the known limit above) | A later card: rebuild the style-changed lightmaps of every face under RT-primary. |
+| The bounce's noise, one ray a pixel | PM8 (TASK190), the denoiser. |
+| The exposure fitted against a lightmap that holds qrad3's bounces, with the bounce added after it: RT-primary may be brighter than stock where most light is bounced | The owner, from the frames (PM11): `r_rt_direct_bounce`, a fixed `r_rt_direct_exposure`, or a fit that leaves the indirect share out. |
+| A per-texel albedo at the hit (RT6's texture table in this pass) instead of the texture's mean | Only if the owner's frames ask for it. |
+| The bounce on alias models (a model hit gives 0) | PM9. |
