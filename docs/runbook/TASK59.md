@@ -119,9 +119,25 @@ No pin is made of an accumulated scenario in this slice.
   frame keeps no trace of them in the term. So the accumulation is inside the trace:
   `rm_rts_temporal` is the trace with the four visibilities blended with their history
   before the term is made, run in `rm_rts_trace`'s place while `r_rt_temporal` is above 0.
-  Both kernels call one trace (`rm_rts_shade`, the old kernel's body up to its visibility
-  loop) and one store (`rm_rts_finish`: the term, the packed words, the counts), so the stock
-  kernel computes what it did, in the same order.
+  `rm_rts_temporal` calls a copy of the trace (`rm_rts_shade`, the stock kernel's body up to
+  its visibility loop) and of its store (`rm_rts_finish`: the term, the packed words, the
+  counts); `rm_rts_trace` keeps main's text and is not a caller of them.
+- **Why sharing the trace changed the stock frames (round 1).** The first hold of slice 1b
+  had `rm_rts_trace` call the two helpers, and `rt-shadows` and `rt-shadows-entities`
+  differed from main at `r_rt_temporal 0`. The source arithmetic was the same, and so was
+  the AIR's (`xcrun metal -S -emit-llvm`): the same `fast` float operations in the same order,
+  except that main packs the four visibilities twice (for the term and for the packed word)
+  where the helpers pack them once. What changed is what the compiler inlined. Main's unit
+  inlines the whole trace into `rm_rts_trace` but `mtl_rts_surf`; with the helpers it called
+  `rm_rts_shade` and `rm_rts_finish` as functions, and with `rm_rts_trace` restored to main's
+  text but the copy in the same unit, `rm_rts_visibility` and `mtl_rts_surf_light` had a
+  second caller and stopped being inlined into it. Under Metal's default fast math, the GPU
+  compiler is then free to contract and reorder a different program, which is the likely way
+  a few pixels round differently. That last step happens below the AIR and is not traced. So
+  `rm_rts_temporal` and its copy are compiled apart: they sit behind `RM_RTS_TEMPORAL_TU`, and
+  `rm_rtshadow_temporal.metal` defines it and includes `rm_rtshadow.metal`. The stock unit's
+  AIR for `rm_rts_trace`, `mtl_rts_surf` and `rm_fragment_resolve_rts` is then identical to
+  main's.
 - **The sun's light can be made again after the trace.** Its one ray gives a class (lit or
   shadowed, else not traced: bright, facing away) and the light is the base plus the sun's
   term where lit (`mtl_rtsun_light`); the base, the normal and the sun's direction are all
@@ -207,7 +223,14 @@ again. `tests/check-ref-metal.sh`:
 - Each back end's `tv.reset = rm_rtt_hist_take(&thist, &tview);`, with the mutant that
   passes the view's reasons on alone.
 - Kernel-call pairs for both new kernels (the reprojection, the rule, the blend, the count,
-  the light set) and for both shadow kernels' shared trace and store.
+  the light set) and for the shadows' temporal kernel's trace and store.
+- The stock shadow trace (round 1): `rm_rts_trace`'s text, pinned by its `cksum`; the copy
+  (`rm_rts_shade` and `rm_rts_finish`) holding the stock kernel's code lines and no others but
+  its own carrying of `rm_rts_px`; and the temporal kernel and its copy only behind
+  `RM_RTS_TEMPORAL_TU`, built apart by `rm_rtshadow_temporal.metal` into the metallib. Four
+  mutants are refused: the stock kernel edited (both the checksum and the copy pin refuse
+  it), the copy edited in `rm_rts_shade` or in `rm_rts_finish`, and the guard dropped. Against
+  the first hold's file the pins fail; against the fix they pass.
 
 ### The hold
 
