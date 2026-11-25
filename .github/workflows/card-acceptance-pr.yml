@@ -1,0 +1,38 @@
+name: Card acceptance (pull request)
+run-name: card-acceptance-pr
+# A pull request that closes a card is red until every acceptance criterion
+# of that card has a verdict: met (ticked), "moved to #N" or "dropped:
+# <reason>". It runs on edited too, so editing the pull request's body (or
+# pushing) re-runs it after the card is updated. The backstop after the
+# close is .github/workflows/card-acceptance.yml
+# (docs/decisions/0015-acceptance-verdicts.md).
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions: {}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  acceptance:
+    name: Acceptance verdicts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Check the verdicts
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        # Only the number comes from the event; the body is read with gh api.
+        N: ${{ github.event.pull_request.number }}
+      shell: sh
+      run: |
+        scripts/card-acceptance.sh pr "$N"

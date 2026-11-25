@@ -27,8 +27,11 @@
  * (rmb_rtsun.m). The exposure is the view's: r_rt_direct_exposure's or the
  * map's fit at its load (rm_rtdirscene.c, slice 3c). TASK189 adds the sky
  * ray's blue-noise tile (rm_rtao_bluenoise, made again for this pass) and
- * the sky's and the sun's counts. Every object is counted in the ledger as
- * RM_OBJ_RT.
+ * the sky's and the sun's counts. TASK190 slice 1 (PM8) adds the light's
+ * temporal accumulation, rm_rtp_temporal (rm_rtptemporal.metal), after the
+ * trace in an encoder of its own with its own GPU time, its histories made
+ * only while r_rt_temporal is above 0. Every object is counted in the
+ * ledger as RM_OBJ_RT.
  *
  * =======================================================================
  */
@@ -100,6 +103,31 @@ static int ndone;
 static rm_rtdir_view_t view;
 static float styles[3 * RM_RTL_STYLES];
 static int view_set, traced;
+
+/*
+ * TASK190 slice 1 (PM8): the accumulation of the light, made only while
+ * r_rt_temporal is above 0 (rmb_rtdir_temporal): rm_rtp_temporal's
+ * pipeline and timestamps, at the first view that accumulates, and at
+ * the render size the two histories of the light with its count
+ * (RGBA16Float) and of the key (the distance's bits and the material id,
+ * RG32Uint), read and written in turn, and the light the resolve reads
+ * (RGBA16Unorm, t_light's format).
+ */
+static id<MTLComputePipelineState> tmp_pipe;
+static id<MTLCounterSampleBuffer> tsamples;
+static id<MTLTexture> t_hist[2];
+static id<MTLTexture> t_key[2];
+static id<MTLTexture> t_acc;
+static int hist_cur;                    /* the history this view reads; the other is written */
+static rm_rtt_hist_t thist;             /* the last view encoded into it: a skipped one resets the next */
+static int tmp_refused;                 /* the pipeline could not be made: not tried again until the pass is closed */
+static unsigned long tmp_bad_w, tmp_bad_h;  /* a render size whose histories could not be made: not tried again */
+static rm_rtt_view_t tview;
+static int tview_set;
+static int acc_view;                    /* this view's light was accumulated into t_acc: the development view shows it */
+static unsigned tshow;                  /* the r_rt_direct_show of the last view accumulated */
+static unsigned long slot_acc[RMB_FRAMES_IN_FLIGHT];   /* per slot: the frame that accumulated in it */
+static int slot_ttimed[RMB_FRAMES_IN_FLIGHT];
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTDIR_SET(slot, obj) \
@@ -217,6 +245,7 @@ rmb_rtdir_open(char *err, size_t errlen)
 		atomic_store(&slot_done[i], ~0UL);   /* no frame */
 		slot_pending[i] = 0;
 		slot_frame[i] = 0;
+		slot_acc[i] = ~0UL;
 	}
 
 	ndone = 0;
@@ -247,8 +276,19 @@ rmb_rtdir_close(void)
 		RMB_RTDIR_SET(tile, nil);
 		RMB_RTDIR_SET(counts, nil);
 		RMB_RTDIR_SET(samples, nil);
+		RMB_RTDIR_SET(tmp_pipe, nil);
+		RMB_RTDIR_SET(tsamples, nil);
+		RMB_RTDIR_SET(t_hist[0], nil);
+		RMB_RTDIR_SET(t_hist[1], nil);
+		RMB_RTDIR_SET(t_key[0], nil);
+		RMB_RTDIR_SET(t_key[1], nil);
+		RMB_RTDIR_SET(t_acc, nil);
 	}
 
+	rm_rtt_hist_reset(&thist);
+	tview_set = hist_cur = tmp_refused = acc_view = 0;
+	tmp_bad_w = tmp_bad_h = 0;
+	tshow = 0;
 	dir_open = 0;
 	nlights = 0;
 	nself = 0;
@@ -419,10 +459,135 @@ rmb_rtdir_prepare(unsigned long w, unsigned long h)
 	return 1;
 }
 
+/* the histories and the accumulated light released: the next view that accumulates resets (FIRST) */
+static void
+rmb_rtdir_temporal_free(void)
+{
+	@autoreleasepool
+	{
+		RMB_RTDIR_SET(t_hist[0], nil);
+		RMB_RTDIR_SET(t_hist[1], nil);
+		RMB_RTDIR_SET(t_key[0], nil);
+		RMB_RTDIR_SET(t_key[1], nil);
+		RMB_RTDIR_SET(t_acc, nil);
+	}
+
+	rm_rtt_hist_reset(&thist);
+	hist_cur = 0;
+}
+
+/* a timestamp pair a slot at the encoders' boundaries, or nil where the device samples none there */
+static id<MTLCounterSampleBuffer>
+rmb_rtdir_new_samples(void)
+{
+	MTLCounterSampleBufferDescriptor *sd;
+	id<MTLCounterSet> ts = nil;
+	NSError *e = nil;
+
+	for (id<MTLCounterSet> cs in rmb_device.counterSets)
+	{
+		if ([cs.name isEqualToString:MTLCommonCounterSetTimestamp])
+		{
+			ts = cs;
+		}
+	}
+
+	if (!ts || ![rmb_device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary])
+	{
+		return nil;
+	}
+
+	sd = [MTLCounterSampleBufferDescriptor new];
+	sd.counterSet = ts;
+	sd.storageMode = MTLStorageModeShared;
+	sd.sampleCount = RMB_FRAMES_IN_FLIGHT * 2;
+	return [rmb_device newCounterSampleBufferWithDescriptor:sd error:&e];
+}
+
+int
+rmb_rtdir_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
+{
+	tview_set = 0;
+
+	/* off: no history is kept, and the trace's light is the resolve's */
+	if (!t || !(t->alpha > 0.0f) || !dir_open || (w < 1) || (h < 1) || (w > 0xffffffffUL) || (h > 0xffffffffUL))
+	{
+		if (t_hist[0] || t_hist[1] || t_key[0] || t_key[1] || t_acc)
+		{
+			rmb_rtdir_temporal_free();
+		}
+
+		rm_rtt_hist_reset(&thist);
+		return 0;
+	}
+
+	/* a failure is latched: the pipeline until the pass is closed, the histories for that size */
+	if (tmp_refused || ((w == tmp_bad_w) && (h == tmp_bad_h)))
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		if (!tmp_pipe)
+		{
+			NSError *e = nil;
+			id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rtp_temporal"];
+
+			RMB_RTDIR_SET(tmp_pipe, k ? [rmb_device newComputePipelineStateWithFunction:k error:&e] : nil);
+
+			if (!tmp_pipe)
+			{
+				tmp_refused = 1;
+				fprintf(stderr, "ref_metal: rt temporal: no direct-light accumulation pipeline\n");
+				return 0;
+			}
+
+			RMB_RTDIR_SET(tsamples, rmb_rtdir_new_samples());
+		}
+
+		/* made again when the render size changes, the old ones released first */
+		if (!t_acc || (t_acc.width != w) || (t_acc.height != h))
+		{
+			MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+					width:w height:h mipmapped:NO];
+
+			rmb_rtdir_temporal_free();
+			d.storageMode = MTLStorageModePrivate;
+			d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+			RMB_RTDIR_SET(t_hist[0], [rmb_device newTextureWithDescriptor:d]);
+			RMB_RTDIR_SET(t_hist[1], [rmb_device newTextureWithDescriptor:d]);
+			d.pixelFormat = MTLPixelFormatRG32Uint;
+			RMB_RTDIR_SET(t_key[0], [rmb_device newTextureWithDescriptor:d]);
+			RMB_RTDIR_SET(t_key[1], [rmb_device newTextureWithDescriptor:d]);
+			d.pixelFormat = MTLPixelFormatRGBA16Unorm;
+			RMB_RTDIR_SET(t_acc, [rmb_device newTextureWithDescriptor:d]);
+
+			if (!t_hist[0] || !t_hist[1] || !t_key[0] || !t_key[1] || !t_acc)
+			{
+				rmb_rtdir_temporal_free();
+				tmp_bad_w = w;
+				tmp_bad_h = h;
+				fprintf(stderr, "ref_metal: rt temporal %lux%lu: the direct light's histories cannot be made\n", w, h);
+				return 0;
+			}
+
+			fprintf(stderr, "ref_metal: rt temporal direct %lux%lu: %lu bytes allocated\n", w, h,
+					(unsigned long)(t_hist[0].allocatedSize + t_hist[1].allocatedSize + t_key[0].allocatedSize +
+					t_key[1].allocatedSize + t_acc.allocatedSize));
+		}
+	}
+
+	tview = *t;
+	tview_set = 1;
+	return 1;
+}
+
 void
 rmb_rtdir_set_view(const rm_rtdir_view_t *v, const float *st)
 {
 	view_set = 0;
+	tview_set = 0;          /* rmb_rtdir_temporal, after this, hands the view's accumulation over */
 
 	if (!dir_open || !v || !st)
 	{
@@ -488,6 +653,21 @@ rmb_rtdir_read(void)
 		s->bounce_hits = c[16];
 		s->exposure = slot_exposure[k];
 		s->ms = -1;
+		s->accumulated = (slot_acc[k] == slot_frame[k]);
+		s->tms = -1;
+
+		/* TASK190 slice 1: the accumulation's own encoder, timed apart */
+		if (s->accumulated && slot_ttimed[k] && tsamples)
+		{
+			NSData *d = [tsamples resolveCounterRange:NSMakeRange((NSUInteger)k * 2, 2)];
+			const MTLCounterResultTimestamp *t = d ? (const MTLCounterResultTimestamp *)d.bytes : NULL;
+
+			if (t && (d.length >= 2 * sizeof(*t)) && (t[0].timestamp != MTLCounterErrorValue) &&
+				(t[1].timestamp != MTLCounterErrorValue) && (t[1].timestamp >= t[0].timestamp))
+			{
+				s->tms = rmb_rt_gpu_ms(t[1].timestamp - t[0].timestamp);
+			}
+		}
 
 		if (slot_timed[k] && samples)
 		{
@@ -694,10 +874,113 @@ rmb_rtdir_show(id<MTLRenderCommandEncoder> enc)
 
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:0];
 	[enc setFragmentTexture:t_vis atIndex:0];
-	[enc setFragmentTexture:t_light atIndex:1];
+	/* TASK190 slice 1: the term as the resolve reads it, accumulated where the view accumulated */
+	[enc setFragmentTexture:((acc_view && t_acc) ? t_acc : t_light) atIndex:1];
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	rmb_counts.draws++;
 	return 1;
+}
+
+/*
+ * TASK190 slice 1 (PM8): after the trace, in an encoder of its own (its
+ * own timestamp pair), the traced light (the trace's out) accumulated
+ * over the views by rm_rtp_temporal into t_acc, which the resolve then
+ * reads; nil, and the trace's light read as it is, when the view does not
+ * accumulate (r_rt_temporal 0, the histories not made, no motion vectors
+ * at the render size).
+ */
+static id<MTLTexture>
+rmb_rtdir_accumulate(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material, id<MTLTexture> light)
+{
+	unsigned long fno = 0;
+	id<MTLCommandBuffer> cmd;
+	id<MTLComputeCommandEncoder> ce;
+	id<MTLTexture> mv = rmb_gbuf_motion();
+	const NSUInteger w = light.width, h = light.height;
+	rm_rtt_view_t tv;
+	int slot, timed;
+
+	acc_view = 0;
+
+	if (!tview_set)
+	{
+		return nil;
+	}
+
+	tview_set = 0;
+
+	if (!dir_open || !tmp_pipe || !t_hist[0] || !t_hist[1] || !t_key[0] || !t_key[1] || !t_acc || (t_acc.width != w) ||
+		(t_acc.height != h) || !mv || (mv.width != w) || (mv.height != h) || (depth.width != w) || (depth.height != h))
+	{
+		return nil;
+	}
+
+	@autoreleasepool
+	{
+		/* ends the trace's encoder: this one reads what it wrote */
+		cmd = rmb_frame_compute(&fno);
+
+		if (!cmd)
+		{
+			return nil;
+		}
+
+		slot = (int)(fno % RMB_FRAMES_IN_FLIGHT);
+		timed = (tsamples != nil);
+
+		if (timed)
+		{
+			MTLComputePassDescriptor *cp = [MTLComputePassDescriptor computePassDescriptor];
+
+			cp.sampleBufferAttachments[0].sampleBuffer = tsamples;
+			cp.sampleBufferAttachments[0].startOfEncoderSampleIndex = (NSUInteger)slot * 2;
+			cp.sampleBufferAttachments[0].endOfEncoderSampleIndex = (NSUInteger)slot * 2 + 1;
+			ce = [cmd computeCommandEncoderWithDescriptor:cp];
+		}
+		else
+		{
+			ce = [cmd computeCommandEncoder];
+		}
+
+		if (!ce)
+		{
+			return nil;
+		}
+
+		/* the view is encoded into the history here, and only here */
+		tv = tview;
+		tv.reset = rm_rtt_hist_take(&thist, &tview);
+
+		/* another r_rt_direct_show changes what the light holds: the history starts again */
+		if (view.show != tshow)
+		{
+			tv.reset |= RM_RTT_RESET_FIRST;
+		}
+
+		tshow = view.show;
+		[ce setComputePipelineState:tmp_pipe];
+		[ce setTexture:depth atIndex:0];
+		[ce setTexture:normal atIndex:1];
+		[ce setTexture:material atIndex:2];
+		[ce setTexture:mv atIndex:3];
+		[ce setTexture:light atIndex:4];
+		[ce setTexture:t_hist[hist_cur] atIndex:5];
+		[ce setTexture:t_key[hist_cur] atIndex:6];
+		[ce setTexture:t_acc atIndex:7];
+		[ce setTexture:t_hist[1 - hist_cur] atIndex:8];
+		[ce setTexture:t_key[1 - hist_cur] atIndex:9];
+		/* the whole view: the kernel reads its start (the inverse, the rectangle, the eye) */
+		[ce setBytes:&view length:sizeof(view) atIndex:0];
+		[ce setBytes:&tv length:sizeof(tv) atIndex:1];
+		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTDIR_GROUP, RMB_RTDIR_GROUP, 1)];
+		[ce endEncoding];
+		hist_cur = 1 - hist_cur;
+		slot_acc[slot] = fno;
+		slot_ttimed[slot] = timed;
+		acc_view = 1;
+	}
+
+	return t_acc;
 }
 
 /* ---- TASK179: the effect table's rows (rm_rtfx.c) ---------------------------------- */
@@ -710,7 +993,10 @@ rmb_rtdir_fx_trace(rmb_rtfx_io_t *io)
 
 	if (dl)
 	{
-		io->light = dl;
+		/* TASK190 slice 1: accumulated over the views where r_rt_temporal is above 0, else the trace's as it is */
+		id<MTLTexture> acc = rmb_rtdir_accumulate(io->depth, io->normal, io->material, dl);
+
+		io->light = acc ? acc : dl;
 	}
 }
 
