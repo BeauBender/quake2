@@ -35,6 +35,7 @@
 #include "header/rm_rt.h"
 #include "header/rm_rtsun.h"
 #include "header/rm_rtsunscene.h"
+#include "header/rm_rtaoscene.h"
 #include "header/rm_gbufscene.h"
 
 /*
@@ -317,5 +318,6 @@ RM_RTSun_View(const rm_view_t *view)
 	}
 
 	rmb_rtsun_set_view(&v);
+	rmb_rtsun_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (unsigned long)h);
 	sun_viewed = 1;
 }

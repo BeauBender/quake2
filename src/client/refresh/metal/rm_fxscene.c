@@ -37,6 +37,7 @@
 #include "header/local.h"
 #include "header/rm_fxscene.h"
 #include "header/rm_rtgate.h"
+#include "header/rm_rtaoscene.h"
 
 /* a metal_stats line every this many scaled views, and on each that resets */
 #define RM_FX_STATS_EVERY 60
@@ -103,6 +104,8 @@ void
 RM_FX_Reset(void)
 {
 	rm_fx_state_reset(&fx_state);
+	/* RT7's history resets on the same events as the scaler's (design section 2, the "Reset" row) */
+	RM_RTT_Reset();
 }
 
 /* the back end's note, when it has one (a scaler that cannot be made, targets that do not fit) */
@@ -278,4 +281,5 @@ void
 RM_FX_EndFrame(void)
 {
 	rm_fx_frame_end(&fx_state);
+	RM_RTT_EndFrame();
 }
