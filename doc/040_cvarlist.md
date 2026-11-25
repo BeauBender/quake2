@@ -1607,8 +1607,18 @@ is.
   also starts again after a frame whose pass it skipped. It accumulates
   `r_rt_shadows` (each light's visibility, before the light is added),
   `r_rt_sun` and `r_rt_ao`, each with its own history and one reset for
-  the three. `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show`
-  show the frame's own trace, before the accumulation. The design's
+  the three. Under the Ray traced presentation (`r_presentation 3`) it
+  also accumulates that presentation's light (TASK190): the direct
+  light, the sky light, the sun and the bounce, summed and before the
+  albedo, with a history of its own, made only under that presentation
+  and one reset shared with the others; the same rejections apply but
+  the dynamic-light set's, since that light sums every light. The
+  presentation does not set `r_rt_temporal`: the value is the user's,
+  and at `0` the presentation's frames are the same as without it.
+  `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the
+  frame's own trace, before the accumulation; `r_rt_direct_show`'s
+  terms are shown accumulated, as the picture reads them, its history
+  starting again when `r_rt_direct_show` changes. The design's
   default of `0.9` is set once the denoiser lands and the look is
   judged. Saved with the configuration; applies from the next frame.
   Not on the Ray tracing screens yet: it joins the tuning screen, the

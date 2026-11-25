@@ -124,6 +124,8 @@ static int tmp_refused;                 /* the pipeline could not be made: not t
 static unsigned long tmp_bad_w, tmp_bad_h;  /* a render size whose histories could not be made: not tried again */
 static rm_rtt_view_t tview;
 static int tview_set;
+static int acc_view;                    /* this view's light was accumulated into t_acc: the development view shows it */
+static unsigned tshow;                  /* the r_rt_direct_show of the last view accumulated */
 static unsigned long slot_acc[RMB_FRAMES_IN_FLIGHT];   /* per slot: the frame that accumulated in it */
 static int slot_ttimed[RMB_FRAMES_IN_FLIGHT];
 
@@ -284,8 +286,9 @@ rmb_rtdir_close(void)
 	}
 
 	rm_rtt_hist_reset(&thist);
-	tview_set = hist_cur = tmp_refused = 0;
+	tview_set = hist_cur = tmp_refused = acc_view = 0;
 	tmp_bad_w = tmp_bad_h = 0;
+	tshow = 0;
 	dir_open = 0;
 	nlights = 0;
 	nself = 0;
@@ -871,7 +874,8 @@ rmb_rtdir_show(id<MTLRenderCommandEncoder> enc)
 
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:0];
 	[enc setFragmentTexture:t_vis atIndex:0];
-	[enc setFragmentTexture:t_light atIndex:1];
+	/* TASK190 slice 1: the term as the resolve reads it, accumulated where the view accumulated */
+	[enc setFragmentTexture:((acc_view && t_acc) ? t_acc : t_light) atIndex:1];
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	rmb_counts.draws++;
 	return 1;
@@ -895,6 +899,8 @@ rmb_rtdir_accumulate(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture>
 	const NSUInteger w = light.width, h = light.height;
 	rm_rtt_view_t tv;
 	int slot, timed;
+
+	acc_view = 0;
 
 	if (!tview_set)
 	{
@@ -944,6 +950,14 @@ rmb_rtdir_accumulate(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture>
 		/* the view is encoded into the history here, and only here */
 		tv = tview;
 		tv.reset = rm_rtt_hist_take(&thist, &tview);
+
+		/* another r_rt_direct_show changes what the light holds: the history starts again */
+		if (view.show != tshow)
+		{
+			tv.reset |= RM_RTT_RESET_FIRST;
+		}
+
+		tshow = view.show;
 		[ce setComputePipelineState:tmp_pipe];
 		[ce setTexture:depth atIndex:0];
 		[ce setTexture:normal atIndex:1];
@@ -963,6 +977,7 @@ rmb_rtdir_accumulate(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture>
 		hist_cur = 1 - hist_cur;
 		slot_acc[slot] = fno;
 		slot_ttimed[slot] = timed;
+		acc_view = 1;
 	}
 
 	return t_acc;
