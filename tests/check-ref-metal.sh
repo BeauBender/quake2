@@ -29,7 +29,8 @@
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
 #     (rm_rtsun.c and common/mtl_rtsun_math.h, RT4, TASK56),
 #     tests/metal/rm_rtdir_test.c, the pure part of RT-primary's direct light
-#     (rm_rtdir.c and common/mtl_rtdir_math.h, TASK188),
+#     (rm_rtdir.c and common/mtl_rtdir_math.h, TASK188; eight scratch mutants
+#     of the exposure fit in rm_rtdir.c must fail it),
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -620,6 +621,42 @@ else
 	case $rtdir in *", 0 failed") ;; *) bad "tests/metal/rm_rtdir_test.c printed no result line"; rtdir="";; esac
 fi
 seg 7.5 "; direct light ${rtdir:-host test}"
+# Scratch mutants of rm_rtdir.c the test must fail (TASK188 slice 3c): the exposure fit's line test with a
+# leaf never solid, a split segment's first half sent down the wrong side, a point at 0 put behind, the
+# depth cap a level deeper, the visit cap gone; the fixtures sampled; the luxel's s without texturemins;
+# the sample stride rounded down
+rtdir_mutants=0
+if [ -n "$rtdir" ]; then
+	mkdir "${tmp:?}/dirm"
+	for dm in leaf-never-solid sides-swapped front-zero-behind depth-cap-off visits-uncapped fixtures-sampled \
+		luxel-s-unshifted every-floor; do
+		case $dm in
+			leaf-never-solid) sed 's/return !(nd.contents & RM_RTDIR_CONTENTS_SOLID);/return 1;/' ;;
+			sides-swapped) sed 's/rm_rtdir_clear_node(t, nd.child\[side\], a, mid, depth + 1)/rm_rtdir_clear_node(t, nd.child[!side], a, mid, depth + 1)/' ;;
+			front-zero-behind) sed 's/side = front < 0;/side = front <= 0;/' ;;
+			depth-cap-off) sed 's/(depth > RM_RTDIR_FIT_DEPTH)/(depth > RM_RTDIR_FIT_DEPTH + 1)/' ;;
+			visits-uncapped) sed 's/if (t->visits >= t->cap)/if (0)/' ;;
+			fixtures-sampled) sed 's/(RM_RTDIR_SURF_LIGHT | RM_RTDIR_SURF_TRANS33/(RM_RTDIR_SURF_TRANS33/' ;;
+			luxel-s-unshifted) sed 's/vecs\[a\]\[3\] - texturemins\[a\]/vecs[a][3] - (a ? texturemins[a] : 0)/' ;;
+			every-floor) sed 's|return 1 + (total - 1) / cap;|return total / cap;|' ;;
+		esac < "$rm_dir/rm_rtdir.c" > "${tmp:?}/dirm/rm_rtdir.c"
+		if cmp -s "$rm_dir/rm_rtdir.c" "${tmp:?}/dirm/rm_rtdir.c"; then
+			bad "the exposure-fit mutant ($dm) changed nothing"
+		# shellcheck disable=SC2086 # flags is a word list
+		elif ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -DRM_RTFX_HOST -Itests/metal -I"$rm_dir" \
+			-o "${tmp:?}/dirm/t" tests/metal/rm_rtdir_test.c "${tmp:?}/dirm/rm_rtdir.c" "$rm_dir/rm_rtgate.c" \
+			"$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+			"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/dirm.out" 2>&1; then
+			cat "${tmp:?}/dirm.out"
+			bad "the exposure-fit mutant ($dm) does not compile"
+		elif "${tmp:?}/dirm/t" > "${tmp:?}/dirm.out" 2>&1; then
+			bad "tests/metal/rm_rtdir_test.c passes the exposure-fit mutant ($dm)"
+		else
+			rtdir_mutants=$((rtdir_mutants + 1))
+		fi
+	done
+fi
+seg 7.6 ", $rtdir_mutants fit mutants refused"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)

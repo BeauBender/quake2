@@ -311,7 +311,9 @@ rm_rtdir_dyn(constant rm_rtdir_view &v, float3 p, float3 n, float3 o, instance_a
  * (mtl_rtdir_capped). TASK188 slice 3b adds the frame's dynamic lights
  * (rm_rtdir_dyn, their own term) and the light of an emissive face the
  * pixel is on (rm_rtdir_own, times style 0, as qrad3 adds it to the
- * style-0 lightmap); r_rt_direct_show 4 is the dynamic lights alone. It
+ * style-0 lightmap); r_rt_direct_show 4 is the dynamic lights alone.
+ * Under views 3 and 4 the own light's eye ray is not cast (TASK188
+ * slice 3c): view 3 traces no ray at all, and view 4 does not show it. It
  * takes no texture: the light a world pixel is written with comes from
  * the lights alone. A ray stops a unit short of its light: an entity's
  * origin is in open space.
@@ -386,7 +388,8 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
 
 	{
 		const float3 dyn = rm_rtdir_dyn(v, p, n, o, ias, inst, tmat, ntris, dl, t);
-		const float3 own = rm_rtdir_own(v, p, ias, inst, tmat, ntris, self) * float3(styles[0]);
+		const float3 own = ((v.show == 3u) || (v.show == 4u)) ? float3(0.0f) :
+				rm_rtdir_own(v, p, ias, inst, tmat, ntris, self) * float3(styles[0]);
 
 		return ((v.show == 4u) ? dyn : (raw + dyn + own)) * MTL_RTDIR_UNIT;
 	}
