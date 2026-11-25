@@ -1550,7 +1550,9 @@ is.
   only for an effect that is on: at 1920 x 1080 that is 232,243,200 bytes
   with all three on, at 3840 x 2160 928,972,800 (about 0.9 GB); the
   reflections' blur adds 4 bytes a pixel while the water is on. A failed
-  allocation is logged once and the frames are then the trace's alone.
+  allocation is logged once and the frames are then the trace's alone;
+  for the reflections' blur, once per render size, since a new size tries
+  it again.
   Saved with the configuration; applies from the next frame. The Ray
   tracing menu's tuning screen has it as "accumulate" (0 to 0.98, the
   renderer's own maximum, in steps of 0.02): live when shadows, sun, AO
