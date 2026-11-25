@@ -75,6 +75,21 @@ static int ndone;
 static rm_rtsun_view_t view;
 static int view_set, traced;
 
+/*
+ * RT7's accumulation (TASK59 slice 1b), made only while r_rt_temporal is
+ * above 0: rm_rtsun_temporal's pipeline, at the first view that
+ * accumulates, and the two histories, RGBA32Float at the render size,
+ * read and written in turn.
+ */
+static id<MTLComputePipelineState> tmp_pipe;
+static id<MTLTexture> t_hist[2];
+static int hist_cur;                    /* the history this view reads; the other is written */
+static rm_rtt_hist_t thist;             /* the last view encoded into it: a skipped one resets the next */
+static int tmp_refused;                 /* the pipeline could not be made: not tried again until the pass is closed */
+static unsigned long tmp_bad_w, tmp_bad_h;  /* a render size whose histories could not be made: not tried again */
+static rm_rtt_view_t tview;
+static int tview_set;
+
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTSUN_SET(slot, obj) \
 	do \
@@ -179,8 +194,14 @@ rmb_rtsun_close(void)
 		RMB_RTSUN_SET(t_light, nil);
 		RMB_RTSUN_SET(counts, nil);
 		RMB_RTSUN_SET(samples, nil);
+		RMB_RTSUN_SET(tmp_pipe, nil);
+		RMB_RTSUN_SET(t_hist[0], nil);
+		RMB_RTSUN_SET(t_hist[1], nil);
 	}
 
+	tview_set = hist_cur = tmp_refused = 0;
+	tmp_bad_w = tmp_bad_h = 0;
+	rm_rtt_hist_reset(&thist);
 	sun_open = 0;
 	view_set = traced = 0;
 	ndone = 0;
@@ -222,6 +243,79 @@ rmb_rtsun_prepare(unsigned long w, unsigned long h)
 				(unsigned long)(t_class.allocatedSize + t_light.allocatedSize));
 	}
 
+	return 1;
+}
+
+int
+rmb_rtsun_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
+{
+	tview_set = 0;
+
+	/* off: no history is kept */
+	if (!t || !(t->alpha > 0.0f) || !sun_open || (w < 1) || (h < 1) || (w > 0xffffffffUL) || (h > 0xffffffffUL))
+	{
+		if (t_hist[0] || t_hist[1])
+		{
+			RMB_RTSUN_SET(t_hist[0], nil);
+			RMB_RTSUN_SET(t_hist[1], nil);
+		}
+
+		rm_rtt_hist_reset(&thist);
+		return 0;
+	}
+
+	/* a failure is latched: the pipeline until the pass is closed, the histories for that size */
+	if (tmp_refused || ((w == tmp_bad_w) && (h == tmp_bad_h)))
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		if (!tmp_pipe)
+		{
+			NSError *e = nil;
+			id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rtsun_temporal"];
+
+			RMB_RTSUN_SET(tmp_pipe, k ? [rmb_device newComputePipelineStateWithFunction:k error:&e] : nil);
+
+			if (!tmp_pipe)
+			{
+				tmp_refused = 1;
+				fprintf(stderr, "ref_metal: rt temporal: no sun accumulation pipeline\n");
+				return 0;
+			}
+		}
+
+		if (!t_hist[0] || !t_hist[1] || (t_hist[0].width != w) || (t_hist[0].height != h))
+		{
+			MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+					width:w height:h mipmapped:NO];
+
+			d.storageMode = MTLStorageModePrivate;
+			d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+			RMB_RTSUN_SET(t_hist[0], [rmb_device newTextureWithDescriptor:d]);
+			RMB_RTSUN_SET(t_hist[1], [rmb_device newTextureWithDescriptor:d]);
+			rm_rtt_hist_reset(&thist);
+
+			if (!t_hist[0] || !t_hist[1])
+			{
+				RMB_RTSUN_SET(t_hist[0], nil);
+				RMB_RTSUN_SET(t_hist[1], nil);
+				tmp_bad_w = w;
+				tmp_bad_h = h;
+				fprintf(stderr, "ref_metal: rt temporal %lux%lu: the sun's histories cannot be made\n", w, h);
+				return 0;
+			}
+
+			hist_cur = 0;
+			fprintf(stderr, "ref_metal: rt temporal sun %lux%lu: %lu bytes allocated\n", w, h,
+					(unsigned long)(t_hist[0].allocatedSize + t_hist[1].allocatedSize));
+		}
+	}
+
+	tview = *t;
+	tview_set = 1;
 	return 1;
 }
 
@@ -318,9 +412,11 @@ rmb_rtsun_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 	id<MTLCommandBuffer> cmd;
 	id<MTLComputeCommandEncoder> ce;
 	const NSUInteger w = depth.width, h = depth.height;
+	const int acc_set = tview_set;  /* RT7: this view accumulates, when everything it needs is at this size */
 	int slot, timed;
 
 	traced = 0;
+	tview_set = 0;
 
 	if (!sun_open || !view_set || !depth || !normal || !material || !lm || !base)
 	{
@@ -405,6 +501,35 @@ rmb_rtsun_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		[ce setBytes:&view length:sizeof(view) atIndex:0];
 		[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTSUN_COUNTS * sizeof(uint32_t) atIndex:6];
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTSUN_GROUP, RMB_RTSUN_GROUP, 1)];
+
+		/*
+		 * RT7 (TASK59 slice 1b): the sun's visibility accumulated over the
+		 * views, the light written again from it. Only while r_rt_temporal is
+		 * above 0 and the histories and the motion vectors are at the render
+		 * size; otherwise nothing below runs and the frame is the trace's alone.
+		 */
+		if (acc_set && tmp_pipe && t_hist[0] && t_hist[1] && (t_hist[0].width == w) && (t_hist[0].height == h))
+		{
+			id<MTLTexture> mv = rmb_gbuf_motion();
+
+			if (mv && (mv.width == w) && (mv.height == h))
+			{
+				rm_rtt_view_t tv = tview;
+
+				/* the view is encoded into the history here, and only here */
+				tv.reset = rm_rtt_hist_take(&thist, &tview);
+				[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+				[ce setComputePipelineState:tmp_pipe];
+				[ce setTexture:mv atIndex:7];
+				[ce setTexture:t_hist[hist_cur] atIndex:8];
+				[ce setTexture:t_hist[1 - hist_cur] atIndex:9];
+				[ce setBytes:&tv length:sizeof(tv) atIndex:9];
+				[ce dispatchThreads:MTLSizeMake(w, h, 1)
+						threadsPerThreadgroup:MTLSizeMake(RMB_RTSUN_GROUP, RMB_RTSUN_GROUP, 1)];
+				hist_cur = 1 - hist_cur;
+			}
+		}
+
 		[ce endEncoding];
 
 		slot_pending[slot] = 1;

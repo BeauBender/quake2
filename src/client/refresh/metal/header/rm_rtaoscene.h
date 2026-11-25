@@ -33,6 +33,8 @@
 #ifndef RM_RTAOSCENE_H
 #define RM_RTAOSCENE_H
 
+#include "rm_rttemporal.h"
+
 void RM_RTAO_Init(const rmb_caps_t *caps);
 void RM_RTAO_Shutdown(void);
 int RM_RTAO_Wanted(void);
@@ -40,5 +42,24 @@ void RM_RTAO_Frame(const refdef_t *fd, int scene_ready);
 int RM_RTAO_Active(void);
 int RM_RTAO_ShowOnly(void);
 void RM_RTAO_View(const rm_view_t *view);
+
+/*
+ * RT7's history (TASK59): RM_RTT_Reset forgets the last view on a map
+ * load, with the scaler's (RM_FX_Reset); RM_RTT_EndFrame ends the frame
+ * with the scaler's (RM_FX_EndFrame), so a frame that accumulated no view
+ * resets the next.
+ */
+void RM_RTT_Reset(void);
+void RM_RTT_EndFrame(void);
+
+/*
+ * The one reset state of the shadows', the sun's and the AO's histories
+ * (slice 1b). RM_RTT_BeginView: a world view starts (rm_main.c, before
+ * the effects' views). RM_RTT_ViewFor: the view the effects' back ends
+ * accumulate with, stepped at the first call of a world view and the same
+ * for every effect after it; NULL while r_rt_temporal is 0.
+ */
+void RM_RTT_BeginView(void);
+const rm_rtt_view_t *RM_RTT_ViewFor(const rm_view_t *view);
 
 #endif /* RM_RTAOSCENE_H */
