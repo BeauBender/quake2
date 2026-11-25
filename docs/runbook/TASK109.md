@@ -122,6 +122,16 @@ family's default rows are 720 or 1080, and the scale is kept at 1 or below. So t
 records run the scaler as temporal anti-aliasing. The hold records `r_metalfx_scale 0.5` from
 scratch copies, which are never committed.
 
+`rt-all-metalfx2` leaves out the ten lines of the `rt-*` scenarios that restate a default
+(`r_rt_ao_range 128`, `r_rt_ao_min 0.4`, `r_rt_sunscale 0.35`, `r_rt_sunfloor 0.5`,
+`r_rt_water_normal 0.08`, `r_rt_water_reflect 0.5` and the four `*_show 0`, each the
+`Cvar_Get` default), so it draws what it did. With them, its seeded record started the
+engine with 141 arguments, above `MAX_NUM_ARGVS` (128, `src/common/argproc.c`), and the first
+hold's every `rt-all-metalfx2` record stopped at once with `argc > MAX_NUM_ARGVS`. It now
+takes 111 of 128, the most of any scenario (`rt-water` 99, `rtprimary-metalfx2` 96), and
+`tests/check-scenario-parsers.sh` (`t_argcount`) fails when a committed scenario's seeded
+record would take more.
+
 ### The read of each effect
 
 Every effect was read for a size that is the window's or the drawable's where it should be
@@ -181,8 +191,8 @@ summary.
 
 | Check | Result |
 |---|---|
-| base and branch | main `@BASE@`, branch `@HEAD@` |
-| stock, `world-metalfx*`, `hdr-metalfx2`, `rt-*` and `rtprimary-*`, byte-identical to main | @PINS@ |
+| base and branch | slice 1 (`task109s1`, which this slice is stacked on) `@BASE@`, branch `@HEAD@` |
+| stock, `world-metalfx*`, `hdr-metalfx2`, `rt-*` and `rtprimary-*`, byte-identical to the base | @PINS@ |
 | `rt-all-metalfx2`, default scale, three runs | @RTALL_DEF@ |
 | `rtprimary-metalfx2`, default scale, three runs | @RTP_DEF@ |
 | `rt-all-metalfx2`, `r_metalfx_scale 0.5`, three runs | @RTALL_HALF@ |
@@ -201,7 +211,10 @@ The host checks (no lock) on the branch before the hold:
 | `tests/check-ref-metal.sh` | ok: `13162 checks, 0 failed`; `MetalFX 392 checks, 0 failed, 3 reset mutants refused` |
 | `make test` | `yq2test: 591 tests, 0 failed` |
 | `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh`, `tests/check-pin-chars.sh` | ok, each |
-| `tests/check-scenario-parsers.sh` | ok: `4 tests, 10 mutants caught` |
+| `tests/check-scenario-parsers.sh` | ok: `5 tests, 11 mutants caught`; argc at most 111 of 128 (`rt-all-metalfx2`) |
 | `scripts/pins.sh check-content` | `content tags ok` |
 
-No code changed, so this slice has no red test and no new mutant.
+No engine code changed. The one red test is `t_argcount` in
+`tests/check-scenario-parsers.sh`: red on the first `rt-all-metalfx2` (141 of 128), green
+on the trimmed one, and its mutant (`argc-restated-defaults`, the ten lines put back) is
+caught.
