@@ -890,6 +890,8 @@ TEST(vidrules_rt_status_names_the_presentation)
 	T_CHECK(!VidRules_RTOverridden(5, "metal", 1, 2) && !VidRules_RTOverridden(0, "gl1", 1, 2));
 	T_CHECK(!VidRules_RTEffective(0, "metal", 1, 2, 1.0f) && VidRules_RTEffective(0, "metal", 1, 1, 0.0f));
 	T_REQUIRE(tune_row("r_metalfx") >= 0 && tune_row("r_rt_flatlight") >= 0 && tune_row("r_rt_temporal") >= 0);
+	/* every row fits the screen (vidrules.c also asserts it at compile time) */
+	T_CHECK(VidRules_TuneNum() <= VIDTUNE_MAX_ROWS);
 	T_CHECK(VidRules_TuneOverridden(tune_row("r_metalfx"), "metal", 2) &&
 		!VidRules_TuneOverridden(tune_row("r_metalfx"), "metal", 1));
 	T_CHECK(!VidRules_TuneOverridden(tune_row("r_rt_flatlight"), "metal", 2));   /* flat light stays the user's */

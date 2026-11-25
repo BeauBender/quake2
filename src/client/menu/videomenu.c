@@ -856,7 +856,7 @@ HdrRule(int item, const char *renderer, char *note, size_t len)
  * (restart)", live only after a row that needs vid_restart changed. As
  * the ray-tracing screen, it keeps the view undimmed and every item shown.
  */
-#define TUNE_MAX_ROWS 12
+#define TUNE_MAX_ROWS VIDTUNE_MAX_ROWS
 #define TUNE_MAX_STEPS 80
 
 static menuframework_s s_tune_menu;

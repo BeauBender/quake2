@@ -795,6 +795,9 @@ static const vidrt_control_t rt_tune[] = {
 	{ "r_metalfx_scale", "scale", "0", CVAR_ARCHIVE, -1, 0.0f, 1.0f, 0.05f, "%.2f", NULL, 0, 0 },
 };
 
+_Static_assert(sizeof(rt_tune) / sizeof(rt_tune[0]) <= VIDTUNE_MAX_ROWS,
+	"the tuning screen holds VIDTUNE_MAX_ROWS rows: raise it with a new row");
+
 int
 VidRules_TuneNum(void)
 {

@@ -279,6 +279,13 @@ const char *VidRules_RTStatus(const char *renderer, int available, float present
 #define VIDTUNE_EFFECT_ACCUM -2
 #define VIDTUNE_ACCUM_ROWS 4
 
+/*
+ * The most rows the tuning screen holds (videomenu.c sizes its arrays by
+ * it): vidrules.c asserts at compile time that rt_tune fits, so a row past
+ * it fails the build instead of being left off the screen.
+ */
+#define VIDTUNE_MAX_ROWS 12
+
 int VidRules_TuneNum(void);
 const vidrt_control_t *VidRules_TuneControl(int i);
 vidrule_t VidRules_TuneItem(int i, const char *renderer, int available, int effect_on);
