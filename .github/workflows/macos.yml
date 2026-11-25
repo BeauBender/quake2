@@ -8,9 +8,17 @@ on:
     types:
       - opened
       - synchronize
+  schedule:
+    # Every night on main: every check of tests/ci-checks.txt, the harness
+    # group whole, whatever changed (TASK211).
+    - cron: '17 9 * * *'
 concurrency:
-  # Cancel concurrent workflows for the same PR or commit hash.
-  group: ${{github.workflow}}-${{github.event_name == 'pull_request' && github.head_ref || github.sha}}
+  # A push to main has one group, so a newer push cancels the main run it
+  # supersedes, and no pull request run (TASK211). A pull request has a
+  # group of its own number: only its own newer push cancels its run. Any
+  # other run (the schedule) has a group of its own run id and is never
+  # cancelled. tests/check-ci-map.sh holds this line.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && 'main' || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 # No token permission unless a job names it.
 permissions: {}
@@ -85,12 +93,25 @@ jobs:
         if-no-files-found: error
   invariants_macos:
     # The gate's invariants (tests/check-*.sh, as scripts/test.sh runs them)
-    # on a free standard runner: every check in tests/ci-checks.txt, through
+    # on free standard runners: the checks in tests/ci-checks.txt, through
     # scripts/ci-checks.sh. tests/ci-local-only.txt names the checks that run
     # on the build host only, each with its reason; tests/check-ci-parity.sh
-    # keeps the two lists equal to the checks. Among them tests/check-ios.sh:
-    # the client, game and ref_metal objects for the iOS simulator and the
-    # device, no SDL, no game data, no signing, no simulator booted.
+    # keeps the two lists equal to the checks.
+    #
+    # Three jobs in parallel (TASK211), the groups of tests/ci-map.txt:
+    #   fast     every check that is not in the other two;
+    #   harness  the slow self-tests of the harness: on a pull request those
+    #            whose path globs match a changed path, and all of them when
+    #            a path is in no map entry or is the map, the selector or
+    #            under .github/; on a push and the nightly run, all of them;
+    #   ios      tests/check-ios.sh: the client, game and ref_metal objects
+    #            for the iOS simulator and the device, no SDL, no game data,
+    #            no signing, no simulator booted.
+    # tests/check-ci-map.sh holds the matrix, the map and the selector.
+    strategy:
+      matrix:
+        group: [fast, harness, ios]
+      fail-fast: false # a failing group stops no other
     runs-on: macos-latest
     permissions:
       # actions/checkout reads the repository.
@@ -128,5 +149,7 @@ jobs:
         CHECK_STATIC_MODULES_REQUIRE: 1
         CHECK_BENCH_REQUIRE: 1
         CHECK_CVAR_DOCS_SELFTEST_REQUIRE: 1
+        # The group of tests/ci-map.txt this job runs (TASK211).
+        CI_CHECKS_GROUP: ${{ matrix.group }}
       run: |
         scripts/ci-checks.sh

@@ -300,7 +300,7 @@ sel_cases() {
 	esac
 	paths "$l"
 	expect empty "$HALL" "$(sel "$s" "$m" harness "$l")" || cf=1
-	printf 'README.md' > "$l"
+	printf 'README.md\0CLAUDE.md' > "$l"
 	expect unterminated "$HALL" "$(sel "$s" "$m" harness "$l")" || cf=1
 	expect every "$HALL" "$(sel "$s" "$m" harness -)" || cf=1
 	expect nofile STATUS2 "$(sel "$s" "$m" harness "$tmp/none")" || cf=1
