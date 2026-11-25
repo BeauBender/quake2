@@ -46,6 +46,7 @@
 #include "rm_rtfx.h"
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_rtsun_math.h"
+#include "rm_rttemporal.h"
 
 /* ---- rm_rtsun.c: no SDL, no Metal ----------------------------------------------------- */
 
@@ -232,6 +233,15 @@ void rmb_rtsun_close(void);
  * made.
  */
 int rmb_rtsun_prepare(unsigned long w, unsigned long h);
+
+/*
+ * RT7 (TASK59 slice 1b): the next traced view accumulates its visibility
+ * with t (copied), at the render size w x h, through rm_rtsun_temporal
+ * after the trace; its pipeline and the two histories are made at the
+ * first such view, a failure latched. NULL, or t's alpha 0, releases the
+ * histories and accumulates nothing. 1 when the view accumulates.
+ */
+int rmb_rtsun_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h);
 
 /* the view the next G-buffer view traces with (copied); NULL turns the pass off for that view */
 void rmb_rtsun_set_view(const rm_rtsun_view_t *v);

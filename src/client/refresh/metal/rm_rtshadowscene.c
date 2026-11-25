@@ -35,6 +35,7 @@
 #include "header/rm_rt.h"
 #include "header/rm_rtshadow.h"
 #include "header/rm_rtscene.h"
+#include "header/rm_rtaoscene.h"
 #include "header/rm_gbufscene.h"
 
 static cvar_t *r_rt_shadows;
@@ -452,6 +453,7 @@ RM_RTS_View(const rm_view_t *view)
 	v.carried = RM_RT_Carried();
 	RM_RTS_Ents();
 	rmb_rts_set_view(&v, lights, n);
+	rmb_rts_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (unsigned long)h);
 
 	/* the dynamic-light term leaves the lightmaps: the resolve adds it back */
 	r_dlight_term = false;

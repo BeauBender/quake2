@@ -42,6 +42,7 @@
 #include "rm_rtfx.h"
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_rts_math.h"
+#include "rm_rttemporal.h"
 
 /* ---- rm_rtshadow.c: no SDL, no Metal ------------------------------------------------ */
 
@@ -296,6 +297,15 @@ void rmb_rts_set_ents(const float *rows, int n);
  * made.
  */
 int rmb_rts_prepare(unsigned long w, unsigned long h);
+
+/*
+ * RT7 (TASK59 slice 1b): the next traced view accumulates its visibilities
+ * with t (copied), at the render size w x h, through rm_rts_temporal in
+ * rm_rts_trace's place; its pipeline and the two histories are made at the
+ * first such view, a failure latched. NULL, or t's alpha 0, releases the
+ * histories and accumulates nothing. 1 when the view accumulates.
+ */
+int rmb_rts_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h);
 
 /*
  * The view and lights the next G-buffer view traces and resolves with
