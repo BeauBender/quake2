@@ -395,7 +395,112 @@ for bf in rmb_rtao.m rmb_rtshadow.m rmb_rtsun.m; do
 		rtt_bmut=$((rtt_bmut + 1))
 	fi
 done
-seg 5.5 "; temporal ${rtt:-host test}, $rtt_mutants rule mutants, $rtt_kpins kernel pins with $rtt_kmut kernel mutants and $rtt_bmut back-end mutants refused"
+# the stock shadow trace (slice 1b, round 1): rm_rts_trace and its unit stay as they were before RT7.
+# Its helpers shared with rm_rts_temporal in one unit, the compiler stopped inlining rm_rts_visibility
+# and mtl_rts_surf_light into it and the stock rt-shadows frames changed. So rm_rts_trace's text is
+# pinned by its checksum, the temporal kernel and its copy of the trace's body (rm_rts_shade,
+# rm_rts_finish) sit only behind RM_RTS_TEMPORAL_TU, compiled apart by rm_rtshadow_temporal.metal, and
+# the copy holds the stock kernel's code lines, so that the two cannot drift apart unseen. Mutants: the
+# stock kernel edited (the checksum and the copy pin refuse it), the copy edited in either helper, the
+# guard dropped.
+rts_trace_sum='2595407311 7173'  # cksum of rm_rts_trace's text, from its name to its closing brace (TASK188 slice 3a)
+rts_text() { # <file>: rm_rts_trace's definition, from its name to its closing brace
+	awk '/^rm_rts_trace\(/ { b = 1 } b { print } b && /^}/ { exit }' "$1"
+}
+rts_code() { # <file> <function>...: the code lines of the bodies, whitespace squeezed, rm_rts_px's "s." dropped
+	awk -v fns="$(shift; echo "$*")" 'BEGIN { n = split(fns, want, " ") }
+		{ for (i = 1; i <= n; i++) if (index($0, want[i] "(") == 1) h = 1 }
+		h && /^\{/ { h = 0; b = 1; next }
+		b && /^\}/ { b = 0; next }
+		b { print }' "$1" |
+		sed -E 's/^[[:space:]]+//; s/[[:space:]]+/ /g; s/(^|[^A-Za-z0-9_.])s\./\1/g' | grep -vE '^$|^[{}]$|^/?\*'
+}
+# the lines only one side has: the stock kernel's own declarations and its write of the packed words, the
+# copy's carrying of what it found in rm_rts_px and its write of the same words, packed once
+printf '%s\n' 'const bool inside = (px.x < out.get_width()) && (px.y < out.get_height());' \
+	'float adds[MTL_RTS_MAX_LIGHTS];' \
+	'out.write(uint4(mtl_rts_pack_vis(vis[0], vis[1], vis[2], vis[3]), mtl_rts_pack_idx(top, flags), 0, 0), px);' \
+	> "${tmp:?}/rts-stock-only"
+printf '%s\n' 'rm_rts_px s;' 'nl = 0;' 'thread float *adds = adds;' 'nl = nl;' 'top = top;' 'flags = flags;' \
+	'rays = rays;' 'primary = primary;' 'vis[k] = vis[k];' 'return s;' 'out.write(uint4(pvis, pidx, 0, 0), px);' \
+	> "${tmp:?}/rts-copy-only"
+rts_alike() { # <file>: 0 when rm_rts_shade and rm_rts_finish hold rm_rts_trace's code lines and no other
+	rts_code "$1" rm_rts_trace > "${tmp:?}/rts-stock"
+	rts_code "$1" rm_rts_shade rm_rts_finish > "${tmp:?}/rts-copy"
+	[ -s "${tmp:?}/rts-stock" ] && [ -s "${tmp:?}/rts-copy" ] &&
+		! grep -vxF -f "${tmp:?}/rts-stock-only" "${tmp:?}/rts-stock" | grep -qvxF -f "${tmp:?}/rts-copy" &&
+		! grep -vxF -f "${tmp:?}/rts-copy-only" "${tmp:?}/rts-copy" | grep -qvxF -f "${tmp:?}/rts-stock"
+}
+rts_unit() { # <file>: 0 when rm_rts_trace is outside RM_RTS_TEMPORAL_TU and the temporal kernel and its copy inside
+	awk '/^#ifndef RM_RTS_TEMPORAL_TU$/ { if (s == 0) s = 1; next }
+		/^#else \/\* RM_RTS_TEMPORAL_TU \*\/$/ { if (s == 1) s = 2; next }
+		/^#endif \/\* RM_RTS_TEMPORAL_TU \*\/$/ { if (s == 2) s = 3; next }
+		/^rm_rts_trace\(/ { if (s != 1) bad = 1; tr++ }
+		/^(rm_rts_temporal|rm_rts_shade|rm_rts_finish)\(/ { if (s != 2) bad = 1; tp++ }
+		END { exit !(s == 3 && !bad && tr == 1 && tp == 3) }' "$1"
+}
+rts_pins=0 rts_mut=0
+rts_f=$rm_dir/rm_rtshadow.metal
+if [ "$(rts_text "$rts_f" | cksum)" != "$rts_trace_sum" ]; then
+	bad "rm_rtshadow.metal: rm_rts_trace's text is not the pinned stock kernel's (cksum $rts_trace_sum)"
+else
+	rts_pins=$((rts_pins + 1))
+fi
+if ! rts_alike "$rts_f"; then
+	diff "${tmp:?}/rts-stock" "${tmp:?}/rts-copy" || :
+	bad "rm_rtshadow.metal: rm_rts_shade and rm_rts_finish do not hold rm_rts_trace's code lines alone"
+else
+	rts_pins=$((rts_pins + 1))
+fi
+if ! rts_unit "$rts_f"; then
+	bad "rm_rtshadow.metal: rm_rts_trace not alone outside RM_RTS_TEMPORAL_TU, or the temporal kernel outside it"
+elif ! grep -qxF '#define RM_RTS_TEMPORAL_TU 1' "$rm_dir/rm_rtshadow_temporal.metal" ||
+	! grep -qxF '#include "rm_rtshadow.metal"' "$rm_dir/rm_rtshadow_temporal.metal" ||
+	[ "$(grep -cF 'ref_metal/rm_rtshadow_temporal.air' Makefile)" != 2 ]; then
+	bad "rm_rtshadow_temporal.metal does not compile the temporal kernel apart into ref_metal.metallib"
+else
+	rts_pins=$((rts_pins + 1))
+fi
+for m in stock shade finish guard; do
+	case $m in
+		stock|shade|finish)
+			kn=rm_rts_trace
+			[ "$m" = shade ] && kn=rm_rts_shade
+			[ "$m" = finish ] && kn=rm_rts_finish
+			# the shadow ray's end in the trace, the term's test in the outputs: one copy only
+			awk -v fn="$kn" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+				b { sub(/len - 0\.5f\)/, "len - 0.25f)"); sub(/adds\[i\] > 0\.0f\)/, "adds[i] >= 0.0f)") } { print }' \
+				"$rts_f" ;;
+		guard) sed '/^#else \/\* RM_RTS_TEMPORAL_TU \*\/$/d; /^#endif \/\* RM_RTS_TEMPORAL_TU \*\/$/d' "$rts_f" ;;
+	esac > "${tmp:?}/rts-mut.metal"
+	if cmp -s "$rts_f" "${tmp:?}/rts-mut.metal"; then
+		bad "the stock-trace mutant ($m) changed nothing"
+		continue
+	fi
+	case $m in
+		stock)
+			if [ "$(rts_text "${tmp:?}/rts-mut.metal" | cksum)" = "$rts_trace_sum" ]; then
+				bad "the stock-trace checksum pin passes the mutant ($m)"
+			elif rts_alike "${tmp:?}/rts-mut.metal"; then
+				bad "the copy pin passes the mutant ($m)"
+			else
+				rts_mut=$((rts_mut + 1))
+			fi ;;
+		shade|finish)
+			if rts_alike "${tmp:?}/rts-mut.metal"; then
+				bad "the copy pin passes the mutant ($m)"
+			else
+				rts_mut=$((rts_mut + 1))
+			fi ;;
+		guard)
+			if rts_unit "${tmp:?}/rts-mut.metal"; then
+				bad "the unit pin passes the mutant ($m)"
+			else
+				rts_mut=$((rts_mut + 1))
+			fi ;;
+	esac
+done
+seg 5.5 "; temporal ${rtt:-host test}, $rtt_mutants rule mutants, $rtt_kpins kernel pins with $rtt_kmut kernel mutants and $rtt_bmut back-end mutants refused, $rts_pins stock-trace pins with $rts_mut mutants refused"
 
 # the pure part of the water reflections (RT6, TASK58): rm_rtwater.c and common/mtl_rtw_math.h, with
 # rm_rtshadow.c for the view's inverse, rm_rt.c for the instances the rays test and rm_pure.c for gl1's warp
@@ -1088,7 +1193,6 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	"rm_rtshadow.metal rm_rts_temporal mtl_rtt_reproject" "rm_rtshadow.metal rm_rts_temporal mtl_rtt_reject" \
 	"rm_rtshadow.metal rm_rts_temporal mtl_rtt_blend" "rm_rtshadow.metal rm_rts_temporal mtl_rtt_count" \
 	"rm_rtshadow.metal rm_rts_temporal mtl_rtt_lights" "rm_rtshadow.metal rm_rts_temporal rm_rts_shade" \
-	"rm_rtshadow.metal rm_rts_trace rm_rts_shade" "rm_rtshadow.metal rm_rts_trace rm_rts_finish" \
 	"rm_rtshadow.metal rm_rts_temporal rm_rts_finish" \
 	"rm_rtsun.metal rm_rtsun_temporal mtl_rtt_reproject" "rm_rtsun.metal rm_rtsun_temporal mtl_rtt_reject" \
 	"rm_rtsun.metal rm_rtsun_temporal mtl_rtt_blend" "rm_rtsun.metal rm_rtsun_temporal mtl_rtt_count"; do
