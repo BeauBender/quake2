@@ -35,7 +35,8 @@
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
 #     tests/metal/rm_fx_test.c, the pure part of the MetalFX scalers
-#     (rm_metalfx.c, TASK111), and tests/metal/rm_rtgate_test.c, the
+#     (rm_metalfx.c, TASK111; three scratch mutants of TASK109's effect
+#     reset and reset line it must fail), and tests/metal/rm_rtgate_test.c, the
 #     hardware gate of ray tracing (rm_rtgate.c, RT8, TASK60), and
 #     tests/metal/rm_retro_tex_test.c, Retro's texture upload and 480-line
 #     view (common/mtl_retro_tex.h, TASK185). The gate's
@@ -690,7 +691,37 @@ else
 	fx=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_fx_test: //')
 	case $fx in *", 0 failed") ;; *) bad "tests/metal/rm_fx_test.c printed no result line"; fx="";; esac
 fi
-seg 9 "; MetalFX ${fx:-host test}"
+# Scratch mutants of rm_metalfx.c the test must fail (TASK109 slice 2): the effect reason dropped; its
+# comparison inverted (an effect turned off resets, one turned on does not); the reset line's two
+# fields swapped (the scaler's reasons named as RT7's and the other way). Each must compile and fail,
+# and all three must be refused.
+fx_mutants=0
+if [ -n "$fx" ]; then
+	mkdir "${tmp:?}/fxr"
+	for fxr in effectdrop effectinvert lineswap; do
+		case $fxr in
+			effectdrop) sed 's/return RM_FX_RESET_EFFECT;/return 0;/' "$rm_dir/rm_metalfx.c" > "${tmp:?}/fxr/rm_metalfx.c" ;;
+			effectinvert) sed 's/if (last->valid \&\& !last->rt \&\& rt)/if (last->valid \&\& last->rt \&\& !rt)/' \
+				"$rm_dir/rm_metalfx.c" > "${tmp:?}/fxr/rm_metalfx.c" ;;
+			lineswap) sed -e 's/^			scaler);$/			@SWAP@);/' -e 's/^			temporal);$/			scaler);/' \
+				-e 's/^			@SWAP@);$/			temporal);/' "$rm_dir/rm_metalfx.c" > "${tmp:?}/fxr/rm_metalfx.c" ;;
+		esac
+		if cmp -s "$rm_dir/rm_metalfx.c" "${tmp:?}/fxr/rm_metalfx.c"; then
+			bad "the MetalFX mutant ($fxr) changed nothing"
+		# shellcheck disable=SC2086 # flags is a word list
+		elif ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -I"$rm_dir" -o "${tmp:?}/fxr/t" tests/metal/rm_fx_test.c \
+			"${tmp:?}/fxr/rm_metalfx.c" -lm > "${tmp:?}/fxr.out" 2>&1; then
+			cat "${tmp:?}/fxr.out"
+			bad "the MetalFX mutant ($fxr) does not compile, so it tests nothing"
+		elif "${tmp:?}/fxr/t" > "${tmp:?}/fxr.out" 2>&1; then
+			bad "tests/metal/rm_fx_test.c passes the MetalFX mutant ($fxr)"
+		else
+			fx_mutants=$((fx_mutants + 1))
+		fi
+	done
+	[ "$fx_mutants" -eq 3 ] || bad "tests/metal/rm_fx_test.c refused $fx_mutants of the 3 MetalFX mutants"
+fi
+seg 9 "; MetalFX ${fx:-host test}, $fx_mutants reset mutants refused"
 
 # Retro's texture upload and 480-line view (TASK185, PM3): common/mtl_retro_tex.h alone
 retex=""
