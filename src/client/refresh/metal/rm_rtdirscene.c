@@ -263,6 +263,104 @@ RM_RTDir_FitPoints(const model_t *wm, rm_rtdir_fitpt_t *pts, long cap, long ever
 	return n;
 }
 
+/*
+ * TASK189 slice 2: an image's albedo for the bounce, the mean of its .wal's
+ * texels through the palette (rm_rtl_wal_mean, as TASK187 reads an
+ * emitter's), RM_RTL_UNREAD_GREY for an image that is not a .wal or cannot
+ * be read. One read a distinct image a map.
+ */
+static void
+RM_RTDir_Albedo(int img, float (*cache)[3], unsigned char *have, float *out)
+{
+	const image_t *image;
+	size_t len;
+	byte *wal = NULL;
+	int n, k;
+
+	for (k = 0; k < 3; k++)
+	{
+		out[k] = RM_RTL_UNREAD_GREY;
+	}
+
+	if ((img < 0) || (img >= MAX_GLTEXTURES))
+	{
+		return;
+	}
+
+	if (!have[img])
+	{
+		image = &gltextures[img];
+		len = strlen(image->name);
+		have[img] = 1;
+		cache[img][0] = cache[img][1] = cache[img][2] = RM_RTL_UNREAD_GREY;
+
+		if ((len > 4) && !Q_stricmp(image->name + len - 4, ".wal"))
+		{
+			n = ri.FS_LoadFile(image->name, (void **)&wal);
+
+			if (wal)
+			{
+				if ((n <= 0) || !rm_rtl_wal_mean(wal, (size_t)n, d_8to24table, cache[img]))
+				{
+					cache[img][0] = cache[img][1] = cache[img][2] = RM_RTL_UNREAD_GREY;
+				}
+
+				ri.FS_FreeFile(wal);
+			}
+		}
+	}
+
+	for (k = 0; k < 3; k++)
+	{
+		out[k] = cache[img][k];
+	}
+}
+
+/*
+ * TASK189 slice 2: the map's bounce records (rm_rtdir_bounce_table), each
+ * face's albedo its texture's mean, with the world's lightmap array; none
+ * (the bounce then reads nothing) when memory runs out.
+ */
+static void
+RM_RTDir_Bounce(const model_t *wm)
+{
+	static float cache[MAX_GLTEXTURES][3];
+	static unsigned char have[MAX_GLTEXTURES];
+	const rm_world_t *w = wm->world;
+	const unsigned long ntris = w->size.indices / 3;
+	const long nrecs = (long)w->size.surfs;
+	unsigned *rec = (ntris && w->recs) ? malloc(ntris * sizeof(*rec)) : NULL;
+	float (*albedo)[3] = (rec && (nrecs > 0)) ? malloc((size_t)nrecs * sizeof(*albedo)) : NULL;
+	long s, lit = -1;
+
+	memset(have, 0, sizeof(have));
+
+	if (albedo)
+	{
+		for (s = 0; s < nrecs; s++)
+		{
+			RM_RTDir_Albedo(w->recs[s].image, cache, have, albedo[s]);
+		}
+
+		lit = rm_rtdir_bounce_table(w->recs, nrecs, (const float (*)[3])albedo, rec, ntris);
+	}
+
+	if ((lit < 0) || !rmb_rtdir_set_bounce(rec, ntris, w->lmtex))
+	{
+		lit = 0;
+		rmb_rtdir_set_bounce(NULL, 0, 0);
+	}
+
+	free(albedo);
+	free(rec);
+
+	if (r_rt_stats_ref && r_rt_stats_ref->value)
+	{
+		R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: %ld of %lu triangles read a lightmap at a bounce's hit\n",
+				wm->name, lit, ntris);
+	}
+}
+
 /* the map's lights and emissive faces into the back end's buffer, once a map (and after the pass opened again) */
 static void
 RM_RTDir_Lights(void)
@@ -381,104 +479,6 @@ RM_RTDir_Lights(void)
 	}
 
 	RM_RTDir_Bounce(wm);
-}
-
-/*
- * TASK189 slice 2: an image's albedo for the bounce, the mean of its .wal's
- * texels through the palette (rm_rtl_wal_mean, as TASK187 reads an
- * emitter's), RM_RTL_UNREAD_GREY for an image that is not a .wal or cannot
- * be read. One read a distinct image a map.
- */
-static void
-RM_RTDir_Albedo(int img, float (*cache)[3], unsigned char *have, float *out)
-{
-	const image_t *image;
-	size_t len;
-	byte *wal = NULL;
-	int n, k;
-
-	for (k = 0; k < 3; k++)
-	{
-		out[k] = RM_RTL_UNREAD_GREY;
-	}
-
-	if ((img < 0) || (img >= MAX_GLTEXTURES))
-	{
-		return;
-	}
-
-	if (!have[img])
-	{
-		image = &gltextures[img];
-		len = strlen(image->name);
-		have[img] = 1;
-		cache[img][0] = cache[img][1] = cache[img][2] = RM_RTL_UNREAD_GREY;
-
-		if ((len > 4) && !Q_stricmp(image->name + len - 4, ".wal"))
-		{
-			n = ri.FS_LoadFile(image->name, (void **)&wal);
-
-			if (wal)
-			{
-				if ((n <= 0) || !rm_rtl_wal_mean(wal, (size_t)n, d_8to24table, cache[img]))
-				{
-					cache[img][0] = cache[img][1] = cache[img][2] = RM_RTL_UNREAD_GREY;
-				}
-
-				ri.FS_FreeFile(wal);
-			}
-		}
-	}
-
-	for (k = 0; k < 3; k++)
-	{
-		out[k] = cache[img][k];
-	}
-}
-
-/*
- * TASK189 slice 2: the map's bounce records (rm_rtdir_bounce_table), each
- * face's albedo its texture's mean, with the world's lightmap array; none
- * (the bounce then reads nothing) when memory runs out.
- */
-static void
-RM_RTDir_Bounce(const model_t *wm)
-{
-	static float cache[MAX_GLTEXTURES][3];
-	static unsigned char have[MAX_GLTEXTURES];
-	const rm_world_t *w = wm->world;
-	const unsigned long ntris = w->size.indices / 3;
-	const long nrecs = (long)w->size.surfs;
-	unsigned *rec = (ntris && w->recs) ? malloc(ntris * sizeof(*rec)) : NULL;
-	float (*albedo)[3] = (rec && (nrecs > 0)) ? malloc((size_t)nrecs * sizeof(*albedo)) : NULL;
-	long s, lit = -1;
-
-	memset(have, 0, sizeof(have));
-
-	if (albedo)
-	{
-		for (s = 0; s < nrecs; s++)
-		{
-			RM_RTDir_Albedo(w->recs[s].image, cache, have, albedo[s]);
-		}
-
-		lit = rm_rtdir_bounce_table(w->recs, nrecs, (const float (*)[3])albedo, rec, ntris);
-	}
-
-	if ((lit < 0) || !rmb_rtdir_set_bounce(rec, ntris, w->lmtex))
-	{
-		lit = 0;
-		rmb_rtdir_set_bounce(NULL, 0, 0);
-	}
-
-	free(albedo);
-	free(rec);
-
-	if (r_rt_stats_ref && r_rt_stats_ref->value)
-	{
-		R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: %ld of %lu triangles read a lightmap at a bounce's hit\n",
-				wm->name, lit, ntris);
-	}
 }
 
 /*
