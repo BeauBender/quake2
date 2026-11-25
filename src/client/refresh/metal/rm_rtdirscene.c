@@ -30,8 +30,10 @@
  * r_rt_direct_seed) and the sun (TASK56's direction and r_rt_sunscale,
  * RM_RTSun_Primary) to the view; slice 2 the bounce (r_rt_direct_bounce,
  * the map's per-triangle bounce records with their textures' means and
- * the world's lightmap array). Under any presentation but RT-primary
- * nothing here builds or allocates anything.
+ * the world's lightmap array). TASK190 slice 1 (PM8) accumulates the light
+ * over the views with RT7's reset state (RM_RTT_ViewFor), by r_rt_temporal.
+ * Under any presentation but RT-primary nothing here builds or allocates
+ * anything.
  *
  * =======================================================================
  */
@@ -44,6 +46,7 @@
 #include "header/rm_rtgate.h"
 #include "header/rm_rtao.h"
 #include "header/rm_rtsunscene.h"
+#include "header/rm_rtaoscene.h"
 #include "header/rm_gbufscene.h"
 
 static cvar_t *r_rt_direct;
@@ -560,6 +563,19 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 			{
 				R_Printf(PRINT_ALL, "%s\n", line);
 			}
+
+			/* TASK190 slice 1: the accumulation's own GPU time, on a frame that accumulated */
+			if (st[i].accumulated)
+			{
+				if (st[i].tms >= 0)
+				{
+					R_Printf(PRINT_ALL, "ref_metal: rt direct temporal: frame %lu: %.3f ms\n", st[i].frame, st[i].tms);
+				}
+				else
+				{
+					R_Printf(PRINT_ALL, "ref_metal: rt direct temporal: frame %lu: - ms\n", st[i].frame);
+				}
+			}
 		}
 	}
 }
@@ -655,5 +671,13 @@ RM_RTDir_View(const rm_view_t *view)
 	rm_rtdir_view_bounce(&v, RM_Effect(r_rt_direct_bounce));
 
 	rmb_rtdir_set_view(&v, dir_styles);
+
+	/*
+	 * TASK190 slice 1 (PM8): the light accumulated over the views, by
+	 * r_rt_temporal as the user set it (no presentation overlays it), with
+	 * the one reset state RT7's effects share: at 0 nothing is made and
+	 * the trace's light is the resolve's, bit for bit
+	 */
+	rmb_rtdir_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (unsigned long)h);
 	dir_viewed = 1;
 }

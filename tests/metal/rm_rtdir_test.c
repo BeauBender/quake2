@@ -945,19 +945,30 @@ static const char *const host_bindings[] = {
 	"[ce setTexture:(lm_ok ? atlas : white_arr) atIndex:7];",
 };
 
+/* TASK190 slice 1: rmb_rtdir_accumulate's, rm_rtp_temporal's ten (the guides, the trace's light, the histories, the output) */
+static const char *const acc_bindings[] = {
+	"[ce setTexture:depth atIndex:0];", "[ce setTexture:normal atIndex:1];", "[ce setTexture:material atIndex:2];",
+	"[ce setTexture:mv atIndex:3];", "[ce setTexture:light atIndex:4];", "[ce setTexture:t_hist[hist_cur] atIndex:5];",
+	"[ce setTexture:t_key[hist_cur] atIndex:6];", "[ce setTexture:t_acc atIndex:7];",
+	"[ce setTexture:t_hist[1 - hist_cur] atIndex:8];", "[ce setTexture:t_key[1 - hist_cur] atIndex:9];",
+};
+
 /*
  * The host half of the rule, in rmb_rtdir.m's text (src) with its
  * comments taken out: the file binds a compute texture only in
  * rmb_rtdir_trace, the seven known (texture, index) pairs, each once, and
- * none else (setTexture or setTextures anywhere). NULL when it holds,
- * else the rule broken.
+ * none else (setTexture or setTextures anywhere), but in TASK190's
+ * rmb_rtdir_accumulate, the accumulation's ten, each once, whose body is
+ * then set aside for the rest of the rule. NULL when it holds, else the
+ * rule broken.
  */
 static const char *
 binding_broken(const char *src)
 {
 	static char text[65536];
 	const size_t n = sizeof(host_bindings) / sizeof(host_bindings[0]);
-	fn_t tr;
+	const size_t na = sizeof(acc_bindings) / sizeof(acc_bindings[0]);
+	fn_t tr, acc;
 	size_t i;
 	int r;
 
@@ -967,6 +978,25 @@ binding_broken(const char *src)
 	{
 		return "rmb_rtdir_trace is not defined once";
 	}
+
+	if (!find_fn(text, "static id<MTLTexture>\nrmb_rtdir_accumulate(", &acc))
+	{
+		return "rmb_rtdir_accumulate is not defined once";
+	}
+
+	r = (count_in(acc.body, acc.nbody, "setTexture") == (int)na) ? PIN_OK : PIN_BROKEN;
+
+	for (i = 0; i < na; i++)
+	{
+		r = pin_and(r, pin_count(acc.body, acc.nbody, acc_bindings[i], 1));
+	}
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "the accumulation binds a texture beyond its known ten");
+	}
+
+	memset(text + (acc.body - text), ' ', acc.nbody);
 
 	r = ((count_in(text, strlen(text), "setTexture") == (int)n) && (count_in(tr.body, tr.nbody, "setTexture") == (int)n)) ?
 		PIN_OK : PIN_BROKEN;
@@ -1064,6 +1094,9 @@ test_host_binding(void)
 		{ "self-count", "\tview.nself = selftab ? (unsigned)nself : 0u;\n", "\tview.nself = 0xffffffffu;\n" },
 		/* TASK188 slice 3c: the table's count not taken at the encode */
 		{ "self-count-early", "\t\tview.nself = selftab ? (unsigned)nself : 0u;\n", "" },
+		/* TASK190 slice 1: the accumulation binding the trace's own light for a new parameter */
+		{ "acc-new-binding", "\t\t[ce setTexture:t_key[1 - hist_cur] atIndex:9];\n",
+			"\t\t[ce setTexture:t_key[1 - hist_cur] atIndex:9];\n\t\t[ce setTexture:t_light atIndex:10];\n" },
 	};
 	const char *why;
 	int i;
