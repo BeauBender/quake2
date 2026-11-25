@@ -35,6 +35,7 @@
 #include "header/rm_rtwaterscene.h"
 #include "header/rm_rtscene.h"
 #include "header/rm_rtaoscene.h"
+#include "header/rm_rtgate.h"
 #include "header/rm_gbufscene.h"
 
 static cvar_t *r_rt_water;
@@ -351,8 +352,12 @@ RM_RTW_View(const rm_view_t *view)
 		RM_RTW_Shading(view, &v);
 	}
 
-	/* TASK59 slice 2b: the reflections' blur, with no history, while r_rt_temporal is above 0 */
-	rmb_rtw_set_blur(RM_RTT_On());
+	/*
+	 * TASK59 slice 2b: the reflections' blur, with no history, while
+	 * r_rt_temporal is above 0, and never under RT-primary, whose denoising
+	 * is PM8's (TASK190)
+	 */
+	rmb_rtw_set_blur(rm_rtt_wblur(RM_RTT_On(), RM_PresentationMode() == RM_PRES_RTPRIMARY));
 	rmb_rtw_set_view(&v);
 	rtw_viewed = 1;
 }

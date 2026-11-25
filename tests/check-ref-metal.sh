@@ -303,10 +303,11 @@ fi
 # the mutants: a rejection reason dropped (material, lights, depth, off screen), the view's reset
 # ignored, the frame without an accumulated view not resetting, a map load not resetting; slice 1b's:
 # the light set's flags not masked, a history that skipped a view still read (the early return), a
-# history made again still read, the views' number restarting on a map load. Each must compile (a
+# history made again still read, the views' number restarting on a map load; slice 2b's: the water
+# reflections' blur run under RT-primary (rm_rtt_wblur's gate dropped). Each must compile (a
 # mutant the compiler refuses tests nothing, review TASK59 slice 1, I1) and fail the test.
 rtt_mutants=0
-for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep; do
+for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep wblur; do
 	rtt_tree "${tmp:?}/rttm"
 	h=${tmp:?}/rttm/src/client/refresh/metal/common/mtl_rtt_math.h
 	c=${tmp:?}/rttm/src/client/refresh/metal/rm_rttemporal.c
@@ -325,6 +326,7 @@ for m in mat lights depth off reset frameend mapload lightsmask histgap histrese
 			"$rm_dir/rm_rttemporal.c" > "$c" ;;
 		histreset) sed 's/	h->valid = 0;/	h->valid = h->valid;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		seqkeep) sed 's/	st->seq = seq;/	st->seq = seq \& 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		wblur) sed 's/return on \&\& !rtprimary;/return on;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 	esac
 	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$h" && cmp -s "$rm_dir/rm_rttemporal.c" "$c"; then
 		bad "the temporal mutant ($m) changed nothing"
@@ -1461,7 +1463,34 @@ for p in rdepth histread histwrite; do
 		rtd_kmut=$((rtd_kmut + 1))
 	fi
 done
-seg 5.6 "; denoiser ${rtd:-host test}, $rtd_mutants rule mutants, $rtd_kpins kernel pins with $rtd_kmut kernel mutants refused${rtd_metal:+ and compiled}"
+# slice 2b, round 1: the water scene hands the blur the rule (rm_rtt_wblur) with RT-primary's mode, so
+# the blur never runs under r_presentation 3, whose denoising is PM8's (TASK190). Mutants: the gate
+# dropped (the blur on with r_rt_temporal alone), the mode compared with stock's, the call commented out.
+wsc=$rm_dir/rm_rtwaterscene.c
+wsc_call='rmb_rtw_set_blur(rm_rtt_wblur(RM_RTT_On(), RM_PresentationMode() == RM_PRES_RTPRIMARY));'
+wsc_pin() { # <file>: 0 when the scene gates the blur off under RT-primary
+	strip "$1" | grep -qF "$wsc_call"
+}
+wsc_mut=0
+if ! wsc_pin "$wsc"; then
+	bad "rm_rtwaterscene.c does not gate the reflections' blur off under RT-primary ($wsc_call)"
+else
+	for m in nogate stock commented; do
+		case $m in
+			nogate) sed 's/rmb_rtw_set_blur(rm_rtt_wblur(RM_RTT_On(), RM_PresentationMode() == RM_PRES_RTPRIMARY));/rmb_rtw_set_blur(RM_RTT_On());/' "$wsc" ;;
+			stock) sed 's/RM_PresentationMode() == RM_PRES_RTPRIMARY));/RM_PresentationMode() == RM_PRES_STOCK));/' "$wsc" ;;
+			commented) sed 's|^\(	rmb_rtw_set_blur(rm_rtt_wblur(.*\)$|	/* \1 */|' "$wsc" ;;
+		esac > "${tmp:?}/rtw-scene.c"
+		if cmp -s "$wsc" "${tmp:?}/rtw-scene.c"; then
+			bad "the reflections' blur's RT-primary gate mutant ($m) changed nothing"
+		elif wsc_pin "${tmp:?}/rtw-scene.c"; then
+			bad "the reflections' blur's RT-primary gate pin passes its mutant ($m)"
+		else
+			wsc_mut=$((wsc_mut + 1))
+		fi
+	done
+fi
+seg 5.6 "; denoiser ${rtd:-host test}, $rtd_mutants rule mutants, $rtd_kpins kernel pins with $rtd_kmut kernel mutants refused${rtd_metal:+ and compiled}, the blur's RT-primary gate pinned with $wsc_mut mutants refused"
 
 # (f) the colour-space probe. probe_run <dir with rmb_device.m or empty> <exe>: builds
 # tests/metal/rmb_cs_probe.m, which includes rmb_device.m (found in <dir> first, else in
