@@ -91,28 +91,46 @@ asset is added.
 
 ## The records (M6, apple9, 640 x 480)
 
-Recorded at `@CODE@`, three runs each, hashed as the hash of the frames' sha256s:
+Recorded at `cab3f0310a06`, three runs each, hashed as the hash of the frames' sha256s:
 
 | Record | Frames | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|---|
-@RECORDS@
+| `rtprimary-world` | 23 | `e765655f097f` | `e765655f097f` | `e765655f097f` |
+| `rtprimary-direct` | 23 | `8975350df42b` | `8975350df42b` | `8975350df42b` |
+| `rtprimary-vis` | 23 | `469ce42fec8c` | `469ce42fec8c` | `469ce42fec8c` |
+| `rtprimary-noshadow` | 23 | `b3d10fafdc08` | `b3d10fafdc08` | `b3d10fafdc08` |
+| `rtprimary-sky` | 23 | `9acbe75f592b` | `9acbe75f592b` | `9acbe75f592b` |
+| `rtprimary-sun` | 23 | `6f6c37b9a084` | `6f6c37b9a084` | `6f6c37b9a084` |
+| `rtprimary-styles` (`waste2`) | 89 | `6c7091b0c7d4` | `6c7091b0c7d4` | `6c7091b0c7d4` |
+| `rtprimary-sky` on `waste2` | 89 | `f9627ca24ade` | `f9627ca24ade` | `f9627ca24ade` |
+| `rtprimary-sun` on `waste2` | 89 | `9b41895c7103` | `9b41895c7103` | `9b41895c7103` |
+| `rtprimary-outdoor` (`water.dm2`) | 4 | `4f488097739a` | `4f488097739a` | `4f488097739a` |
+| `rtprimary-sky` on `water.dm2` | 4 | `b7a508dbb285` | `b7a508dbb285` | `b7a508dbb285` |
+| `rtprimary-sun` on `water.dm2` | 4 | `0164dce9b7c0` | `0164dce9b7c0` | `0164dce9b7c0` |
+| `rtprimary-dlights` | 23 | `f247f241a7e9` | `f247f241a7e9` | `f247f241a7e9` |
+| `rtprimary-dlights` on `waste2` | 89 | `eb8f97a5b060` | `eb8f97a5b060` | `eb8f97a5b060` |
 
 For the owner's look, not in the repository: slice 3c's captures (`rtprimary-world` 6 and 12, `waste2` 61 and
 67, `rtprimary-dlights` 20) from the branch and from slice 3c's code, and the pool of `base1`, every capture of
 `rtprimary-world` on `water.dm2` (its sun from the table's line) from both, with the sky's and the sun's terms
 alone from the branch. The view that faces open sky is `demo1.dm2`'s captures 21 and 22 (`base2`), of
-`rtprimary-world`, `rtprimary-sky` and `rtprimary-sun` (round 2). @FRAMES@
+`rtprimary-world`, `rtprimary-sky` and `rtprimary-sun` (round 2). Slice 3c's own records, for the same scenarios: `rtprimary-world` a8b7641d0739, `rtprimary-styles` 66b4cf67a706, `rtprimary-outdoor` e6017ca1d1b6, `rtprimary-dlights` 921311e433c6. Views 1 to 3 are byte-identical to slice 3c's: `rtprimary-direct` (8975350df42b), `rtprimary-vis` (469ce42fec8c) and `rtprimary-noshadow` (b3d10fafdc08) hash the same on the branch and on slice 3c, which is the proof of I1's fix on frames. The frames of the owner's look scored against slice 3c: `rtprimary-world` 6 and 12 0.000000, `rtprimary-styles` 61 and 67 0.000000, `rtprimary-dlights` 20 0.000010, `rtprimary-outdoor` 0 and 1 0.000000, 2 and 3 0.000001. Round 2 recorded the final commit's code again (`fbfaa003e05e`, which changed only this runbook): every scenario above gave the same hash, three runs for the 23, 89 and 4 frame ones, and the pool's under `rtprimary-pool` (4f488097739a).
 
 ## Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
 
-The before is TASK188 slice 3c (`@S3C@`), built in a scratch copy and run by `PINS_BIN`; the after is
-`@CODE@`. Information only (decision 0014), not a gate:
+The before is TASK188 slice 3c (`d18c0c48229b`), built in a scratch copy and run by `PINS_BIN`; the after is
+`cab3f0310a06`. Information only (decision 0014), not a gate:
 
 | Map (scenario, `cl_lights`) | Side | Exposure (mean) | Shadow rays a world pixel | Sky rays, reached | Sun rays, lit | Pass time (mean) |
 |---|---|---|---|---|---|---|
-@STATS@
+| `base2` (`rtprimary-dlights`) | slice 3c | 1.4609 | 15.82 | n/a | n/a | 7.005 ms |
+| `base2` (`rtprimary-dlights`) | branch | 1.4609 | 15.82 | 1.000, 2.8 % | 0.677, 1.8 % | 7.715 ms |
+| `waste2` (`rtprimary-styles`) | slice 3c | 1.4715 | 26.10 | n/a | n/a | 9.037 ms |
+| `waste2` (`rtprimary-styles`) | branch | 1.4715 | 26.10 | 1.000, 0.0 % | 0.573, 0.0 % | 10.240 ms |
+| `base1` pool (`rtprimary-outdoor`, `water.dm2`) | slice 3c | 1.7564 | 19.96 | n/a | n/a | 8.917 ms |
+| `base1` pool (`rtprimary-outdoor`, `water.dm2`) | branch | 1.7564 | 19.98 | 1.000, 0.0 % | 0.522, 0.0 % | 10.621 ms |
 
-@STATSNOTE@
+The exposure fits are identical on both sides (1.4609, 1.4715 and 1.7564), and so are the shadow rays a world pixel on `base2` and `waste2` (15.82 and 26.10; `base1`'s 19.96 and 19.98). The sky and sun terms add 0.710 ms (`base2`), 1.203 ms (`waste2`) and 1.704 ms (`base1`) to the pass's mean. Capped world pixels: 5.5 % (`base2`), 34.5 % (`waste2`), 0.0 % (`base1`), the same on both sides. Information only.
 
 ## Why the sky and the sun are rare on these views (round 2)
 
@@ -136,19 +154,24 @@ trace found no fault in the chain:
   just above and under its surface (TASK70), not outdoors.
 
 The probe hold sets RT2's sun (`r_presentation 1`, `r_rt_sun 1`, at `r_rt_sunfloor 0.5` and at `1`) beside
-RT-primary's sky light and sun on the same three views, joined frame by frame: @SKYCMP@
+RT-primary's sky light and sun on the same three views, joined frame by frame: Round 2's comparison (`base2`, 687 frames, all joined): the means over all 687 frames are RT2 lit 1.2 % (floor 0.5) and 1.8 % (floor 1) against RT-primary's sky reached 2.8 % and sun lit 1.8 %. Over the 80 frames (625 to 704) where RT-primary's sky rays reach the sky above 1 %: RT2 lit 9.9 % (floor 0.5) and 15.2 % (floor 1), RT-primary sky reached 23.6 % and sun lit 15.2 %. Frame 648: RT2 at floor 1 has 55245 lit of 208164 rays (26.5 %), and RT-primary's sun has 55245 of 208164 (26.5 %), equal exactly; RT2 at floor 0.5 has 9888 of 22756 (43.5 %), and RT-primary's sky reaches 65272 of 249525 world pixels (26.2 %). Frame 678 agrees the same way: 14733 of 159737 lit (9.2 %) at floor 1 and for RT-primary's sun. `waste2` (616 of 617 frames joined) and the `base1` pool (92 of 92) read 0.0 % on both sides, at both floors, with no frame above 1 % of sky rays reaching the sky; in the `waste2` row (frame 18) RT-primary's sky is 0 of 307200 and its sun 0 of 136940, in the pool's (frame 16) 0 of 307200 and 0 of 126046. So the trace and the probe agree that there is no bug: these views see almost no sky.
 
 ## Stock is unchanged
 
 Every committed `metal` scenario but RT-primary's, seeded, the water scenarios on one `water.dm2` copied to
-both, `cinematic` on `idlog.cin` at `PINS_EVERY=7`, base main at `@BASE@` and the branch at `@CODE@`:
-@PINS@ At `r_presentation 0` the slice changes no pixel.
+both, `cinematic` on `idlog.cin` at `PINS_EVERY=7`, base main at `3d02c2ac281a` and the branch at `cab3f0310a06`:
+Round 1: 29 of 29 stock scenarios byte-identical to the base (`3d02c2ac281a`; base and branch each ran 29 scenarios, 0 failed; `water.dm2` hashed 7dbf4e8c202e three times). Round 2, on the runbook-only commit `fbfaa003e05e` against main at `4efcd73b246d`: 29 of 29 byte-identical again (`water.dm2` 85c7fcca4fae twice). At `r_presentation 0` the slice changes no pixel.
 
 ## Checks
 
-In one hold on the code of the final commit (`@CODE@`; main merged: @MERGED@), each check's last line:
+In one hold on the code of the final commit (`cab3f0310a06`; main merged: no), each check's last line:
 
-@CHECKS@
+- make ref_metal: `===> LD release/ref_metal.dylib`; make: `===> LD release/quake2`.
+- `make test`: `yq2test: 591 tests, 0 failed`.
+- `check-ref-metal`: `ok (13162 checks, 0 failed; ray tracing 169; G-buffer 177; shadows 4384; AO 283; water 727; sun 711; direct light 933, 8 fit mutants and 18 sky mutants refused; RT data 170; MetalFX 335; ray-tracing gate 972 ...)`.
+- `rm_rtdir_test`: `direct light 933 checks, 0 failed, 8 fit mutants and 18 sky mutants refused`.
+- `check-cvar-docs`: `ok`; `check-runbook-index`: `ok`; `check-doc-links`: `ok`; `check-video-menu`: `ok`; `check-pin-chars`: `ok`.
+- `check-scenario-parsers`: `ok (4 tests, 10 mutants caught)`.
 
 No frame was looked at by the agent.
 
