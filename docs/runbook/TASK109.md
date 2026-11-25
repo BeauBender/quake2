@@ -101,3 +101,93 @@ What the host test cannot show, and the live run does:
 
 The base and the branch: main `f10aa5bc3abe`, branch `c063b41b2c24`; the hold: 16 events, 0 wrong. Stock and MetalFX records: 29 of 29 scenarios byte-identical to the base (stock 17 of 17, `metalfx` 5 of 5).
 `rt-*` records: 7 of 7 byte-identical to the base.
+
+## Slice 3, the ray-traced effects at the scaler's internal size
+
+### The scenarios
+
+Two scenarios run the effects through `MTLFXTemporalScaler` (`r_metalfx 2`) at the default
+`r_metalfx_scale 0`:
+
+- `rt-all-metalfx2` is `dlights` with every ray-traced effect on, each at its `rt-*`
+  scenario's values: `r_rt_shadows`, `r_rt_ao`, `r_rt_sun` and `r_rt_water`. It is
+  recorded with `PINS_SEED`, as `dlights`.
+- `rtprimary-metalfx2` is `rtprimary-world` under the scaler.
+
+Both set `r_rt_temporal 0`, as the `rt-*` pins do, so a later change of RT7's default does
+not move them. At the harness's 480 lines the default scale is the view's own size: the
+family's default rows are 720 or 1080, and the scale is kept at 1 or below. So the committed
+records run the scaler as temporal anti-aliasing. The hold records `r_metalfx_scale 0.5` from
+scratch copies, which are never committed.
+
+### The read of each effect
+
+Every effect was read for a size that is the window's or the drawable's where it should be
+the render size, and for a per-pixel radius or step that does not scale. Nothing is wrong,
+and no code changes.
+
+- **Where the size comes from.** Under the scaler, `RM_GB_Begin` takes the input size from
+  `RM_FX_Begin` (`rm_fx_sizes`). The render target is `iw` x `ih`, and `view->vp` is the view
+  at the target's origin with that size (`rm_fx_input_viewport`). The jittered projection
+  replaces `view->proj` before any effect's view is made (`rm_rtfx_view` runs after
+  `RM_GB_Begin` in `R_RenderViewGB`). Every effect's view takes `RM_GB_TargetSize` (the
+  render size on the G-buffer path) and `view->vp`:
+  - RT3, `RM_RTS_View`;
+  - RT4, `RM_RTSun_View`;
+  - RT5, `RM_RTAO_View`;
+  - RT6, `RM_RTW_View`;
+  - RT-primary, `RM_RTDir_View`.
+
+  Each back end sizes its outputs from the depth attachment (`depth.width`), the render
+  size. No effect reads `rmb_target_size`, `vid` or `r_newrefdef`'s size.
+- **The unprojection.** Each kernel turns a pixel into clip space through the view's
+  viewport (`v.vp`, for example `rm_rtao.metal` and `rm_rtdir.metal`), so the points it finds
+  follow the render size.
+- **RT5, the AO.** The range (`r_rt_ao_range`, 128 units) and the floor are in world units.
+  The traced size is `r_rt_ao_scale` of the render size (`mtl_rtao_lo_size`). So at
+  `r_metalfx_scale 0.5` and the default `r_rt_ao_scale 0.5`, the AO is traced at a quarter of
+  the output's width and height. That is the cvar as documented, a fraction of the view as it
+  is drawn, and it is not a size bug. The upsample's four traced pixels (`mtl_rtao_up_pair`)
+  are relative to the divisor.
+- **RT6, water.**
+  - The marks' 3 x 3 dilation is one pixel of the target it marks.
+  - The screen-space lookups map a hit through `v.vp` into the render size.
+  - The world-space hits' mip level (`lod_k`) is `2 / (h x proj[5])`, with `h` the render
+    viewport's height, so it is the footprint of a render pixel.
+  - The test for whether a lit pixel shows the hit (`mtl_rtw_seen_tol`) is in world units:
+    1 % of the distance, at least 4 units. At a lower render size a grazing surface's pixel
+    spans more depth, so a few more grazing hits fall back to the world-space shading or to
+    the stock water. That is a graceful fallback, not a size bug, and it is noted here only.
+- **RT3 and RT4, the shadows and the sun.** These have no screen-space radius. The depth
+  bias (`bias_k`, `4 / 2^24 / znear`) is depth precision, not pixels.
+- **RT7, the sizes.**
+  - `RM_RTT_ViewFor` keys the history on `RM_GB_TargetSize` and the viewport, so a change
+    of the render size or of the rectangle resets it.
+  - The motion vectors are in render pixels: `mtl_gb_motion` scales by `half_vp`, from the
+    render viewport.
+  - `mtl_rtt_reproject` reads them against the same `w` x `h`.
+  - Each history is allocated at the depth's size.
+- **RT-primary.** `rm_rtdir_view` and `rmb_rtdir_prepare` take the same render size and
+  viewport. `t_vis` and `t_light` are made at the depth's size.
+- **The particles.** These are not an effect, but their size is in frame pixels, and the
+  G-buffer view already rescales it (`R_DrawPoints`, TASK54).
+
+### The hold (M6, under the timing lock)
+
+The orchestrator runs the hold script. The values in this section are filled in from its
+summary.
+
+| Check | Result |
+|---|---|
+| base and branch | main `@BASE@`, branch `@HEAD@` |
+| stock, `world-metalfx*`, `hdr-metalfx2`, `rt-*` and `rtprimary-*`, byte-identical to main | @PINS@ |
+| `rt-all-metalfx2`, default scale, three runs | @RTALL_DEF@ |
+| `rtprimary-metalfx2`, default scale, three runs | @RTP_DEF@ |
+| `rt-all-metalfx2`, `r_metalfx_scale 0.5`, three runs | @RTALL_HALF@ |
+| `rtprimary-metalfx2`, `r_metalfx_scale 0.5`, three runs | @RTP_HALF@ |
+| the input and output sizes (`metal_stats 1`), default and 0.5 | @SIZES@ |
+| `viewsize 60`: the box of the changing pixels at `r_metalfx 2` and at `r_metalfx 0`, against 384x288 at 128,96 | @VS60@ |
+| a still `base1`, 300 frames and more, effects on, `r_metalfx 2` at 0.5: the steps at every 32nd frame and every 5th, and the last against `r_metalfx 0` | @STILL@ |
+| the frames for the owner (captures 12 and 21, at 0.5 and at `r_metalfx 0`) | @FRAMES@ |
+
+Host checks (no lock) on the branch before the hold: @HOSTCHECKS@.
