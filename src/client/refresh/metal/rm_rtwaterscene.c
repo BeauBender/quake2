@@ -351,6 +351,8 @@ RM_RTW_View(const rm_view_t *view)
 		RM_RTW_Shading(view, &v);
 	}
 
+	/* TASK59 slice 2b: the reflections' blur, with no history, while r_rt_temporal is above 0 */
+	rmb_rtw_set_blur(RM_RTT_On());
 	rmb_rtw_set_view(&v);
 	rtw_viewed = 1;
 }

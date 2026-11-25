@@ -53,6 +53,7 @@
 #include "header/rm_rtwater.h"
 #include "header/rmb_internal.h"
 #include "common/mtl_rtw_math.h"
+#include "common/mtl_rtd_math.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_rtwater.m is written for ARC: compile it with -fobjc-arc"
@@ -114,6 +115,18 @@ static int ndone;
 static rm_rtw_view_t view;
 static int view_set, traced, forward, shown;   /* shown: this view's r_rt_water_show view was drawn */
 static int marked;                      /* TASK162: this view's raster drew the water's marks (rmb_rtw_mark) */
+
+/*
+ * TASK59 slice 2b: the reflections' 3 x 3 blur (rm_rtwdenoise.metal),
+ * while r_rt_temporal is above 0 (rmb_rtw_set_blur). Its pipeline and
+ * output are made on the first view that blurs and released when one
+ * does not, so at r_rt_temporal 0 nothing of it exists.
+ */
+static id<MTLComputePipelineState> blur_pipe;
+static id<MTLTexture> t_rblur;          /* the blurred reflection and the class, as t_refl */
+static int blur_on;                     /* the next view blurs */
+static int blur_bad;                    /* its pipeline or output could not be made: latched until the pass closes */
+static int blurred;                     /* this view's reflection was blurred into t_rblur */
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTW_SET(slot, obj) \
@@ -463,9 +476,12 @@ rmb_rtw_close(void)
 		RMB_RTW_SET(counts, nil);
 		RMB_RTW_SET(samples, nil);
 		RMB_RTW_SET(shade, nil);
+		RMB_RTW_SET(blur_pipe, nil);
+		RMB_RTW_SET(t_rblur, nil);
 		rmb_rtw_close_ws();
 	}
 
+	blur_on = blur_bad = blurred = 0;
 	rtw_open = 0;
 	made_ws = 0;
 	list_cap = shade_n = 0;
@@ -927,6 +943,104 @@ rmb_rtw_trace_ws(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 	return 1;
 }
 
+void
+rmb_rtw_set_blur(int on)
+{
+	blur_on = (on != 0);
+
+	if (!blur_on && (blur_pipe || t_rblur))
+	{
+		@autoreleasepool
+		{
+			RMB_RTW_SET(blur_pipe, nil);
+			RMB_RTW_SET(t_rblur, nil);
+		}
+	}
+}
+
+/* the reflection the blend and the forward pass read: the blurred one when this view blurred it */
+static id<MTLTexture>
+rmb_rtw_out(void)
+{
+	return (blurred && t_rblur) ? t_rblur : t_refl;
+}
+
+/*
+ * TASK59 slice 2b: the 3 x 3 blur of the reflection the trace has just
+ * written, into t_rblur, in an encoder of its own after the trace's on
+ * the same command buffer (the textures are tracked, so it waits for the
+ * trace). 1 when it was dispatched; 0 leaves the trace's output to the
+ * blend. Its GPU time is not in the pass's stats.
+ */
+static int
+rmb_rtw_blur(id<MTLCommandBuffer> cmd, id<MTLTexture> depth, NSUInteger w, NSUInteger h)
+{
+	id<MTLComputeCommandEncoder> ce;
+	mtl_rtd_rview_t rv;
+
+	if (!blur_on || blur_bad || !t_refl || !t_wdist)
+	{
+		return 0;
+	}
+
+	if (!blur_pipe)
+	{
+		NSError *e = nil;
+		id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rtw_denoise"];
+
+		RMB_RTW_SET(blur_pipe, k ? [rmb_device newComputePipelineStateWithFunction:k error:&e] : nil);
+
+		if (!blur_pipe)
+		{
+			blur_bad = 1;
+			fprintf(stderr, "ref_metal: rt water: no reflection blur pipeline%s%s\n", e ? ": " : "",
+					e ? e.localizedDescription.UTF8String : "");
+			return 0;
+		}
+	}
+
+	if (!t_rblur || (t_rblur.width != w) || (t_rblur.height != h))
+	{
+		MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+				width:w height:h mipmapped:NO];
+
+		d.storageMode = MTLStorageModePrivate;
+		d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+		RMB_RTW_SET(t_rblur, [rmb_device newTextureWithDescriptor:d]);
+
+		if (!t_rblur)
+		{
+			blur_bad = 1;
+			fprintf(stderr, "ref_metal: rt water: cannot make the reflection blur's %lux%lu output\n",
+					(unsigned long)w, (unsigned long)h);
+			return 0;
+		}
+
+		fprintf(stderr, "ref_metal: rt water blur %lux%lu: %lu bytes allocated\n", (unsigned long)w,
+				(unsigned long)h, (unsigned long)t_rblur.allocatedSize);
+	}
+
+	ce = [cmd computeCommandEncoder];
+
+	if (!ce)
+	{
+		return 0;
+	}
+
+	memcpy(rv.inv, view.inv, sizeof(rv.inv));
+	memcpy(rv.vp, view.vp, sizeof(rv.vp));
+	memcpy(rv.eye, view.eye, sizeof(rv.eye));
+	[ce setComputePipelineState:blur_pipe];
+	[ce setTexture:t_refl atIndex:0];
+	[ce setTexture:depth atIndex:1];
+	[ce setTexture:t_wdist atIndex:2];
+	[ce setTexture:t_rblur atIndex:3];
+	[ce setBytes:&rv length:sizeof(rv) atIndex:0];
+	[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTW_GROUP, RMB_RTW_GROUP, 1)];
+	[ce endEncoding];
+	return 1;
+}
+
 int
 rmb_rtw_trace(id<MTLTexture> target, id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material)
 {
@@ -936,7 +1050,7 @@ rmb_rtw_trace(id<MTLTexture> target, id<MTLTexture> depth, id<MTLTexture> normal
 	const int ws = made_ws;
 	int slot, timed;
 
-	traced = forward = shown = 0;
+	traced = forward = shown = blurred = 0;
 
 	if (!rtw_open || !view_set || !target || !depth || !normal || !material)
 	{
@@ -988,6 +1102,7 @@ rmb_rtw_trace(id<MTLTexture> target, id<MTLTexture> depth, id<MTLTexture> normal
 			return 0;
 		}
 
+		blurred = rmb_rtw_blur(cmd, depth, w, h);
 		slot_pending[slot] = 1;
 		slot_timed[slot] = timed;
 		slot_ws[slot] = ws;
@@ -1022,7 +1137,7 @@ rmb_rtw_blend(id<MTLRenderCommandEncoder> enc, id<MTLTexture> material)
 	}
 
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:0];
-	[enc setFragmentTexture:t_refl atIndex:0];
+	[enc setFragmentTexture:rmb_rtw_out() atIndex:0];
 	[enc setFragmentTexture:material atIndex:1];
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	rmb_counts.draws++;
@@ -1051,14 +1166,14 @@ rmb_rtw_bind_forward(id<MTLRenderCommandEncoder> enc)
 	}
 
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:6];
-	[enc setFragmentTexture:t_refl atIndex:6];
+	[enc setFragmentTexture:rmb_rtw_out() atIndex:6];
 	[enc setFragmentTexture:t_wdist atIndex:7];
 }
 
 void
 rmb_rtw_view_end(void)
 {
-	traced = forward = shown = marked = 0;
+	traced = forward = shown = marked = blurred = 0;
 }
 
 /* ---- TASK179: the effect table's rows (rm_rtfx.c) ---------------------------------- */

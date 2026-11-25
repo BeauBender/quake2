@@ -82,6 +82,12 @@ RM_RTT_BeginView(void)
 	rtt_stepped = 0;
 }
 
+int
+RM_RTT_On(void)
+{
+	return rm_rtt_alpha(r_rt_temporal ? r_rt_temporal->value : 0.0f) > 0.0f;
+}
+
 const rm_rtt_view_t *
 RM_RTT_ViewFor(const rm_view_t *view)
 {
