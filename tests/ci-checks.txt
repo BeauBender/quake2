@@ -9,6 +9,7 @@ check-bench.sh
 check-bounded-run.sh
 check-bsp-loader.sh
 check-card-close-labels.sh
+check-ci-map.sh
 check-checkout-current.sh
 check-ci-parity.sh
 check-codeql-changes.sh
