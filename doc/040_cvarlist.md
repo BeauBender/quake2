@@ -1540,6 +1540,11 @@ is.
   (the warp moves every frame), get a 3 x 3 blur guided by the distance
   from the eye, over the neighbours that hold a reflection on the same
   water (TASK59 slice 2b); at `0` they are the trace's alone, as before.
+  The blur does not run under RT-primary (`r_presentation 3`), whose
+  water is the trace's alone at any value: RT-primary's denoising is row
+  PM8 of the presentation-modes plan (TASK190, #537), not this one. The
+  AO's and the sun's denoiser do not run there either, since RT-primary
+  reads `r_rt_ao` and `r_rt_sun` as `0`.
   The accumulation's memory, per pixel of the render size, is 112 bytes
   for the three effects (the AO 32, the sun 32, the shadows 48), made
   only for an effect that is on: at 1920 x 1080 that is 232,243,200 bytes

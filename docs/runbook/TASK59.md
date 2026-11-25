@@ -442,8 +442,15 @@ Results of the hold (code commit `@HEAD@`, base main at `@BASE@`, slice 1b at `@
   (`ref_metal: rt water: no reflection blur pipeline`, `cannot make the reflection blur's
   WxH output`). The blur's GPU time is not in the water's stats.
 - RT-primary (`r_presentation 3`) reads the water as on and `r_rt_temporal` as the user's
-  value, 0.9 by default, so its water is blurred by default: the hold compares its scenarios
-  with main's and says how many differ.
+  value, 0.9 by default, but the blur does not run there (round 1): RT-primary's denoising
+  is row PM8 of `docs/plans/presentation-modes.md` (TASK190, #537), "TASK59's filter on
+  demodulated irradiance for every term", not this card's. `RM_RTW_View` hands the back end
+  `rm_rtt_wblur(RM_RTT_On(), RM_PresentationMode() == RM_PRES_RTPRIMARY)`, 1 only while
+  `r_rt_temporal` is above 0 and the mode is not RT-primary, so RT-primary's frames are
+  main's: the hold compares its scenarios with main's and they must all be identical. The
+  AO's and the sun's denoiser (slice 2) run inside their effects' passes, and RT-primary
+  reads `r_rt_ao` and `r_rt_sun` as 0 (`RM_Effect`, the mode's table, pinned by
+  `tests/metal/rm_rtgate_test.c`), so they never run there either.
 - The tuning row: "accumulate", a slider of `r_rt_temporal` from 0 to 0.95 in steps of 0.05,
   after "water hits". It acts on four effects, so its effect is `VIDTUNE_EFFECT_ACCUM`: live
   while any of the shadows, the sun, the AO and the water runs as the renderer runs it
@@ -480,6 +487,13 @@ compiler the real file and each mutant must compile. The kernel's calls of `mtl_
 `tests/menu/videomenu_test.c`: the row is shown, greyed with its reason with every effect
 off, live with the sun or the water alone, and a step writes `r_rt_temporal`.
 
+Round 1, RT-primary: `tests/metal/rm_rttemporal_test.c` pins `rm_rtt_wblur` (on with the
+accumulation on and the mode not RT-primary, off otherwise), and `tests/check-ref-metal.sh`
+builds it against a mutant that drops the RT-primary gate (`wblur`), which must compile and
+fail it. It pins the call in `rm_rtwaterscene.c` as text, with three mutants it must refuse
+while the real file passes: the gate dropped (`rmb_rtw_set_blur(RM_RTT_On())`), the mode
+compared with stock's, and the call commented out.
+
 Run by hand on the branch, with the check's compile lines and no lock: `denoiser 171 checks,
 0 failed, 8 rule mutants, 6 kernel pins with 6 kernel mutants refused and compiled` and `29
 kernel calls, 290 kernel-call mutants refused`; `check-cvar-docs: ok`, `check-doc-links: ok`,
@@ -490,7 +504,8 @@ kernel calls, 290 kernel-call mutants refused`; `check-cvar-docs: ok`, `check-do
 
 ### The hold
 
-One hold on the final commit, as the scratchpad's `task59s2b-hold.sh`: the builds, `make
+One hold on the final commit, as the scratchpad's `task59s2b-r1-hold.sh` (round 1's copy of
+`task59s2b-hold.sh`): the builds, `make
 test`, `tests/check-ref-metal.sh` and the doc, menu and pin-character checks; main and slice
 2's code built in scratch; the stock `metal` pins (every committed scenario but RT-primary's,
 the `rt-*` ones at `r_rt_temporal 0`) by main and by the branch, compared frame by frame; the
@@ -505,7 +520,7 @@ Results of the hold (code commit `@HEAD@`, base main at `@BASE@`, slice 2 at `@S
 - `pins: @STOCK_SAME@ of @STOCK_TOTAL@ stock scenarios byte-identical to the base`,
   @STOCK_DIFF@ differ; `rt-water` and `rt-water-entities`: @RTW_STOCK@.
 - `pins: @RTP_SAME@ of @RTP_TOTAL@ RT-primary scenarios byte-identical to the base`
-  (@RTP_DIFF@ differ, where the view shows water).
+  (@RTP_DIFF@ differ; all must be identical, since the blur does not run under RT-primary).
 - The water, `water.dm2` at 640 x 480:
 
   | Run | Hash | Frames different |
