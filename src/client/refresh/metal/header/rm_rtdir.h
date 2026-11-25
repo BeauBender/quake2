@@ -47,6 +47,8 @@
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_rts_math.h"
 #include "../common/mtl_rtdir_math.h"
+#include "../common/mtl_rtsun_math.h"
+#include "../common/mtl_rtsky_math.h"
 
 /* ---- rm_rtdir.c: no SDL, no Metal ----------------------------------------------------- */
 
@@ -73,14 +75,18 @@ int rm_rtdir_on(int pres, float direct, int device_rt, float fullbright);
  * reached them: white all, black none; dark blue no light in range), 3
  * the direct term alone with no shadow ray traced (every light in range
  * counts as seen), 4 the dynamic lights' term alone, with their shadow
- * rays (TASK188 slice 3b). v clamped to 0 to RM_RTDIR_SHOW_MAX before it
- * is cut to an int; 0 for a value that is not finite.
+ * rays (TASK188 slice 3b), 5 the sky light's term alone and 6 the sun's
+ * term alone, each with its ray (TASK189). v clamped to 0 to
+ * RM_RTDIR_SHOW_MAX before it is cut to an int; 0 for a value that is not
+ * finite.
  */
-#define RM_RTDIR_SHOW_MAX 4
+#define RM_RTDIR_SHOW_MAX 6
 #define RM_RTDIR_SHOW_DIRECT 1
 #define RM_RTDIR_SHOW_VIS 2
 #define RM_RTDIR_SHOW_NOSHADOW 3
 #define RM_RTDIR_SHOW_DLIGHTS 4
+#define RM_RTDIR_SHOW_SKY ((int)MTL_RTSKY_SHOW_SKY)
+#define RM_RTDIR_SHOW_SUN ((int)MTL_RTSKY_SHOW_SUN)
 int rm_rtdir_show(float v);
 
 /* a dynamic light as the kernel reads it (rm_rtdir.metal's rm_rtdir_dlight, 32 bytes; TASK188 slice 3b) */
@@ -299,7 +305,7 @@ float rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long sa
  */
 float rm_rtdir_exposure(float cvar, float fit, int *fixed);
 
-/* the view of the kernel (rm_rtdir.metal's rm_rtdir_view, 128 bytes) */
+/* the view of the kernel (rm_rtdir.metal's rm_rtdir_view, 176 bytes) */
 typedef struct
 {
 	float inv[16];      /* GL clip coordinates to world, as rm_rts_view */
@@ -311,7 +317,11 @@ typedef struct
 	unsigned show;      /* rm_rtdir_show */
 	unsigned ndlights;  /* the frame's dynamic lights (the back end's, rmb_rtdir_set_dlights), 0 from rm_rtdir_view */
 	unsigned nself;     /* the per-triangle table's entries (the back end's, rmb_rtdir_set_self), 0 from rm_rtdir_view */
-	unsigned pad[2];
+	unsigned frame;     /* TASK189: the sky ray's noise frame (rm_rtao_frame of r_rt_direct_seed), 0 from rm_rtdir_view */
+	unsigned pad;
+	float sun_dir[4];   /* TASK189: the unit direction toward the sun, 0; 0 from rm_rtdir_view */
+	float sun[4];       /* TASK189: sky_color x r_rt_sunscale a channel, 0; 0 from rm_rtdir_view (no sun ray) */
+	float sky[4];       /* TASK189: the sky's mean colour x r_rt_direct_sky a channel, 0; 0 from rm_rtdir_view (no sky ray) */
 } rm_rtdir_view_t;
 
 /*
@@ -320,6 +330,23 @@ typedef struct
  */
 int rm_rtdir_view(const float *proj, const float *world, const rm_viewport_t *vp, const float *eye, float znear,
 		float exposure, unsigned nlights, unsigned show, rm_rtdir_view_t *out);
+
+/* TASK189: r_rt_direct_sky as the pass takes it: 0 to MTL_RTSKY_SCALE_MAX, 0 for a value that is not finite */
+float rm_rtdir_sky_scale(float v);
+
+/*
+ * TASK189: the sky light and the sun of RT-primary's light model into a
+ * view made by rm_rtdir_view. sky the sky's mean colour (rm_rtl_sky_mean,
+ * NULL when the map has no sky image: no sky ray) times sky_scale
+ * (rm_rtdir_sky_scale's); sun_dir the unit direction toward the sun
+ * (rm_rtsun_dir of TASK56's angles) and sun its colour, sky_color times
+ * r_rt_sunscale (rm_rtsun_sky_color, rm_rtsun_scale), as RT2's view takes
+ * them (NULL: no sun ray); frame the sky ray's noise frame (rm_rtao_frame).
+ * A channel that is not finite or below 0 reads 0, and so does a
+ * direction that is not finite.
+ */
+void rm_rtdir_view_open(rm_rtdir_view_t *v, const float *sky, float sky_scale, const float *sun_dir, const float *sun,
+		unsigned frame);
 
 /* One frame's direct-light pass, for the r_rt_stats 2 line (counted on the GPU, read once the frame completed). */
 typedef struct
@@ -334,6 +361,10 @@ typedef struct
 	unsigned long fit_lm;       /* the fit's sums and samples (rm_rtdir_fit) */
 	unsigned long fit_raw;
 	unsigned long fit_n;
+	unsigned long sky_rays;     /* TASK189: the sky rays traced (one a world pixel at most, MTL_RTSKY_RAYS) */
+	unsigned long sky_hits;     /* the ones that reached the sky */
+	unsigned long sun_rays;     /* the sun rays traced (one a world pixel facing the sun at most, MTL_RTSKY_SUN_RAYS) */
+	unsigned long sun_lit;      /* the ones that reached the sky toward the sun */
 	float exposure;             /* the exposure the frame used */
 	double ms;                  /* the pass's GPU time; below 0 when not measured */
 } rm_rtdir_stats_t;
@@ -482,6 +513,12 @@ float rm_rtdir_fit_tree(const rm_rtdir_light_t *l, long n, const rm_rtdir_fitpt_
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
 int rm_rtdir_stats_format(const rm_rtdir_stats_t *s, int nlights, int fixed, char *buf, size_t len);
+
+/*
+ * TASK189: the r_rt_stats 2 line of a frame's sky light and sun, without
+ * a newline: 1 when it fits in len; 0 with buf empty otherwise
+ */
+int rm_rtdir_open_format(const rm_rtdir_stats_t *s, char *buf, size_t len);
 
 /* the map's line, once the lights are uploaded: 1 when it fits in len; 0 with buf empty otherwise */
 int rm_rtdir_map_format(const char *map, const rm_rtdir_pack_t *p, char *buf, size_t len);

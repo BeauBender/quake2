@@ -25,8 +25,10 @@
  * kernels (rmb_gbuf_resolve's trace walk), the frame's counts and the
  * pass's GPU time, read once the frame completed, in the sun's shape
  * (rmb_rtsun.m). The exposure is the view's: r_rt_direct_exposure's or the
- * map's fit at its load (rm_rtdirscene.c, slice 3c). Every object is
- * counted in the ledger as RM_OBJ_RT.
+ * map's fit at its load (rm_rtdirscene.c, slice 3c). TASK189 adds the sky
+ * ray's blue-noise tile (rm_rtao_bluenoise, made again for this pass) and
+ * the sky's and the sun's counts. Every object is counted in the ledger as
+ * RM_OBJ_RT.
  *
  * =======================================================================
  */
@@ -41,6 +43,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rt.h"
 #include "header/rm_rtdir.h"
+#include "header/rm_rtao.h"
 #include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
@@ -53,10 +56,13 @@ extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
 #define RMB_RTDIR_GROUP 8       /* the kernel's threadgroup side */
-/* world, in range, rays, lit (their low words), the fit's lightmap and raw sums and samples, the three high words, capped */
-#define RMB_RTDIR_COUNTS 11
+/*
+ * world, in range, rays, lit (their low words), the fit's lightmap and raw sums and samples, the three high words,
+ * capped; TASK189's sky rays, sky hits, sun rays and sun hits
+ */
+#define RMB_RTDIR_COUNTS 15
 
-_Static_assert(sizeof(rm_rtdir_view_t) == 128, "the view is rm_rtdir.metal's 128 bytes");
+_Static_assert(sizeof(rm_rtdir_view_t) == 176, "the view is rm_rtdir.metal's 176 bytes");
 _Static_assert(sizeof(rm_rtdir_light_t) == 48, "a light is rm_rtdir.metal's 48 bytes");
 _Static_assert(sizeof(rm_rtdir_dlight_t) == 32, "a dynamic light is rm_rtdir.metal's 32 bytes");
 /* the frame's dynamic lights go by setBytes, inside its 4 KB */
@@ -71,6 +77,7 @@ static id<MTLBuffer> lights;            /* the map's lights, at least one record
 static unsigned long nlights;
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTDIR_COUNTS */
 static id<MTLBuffer> selftab;           /* the map's per-triangle own light (TASK188 slice 3b), at least one word long */
+static id<MTLBuffer> tile;              /* TASK189: the sky ray's blue-noise ranks, MTL_RTAO_TILE_N ushorts */
 static unsigned long nself;
 static rm_rtdir_dlight_t dlights[MTL_RTDIR_MAX_DLIGHTS];   /* the frame's dynamic lights, all of them bound */
 static unsigned ndlights;
@@ -142,7 +149,20 @@ rmb_rtdir_open(char *err, size_t errlen)
 		RMB_RTDIR_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTDIR_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
 
-		if (!trace_pipe || !show_pipe || !counts)
+		/* TASK189: the sky ray's tile, made in code as the AO's (rm_rtao_bluenoise) */
+		{
+			unsigned short *ranks = malloc(MTL_RTAO_TILE_N * sizeof(*ranks));
+
+			if (ranks && rm_rtao_bluenoise(ranks))
+			{
+				RMB_RTDIR_SET(tile, [rmb_device newBufferWithBytes:ranks length:MTL_RTAO_TILE_N * sizeof(*ranks)
+						options:MTLResourceStorageModeShared]);
+			}
+
+			free(ranks);
+		}
+
+		if (!trace_pipe || !show_pipe || !counts || !tile)
 		{
 			snprintf(err, errlen, "cannot build the direct light's pipelines%s%s", e ? ": " : "",
 					e ? e.localizedDescription.UTF8String : "");
@@ -198,6 +218,7 @@ rmb_rtdir_close(void)
 		RMB_RTDIR_SET(t_light, nil);
 		RMB_RTDIR_SET(lights, nil);
 		RMB_RTDIR_SET(selftab, nil);
+		RMB_RTDIR_SET(tile, nil);
 		RMB_RTDIR_SET(counts, nil);
 		RMB_RTDIR_SET(samples, nil);
 	}
@@ -396,6 +417,10 @@ rmb_rtdir_read(void)
 		s->fit_raw = c[5];
 		s->fit_n = c[6];
 		s->capped = c[10];
+		s->sky_rays = c[11];
+		s->sky_hits = c[12];
+		s->sun_rays = c[13];
+		s->sun_lit = c[14];
 		s->exposure = slot_exposure[k];
 		s->ms = -1;
 
@@ -540,6 +565,8 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		[ce setBytes:dlights length:sizeof(dlights) atIndex:10];
 		/* the own-light table, or (none made) a word the kernel does not read: view.nself is then 0 */
 		[ce setBuffer:(selftab ? selftab : counts) offset:0 atIndex:11];
+		/* TASK189: the sky ray's noise */
+		[ce setBuffer:tile offset:0 atIndex:12];
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTDIR_GROUP, RMB_RTDIR_GROUP, 1)];
 		[ce endEncoding];
 
