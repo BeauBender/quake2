@@ -412,17 +412,115 @@ Results of the hold (code commit `@HEAD@`, base main at `@BASE@`, slice 1b at `@
 - Checks: `@CHECK_REF_METAL@`; `@YQ2TEST@`; `check-cvar-docs: ok`, `check-doc-links: ok`,
   `check-runbook-index: ok`, `check-video-menu: ok`, `check-pin-chars: ok`.
 
+## Slice 2b: the reflections' blur, the tuning row and the memory
+
+### What it adds
+
+- The reflections' weight rule (`common/mtl_rtd_math.h`, next to the 5 x 5 one): the 3 x 3
+  binomial taps, 1 2 1 in each axis over 16 (`mtl_rtd_rtap`); the weight of a neighbour, its
+  tap times the 5 x 5 blur's depth guide (`mtl_rtd_depth_w`), 0 for a neighbour that holds
+  no reflection (`mtl_rtd_rweight`); and the result at full strength, since a reflection has
+  no history and so no sample count (`mtl_rtd_rresult`, the 5 x 5 rule's result at 1
+  sample). No normal guide: the design names the depth alone.
+- The kernel, `rm_rtw_denoise` in `rm_rtwdenoise.metal`, a translation unit of its own, so
+  the stock water kernels (`rm_rtwater.metal`) and slice 2's denoiser keep their text and
+  compiled code. It reads this frame's reflection and class (`t_refl`), the depth and the
+  translucent water's distance, and writes, for a pixel with a reflection, the weighted mean
+  of the 3 x 3 neighbours that hold one on the same layer (opaque or translucent water), the
+  class kept; every other pixel is copied, so every pixel the blend reads is written. A
+  pixel's distance is the translucent water's own (`t_wdist`) or the depth unprojected with
+  the water's view (`mtl_rtd_rview_t`: its inverse, viewport and eye). No history is read or
+  written.
+- The back end (`rmb_rtwater.m`): `rmb_rtw_blur` dispatches it after the trace, in an
+  encoder of its own on the same command buffer, into `t_rblur` (RGBA8Unorm at the render
+  size, 4 bytes a pixel); the blend and the forward pass's translucent water then read it in
+  place of `t_refl` (`rmb_rtw_out`). It runs only while `r_rt_temporal` is above 0
+  (`RM_RTT_On`, read by `RM_RTW_View` each view without stepping the history's state). Its
+  pipeline and output are made on the first view that blurs and released by the first that
+  does not, so at 0 nothing of it exists and every water frame is the trace's, as on main. A
+  pipeline or output that cannot be made is latched until the pass closes and logged once
+  (`ref_metal: rt water: no reflection blur pipeline`, `cannot make the reflection blur's
+  WxH output`). The blur's GPU time is not in the water's stats.
+- RT-primary (`r_presentation 3`) reads the water as on and `r_rt_temporal` as the user's
+  value, 0.9 by default, so its water is blurred by default: the hold compares its scenarios
+  with main's and says how many differ.
+- The tuning row: "accumulate", a slider of `r_rt_temporal` from 0 to 0.95 in steps of 0.05,
+  after "water hits". It acts on four effects, so its effect is `VIDTUNE_EFFECT_ACCUM`: live
+  while any of the shadows, the sun, the AO and the water runs as the renderer runs it
+  (`VidRules_RTEffective`), greyed "turn on shadows, sun, AO or water first" while none does,
+  and "set by the presentation" under Retro. The presets and the A/B hold it
+  (`scripts/rt/preset-to-table.sh` now counts 21 tuning cvars). The settings optimizer's
+  search (`optsearch.c`) lists eleven of the tuning cvars, not every one, so it is unchanged.
+- Memory (slice 2's security note N1): `doc/040_cvarlist.md` gives the accumulation's 112
+  bytes a pixel for the three effects, 928,972,800 bytes at 3840 x 2160, and the blur's 4.
+  The tuning screen has no rule by device class, and none is added: whether a default may
+  differ by device class is decision 0014's open question, the owner's.
+- `scripts/pins/rt-variations.txt` (correctness note N2): its header says its presets run at
+  the default and so show the accumulated, denoised and blurred frames, the look that ships.
+  No preset changes.
+- `dn_pipe` (correctness note N3): the AO's and the sun's denoiser pipelines are released on
+  the path that releases the histories, and made again with the accumulation.
+
+### Tests
+
+`tests/metal/rm_rtdenoise_test.c` gains the reflections' taps (sum, symmetry, values, 0
+outside the 3 x 3), the weight (the tap, a neighbour without a reflection, the depth guide
+inside, at and past the tolerance and on NaN and infinity), the result (nothing added, the
+mean, a NaN value given the mean) and a 3 x 3 blur over the test image as the kernel runs it:
+a constant kept, a checkerboard and one bright neighbour smoothed by their taps' shares, a
+depth edge and a neighbour without a reflection that stop it. `tests/check-ref-metal.sh`
+builds it against two more rule mutants, each of which must compile and fail it: the
+reflections' depth guide always 1 (`rdepth`) and a neighbour without a reflection blurred in
+(`rok`). It pins `mtl_rtd_rweight(dx, dy, dc, dn, ok)` in `rm_rtw_denoise` with the depth
+guide's mutant (the neighbour's distance replaced by the pixel's own), and the kernel's four
+textures and its one write (`refl_out`) with a mutant that reads a history (a fifth texture
+mixed into the blur, `histread`) and one that writes one (`histwrite`); with the Metal
+compiler the real file and each mutant must compile. The kernel's calls of `mtl_rtd_rweight`,
+`mtl_rtd_add` and `mtl_rtd_rresult` join the kernel-call pins with their ten mutants each.
+`tests/menu/videomenu_test.c`: the row is shown, greyed with its reason with every effect
+off, live with the sun or the water alone, and a step writes `r_rt_temporal`.
+
+Run by hand on the branch, with the check's compile lines and no lock: `denoiser 171 checks,
+0 failed, 8 rule mutants, 6 kernel pins with 6 kernel mutants refused and compiled` and `29
+kernel calls, 290 kernel-call mutants refused`; `check-cvar-docs: ok`, `check-doc-links: ok`,
+`check-runbook-index: ok`, `check-pin-chars: ok`, `check-video-menu: ok` (3390 checks);
+`xcrun metal -c` of `rm_rtwdenoise.metal`, and a syntax-only compile of `rmb_rtwater.m`,
+`rmb_rtao.m`, `rmb_rtsun.m`, `rm_rtwaterscene.c` and `rm_rtaoscene.c` with `-Wall -Wextra
+-Werror`.
+
+### The hold
+
+One hold on the final commit, as the scratchpad's `task59s2b-hold.sh`: the builds, `make
+test`, `tests/check-ref-metal.sh` and the doc, menu and pin-character checks; main and slice
+2's code built in scratch; the stock `metal` pins (every committed scenario but RT-primary's,
+the `rt-*` ones at `r_rt_temporal 0`) by main and by the branch, compared frame by frame; the
+RT-primary scenarios likewise, each side at its default; and two scratch scenarios of
+`rt-water.cfg`'s view, never committed: at `r_rt_temporal 0.9` (run twice) and at 0 (run
+twice: the water's warp follows the client clock, so the second run at 0 is the run-to-run
+floor), and the 0.9 one run by slice 2's code. Two frames each of the 0.9 run, of slice 2's
+0.9 run and of the run at 0 are for the owner and are kept outside the repository.
+
+Results of the hold (code commit `@HEAD@`, base main at `@BASE@`, slice 2 at `@S2@`):
+
+- `pins: @STOCK_SAME@ of @STOCK_TOTAL@ stock scenarios byte-identical to the base`,
+  @STOCK_DIFF@ differ; `rt-water` and `rt-water-entities`: @RTW_STOCK@.
+- `pins: @RTP_SAME@ of @RTP_TOTAL@ RT-primary scenarios byte-identical to the base`
+  (@RTP_DIFF@ differ, where the view shows water).
+- The water, `water.dm2` at 640 x 480:
+
+  | Run | Hash | Frames different |
+  | --- | --- | --- |
+  | 0.9, two runs | `@ACC_HASH@` | @ACC_DET@ between the runs |
+  | 0, two runs | `@OFF_HASH@` | @OFF_DET@ between the runs (the floor) |
+  | 0.9 against 0 | | @ACC_OFF@ |
+  | 0.9 against slice 2's code at 0.9 | | @ACC_S2@ |
+  | 0 against the stock `rt-water` record | | @OFF_STOCK@ |
+
+- Checks: `@CHECK_REF_METAL@`; `@YQ2TEST@`; `check-cvar-docs: ok`, `check-doc-links: ok`,
+  `check-runbook-index: ok`, `check-video-menu: ok`, `check-pin-chars: ok`.
+
 ## Left for the next slices
 
-- The reflections' 3x3 depth-guided blur, with no history (the design, section 2), and its
-  kernel pins with the mutant that blurs them with a history: left by slice 2, which stopped at
-  the denoiser and the default to stay near its size. The design names no cvar for it;
-  `r_rt_temporal` above 0 is the card's reading.
-- The tuning-screen row of `r_rt_temporal`, greyed with its reason when no accumulated effect
-  is on, with the presets table (`scripts/rt/preset-to-table.sh`), the counts that pin the
-  screen (`tests/check-video-menu.sh`, `tests/menu/videomenu_test.c`) and, if
-  `src/client/menu/optsearch.c` lists every tuning cvar, the settings optimizer: left by
-  slice 2 likewise.
 - The look of the accumulated and denoised effects, judged by the owner from the hold's
   frames and the tuning screen (INFORM11).
 - RT11's `r_rt_scale` and the `r_rt_stats 1` reset line of the design's RT11 row.
