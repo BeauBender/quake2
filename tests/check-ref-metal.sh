@@ -42,8 +42,8 @@
 #     header it must fail and four pins of rm_rtptemporal.metal with seven
 #     mutants, compiled with xcrun metal where it is there,
 #     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
-#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; seven
-#     scratch mutants of the two must fail it, and all seven must),
+#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eleven
+#     scratch mutants of the two must fail it, and all eleven must),
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -712,11 +712,11 @@ esac
 # skipped, the glow pulse's sign flipped, the split with the weapon traced, the split with a fullbright model
 # traced, the tag's decode dropping a bit, the weapon unprojected with the view's projection; slice 2's: the
 # weapon's depth hack read as the crosshair's, a glowing or minlight model rastered untagged, a model tagged
-# without its normals
+# without its normals, the colour index's NaN and sign guard on the bit pattern dropped
 rtm_mutants=0
 if [ -n "$rtm" ]; then
 	for m in shadedot-twice minlight-skipped glow-sign weapon-traced fullbright-traced tag-bit weapon-view-inv \
-		depthhack-weapon untagged-traced tag-no-normals; do
+		depthhack-weapon untagged-traced tag-no-normals nan-guard; do
 		rtm_tree "${tmp:?}/rtmm"
 		h=${tmp:?}/rtmm/src/client/refresh/metal/common/mtl_rtm_math.h
 		c=${tmp:?}/rtmm/src/client/refresh/metal/rm_rtmodel.c
@@ -737,6 +737,7 @@ if [ -n "$rtm" ]; then
 				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 			weapon-view-inv) sed 's/rm_weapon_projection(p, w->fovy, w->gunfov, w->hand, w->width/rm_projection(p, w->fovy, w->width/' \
 				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			nan-guard) sed 's/if (u > MTL_RTM_BITS_INF)$/if (0)/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 		esac
 		r=0
 		rtm_run "${tmp:?}/rtmm" || r=$?
@@ -751,7 +752,15 @@ if [ -n "$rtm" ]; then
 			rtm_mutants=$((rtm_mutants + 1))
 		fi
 	done
-	[ "$rtm_mutants" -eq 10 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 10 model-light mutants"
+	[ "$rtm_mutants" -eq 11 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 11 model-light mutants"
+fi
+# slice 2's review: under Metal the colour index's guard reads the bit pattern by as_type, which fast math
+# does not fold (the host test sees only the host's union); the index tests the pattern, not the float
+if [ "$(grep -cxF '#define MTL_RTM_BITS(f) as_type<uint>(f)' "$rm_dir/common/mtl_rtm_math.h")" != 1 ] ||
+	! awk '/^#ifdef __METAL_VERSION__$/ { m = 1; next } m && /^#define MTL_RTM_BITS\(/ { print; exit }' \
+		"$rm_dir/common/mtl_rtm_math.h" | grep -qF 'as_type<uint>(f)' ||
+	[ "$(grep -cxF '	const unsigned u = MTL_RTM_BITS(f);' "$rm_dir/common/mtl_rtm_math.h")" != 1 ]; then
+	bad "common/mtl_rtm_math.h: the colour index under Metal does not test the bit pattern (as_type<uint>)"
 fi
 # slice 2: under Metal the minlight floor's test is s >= 0.1f, gl1's double test s > 0.1 (the host test holds
 # the two the same for every float near 0.1); the host keeps the double test
@@ -761,7 +770,7 @@ if [ "$(grep -cxF '#define MTL_RTM_ABOVE(s) ((s) >= MTL_RTM_FLOOR)' "$rm_dir/com
 		"$rm_dir/common/mtl_rtm_math.h" | grep -qF '>= MTL_RTM_FLOOR'; then
 	bad "common/mtl_rtm_math.h: the minlight floor's test under Metal is not s >= 0.1f"
 fi
-seg 7.8 "; model light ${rtm:-host test}, $rtm_mutants of 10 mutants refused"
+seg 7.8 "; model light ${rtm:-host test}, $rtm_mutants of 11 mutants refused"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)

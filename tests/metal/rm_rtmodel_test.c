@@ -651,6 +651,70 @@ test_floor_metal(void)
 	CHECK(MTL_RTM_ABOVE(0.1f) && !MTL_RTM_ABOVE(nextafterf(0.1f, 0.0f)) && !MTL_RTM_ABOVE(NAN));
 }
 
+/* gl1's index rule with float compares (IEEE here, no fast math): what mtl_rtm_index1 must give */
+static int
+index_ref(float f)
+{
+	return !(f > 0.0f) ? 0 : ((f >= 255.0f) ? 255 : (int)f);
+}
+
+static float
+float_of_bits(unsigned u)
+{
+	float f;
+
+	memcpy(&f, &u, sizeof(f));
+	return f;
+}
+
+/*
+ * The colour index's guard (slice 2's review): the index tests the bit
+ * pattern (MTL_RTM_BITS), not a float compare, so a NaN of either sign
+ * and any payload, -inf and -0 give 0 and +inf 255; and over a sweep of
+ * 65536 patterns spread across every sign and exponent the index is
+ * gl1's float-compare rule and lies in 0 .. 255.
+ */
+static void
+test_index_guard(void)
+{
+	const unsigned nans[] = {0x7f800001u, 0x7fc00000u, 0x7fffffffu, 0xff800001u, 0xffc00000u, 0xffffffffu};
+	unsigned k;
+	int i, bad = 0, out = 0;
+
+	CHECK(sizeof(unsigned) == sizeof(float));
+	CHECK(MTL_RTM_BITS(INFINITY) == MTL_RTM_BITS_INF && MTL_RTM_BITS(255.0f) == MTL_RTM_BITS_255);
+
+	CHECK(mtl_rtm_index1(1.0f, NAN) == 0);
+	CHECK(mtl_rtm_index1(1.0f, -NAN) == 0);
+	CHECK(mtl_rtm_index1(1.0f, INFINITY) == 255);
+	CHECK(mtl_rtm_index1(1.0f, -INFINITY) == 0);
+	CHECK(mtl_rtm_index1(-1.0f, INFINITY) == 0);
+	CHECK(mtl_rtm_index1(0.0f, INFINITY) == 0);
+	CHECK(mtl_rtm_index1(1.0f, -0.0f) == 0);
+	CHECK(mtl_rtm_index1(1.0f, -1.0f) == 0);
+	CHECK(mtl_rtm_index1(1.0f, 1.0f) == 255 && mtl_rtm_index1(1.0f, 0.5f) == 127);
+
+	for (i = 0; i < (int)(sizeof(nans) / sizeof(nans[0])); i++)
+	{
+		const float n = float_of_bits(nans[i]);
+
+		bad += mtl_rtm_index1(1.0f, n) != 0;
+		bad += mtl_rtm_index1(n, 0.5f) != 0;
+	}
+
+	for (k = 0; k < 65536u; k++)
+	{
+		const float s = float_of_bits(k * 0x10001u);
+		const int got = mtl_rtm_index1(1.0f, s);
+
+		out += (got < 0) || (got > 255);
+		bad += got != index_ref(1.0f * s * 255.0f);
+	}
+
+	CHECK(bad == 0);
+	CHECK(out == 0);
+}
+
 /* slice 2: the r_rt_stats 2 line, with and without the GPU time, and a buffer it does not fit */
 static void
 test_stats_line(void)
@@ -690,6 +754,7 @@ main(void)
 	test_weapon();
 	test_pullback();
 	test_floor_metal();
+	test_index_guard();
 	test_stats_line();
 
 	printf("rm_rtmodel_test: %d checks, %d failed\n", checks, failures);

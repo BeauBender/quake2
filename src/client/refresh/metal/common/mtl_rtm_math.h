@@ -159,19 +159,61 @@ mtl_rtm_shade(mtl_rtm_v3_t l, unsigned f, float glow, float overbright)
 }
 
 /*
+ * The bit pattern of a float. The colour index tests it with integer
+ * compares in place of float ones: the Metal shaders build with fast
+ * math, under which a float compare may be folded as if no NaN came (the
+ * compiler emits "fcmp fast"), while an integer test of the pattern is no
+ * float operation and keeps its meaning. Metal's own isnan lowers to the
+ * same integer test, but its specification promises nothing under fast
+ * math, so the test is written out.
+ */
+#ifdef __METAL_VERSION__
+#define MTL_RTM_BITS(f) as_type<uint>(f)
+#else
+static inline unsigned
+mtl_rtm_bits(float f)
+{
+	union
+	{
+		float f;
+		unsigned u;
+	} b;
+
+	b.f = f;
+	return b.u;
+}
+
+#define MTL_RTM_BITS(f) mtl_rtm_bits(f)
+#endif
+
+/* +inf's pattern: every pattern above it is a NaN or has the sign set */
+#define MTL_RTM_BITS_INF 0x7f800000u
+/* 255.0f's: a pattern with the sign clear at or above it is 255 or more, +inf included */
+#define MTL_RTM_BITS_255 0x437f0000u
+
+/*
  * gl1's colour index of one channel (R_DrawAliasFrameLerp): the shadedot
  * factor dot times the shade light times 255, truncated and clamped to 0
- * .. 255 (a NaN is 0). The caller then takes the minlight table and the
- * gamma table (gl1_minlight, vid_gamma) at the index: neither is a closed
- * form the GPU can repeat to the bit (the gamma table is a pow), so both
- * are inputs.
+ * .. 255. A NaN, -inf, -0 and every negative value are 0, +inf is 255,
+ * as gl1's float compares give them; the tests are on the bit pattern
+ * (MTL_RTM_BITS), so the index stays in 0 .. 255 under fast math too, and
+ * the truncation only ever sees a finite value in 0 .. 255. The caller
+ * then takes the minlight table and the gamma table (gl1_minlight,
+ * vid_gamma) at the index: neither is a closed form the GPU can repeat to
+ * the bit (the gamma table is a pow), so both are inputs.
  */
 static inline int
 mtl_rtm_index1(float dot, float s)
 {
 	const float f = dot * s * 255.0f;
+	const unsigned u = MTL_RTM_BITS(f);
 
-	return !(f > 0.0f) ? 0 : ((f >= 255.0f) ? 255 : (int)f);
+	if (u > MTL_RTM_BITS_INF)
+	{
+		return 0;
+	}
+
+	return (u >= MTL_RTM_BITS_255) ? 255 : (int)f;
 }
 
 /*
