@@ -33,12 +33,14 @@
  */
 
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../src/client/refresh/metal/header/rm_rtdir.h"
 #include "../../src/client/refresh/metal/header/rm_rtgate.h"
+#include "../../src/client/refresh/metal/common/mtl_gbuf_math.h"
 
 /* src/common/shared/shared.c, linked for rm_pure.c, prints through the engine */
 void
@@ -828,7 +830,7 @@ test_no_lightmap_kernel(void)
 			{ "lights, dl, self, t) : float3(0.0f);", "lights, dl, self, t) + RM_CAT(l, m).read(px).rgb : float3(0.0f);" } } },
 		{ "new-binding", { { "\t\ttexture2d<float, access::write> light_out [[texture(6)]],\n",
 			"\t\ttexture2d<float, access::write> light_out [[texture(6)]],\n"
-			"\t\ttexture2d<float, access::read> q [[texture(7)]],\n" },
+			"\t\ttexture2d<float, access::read> q [[texture(8)]],\n" },
 			{ "lights, dl, self, t) : float3(0.0f);", "lights, dl, self, t) + q.read(px).rgb : float3(0.0f);" } } },
 		{ "emit-buffer", { { "\t\tthread rm_rtdir_tally &t)\n{\n\tconst float3 o",
 			"\t\tthread rm_rtdir_tally &t, device const float4 *lmc)\n{\n\tconst float3 o" },
@@ -862,7 +864,7 @@ test_no_lightmap_kernel(void)
 		{ "self-ray-unused", { { "((v.show == 3u) || (v.show == 4u)) ? float3(0.0f) :", "(v.show == 99u) ? float3(0.0f) :" } } },
 		{ "lmx", { { "\t\ttexture2d<float, access::read> base [[texture(4)]],\n",
 			"\t\ttexture2d<float, access::read> base [[texture(4)]],\n"
-			"\t\ttexture2d<float, access::read> lmx [[texture(7)]],\n" },
+			"\t\ttexture2d<float, access::read> lmx [[texture(8)]],\n" },
 			{ "lights, dl, self, t) : float3(0.0f);", "lights, dl, self, t) + lmx.read(px).rgb : float3(0.0f);" } } },
 	};
 
@@ -1000,6 +1002,10 @@ binding_broken(const char *src)
 	r = pin_and(r, pin_count(text, strlen(text), "view.ndlights = ndlights;", 1));
 	/* TASK188 slice 3c: the table's count taken at the encode, beside its binding, whatever the order of the calls before */
 	r = pin_and(r, pin_count(tr.body, tr.nbody, "view.nself = selftab ? (unsigned)nself : 0u;", 1));
+	/* TASK189 slice 2: the bounce's array the world's (rmb_rtdir_set_bounce's lmtex), its records' count taken at the encode */
+	r = pin_and(r, pin_count(tr.body, tr.nbody, "id<MTLTexture> atlas = brec_lmtex ? rmb_texture_for_draw(brec_lmtex) : nil;", 1));
+	r = pin_and(r, pin_count(text, strlen(text), "brec_lmtex = lmtex;", 1));
+	r = pin_and(r, pin_count(tr.body, tr.nbody, "view.nbrec = (brec && lm_ok && geom_ok) ? (unsigned)nbrec : 0u;", 1));
 
 	if ((r != PIN_OK) || (count_in(text, strlen(text), "atIndex:10]") != 1) || (count_in(text, strlen(text), "atIndex:11]") != 1) ||
 		(count_in(text, strlen(text), "view.ndlights") != 1) || (count_in(text, strlen(text), "view.nself") != 1))
@@ -1046,9 +1052,9 @@ test_host_binding(void)
 		const char *name, *from, *to;
 	} mutants[] = {
 		{ "new-binding", "\t\t[ce setTexture:t_light atIndex:6];\n",
-			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTexture:lm atIndex:7];\n" },
+			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTexture:lm atIndex:8];\n" },
 		{ "new-binding-range", "\t\t[ce setTexture:t_light atIndex:6];\n",
-			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTextures:&lm withRange:NSMakeRange(7, 1)];\n" },
+			"\t\t[ce setTexture:t_light atIndex:6];\n\t\t[ce setTextures:&lm withRange:NSMakeRange(8, 1)];\n" },
 		{ "lights-cap", "(n > RM_RTDIR_MAX_UPLOAD)", "(n > RM_RTL_MAX_LIGHTS)" },
 		{ "lights-twice", "\t\t[ce setBuffer:lights offset:0 atIndex:9];\n",
 			"\t\t[ce setBuffer:lights offset:0 atIndex:9];\n\t\t[ce setBuffer:counts offset:0 atIndex:9];\n" },
@@ -3100,6 +3106,657 @@ test_sky_sun(void)
 	CHECK(rm_pres_value(RM_PRES_RTPRIMARY, "r_rt_direct_sky", 0.5f) == 0.5f);
 }
 
+/* ---- TASK189, PM7 slice 2: the bounce ------------------------------------------------- */
+
+/* rm_rtdir_bounce's and rm_rtdir_tri_lm's parameters and bodies, and mtl_rtsky_math.h's bounce rules, whole */
+#define BOUNCE_PARAMS \
+	"(constant rm_rtdir_view &v, uint2 px, float3 p, float3 n, instance_acceleration_structure ias,\n" \
+	"\t\tdevice const uint *inst, device const uchar *tmat, uint ntris, device const ushort *tile,\n" \
+	"\t\ttexture2d_array<float> atlas, device const float4 *verts, device const uint *idx, constant rm_rtdir_geom &g,\n" \
+	"\t\tdevice const uint *brec, thread rm_rtdir_tally &t)"
+#define BOUNCE_BODY \
+	"{\n" \
+	"\tintersector<triangle_data, instancing> isect;\n" \
+	"\tfloat3 o, dir;\n" \
+	"\tray r;\n" \
+	"\n" \
+	"\tif (!mtl_rtsky_bounces(v.show, v.bounce.x))\n" \
+	"\t{\n" \
+	"\t\treturn float3(0.0f);\n" \
+	"\t}\n" \
+	"\n" \
+	"\to = p + n * mtl_rtao_bias(distance(p, v.eye.xyz), v.bias_k);\n" \
+	"\n" \
+	"\t{\n" \
+	"\t\tconst float u = mtl_rtao_noise(tile[mtl_rtao_tile_index(px.x, px.y, 2u)], v.frame, 2u);\n" \
+	"\t\tconst float w = mtl_rtao_noise(tile[mtl_rtao_tile_index(px.x, px.y, 3u)], v.frame, 3u);\n" \
+	"\t\tconst mtl_rtao_v3_t d = mtl_rtsky_dir(mtl_rtao_v3(n.x, n.y, n.z), u, w);\n" \
+	"\n" \
+	"\t\tdir = float3(d.x, d.y, d.z);\n" \
+	"\t}\n" \
+	"\n" \
+	"\tisect.assume_geometry_type(geometry_type::triangle);\n" \
+	"\tr = ray(o, dir, 0.0f, MTL_RTSUN_RANGE);\n" \
+	"\tt.bounce_rays++;\n" \
+	"\n" \
+	"\tfor (int face = 0; face <= MTL_RTDIR_LAYERS; face++)\n" \
+	"\t{\n" \
+	"\t\tintersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);\n" \
+	"\t\tuint b, tri = 0xffffffffu, m = 0xffu, at, rec, slice;\n" \
+	"\t\tfloat2 st;\n" \
+	"\t\tfloat3 l;\n" \
+	"\n" \
+	"\t\tif (hit.type == intersection_type::none)\n" \
+	"\t\t{\n" \
+	"\t\t\treturn float3(0.0f);\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tb = inst[2 * hit.instance_id];\n" \
+	"\n" \
+	"\t\tif (b != 0xffffffffu)\n" \
+	"\t\t{\n" \
+	"\t\t\ttri = b + hit.primitive_id;\n" \
+	"\t\t\tm = (tri < ntris) ? (uint)tmat[tri] : (uint)MTL_GB_MAT_WORLD;\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tat = mtl_rtsky_bounce_at(m, face);\n" \
+	"\n" \
+	"\t\tif (at == MTL_RTSKY_BOUNCE_PASS)\n" \
+	"\t\t{\n" \
+	"\t\t\tr.min_distance = hit.distance + 0.01f;\n" \
+	"\n" \
+	"\t\t\tif (!(r.min_distance < r.max_distance))\n" \
+	"\t\t\t{\n" \
+	"\t\t\t\treturn float3(0.0f);\n" \
+	"\t\t\t}\n" \
+	"\n" \
+	"\t\t\tcontinue;\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tif ((at != MTL_RTSKY_BOUNCE_SHADE) || (tri >= v.nbrec))\n" \
+	"\t\t{\n" \
+	"\t\t\treturn float3(0.0f);\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\trec = brec[tri];\n" \
+	"\t\tslice = mtl_rtsky_brec_slice(rec);\n" \
+	"\n" \
+	"\t\tif ((slice == MTL_RTSKY_NOLM) || (slice >= atlas.get_array_size()) ||\n" \
+	"\t\t\t!rm_rtdir_tri_lm(verts, idx, g, tri, hit.triangle_barycentric_coord, st))\n" \
+	"\t\t{\n" \
+	"\t\t\treturn float3(0.0f);\n" \
+	"\t\t}\n" \
+	"\n" \
+	"\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n" \
+	"\t\tt.bounce_hits++;\n" \
+	"\t\treturn float3(mtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 0u), l.r, v.bounce.x),\n" \
+	"\t\t\t\tmtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 1u), l.g, v.bounce.x),\n" \
+	"\t\t\t\tmtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 2u), l.b, v.bounce.x));\n" \
+	"\t}\n" \
+	"\n" \
+	"\treturn float3(0.0f);\n" \
+	"}"
+
+#define TRI_LM_PARAMS \
+	"(device const float4 *verts, device const uint *idx, constant rm_rtdir_geom &g, uint tri, float2 bc,\n" \
+	"\t\tthread float2 &st)"
+#define TRI_LM_BODY \
+	"{\n" \
+	"\tuint i0, i1, i2;\n" \
+	"\tfloat4 a0, a1, a2;\n" \
+	"\n" \
+	"\tif ((tri >= g.ntris) || (g.stride4 < 2))\n" \
+	"\t{\n" \
+	"\t\treturn false;\n" \
+	"\t}\n" \
+	"\n" \
+	"\ti0 = idx[3 * tri];\n" \
+	"\ti1 = idx[3 * tri + 1];\n" \
+	"\ti2 = idx[3 * tri + 2];\n" \
+	"\n" \
+	"\tif ((i0 >= g.nverts) || (i1 >= g.nverts) || (i2 >= g.nverts))\n" \
+	"\t{\n" \
+	"\t\treturn false;\n" \
+	"\t}\n" \
+	"\n" \
+	"\ta0 = verts[i0 * g.stride4 + 1];\n" \
+	"\ta1 = verts[i1 * g.stride4 + 1];\n" \
+	"\ta2 = verts[i2 * g.stride4 + 1];\n" \
+	"\tst = float2(mtl_rtsky_bary(a0.z, a1.z, a2.z, bc.x, bc.y), mtl_rtsky_bary(a0.w, a1.w, a2.w, bc.x, bc.y));\n" \
+	"\treturn true;\n" \
+	"}"
+
+#define BOUNCES_BODY \
+	"{\n" \
+	"\tif (!(scale > 0.0f))\n" \
+	"\t{\n" \
+	"\t\treturn 0;\n" \
+	"\t}\n" \
+	"\n" \
+	"\treturn ((show == 0u) || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n" \
+	"}"
+
+#define BOUNCE_AT_BODY \
+	"{\n" \
+	"\tif (mat == 1u)\n" \
+	"\t{\n" \
+	"\t\treturn MTL_RTSKY_BOUNCE_SHADE;\n" \
+	"\t}\n" \
+	"\n" \
+	"\tif (((mat == 3u) || (mat == 5u)) && (layer < MTL_RTDIR_LAYERS))\n" \
+	"\t{\n" \
+	"\t\treturn MTL_RTSKY_BOUNCE_PASS;\n" \
+	"\t}\n" \
+	"\n" \
+	"\treturn MTL_RTSKY_BOUNCE_DARK;\n" \
+	"}"
+
+#define ALONE_BODY \
+	"{\n" \
+	"\treturn ((show == MTL_RTSKY_SHOW_SKY) || (show == MTL_RTSKY_SHOW_SUN) || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n" \
+	"}"
+
+/* the kernel's statement of the bounce: from its ray alone, the same point and normal as the traced light's */
+#define KERNEL_BOUNCE \
+	"const float3 bounce = world ? rm_rtdir_bounce(v, px, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f),\n" \
+	"\t\t\tias, inst, tmat, ntris, tile, atlas, verts, idx, g, brec, t) : float3(0.0f);"
+
+/*
+ * The bounce's rules in the kernel's text (src) with its comments taken
+ * out: the term comes from rm_rtdir_bounce alone, whose parameters and
+ * body are pinned whole (one cosine-weighted ray on the tile's third and
+ * fourth numbers, under mtl_rtsky_bounces; water and translucent faces
+ * passed by mtl_rtsky_bounce_at, at most MTL_RTDIR_LAYERS + 1
+ * intersections; a lightmapped world face read once, in the stock
+ * lightmap array at the hit's lightmap coordinates, times its record's
+ * albedo and the scale; no shadow ray), and it joins the exposed light
+ * once, in the world's write, with the sky's and the sun's terms. The
+ * array is named only there: never at the pixel. NULL when it holds,
+ * else the first rule broken.
+ */
+static const char *
+bounce_broken(const char *src)
+{
+	static char text[65536];
+	fn_t k, b, lm;
+	int r;
+
+	strip_comments(src, text, sizeof(text));
+
+	if (!find_fn(text, "kernel void\nrm_rtdir_trace(", &k) || !find_fn(text, "static float3\nrm_rtdir_bounce(", &b) ||
+		!find_fn(text, "static bool\nrm_rtdir_tri_lm(", &lm))
+	{
+		return "rm_rtdir_bounce or rm_rtdir_tri_lm is not defined once";
+	}
+
+	r = pin_and(pin_count(k.body, k.nbody, KERNEL_BOUNCE, 1), pin_count(k.body, k.nbody, KERNEL_WRITE, 1));
+
+	if ((r != PIN_OK) || (words_in(k.body, k.nbody, "bounce") != 2) || (count_in(text, strlen(text), "rm_rtdir_bounce(") != 2))
+	{
+		return PIN_WHY((r != PIN_OK) ? r : PIN_BROKEN, "the bounce does not join the exposed light once, in the world's write");
+	}
+
+	r = pin_and(pin_is(b.params, b.nparams, BOUNCE_PARAMS), pin_is(b.body, b.nbody, BOUNCE_BODY));
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "rm_rtdir_bounce is not one ray reading the stock lightmap at its hit");
+	}
+
+	r = pin_and(pin_is(lm.params, lm.nparams, TRI_LM_PARAMS), pin_is(lm.body, lm.nbody, TRI_LM_BODY));
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "rm_rtdir_tri_lm is not the hit triangle's lightmap coordinates");
+	}
+
+	/* the lightmap array: the kernel's parameter, its one use (the bounce's call), the bounce's parameter, its two uses */
+	if ((words_in(text, strlen(text), "atlas") != 5) || (count_in(text, strlen(text), "atlas.sample(") != 1) ||
+		(words_in(k.body, k.nbody, "atlas") != 1) || (words_in(b.body, b.nbody, "atlas") != 2) ||
+		(count_in(text, strlen(text), "rm_rtdir_tri_lm(") != 2) || (words_in(text, strlen(text), "brec") != 4) ||
+		(count_in(text, strlen(text), "mtl_rtsky_bounce_at(") != 1) || (count_in(text, strlen(text), "rm_rtdir_seen(") != 3))
+	{
+		return "the lightmap array or the bounce records are named outside the bounce";
+	}
+
+	return NULL;
+}
+
+/* which views trace the bounce, what its ray does at a face, which views are a term alone: mtl_rtsky_math.h's text */
+static const char *
+bounces_broken(const char *src)
+{
+	static char text[65536];
+	fn_t f, a, al;
+	int r;
+
+	strip_comments(src, text, sizeof(text));
+
+	if (!find_fn(text, "static inline int\nmtl_rtsky_bounces(", &f) ||
+		!find_fn(text, "static inline unsigned\nmtl_rtsky_bounce_at(", &a) ||
+		!find_fn(text, "static inline int\nmtl_rtsky_alone(", &al))
+	{
+		return "mtl_rtsky_bounces, mtl_rtsky_bounce_at or mtl_rtsky_alone is not defined once";
+	}
+
+	r = pin_and(pin_is(f.params, f.nparams, "(unsigned show, float scale)"), pin_is(f.body, f.nbody, BOUNCES_BODY));
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "mtl_rtsky_bounces does not trace the bounce under the picture and view 7 alone");
+	}
+
+	r = pin_and(pin_is(a.params, a.nparams, "(unsigned mat, int layer)"), pin_is(a.body, a.nbody, BOUNCE_AT_BODY));
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "mtl_rtsky_bounce_at does not shade world faces alone and pass water and glass");
+	}
+
+	if ((r = pin_is(al.body, al.nbody, ALONE_BODY)) != PIN_OK)
+	{
+		return PIN_WHY(r, "mtl_rtsky_alone is not the views 5, 6 and 7");
+	}
+
+	if ((count_in(text, strlen(text), "#define MTL_RTSKY_BOUNCE_RAYS 1\n") != 1) ||
+		(count_in(text, strlen(text), "MTL_RTSKY_SUN_RAYS + \\\n\tMTL_RTSKY_BOUNCE_RAYS)") != 1) ||
+		(count_in(text, strlen(text), "#define MTL_RTSKY_SHOW_BOUNCE 7u\n") != 1))
+	{
+		return "the bounce is not one ray a pixel in the bound, or its view not 7";
+	}
+
+	return NULL;
+}
+
+/* the stock lightmap coordinate of a vertex (rm_model.c, gl1's): one axis, in its slice of RM_LM_WIDTH luxels */
+static float
+stock_lmuv(const float *pos, const float *vec, short tmin, int light)
+{
+	float s = pos[0] * vec[0] + pos[1] * vec[1] + pos[2] * vec[2] + vec[3];
+
+	s -= tmin;
+	s += light * 16;
+	s += 8;
+	return s / (RM_LM_WIDTH * 16);
+}
+
+/* a bilinear sample of one channel of a host slice (w x h luxels) at (s, t) in 0..1, clamped to the edge, as Metal's */
+static float
+host_bilinear(const float *slice, int w, int h, float s, float t)
+{
+	const float x = s * (float)w - 0.5f, y = t * (float)h - 0.5f;
+	const int x0 = (int)floorf(x), y0 = (int)floorf(y);
+	const float fx = x - (float)x0, fy = y - (float)y0;
+	float c[4];
+	int i;
+
+	for (i = 0; i < 4; i++)
+	{
+		int xi = x0 + (i & 1), yi = y0 + (i >> 1);
+
+		xi = (xi < 0) ? 0 : ((xi >= w) ? w - 1 : xi);
+		yi = (yi < 0) ? 0 : ((yi >= h) ? h - 1 : yi);
+		c[i] = slice[yi * w + xi];
+	}
+
+	return (c[0] * (1 - fx) + c[1] * fx) * (1 - fy) + (c[2] * (1 - fx) + c[3] * fx) * fy;
+}
+
+/*
+ * TASK189 slice 2: the bounce's arithmetic: what its ray does at a face,
+ * which views trace and add it, its direction, the records, the term, the
+ * scale, the ray bound, and the lightmap read at a hit against the stock
+ * lightmap's rule at several points
+ */
+static void
+test_bounce(void)
+{
+	static const rm_surfrec_t recs[7] = {
+		{ .texflags = 0, .lm_slice = 2, .first_index = 0, .num_indices = 6 },
+		{ .texflags = RM_TEX_SKY, .lm_slice = 1, .first_index = 6, .num_indices = 3 },
+		{ .texflags = RM_TEX_WARP, .lm_slice = 1, .first_index = 9, .num_indices = 3 },
+		{ .texflags = RM_TEX_TRANS33, .lm_slice = 1, .first_index = 12, .num_indices = 3 },
+		{ .texflags = 0, .lm_slice = -1, .first_index = 15, .num_indices = 3 },
+		{ .texflags = 0, .lm_slice = 255, .first_index = 18, .num_indices = 3 },
+		{ .texflags = 0, .lm_slice = 0, .first_index = 21, .num_indices = 300 },
+	};
+	const float albedo[7][3] = { { 0.5f, 0.25f, 1.5f }, { 1, 1, 1 }, { 1, 1, 1 }, { 1, 1, 1 }, { NAN, -1, 0.2f },
+		{ 1, 1, 1 }, { 1, 1, 1 } };
+	unsigned table[9], w, mat;
+	rm_rtdir_view_t v;
+	int layer, i, j, ok;
+
+	/* a face: shaded where it is lightmapped world, passed where water or glass (up to the layers), else dark */
+	ok = 1;
+
+	for (mat = 0; mat < 256; mat++)
+	{
+		for (layer = 0; layer <= MTL_RTDIR_LAYERS + 1; layer++)
+		{
+			const unsigned at = mtl_rtsky_bounce_at(mat, layer);
+			const unsigned want = (mat == MTL_GB_MAT_WORLD) ? MTL_RTSKY_BOUNCE_SHADE :
+				(((mat == MTL_GB_MAT_WATER) || (mat == MTL_GB_MAT_TRANS)) && (layer < MTL_RTDIR_LAYERS)) ?
+				MTL_RTSKY_BOUNCE_PASS : MTL_RTSKY_BOUNCE_DARK;
+
+			ok = ok && (at == want);
+		}
+	}
+
+	CHECK(ok);
+	/* the sky, a model and nothing give 0: the sky light has the sky (slice 1), a model has no lightmap */
+	CHECK(mtl_rtsky_bounce_at(MTL_GB_MAT_SKY, 0) == MTL_RTSKY_BOUNCE_DARK);
+	CHECK(mtl_rtsky_bounce_at(MTL_GB_MAT_ALIAS, 0) == MTL_RTSKY_BOUNCE_DARK && mtl_rtsky_bounce_at(0xffu, 0) == MTL_RTSKY_BOUNCE_DARK);
+
+	/* the views: the picture and 7 trace it, every other view not (1 the direct term alone); 7 is a term alone */
+	for (i = 0; i <= 9; i++)
+	{
+		CHECK(mtl_rtsky_bounces((unsigned)i, 1) == ((i == 0) || (i == 7)));
+	}
+
+	CHECK(!mtl_rtsky_bounces(0, 0) && !mtl_rtsky_bounces(7, NAN) && !mtl_rtsky_bounces(0, -1));
+	CHECK(mtl_rtsky_alone(7) && mtl_rtsky_alone(5) && mtl_rtsky_alone(6) && !mtl_rtsky_alone(1) && !mtl_rtsky_alone(0));
+	/* view 7 traces neither the sky's nor the sun's ray, views 5 and 6 no bounce */
+	CHECK(!mtl_rtsky_traces(7, MTL_RTSKY_TERM_SKY, 1) && !mtl_rtsky_traces(7, MTL_RTSKY_TERM_SUN, 1));
+	CHECK(!mtl_rtsky_bounces(5, 1) && !mtl_rtsky_bounces(6, 1));
+
+	/* the bound: one bounce ray a pixel, beside the others: 68 */
+	CHECK(MTL_RTSKY_BOUNCE_RAYS == 1 && MTL_RTSKY_PIXEL_RAYS == 68);
+
+	/* the direction: the tile's third and fourth numbers, another place in the tile than the sky ray's; unit, above the plane */
+	ok = 1;
+
+	for (i = 0; i < 64; i++)
+	{
+		for (j = 0; j < 64; j++)
+		{
+			const mtl_rtao_v3_t n = mtl_rtao_v3(0.0f, 0.6f, -0.8f);
+			const float u = mtl_rtao_noise(mtl_rtao_tile_index((unsigned)i, (unsigned)j, 2u) & 4095u, 17u, 2u);
+			const float vv = mtl_rtao_noise(mtl_rtao_tile_index((unsigned)i, (unsigned)j, 3u) & 4095u, 17u, 3u);
+			const mtl_rtao_v3_t d = mtl_rtsky_dir(n, u, vv);
+			const float len = sqrtf(d.x * d.x + d.y * d.y + d.z * d.z);
+
+			ok = ok && (fabsf(len - 1) < 1e-4f) && (0.6f * d.y - 0.8f * d.z >= MTL_RTAO_MIN_COS - 1e-5f);
+			ok = ok && (mtl_rtao_tile_index((unsigned)i, (unsigned)j, 2u) != mtl_rtao_tile_index((unsigned)i, (unsigned)j, 0u));
+			ok = ok && (mtl_rtao_tile_index((unsigned)i, (unsigned)j, 3u) != mtl_rtao_tile_index((unsigned)i, (unsigned)j, 1u));
+		}
+	}
+
+	CHECK(ok);
+
+	/* the records: the albedo's bytes and the slice, none for the sky, warped and translucent faces and a bad slice */
+	w = mtl_rtsky_brec_pack(128, 64, 255, 2);
+	CHECK(mtl_rtsky_brec_slice(w) == 2 && near(mtl_rtsky_brec_albedo(w, 0), 128.0f / 255.0f, 1e-6) &&
+		near(mtl_rtsky_brec_albedo(w, 1), 64.0f / 255.0f, 1e-6) && mtl_rtsky_brec_albedo(w, 2) == 1.0f);
+	CHECK(rm_rtdir_bounce_table(recs, 7, albedo, table, 9) == 2);
+	CHECK(table[0] == mtl_rtsky_brec_pack(128, 64, 255, 2) && table[1] == table[0]);
+	CHECK(mtl_rtsky_brec_slice(table[2]) == MTL_RTSKY_NOLM && mtl_rtsky_brec_slice(table[3]) == MTL_RTSKY_NOLM &&
+		mtl_rtsky_brec_slice(table[4]) == MTL_RTSKY_NOLM);
+	/* no slice: none; a slice past the bytes: none; the albedo not a number or below 0: 0 */
+	CHECK(table[5] == mtl_rtsky_brec_pack(0, 0, 51, MTL_RTSKY_NOLM) && table[6] == mtl_rtsky_brec_pack(255, 255, 255, MTL_RTSKY_NOLM));
+	/* a record past the buffer marks nothing */
+	CHECK(table[7] == mtl_rtsky_brec_pack(0, 0, 0, MTL_RTSKY_NOLM) && table[8] == table[7]);
+	CHECK(rm_rtdir_bounce_table(recs, 7, albedo, NULL, 9) == -1 && rm_rtdir_bounce_table(recs, 7, albedo, table, 0) == -1);
+	CHECK(rm_rtdir_bounce_table(NULL, 0, NULL, table, 9) == 0 && table[0] == table[7]);
+
+	/* the term: albedo times the lightmap times the scale; 0 for a value not a number or below 0 */
+	CHECK(near(mtl_rtsky_bounce_term(0.5f, 0.4f, 1), 0.2f, 1e-6) && near(mtl_rtsky_bounce_term(0.5f, 0.4f, 2), 0.4f, 1e-6));
+	CHECK(mtl_rtsky_bounce_term(NAN, 0.4f, 1) == 0 && mtl_rtsky_bounce_term(0.5f, -0.4f, 1) == 0 &&
+		mtl_rtsky_bounce_term(0.5f, 0.4f, 0) == 0);
+
+	/* the scale and the view's field */
+	CHECK(rm_rtdir_bounce_scale(1) == 1 && rm_rtdir_bounce_scale(9) == MTL_RTSKY_BOUNCE_MAX && rm_rtdir_bounce_scale(-1) == 0);
+	CHECK(rm_rtdir_bounce_scale(NAN) == 0 && rm_rtdir_bounce_scale(INFINITY) == 0 && MTL_RTSKY_BOUNCE_MAX == 4.0f);
+	memset(&v, 0x7f, sizeof(v));
+	rm_rtdir_view_bounce(&v, 0.5f);
+	CHECK(v.bounce[0] == 0.5f && v.bounce[1] == 0 && v.bounce[2] == 0 && v.bounce[3] == 0);
+	CHECK(offsetof(rm_rtdir_view_t, bounce) == 176 && offsetof(rm_rtdir_view_t, nbrec) == 124);
+	/* r_rt_direct_bounce is the user's under the mode, and a setting the gate's table names */
+	CHECK(rm_pres_value(RM_PRES_RTPRIMARY, "r_rt_direct_bounce", 0.5f) == 0.5f);
+
+	/*
+	 * The lightmap read at a hit, against the stock rule: a face on the xy
+	 * plane at luxel (light_s, light_t) of its slice, the triangle's vertices'
+	 * lightmap coordinates as rm_model.c makes them, interpolated at the hit
+	 * by its barycentrics (mtl_rtsky_bary, rm_rtdir_tri_lm's), land on the
+	 * luxel the stock rule gives the hit's point (rm_rtdir_fit_st, the fit's),
+	 * and a bilinear read there gives that luxel (rm_rtdir_fit_luxel) at its
+	 * centre and the mean of two between them.
+	 */
+	{
+		static float slice[RM_LM_WIDTH * RM_LM_HEIGHT];
+		static unsigned char samples[8 * 8 * 3];
+		const float vecs[2][4] = { { 1, 0, 0, 0 }, { 0, 1, 0, 0 } };
+		const short tmin[2] = { 0, 0 };
+		const int ls = 40, lt = 70, smax = 8, tmax = 8;
+		const float tri[3][3] = { { 0, 0, 0 }, { 160, 0, 0 }, { 0, 160, 0 } };
+		float vs[3], vt[3];
+		static const float pts[6][2] = { { 0, 0 }, { 16, 32 }, { 48, 16 }, { 64, 48 }, { 24, 32 }, { 40, 72 } };
+		int k;
+
+		for (k = 0; k < smax * tmax * 3; k++)
+		{
+			samples[k] = (unsigned char)((k * 37) & 255);
+		}
+
+		/* the slice as R_BuildLightMap fills it with one map at style 1: the face's luxels at its place, red */
+		for (j = 0; j < tmax; j++)
+		{
+			for (i = 0; i < smax; i++)
+			{
+				slice[(lt + j) * RM_LM_WIDTH + ls + i] = (float)samples[(j * smax + i) * 3] / 255.0f;
+			}
+		}
+
+		for (k = 0; k < 3; k++)
+		{
+			vs[k] = stock_lmuv(tri[k], vecs[0], tmin[0], ls);
+			vt[k] = stock_lmuv(tri[k], vecs[1], tmin[1], lt);
+		}
+
+		ok = 1;
+
+		for (k = 0; k < 6; k++)
+		{
+			const float pos[3] = { pts[k][0], pts[k][1], 0 };
+			const float bu = pos[0] / 160.0f, bv = pos[1] / 160.0f;
+			const float s = mtl_rtsky_bary(vs[0], vs[1], vs[2], bu, bv), t = mtl_rtsky_bary(vt[0], vt[1], vt[2], bu, bv);
+			float st[2], lux[3], got;
+
+			rm_rtdir_fit_st(pos, vecs, tmin, st);
+			/* the luxel the stock rule gives the point, in the slice */
+			ok = ok && near(s * RM_LM_WIDTH - 0.5f, st[0] + (float)ls, 1e-3) && near(t * RM_LM_HEIGHT - 0.5f, st[1] + (float)lt, 1e-3);
+			got = host_bilinear(slice, RM_LM_WIDTH, RM_LM_HEIGHT, s, t);
+
+			if ((pts[k][0] == floorf(pts[k][0] / 16) * 16) && (pts[k][1] == floorf(pts[k][1] / 16) * 16))
+			{
+				/* at a luxel's centre: that luxel, the fit's nearest */
+				rm_rtdir_fit_luxel(samples, 1, smax, tmax, st[0], st[1], lux);
+				ok = ok && near(got, lux[0] / 255.0f, 1e-5);
+			}
+			else if (pts[k][0] == 24)
+			{
+				/* half way between luxels 1 and 2 of row 2 */
+				ok = ok && near(got, ((float)samples[(2 * smax + 1) * 3] + (float)samples[(2 * smax + 2) * 3]) / 510.0f, 1e-5);
+			}
+		}
+
+		CHECK(ok);
+	}
+}
+
+/*
+ * The kernel's file holds the bounce's rules, and each mutant of one
+ * breaks a check (bounce_broken's, or kernel_broken's for the lightmap
+ * at the pixel): a second shadow ray at the hit (bounce-shadow-ray), the
+ * hit's light not the frame's lightmap with its styles but a constant
+ * (bounce-unstyled), the bounce traced and added under every view, view 1
+ * among them (bounce-view1), the pixel's own lightmap read (bounce-own-lm),
+ * the term before the exposure (bounce-exposed), the albedo left out
+ * (bounce-no-albedo), the faces passed unbounded (bounce-unbounded), the
+ * sky ray's numbers reused (bounce-sky-numbers), the sky's colour at a sky
+ * hit, counted twice (bounce-sky-lit), a record past the table read
+ * (bounce-unbounded-rec) and the term dropped from the write
+ * (bounce-dropped); in mtl_rtsky_math.h (bounces_broken): view 1 tracing
+ * it (view1-bounce), the sky shaded (bounce-sky-shade), view 7 not alone
+ * (bounce-not-alone), the layers widened (bounce-layers) and two rays
+ * (bounce-two-rays); in rmb_rtdir.m and rm_rtdirscene.c: another texture
+ * than the world's lightmap array bound (bounce-white-array,
+ * bounce-other-texture, bounce-no-lmtex).
+ */
+static void
+test_bounce_kernel(void)
+{
+	static char src[65536], hdr[65536], host[65536], scene[65536], m[65536 + 1024], m2[65536 + 1024];
+	const char *why;
+	int i, refused = 0;
+
+	static const struct
+	{
+		const char *name, *edit[3][2];
+	} mutants[] = {
+		{ "bounce-shadow-ray", { { "\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n",
+			"\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n"
+			"\t\tl *= rm_rtdir_seen(ray(o, dir, 0.0f, hit.distance), ias, inst, tmat, ntris, 0u);\n" } } },
+		{ "bounce-unstyled", { { "\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n", "\t\tl = float3(1.0f);\n" } } },
+		{ "bounce-view1", { { "mtl_rtsky_bounces(v.show, v.bounce.x)", "mtl_rtsky_bounces(0u, v.bounce.x)" } } },
+		{ "bounce-own-lm", { { "\t\tdevice const uint *brec, thread rm_rtdir_tally &t)\n{",
+			"\t\tdevice const uint *brec, thread rm_rtdir_tally &t, texture2d<float, access::read> lm)\n{" },
+			{ "\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n", "\t\tl = lm.read(px).rgb;\n" },
+			{ "atlas, verts, idx, g, brec, t) : float3(0.0f);", "atlas, verts, idx, g, brec, t, lm) : float3(0.0f);" } } },
+		{ "bounce-exposed", { { KERNEL_WRITE,
+			"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + bounce, v.exposure), open + bounce, v.show), px);" } } },
+		{ "bounce-no-albedo", { { "mtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 0u), l.r, v.bounce.x)",
+			"mtl_rtsky_bounce_term(1.0f, l.r, v.bounce.x)" } } },
+		{ "bounce-unbounded", { { "for (int face = 0; face <= MTL_RTDIR_LAYERS; face++)", "for (int face = 0; face <= 64; face++)" } } },
+		{ "bounce-sky-numbers", { { "px.y, 2u)], v.frame, 2u)", "px.y, 0u)], v.frame, 0u)" },
+			{ "px.y, 3u)], v.frame, 3u)", "px.y, 1u)], v.frame, 1u)" } } },
+		{ "bounce-sky-lit", { { "\t\tif ((at != MTL_RTSKY_BOUNCE_SHADE) || (tri >= v.nbrec))\n\t\t{\n\t\t\treturn float3(0.0f);\n",
+			"\t\tif ((at != MTL_RTSKY_BOUNCE_SHADE) || (tri >= v.nbrec))\n\t\t{\n\t\t\treturn (m == 4u) ? v.sky.rgb : float3(0.0f);\n" } } },
+		{ "bounce-unbounded-rec", { { "(tri >= v.nbrec)", "(tri == 0xffffffffu)" } } },
+		{ "bounce-dropped", { { KERNEL_WRITE, "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show), px);" } } },
+	};
+
+	static const struct
+	{
+		const char *name, *from, *to;
+	} hmutants[] = {
+		{ "view1-bounce", "\treturn ((show == 0u) || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n",
+			"\treturn ((show <= 1u) || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n" },
+		{ "bounce-sky-shade", "\tif (mat == 1u)\n", "\tif ((mat == 1u) || (mat == 4u))\n" },
+		{ "bounce-not-alone", " || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n}\n\n/*\n * Slice 2", ") ? 1 : 0;\n}\n\n/*\n * Slice 2" },
+		{ "bounce-layers", "(layer < MTL_RTDIR_LAYERS))\n\t{\n\t\treturn MTL_RTSKY_BOUNCE_PASS;", "(layer < 64))\n\t{\n\t\treturn MTL_RTSKY_BOUNCE_PASS;" },
+		{ "bounce-two-rays", "#define MTL_RTSKY_BOUNCE_RAYS 1\n", "#define MTL_RTSKY_BOUNCE_RAYS 2\n" },
+	};
+
+	CHECK(read_file("src/client/refresh/metal/common/mtl_rtsky_math.h", hdr, sizeof(hdr)));
+	why = bounces_broken(hdr);
+
+	if (why)
+	{
+		printf("mtl_rtsky_math.h: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+
+	for (i = 0; i < (int)(sizeof(hmutants) / sizeof(hmutants[0])); i++)
+	{
+		const int applied = mutate(hdr, hmutants[i].from, hmutants[i].to, m, sizeof(m));
+
+		why = applied ? bounces_broken(m) : NULL;
+
+		if (!applied || !why)
+		{
+			printf("bounce mutant %s: %s\n", hmutants[i].name, applied ? "passes the bounce check" : "does not apply");
+		}
+
+		CHECK(applied && (why != NULL));
+		refused += (applied && why) ? 1 : 0;
+	}
+
+	CHECK(read_file("src/client/refresh/metal/rm_rtdir.metal", src, sizeof(src)));
+	why = bounce_broken(src);
+
+	if (why)
+	{
+		printf("rm_rtdir.metal: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+
+	for (i = 0; i < (int)(sizeof(mutants) / sizeof(mutants[0])); i++)
+	{
+		int applied = 1, e;
+
+		strcpy(m, src);
+
+		for (e = 0; applied && (e < 3) && mutants[i].edit[e][0]; e++)
+		{
+			strcpy(m2, m);
+			applied = mutate(m2, mutants[i].edit[e][0], mutants[i].edit[e][1], m, sizeof(m));
+		}
+
+		why = applied ? bounce_broken(m) : NULL;
+
+		if (applied && !why)
+		{
+			why = kernel_broken(m);
+		}
+
+		if (applied && !why)
+		{
+			why = open_broken(m);
+		}
+
+		/* by hand: RM_RTDIR_MUTANTS=<dir> writes each mutant to <dir>/<name>.metal, to compile it */
+		if (applied && getenv("RM_RTDIR_MUTANTS"))
+		{
+			char path[1024];
+			FILE *o;
+
+			snprintf(path, sizeof(path), "%s/%s.metal", getenv("RM_RTDIR_MUTANTS"), mutants[i].name);
+			o = fopen(path, "wb");
+
+			if (o)
+			{
+				fputs(m, o);
+				fclose(o);
+			}
+
+			printf("bounce mutant %s: %s\n", mutants[i].name, why ? why : "passes the bounce check");
+		}
+
+		if (!applied || !why)
+		{
+			printf("bounce mutant %s: %s\n", mutants[i].name, applied ? "passes the bounce check" : "does not apply");
+		}
+
+		CHECK(applied && (why != NULL));
+		refused += (applied && why) ? 1 : 0;
+	}
+
+	/* the host side: the world's lightmap array, the one R_RegenAllLightmaps keeps with the frame's styles, bound */
+	CHECK(read_file("src/client/refresh/metal/rmb_rtdir.m", host, sizeof(host)));
+	CHECK(binding_broken(host) == NULL);
+	CHECK(mutate(host, "[ce setTexture:(lm_ok ? atlas : white_arr) atIndex:7];", "[ce setTexture:white_arr atIndex:7];", m, sizeof(m)));
+	why = binding_broken(m);
+	CHECK(why != NULL);
+	refused += why ? 1 : 0;
+	CHECK(mutate(host, "rmb_texture_for_draw(brec_lmtex)", "rmb_texture_for_draw(1)", m, sizeof(m)));
+	why = binding_broken(m);
+	CHECK(why != NULL);
+	refused += why ? 1 : 0;
+
+	CHECK(read_file("src/client/refresh/metal/rm_rtdirscene.c", scene, sizeof(scene)));
+	CHECK(count_in(scene, strlen(scene), "rmb_rtdir_set_bounce(rec, ntris, w->lmtex)") == 1);
+	CHECK(mutate(scene, "rmb_rtdir_set_bounce(rec, ntris, w->lmtex)", "rmb_rtdir_set_bounce(rec, ntris, 0)", m, sizeof(m)));
+	why = (count_in(m, strlen(m), "rmb_rtdir_set_bounce(rec, ntris, w->lmtex)") == 1) ? NULL : "the bounce is not given the world's lightmap array";
+	CHECK(why != NULL);
+	refused += why ? 1 : 0;
+
+	/* check-ref-metal.sh counts these in its direct-light segment */
+	printf("rm_rtdir_test: %d bounce mutants refused\n", refused);
+}
+
 int
 main(void)
 {
@@ -3136,6 +3793,8 @@ main(void)
 	test_self();
 	test_mode();
 	test_sky_sun();
+	test_bounce();
+	test_bounce_kernel();
 	printf("rm_rtdir_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }
