@@ -1331,6 +1331,19 @@ is.
   is drawn at the same exposure. A value above `0` is a fixed exposure,
   at most `64`. Saved with the configuration.
 
+* **r_rt_direct_models**: Whether the Metal renderer's direct light
+  (`r_rt_direct`, under the Ray traced presentation only) lights the
+  rastered alias models too. `1` (the default): each model pixel takes
+  the terms a world pixel takes at its own point and normal (the map's
+  lights with their shadow rays, the dynamic lights, the sky, the sun and
+  the bounce) under the world's exposure, in place of the stock light
+  point and shading table, through the stock model colour (overbright,
+  the minlight and gamma tables). Glowing, minlight, fullbright,
+  depth-hacked and translucent models, shells and the view weapon stay
+  stock-lit. `0`: every model stock-lit, as before. It does nothing
+  outside the Ray traced presentation or on a device without ray
+  tracing. Saved with the configuration.
+
 * **r_rt_direct_seed**: The noise frame of the Metal renderer's sky
   light ray and bounce ray under RT-primary (`r_rt_direct_sky`,
   `r_rt_direct_bounce`), with the rule of

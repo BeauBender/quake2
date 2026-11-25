@@ -51,6 +51,9 @@ scenario through it. The cases each of them is held to are in
 | `rtprimary-sun` | `rtprimary-world` with `r_rt_direct_show 6`: the sun's term alone, one ray a pixel toward TASK56's direction times N.L, on white albedo; a pin as `rtprimary-world` (TASK189) |
 | `rtprimary-bounce` | `rtprimary-world` with `r_rt_direct_show 7`: the bounce alone, one cosine-weighted closest-hit ray a pixel that reads the stock lightmap at its hit times the hit face's albedo, on white albedo; a pin as `rtprimary-world` (TASK189 slice 2) |
 | `rtprimary-dlights` | `rtprimary-world` with `cl_lights 1`: the dynamic lights as a term of RT-primary's light, each in range with one shadow ray, by gl1's radius rule; recorded with `PINS_SEED` (the engine PRNG sets a muzzle flash's radius, as in `dlights`), at the default demo and with `PINS_DEMO=demo2.dm2 PINS_EVERY=7`; seeded, a pin as `rtprimary-world`, provisional until the owner accepts the look (TASK188 slice 3b, PM11) |
+| `rtprimary-models` | `rtprimary-world` with `cl_entities 1` (no view weapon, `cl_gun 0`): the rastered alias models lit by RT-primary's traced light at their own point and normal, the world's terms (direct light with its shadow rays, dynamic lights, sky, sun and bounce) in gl1's model colour under the world's exposure, `r_rt_direct_models 1` (the default); glowing, minlight, fullbright and depth-hacked models stay stock-lit; recorded with `PINS_SEED` (entities, as `models`); seeded, a pin as `rtprimary-world`, provisional until the owner accepts the look (TASK191 slice 2, PM9, PM11) |
+| `rtprimary-models-off` | `rtprimary-models` with `r_rt_direct_models 0`: every model stock-lit, the self-check that 0 is the stock split and light (its frames equal a build without the model pass running the same scene); seeded (TASK191 slice 2) |
+| `rtprimary-models-vis` | `rtprimary-models` with `r_rt_direct_show 1`: the direct term alone on white albedo, the traced models' pixels in it; seeded (TASK191 slice 2) |
 | `hdr` | `world` with `r_hdr 1`: `ref_metal`'s float16 frame target, read back as its SDR fallback (each channel clamped to white, in 8 bits); its own reference, not compared with `world`, since float16 blends round once where 8-bit ones round at each layer; other renderers ignore the cvar and draw it as `world` (TASK196, HD2); `r_hdr_peak 1` holds HD3's tone map to that clamp on any display, so the frames do not follow a display's headroom |
 | `hdr-metalfx2` | `hdr` with `r_metalfx 2` at `r_metalfx_scale 0.5`: `MTLFXTemporalScaler` on `ref_metal`'s float16 view and frame, before the tone map; its own reference, not compared with `hdr` or `world-metalfx2`; where the device lacks the scaler `r_metalfx` reads the best supported mode below; other renderers ignore the cvars and draw it as `world` (TASK196, HD4) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
@@ -165,6 +168,9 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `rtprimary-sun` | world | `models` |
 | `rtprimary-bounce` | world | `models` |
 | `rtprimary-dlights` | world,dynamic-lights | `particles` |
+| `rtprimary-models` | world,entities,alias-models | `-` |
+| `rtprimary-models-off` | world,entities,alias-models | `-` |
+| `rtprimary-models-vis` | world,entities,alias-models | `-` |
 | `hdr` | world | `models` |
 | `hdr-metalfx2` | world | `models` |
 | `dlights` | world,dynamic-lights | `particles` |
