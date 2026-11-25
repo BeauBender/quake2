@@ -380,11 +380,45 @@ done
 # through rm_rtt_hist_take, so that every early return before it leaves the history unread in the
 # next view; the mutant passes the view's reasons on without the history's own
 rtt_take='tv.reset = rm_rtt_hist_take(&thist, &tview);'
+rtt_place() { # <file> <function>: 0 when the take sits after every early return of the function and before a dispatch
+	awk -v fn="$2" -v take="$rtt_take" '
+		index($0, fn "(") == 1 { b = 1; next }
+		!b { next }
+		/^}/ { ok = (t == 1) && d && (r == 1) && last; exit }
+		index($0, take) { t++; next }
+		t && !r && /dispatchThreads/ { d = 1 }
+		t && /(^|[^A-Za-z0-9_])return([^A-Za-z0-9_]|$)/ { r++; last = ($0 ~ /^\treturn [^;]*;$/) }
+		END { exit !ok }' "$1"
+}
 rtt_bmut=0
 for bf in rmb_rtao.m rmb_rtshadow.m rmb_rtsun.m; do
 	if [ "$(grep -cF "$rtt_take" "$rm_dir/$bf")" != 1 ]; then
 		bad "$bf: its temporal dispatch does not take the view through $rtt_take"
 		continue
+	fi
+	# round 2 (the slice 1b review's N3): where the call sits, after the trace's last early return
+	# (its one return after the call is the function's last statement) and before a dispatch
+	case $bf in
+		rmb_rtao.m) bfn=rmb_rtao_trace ;;
+		rmb_rtshadow.m) bfn=rmb_rts_trace ;;
+		*) bfn=rmb_rtsun_trace ;;
+	esac
+	if ! rtt_place "$rm_dir/$bf" "$bfn"; then
+		bad "$bf: $rtt_take is not after every early return of $bfn and before its dispatch"
+		continue
+	fi
+	if [ "$bf" = rmb_rtshadow.m ]; then
+		# the call moved above the scene's binding, whose failure returns
+		awk -v take="$rtt_take" 'NR == FNR { if (index($0, take)) h = $0; next }
+			index($0, take) { next } /if \(!rmb_rt_bind_scene\(/ { print h } { print }' \
+			"$rm_dir/$bf" "$rm_dir/$bf" > "${tmp:?}/rtt-back.m"
+		if cmp -s "$rm_dir/$bf" "${tmp:?}/rtt-back.m"; then
+			bad "the temporal back-end placement mutant of $bf changed nothing"
+		elif rtt_place "${tmp:?}/rtt-back.m" "$bfn"; then
+			bad "the temporal back-end placement pin passes the mutant of $bf (the call above rmb_rt_bind_scene)"
+		else
+			rtt_bmut=$((rtt_bmut + 1))
+		fi
 	fi
 	sed 's/tv\.reset = rm_rtt_hist_take(&thist, &tview);/tv.reset = tview.reset;/' "$rm_dir/$bf" > "${tmp:?}/rtt-back.m"
 	if cmp -s "$rm_dir/$bf" "${tmp:?}/rtt-back.m"; then
@@ -400,20 +434,20 @@ done
 # and mtl_rts_surf_light into it and the stock rt-shadows frames changed. So rm_rts_trace's text is
 # pinned by its checksum, the temporal kernel and its copy of the trace's body (rm_rts_shade,
 # rm_rts_finish) sit only behind RM_RTS_TEMPORAL_TU, compiled apart by rm_rtshadow_temporal.metal, and
-# the copy holds the stock kernel's code lines, so that the two cannot drift apart unseen. Mutants: the
-# stock kernel edited (the checksum and the copy pin refuse it), the copy edited in either helper, the
-# guard dropped.
+# the copy holds the stock kernel's code lines in their order, so that the two cannot drift apart
+# unseen. Mutants: the stock kernel edited (the checksum and the copy pin refuse it), the copy edited in
+# either helper, a repeated line of the copy dropped or moved (round 2), the guard dropped.
 rts_trace_sum='2595407311 7173'  # cksum of rm_rts_trace's text, from its name to its closing brace (TASK188 slice 3a)
 rts_text() { # <file>: rm_rts_trace's definition, from its name to its closing brace
 	awk '/^rm_rts_trace\(/ { b = 1 } b { print } b && /^}/ { exit }' "$1"
 }
-rts_code() { # <file> <function>...: the code lines of the bodies, whitespace squeezed, rm_rts_px's "s." dropped
+rts_code() { # <file> <function>...: the code lines of the bodies in order, braces kept, whitespace squeezed, rm_rts_px's "s." dropped
 	awk -v fns="$(shift; echo "$*")" 'BEGIN { n = split(fns, want, " ") }
 		{ for (i = 1; i <= n; i++) if (index($0, want[i] "(") == 1) h = 1 }
 		h && /^\{/ { h = 0; b = 1; next }
 		b && /^\}/ { b = 0; next }
 		b { print }' "$1" |
-		sed -E 's/^[[:space:]]+//; s/[[:space:]]+/ /g; s/(^|[^A-Za-z0-9_.])s\./\1/g' | grep -vE '^$|^[{}]$|^/?\*'
+		sed -E 's/^[[:space:]]+//; s/[[:space:]]+/ /g; s/(^|[^A-Za-z0-9_.])s\./\1/g' | grep -vE '^$|^/?\*'
 }
 # the lines only one side has: the stock kernel's own declarations and its write of the packed words, the
 # copy's carrying of what it found in rm_rts_px and its write of the same words, packed once
@@ -424,12 +458,28 @@ printf '%s\n' 'const bool inside = (px.x < out.get_width()) && (px.y < out.get_h
 printf '%s\n' 'rm_rts_px s;' 'nl = 0;' 'thread float *adds = adds;' 'nl = nl;' 'top = top;' 'flags = flags;' \
 	'rays = rays;' 'primary = primary;' 'vis[k] = vis[k];' 'return s;' 'out.write(uint4(pvis, pidx, 0, 0), px);' \
 	> "${tmp:?}/rts-copy-only"
-rts_alike() { # <file>: 0 when rm_rts_shade and rm_rts_finish hold rm_rts_trace's code lines and no other
+# the two sequences' whole difference once those lines are out (round 2: in order, braces and repeats
+# included): the term's accumulator declared in rm_rts_finish, at its use, instead of at the kernel's
+# top; the copy closing the trace's two blocks before its visibilities' copy into s.vis, where the stock
+# kernel makes the term inside them
+printf '%s\n' '4d3' '< float3 t = float3(0.0f);' '118a118,120' '> }' '> }' '> for (int k = 0; k < MTL_RTS_CAP; k++)' \
+	'119a122' '> }' '120a124' '> float3 t = float3(0.0f);' '128,130d131' '< }' '< }' '< }' \
+	> "${tmp:?}/rts-diff"
+rts_once() { # <lines> <code>: 0 when each of the lines occurs exactly once in the code
+	while IFS= read -r l; do
+		[ "$(grep -cxF -e "$l" "$2")" = 1 ] || return 1
+	done < "$1"
+}
+rts_alike() { # <file>: 0 when rm_rts_shade and rm_rts_finish are rm_rts_trace's code in its order, but for the pinned difference
 	rts_code "$1" rm_rts_trace > "${tmp:?}/rts-stock"
 	rts_code "$1" rm_rts_shade rm_rts_finish > "${tmp:?}/rts-copy"
 	[ -s "${tmp:?}/rts-stock" ] && [ -s "${tmp:?}/rts-copy" ] &&
-		! grep -vxF -f "${tmp:?}/rts-stock-only" "${tmp:?}/rts-stock" | grep -qvxF -f "${tmp:?}/rts-copy" &&
-		! grep -vxF -f "${tmp:?}/rts-copy-only" "${tmp:?}/rts-copy" | grep -qvxF -f "${tmp:?}/rts-stock"
+		rts_once "${tmp:?}/rts-stock-only" "${tmp:?}/rts-stock" &&
+		rts_once "${tmp:?}/rts-copy-only" "${tmp:?}/rts-copy" || return 1
+	grep -vxF -f "${tmp:?}/rts-stock-only" "${tmp:?}/rts-stock" > "${tmp:?}/rts-stock-seq"
+	grep -vxF -f "${tmp:?}/rts-copy-only" "${tmp:?}/rts-copy" > "${tmp:?}/rts-copy-seq"
+	diff "${tmp:?}/rts-stock-seq" "${tmp:?}/rts-copy-seq" > "${tmp:?}/rts-got" || :
+	cmp -s "${tmp:?}/rts-diff" "${tmp:?}/rts-got"
 }
 rts_unit() { # <file>: 0 when rm_rts_trace is outside RM_RTS_TEMPORAL_TU and the temporal kernel and its copy inside
 	awk '/^#ifndef RM_RTS_TEMPORAL_TU$/ { if (s == 0) s = 1; next }
@@ -447,8 +497,8 @@ else
 	rts_pins=$((rts_pins + 1))
 fi
 if ! rts_alike "$rts_f"; then
-	diff "${tmp:?}/rts-stock" "${tmp:?}/rts-copy" || :
-	bad "rm_rtshadow.metal: rm_rts_shade and rm_rts_finish do not hold rm_rts_trace's code lines alone"
+	[ -f "${tmp:?}/rts-got" ] && diff "${tmp:?}/rts-diff" "${tmp:?}/rts-got" || :
+	bad "rm_rtshadow.metal: rm_rts_shade and rm_rts_finish are not rm_rts_trace's code in its order (or a side-only line is not there once)"
 else
 	rts_pins=$((rts_pins + 1))
 fi
@@ -461,8 +511,20 @@ elif ! grep -qxF '#define RM_RTS_TEMPORAL_TU 1' "$rm_dir/rm_rtshadow_temporal.me
 else
 	rts_pins=$((rts_pins + 1))
 fi
-for m in stock shade finish guard; do
+for m in stock shade finish slab-continue-dropped adds-zero-moved guard; do
 	case $m in
+		# round 2, lines the copy repeats: a pixel without light to add no longer skipped, and its add
+		# cleared only after the skip, so that rm_rts_finish reads it unset
+		slab-continue-dropped)
+			awk '/^rm_rts_shade\(/ { b = 1 } b && /^}/ { b = 0 }
+				b && /^[[:space:]]+if \(!slab\)$/ { s = 1 } s && /^[[:space:]]+continue;$/ { s = 0; next } { print }' \
+				"$rts_f" ;;
+		adds-zero-moved)
+			awk '/^rm_rts_shade\(/ { b = 1 } b && /^}/ { b = 0 }
+				b && /^[[:space:]]+adds\[i\] = 0\.0f;$/ { h = $0; next }
+				b && (h != "") && /^[[:space:]]+if \(!slab\)$/ { s = 1 }
+				s && /^[[:space:]]+}$/ { print; print h; h = ""; s = 0; next } { print }' \
+				"$rts_f" ;;
 		stock|shade|finish)
 			kn=rm_rts_trace
 			[ "$m" = shade ] && kn=rm_rts_shade
@@ -486,7 +548,7 @@ for m in stock shade finish guard; do
 			else
 				rts_mut=$((rts_mut + 1))
 			fi ;;
-		shade|finish)
+		shade|finish|slab-continue-dropped|adds-zero-moved)
 			if rts_alike "${tmp:?}/rts-mut.metal"; then
 				bad "the copy pin passes the mutant ($m)"
 			else
