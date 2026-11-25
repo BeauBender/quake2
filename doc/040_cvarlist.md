@@ -1290,8 +1290,10 @@ is.
   white walls); `2` the shadow visibility, grey from black (no light in
   range reached) to white (every one reached), dark blue where no light
   is in range; `3` the direct term with no shadow ray traced (every light
-  in range counts as reached), to compare with `1`. Pixels that are not
-  lightmapped world are black. Not saved with the configuration.
+  in range counts as reached), to compare with `1`; `4` the dynamic
+  lights' term alone (the muzzle flashes, explosions and other lights of
+  the frame, each with its shadow ray), on white walls. Pixels that are
+  not lightmapped world are black. Not saved with the configuration.
 
 * **r_rt_flatlight**: A preview and debug setting of the Metal renderer
   (TASK173): with a level from `0` to `1`, every lightmap sample of the

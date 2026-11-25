@@ -38,6 +38,7 @@
 #include "header/rm_rtsunscene.h"
 #include "header/rm_rtwaterscene.h"
 #include "header/rm_rtfx.h"
+#include "header/rm_rtdirscene.h"
 
 #define RT_MAX_AMODELS 512   /* rm_model.c's MAX_MOD_KNOWN */
 #define RT_TIMES 8192        /* the frames whose GPU times the summary spreads */
@@ -539,8 +540,11 @@ RM_RT_Frame(const refdef_t *fd)
 
 	n = rm_rt_instances(ents, ne, 1, gun, gl_lefthand->value, inst, RM_RT_MAX_INSTANCES, &excl);
 
-	/* RT3's shadows: the lights each alias instance carries, which its shadow rays pass (rm_rts_carried) */
-	if (RM_RTS_Wanted())
+	/*
+	 * RT3's shadows: the lights each alias instance carries, which its shadow rays pass (rm_rts_carried);
+	 * and RT-primary's dynamic lights, whose rays pass them too (TASK188 slice 3b)
+	 */
+	if (RM_RTS_Wanted() || RM_RTDir_Wanted())
 	{
 		nlights = RM_RT_Lights(fd, lights);
 	}

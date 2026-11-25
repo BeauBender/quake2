@@ -46,6 +46,7 @@ static cvar_t *r_rt_stats_ref;
 
 /* the map's lights, then its emissive faces (TASK188 slice 2) */
 static rm_rtdir_light_t dir_lights[RM_RTDIR_MAX_UPLOAD];
+static long dir_nself;              /* the emissive faces drawn at their own light (TASK188 slice 3b) */
 static float dir_styles[3 * RM_RTL_STYLES];
 
 static int dir_device;              /* rmb_caps_t.raytracing */
@@ -192,6 +193,29 @@ RM_RTDir_Lights(void)
 	}
 
 	dir_nlights += nemit;
+
+	/* TASK188 slice 3b: each emissive face's own light, per triangle of the map's index buffer */
+	{
+		const unsigned long ntris = wm->world->size.indices / 3;
+		unsigned *self = (e && emap && !strcmp(emap, wm->name) && ntris) ? malloc(ntris * sizeof(*self)) : NULL;
+
+		dir_nself = self ? rm_rtdir_self_table(e, RM_RTDir_Face, (void *)wm, wm->world->recs,
+				(long)wm->world->size.surfs, self, ntris) : 0;
+
+		if ((dir_nself < 0) || !rmb_rtdir_set_self(self, (dir_nself > 0) ? ntris : 0))
+		{
+			dir_nself = 0;
+			rmb_rtdir_set_self(NULL, 0);
+		}
+
+		free(self);
+
+		if (r_rt_stats_ref && r_rt_stats_ref->value)
+		{
+			R_Printf(PRINT_ALL, "ref_metal: rt direct: %s: %ld emissive faces drawn at their own light\n", wm->name,
+					dir_nself);
+		}
+	}
 }
 
 /*
@@ -312,6 +336,22 @@ RM_RTDir_View(const rm_view_t *view)
 	}
 
 	rm_rtdir_styles((const float (*)[3])st, n, r_modulate->value, dir_styles);
+
+	/* TASK188 slice 3b: the frame's dynamic lights, the renderer's checked copy (R_TakeDlights) in its order */
+	{
+		rm_rtdir_dlight_t dl[MTL_RTDIR_MAX_DLIGHTS];
+		const int nd = r_newrefdef.dlights ? rm_dlight_count(r_newrefdef.num_dlights) : 0;
+		int k = 0;
+
+		for (i = 0; (i < nd) && (k < MTL_RTDIR_MAX_DLIGHTS); i++)
+		{
+			const dlight_t *d = &r_newrefdef.dlights[i];
+
+			k += rm_rtdir_dlight(d->origin, d->color, d->intensity, &dl[k]);
+		}
+
+		rmb_rtdir_set_dlights(dl, k);
+	}
 	/* r_rt_direct_exposure's, else 0: the back end then takes its fit at the lag, at the trace */
 	exposure = rm_rtdir_exposure(RM_Effect(r_rt_direct_exposure), 0.0f, &dir_fixed);
 

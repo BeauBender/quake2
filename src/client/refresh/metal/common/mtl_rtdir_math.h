@@ -69,6 +69,32 @@
 #define MTL_RTDIR_AT_PASS 1u      /* water or a translucent face: the ray goes on */
 #define MTL_RTDIR_AT_SHADOW 2u    /* any other face (the sky, an alias model among them) */
 
+/*
+ * TASK188 slice 3b: the material a shadow ray toward a dynamic light
+ * reads at an alias model that carries that light (rm_rts_carried, a
+ * rocket's light inside it, a muzzle flash's): it passes, as in RT3.
+ */
+#define MTL_RTDIR_MAT_CARRIER 0xfeu
+
+/*
+ * TASK188 slice 3b: the refdef's dynamic lights a pixel takes, at most
+ * (MAX_DLIGHTS of ref.h, the renderer's checked copy, R_TakeDlights): each
+ * one in range with one shadow ray, so the dynamic lights add at most
+ * MTL_RTDIR_MAX_DLIGHTS rays a pixel to the map's MTL_RTDIR_MAX_RAYS,
+ * however many the frame holds.
+ */
+#define MTL_RTDIR_MAX_DLIGHTS 32
+
+/*
+ * TASK188 slice 3b: an emissive face's own light (qrad3's "the texture
+ * itself should still be full bright"), per map triangle in one word:
+ * MTL_RTDIR_SELF_ON and three channels of 10 bits, each the face's patch
+ * light in the lightmap's units (a byte of 255 reads 255) rounded and at
+ * most MTL_RTDIR_SELF_MAX. 0 for a triangle that is not an emissive face.
+ */
+#define MTL_RTDIR_SELF_ON 0x40000000u
+#define MTL_RTDIR_SELF_MAX 1023.0f
+
 /* the exposure fit's samples: a pixel's channel mean, at most MTL_RTDIR_QMAX, in steps of 1 / MTL_RTDIR_QSCALE */
 #define MTL_RTDIR_QMAX 16.0f
 #define MTL_RTDIR_QSCALE 64.0f
@@ -299,12 +325,87 @@ mtl_rtdir_contrib(float intensity, float dist, float ndotl, float spotdot, float
 static inline unsigned
 mtl_rtdir_at(unsigned mat, int layer)
 {
-	if (((mat == 3u) || (mat == 5u)) && (layer < MTL_RTDIR_LAYERS))
+	if (((mat == 3u) || (mat == 5u) || (mat == MTL_RTDIR_MAT_CARRIER)) && (layer < MTL_RTDIR_LAYERS))
 	{
 		return MTL_RTDIR_AT_PASS;
 	}
 
 	return MTL_RTDIR_AT_SHADOW;
+}
+
+/*
+ * TASK188 slice 3b, a dynamic light at a surface point, per unit of its
+ * colour, in the lightmap's units (a byte of 255 reads 255): gl1's rule
+ * (R_AddDynamicLights, rm_lm_dlight), as RT3 measures it where a
+ * surface's own texture axes are not known (mtl_rts_add of mtl_rts_reach,
+ * the compiler's base axes at scale 1): frad, the intensity less the
+ * distance to the point's plane, is at least DLIGHT_CUTOFF, and the
+ * in-plane distance fdist below frad - DLIGHT_CUTOFF; then frad - fdist,
+ * else 0. p the point, n its unit normal toward the front, o the light.
+ * A light behind the plane adds nothing (gl1 marks the front only). No
+ * N.L: gl1's dynamic light has none. Needs common/mtl_rts_math.h first.
+ */
+static inline float
+mtl_rtdir_dlight_add(mtl_rts_v3_t p, mtl_rts_v3_t n, mtl_rts_v3_t o, float intensity)
+{
+	return mtl_rts_add(mtl_rts_reach(p, n, o, intensity));
+}
+
+/* the kernel's walk over the frame's dynamic lights: 1 while light i is to be tried, below n and MTL_RTDIR_MAX_DLIGHTS */
+static inline int
+mtl_rtdir_dlight_walk(unsigned i, unsigned n)
+{
+	return ((i < n) && (i < MTL_RTDIR_MAX_DLIGHTS)) ? 1 : 0;
+}
+
+/*
+ * The bit a dynamic light's shadow ray passes at an alias instance whose
+ * carried lights (rmb_rt_frame's second instance word) hold it: 1 << i,
+ * and 0 past MTL_RTDIR_MAX_DLIGHTS. A map light's ray takes 0 and passes
+ * no model.
+ */
+static inline unsigned
+mtl_rtdir_dlight_bit(unsigned i)
+{
+	return (i < MTL_RTDIR_MAX_DLIGHTS) ? (1u << i) : 0u;
+}
+
+/* one channel of an emissive face's own light, rounded and held to 0 .. MTL_RTDIR_SELF_MAX; 0 for a value that is not a number */
+static inline unsigned
+mtl_rtdir_self_q(float v)
+{
+	if (!(v > 0.0f))
+	{
+		return 0u;
+	}
+
+	v = (v < MTL_RTDIR_SELF_MAX) ? v : MTL_RTDIR_SELF_MAX;
+	return (unsigned)(v + 0.5f);
+}
+
+/* an emissive face's own light (r, g, b in the lightmap's units) in its per-triangle word */
+static inline unsigned
+mtl_rtdir_self_pack(float r, float g, float b)
+{
+	return MTL_RTDIR_SELF_ON | (mtl_rtdir_self_q(r) << 20) | (mtl_rtdir_self_q(g) << 10) | mtl_rtdir_self_q(b);
+}
+
+/*
+ * A triangle's own light from its word, in the lightmap's units: 0 in
+ * each channel for a word without MTL_RTDIR_SELF_ON (not an emissive
+ * face); alpha 1 for an emissive face, else 0.
+ */
+static inline mtl_rgba_t
+mtl_rtdir_self(unsigned w)
+{
+	mtl_rgba_t c;
+	const int on = (w & MTL_RTDIR_SELF_ON) != 0u;
+
+	c.r = on ? (float)((w >> 20) & 1023u) : 0.0f;
+	c.g = on ? (float)((w >> 10) & 1023u) : 0.0f;
+	c.b = on ? (float)(w & 1023u) : 0.0f;
+	c.a = on ? 1.0f : 0.0f;
+	return c;
 }
 
 /*

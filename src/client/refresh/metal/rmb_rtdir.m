@@ -56,8 +56,11 @@ extern rmb_stats_t rmb_counts;
 /* world, in range, rays, lit (their low words), the fit's lightmap and raw sums and samples, the three high words, capped */
 #define RMB_RTDIR_COUNTS 11
 
-_Static_assert(sizeof(rm_rtdir_view_t) == 112, "the view is rm_rtdir.metal's 112 bytes");
+_Static_assert(sizeof(rm_rtdir_view_t) == 128, "the view is rm_rtdir.metal's 128 bytes");
 _Static_assert(sizeof(rm_rtdir_light_t) == 48, "a light is rm_rtdir.metal's 48 bytes");
+_Static_assert(sizeof(rm_rtdir_dlight_t) == 32, "a dynamic light is rm_rtdir.metal's 32 bytes");
+/* the frame's dynamic lights go by setBytes, inside its 4 KB */
+_Static_assert(MTL_RTDIR_MAX_DLIGHTS * sizeof(rm_rtdir_dlight_t) <= 4096, "the dynamic lights fit in setBytes");
 /* the fit's lag is the slots' count: the slot frame f takes last held frame f - RM_RTDIR_FIT_LAG */
 _Static_assert(RM_RTDIR_FIT_LAG == RMB_FRAMES_IN_FLIGHT, "the exposure fit's lag is the frames in flight");
 
@@ -69,6 +72,10 @@ static id<MTLTexture> t_light;          /* the light the resolve reads, RGBA16Un
 static id<MTLBuffer> lights;            /* the map's lights, at least one record long */
 static unsigned long nlights;
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTDIR_COUNTS */
+static id<MTLBuffer> selftab;           /* the map's per-triangle own light (TASK188 slice 3b), at least one word long */
+static unsigned long nself;
+static rm_rtdir_dlight_t dlights[MTL_RTDIR_MAX_DLIGHTS];   /* the frame's dynamic lights, all of them bound */
+static unsigned ndlights;
 static id<MTLCounterSampleBuffer> samples;
 
 /* per slot: the frame whose pass completed (set by its handler), the frame whose counts are awaited */
@@ -180,6 +187,8 @@ rmb_rtdir_open(char *err, size_t errlen)
 
 	ndone = 0;
 	nlights = 0;
+	nself = 0;
+	ndlights = 0;
 	last_frame = 0;
 	view_set = traced = 0;
 	dir_open = 1;
@@ -197,12 +206,15 @@ rmb_rtdir_close(void)
 		RMB_RTDIR_SET(t_vis, nil);
 		RMB_RTDIR_SET(t_light, nil);
 		RMB_RTDIR_SET(lights, nil);
+		RMB_RTDIR_SET(selftab, nil);
 		RMB_RTDIR_SET(counts, nil);
 		RMB_RTDIR_SET(samples, nil);
 	}
 
 	dir_open = 0;
 	nlights = 0;
+	nself = 0;
+	ndlights = 0;
 	last_frame = 0;
 	view_set = traced = 0;
 	ndone = 0;
@@ -246,6 +258,55 @@ rmb_rtdir_set_lights(const rm_rtdir_light_t *l, long n)
 
 	nlights = (unsigned long)n;
 	return 1;
+}
+
+int
+rmb_rtdir_set_self(const unsigned *t, unsigned long n)
+{
+	nself = 0;
+
+	if (!dir_open || ((n > 0) && !t) || (n > 0xffffffffUL))
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		/* a new buffer a map: a frame in flight keeps the old one; one word at least, so index 11 is bound */
+		RMB_RTDIR_SET(selftab, [rmb_device newBufferWithLength:(n > 0 ? (size_t)n : 1) * sizeof(uint32_t)
+				options:MTLResourceStorageModeShared]);
+
+		if (!selftab)
+		{
+			return 0;
+		}
+
+		memset(selftab.contents, 0, sizeof(uint32_t));
+
+		if (n > 0)
+		{
+			memcpy(selftab.contents, t, (size_t)n * sizeof(uint32_t));
+		}
+	}
+
+	nself = n;
+	return 1;
+}
+
+void
+rmb_rtdir_set_dlights(const rm_rtdir_dlight_t *d, int n)
+{
+	ndlights = 0;
+	memset(dlights, 0, sizeof(dlights));
+
+	if (!d || (n < 1))
+	{
+		return;
+	}
+
+	n = (n > MTL_RTDIR_MAX_DLIGHTS) ? MTL_RTDIR_MAX_DLIGHTS : n;
+	memcpy(dlights, d, (size_t)n * sizeof(*d));
+	ndlights = (unsigned)n;
 }
 
 int
@@ -305,6 +366,10 @@ rmb_rtdir_set_view(const rm_rtdir_view_t *v, const float *st)
 	{
 		view.nlights = (unsigned)nlights;
 	}
+
+	/* nor a dynamic light past the frame's, nor a triangle past the table (TASK188 slice 3b) */
+	view.ndlights = ndlights;
+	view.nself = selftab ? (unsigned)nself : 0u;
 
 	memcpy(styles, st, sizeof(styles));
 	view_set = 1;
@@ -508,6 +573,9 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		[ce setBytes:styles length:sizeof(styles) atIndex:1];
 		[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTDIR_COUNTS * sizeof(uint32_t) atIndex:6];
 		[ce setBuffer:lights offset:0 atIndex:9];
+		[ce setBytes:dlights length:sizeof(dlights) atIndex:10];
+		/* the own-light table, or (none made) a word the kernel does not read: view.nself is then 0 */
+		[ce setBuffer:(selftab ? selftab : counts) offset:0 atIndex:11];
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTDIR_GROUP, RMB_RTDIR_GROUP, 1)];
 		[ce endEncoding];
 
