@@ -50,6 +50,7 @@ using namespace metal::raytracing;
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
 #include "common/mtl_rtao_math.h"
+#include "common/mtl_rts_math.h"
 #include "common/mtl_rtdir_math.h"
 
 /* rm_rtdir.h's rm_rtdir_view_t */
@@ -62,6 +63,10 @@ struct rm_rtdir_view
 	float exposure;
 	uint nlights;
 	uint show;
+	uint ndlights;
+	uint nself;
+	uint pad0;
+	uint pad1;
 };
 
 /* rm_rtdir.h's rm_rtdir_light_t */
@@ -70,6 +75,13 @@ struct rm_rtdir_light
 	float4 pos;     /* origin, intensity */
 	float4 color;   /* rgb, style */
 	float4 spot;    /* direction, cos(cone) or MTL_RTDIR_NOSPOT */
+};
+
+/* rm_rtdir.h's rm_rtdir_dlight_t (TASK188 slice 3b) */
+struct rm_rtdir_dlight
+{
+	float4 pos;     /* origin, intensity */
+	float4 color;   /* rgb, 0 */
 };
 
 /* rm_gbuf.metal's rm_fs_varying (rm_vertex_fullscreen's output) */
@@ -93,13 +105,16 @@ rm_rtdir_position(constant rm_rtdir_view &v, uint2 px, float depth)
 /*
  * 1 when r reaches its end (the light) unblocked, 0 when a face shadows
  * it: the nearest face decides (mtl_rtdir_at); a water or translucent
- * face is passed, the nearest first, up to MTL_RTDIR_LAYERS of them.
+ * face is passed, the nearest first, up to MTL_RTDIR_LAYERS of them, and
+ * so is an alias model that carries the light (TASK188 slice 3b: carry,
+ * the dynamic light's mtl_rtdir_dlight_bit; 0 for a map light).
  * inst holds two words an instance (rmb_rt_frame): its first triangle of
  * the map's buffers (~0 for an alias model) and the lights it carries;
  * tmat the map's material id of each of its ntris triangles.
  */
 static float
-rm_rtdir_seen(ray r, instance_acceleration_structure ias, device const uint *inst, device const uchar *tmat, uint ntris)
+rm_rtdir_seen(ray r, instance_acceleration_structure ias, device const uint *inst, device const uchar *tmat, uint ntris,
+		uint carry)
 {
 	intersector<triangle_data, instancing> isect;
 
@@ -121,6 +136,10 @@ rm_rtdir_seen(ray r, instance_acceleration_structure ias, device const uint *ins
 		if (b != 0xffffffffu)
 		{
 			m = (b + hit.primitive_id < ntris) ? (uint)tmat[b + hit.primitive_id] : (uint)MTL_GB_MAT_WORLD;
+		}
+		else if ((carry & inst[2 * hit.instance_id + 1]) != 0u)
+		{
+			m = MTL_RTDIR_MAT_CARRIER;
 		}
 
 		if (mtl_rtdir_at(m, layer) != MTL_RTDIR_AT_PASS)
@@ -167,6 +186,118 @@ struct rm_rtdir_tally
 };
 
 /*
+ * TASK188 slice 3b: the light of the face a world pixel at p is on, its
+ * own (qrad3 adds an emissive face's patch light to its own lightmap), in
+ * the lightmap's units: the word of the triangle the ray from the eye to
+ * p meets (self, the map's per-triangle table, mtl_rtdir_self), passing
+ * water and translucent faces as a shadow ray does, at most
+ * MTL_RTDIR_LAYERS + 1 intersections; 0 for a triangle past the table, an
+ * alias model or nothing met.
+ */
+static float3
+rm_rtdir_own(constant rm_rtdir_view &v, float3 p, instance_acceleration_structure ias, device const uint *inst,
+		device const uchar *tmat, uint ntris, device const uint *self)
+{
+	intersector<triangle_data, instancing> isect;
+	const float3 to = p - v.eye.xyz;
+	const float len = length(to);
+	ray r;
+
+	if (!(len > 0.0f) || (v.nself == 0u))
+	{
+		return float3(0.0f);
+	}
+
+	isect.assume_geometry_type(geometry_type::triangle);
+	r = ray(v.eye.xyz, to / len, 0.0f, len + 1.0f);
+
+	for (int hop = 0; hop <= MTL_RTDIR_LAYERS; hop++)
+	{
+		intersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);
+		uint b, tri, m;
+
+		if (hit.type == intersection_type::none)
+		{
+			return float3(0.0f);
+		}
+
+		b = inst[2 * hit.instance_id];
+
+		if (b == 0xffffffffu)
+		{
+			return float3(0.0f);
+		}
+
+		tri = b + hit.primitive_id;
+		m = (tri < ntris) ? (uint)tmat[tri] : (uint)MTL_GB_MAT_WORLD;
+
+		if (mtl_rtdir_at(m, hop) != MTL_RTDIR_AT_PASS)
+		{
+			const mtl_rgba_t c = mtl_rtdir_self((tri < v.nself) ? self[tri] : 0u);
+
+			return float3(c.r, c.g, c.b);
+		}
+
+		r.min_distance = hit.distance + 0.01f;
+	}
+
+	return float3(0.0f);
+}
+
+/*
+ * TASK188 slice 3b, RT3's dynamic lights as a term of RT-primary's light,
+ * in the lightmap's units: each of the frame's dynamic lights (at most
+ * MTL_RTDIR_MAX_DLIGHTS, mtl_rtdir_dlight_walk) that adds at p by gl1's
+ * rule (mtl_rtdir_dlight_add, its radius rule as RT3 measures it) adds
+ * that times its colour where its one shadow ray, from o, reaches it,
+ * passing a model that carries it. A term of its own beside the map's
+ * lights: none of them takes a dynamic light's place, so a dynamic light
+ * reaches as far as in the stock lightmaps; under r_rt_direct_show 3 no
+ * ray is traced. At most MTL_RTDIR_MAX_DLIGHTS rays a pixel.
+ */
+static float3
+rm_rtdir_dyn(constant rm_rtdir_view &v, float3 p, float3 n, float3 o, instance_acceleration_structure ias,
+		device const uint *inst, device const uchar *tmat, uint ntris, constant rm_rtdir_dlight *dl,
+		thread rm_rtdir_tally &t)
+{
+	float3 sum = float3(0.0f);
+
+	for (uint i = 0; mtl_rtdir_dlight_walk(i, v.ndlights); i++)
+	{
+		const rm_rtdir_dlight d = dl[i];
+		const float a = mtl_rtdir_dlight_add(mtl_rts_v3(p.x, p.y, p.z), mtl_rts_v3(n.x, n.y, n.z),
+				mtl_rts_v3(d.pos.x, d.pos.y, d.pos.z), d.pos.w);
+
+		if (!(a > 0.0f))
+		{
+			continue;
+		}
+
+		t.inrange++;
+
+		if (v.show != 3u)
+		{
+			const float3 to = d.pos.xyz - o;
+			const float len = length(to);
+
+			t.rays++;
+
+			if ((len > 1.0f) &&
+				(rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris, mtl_rtdir_dlight_bit(i)) < 0.5f))
+			{
+				continue;
+			}
+
+			t.lit++;
+		}
+
+		sum += a * d.color.rgb;
+	}
+
+	return sum;
+}
+
+/*
  * The direct light at the world point p of unit normal n, in the
  * lightmap's units: of the lights in range and facing, point lights and
  * emissive faces alike (mtl_rtdir_reach, mtl_rtdir_contrib), the
@@ -177,14 +308,19 @@ struct rm_rtdir_tally
  * occluded light takes no place; under r_rt_direct_show 3 no ray is
  * traced and the first MTL_RTDIR_MAX_TRACED are. At most
  * MTL_RTDIR_MAX_RAYS rays a pixel; past the bound a pixel is capped
- * (mtl_rtdir_capped). It takes no texture: the light a world pixel is
- * written with comes from the lights alone. A ray stops a unit short of
- * its light: an entity's origin is in open space.
+ * (mtl_rtdir_capped). TASK188 slice 3b adds the frame's dynamic lights
+ * (rm_rtdir_dyn, their own term) and the light of an emissive face the
+ * pixel is on (rm_rtdir_own, times style 0, as qrad3 adds it to the
+ * style-0 lightmap); r_rt_direct_show 4 is the dynamic lights alone. It
+ * takes no texture: the light a world pixel is written with comes from
+ * the lights alone. A ray stops a unit short of its light: an entity's
+ * origin is in open space.
  */
 static float3
 rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_float3 *styles,
 		instance_acceleration_structure ias, device const uint *inst, device const uchar *tmat, uint ntris,
-		device const rm_rtdir_light *lights, thread rm_rtdir_tally &t)
+		device const rm_rtdir_light *lights, constant rm_rtdir_dlight *dl, device const uint *self,
+		thread rm_rtdir_tally &t)
 {
 	const float3 o = p + n * mtl_rtao_bias(distance(p, v.eye.xyz), v.bias_k);
 	mtl_rtdir_keep_t k;
@@ -234,7 +370,7 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
 
 			t.rays++;
 
-			if ((len > 1.0f) && (rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris) < 0.5f))
+			if ((len > 1.0f) && (rm_rtdir_seen(ray(o, to / len, 0.0f, len - 1.0f), ias, inst, tmat, ntris, 0u) < 0.5f))
 			{
 				continue;
 			}
@@ -247,7 +383,13 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
 	}
 
 	t.capped = mtl_rtdir_capped(k, seen);
-	return raw * MTL_RTDIR_UNIT;
+
+	{
+		const float3 dyn = rm_rtdir_dyn(v, p, n, o, ias, inst, tmat, ntris, dl, t);
+		const float3 own = rm_rtdir_own(v, p, ias, inst, tmat, ntris, self) * float3(styles[0]);
+
+		return ((v.show == 4u) ? dyn : (raw + dyn + own)) * MTL_RTDIR_UNIT;
+	}
 }
 
 /* the exposure fit's samples: every MTL_RTDIR_FIT_STEP-th pixel a row and a column */
@@ -316,6 +458,8 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 		constant uint &ntris [[buffer(5)]],
 		device atomic_uint *counts [[buffer(6)]],
 		device const rm_rtdir_light *lights [[buffer(9)]],
+		constant rm_rtdir_dlight *dl [[buffer(10)]],
+		device const uint *self [[buffer(11)]],
 		uint2 px [[thread_position_in_grid]])
 {
 	const bool inside = (px.x < light_out.get_width()) && (px.y < light_out.get_height());
@@ -338,7 +482,7 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 
 	/* the traced light, from the lights alone (no texture reaches rm_rtdir_direct) */
 	const float3 raw = world ? rm_rtdir_direct(v, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), styles, ias,
-			inst, tmat, ntris, lights, t) : float3(0.0f);
+			inst, tmat, ntris, lights, dl, self, t) : float3(0.0f);
 
 	/* the fit's sample: the lightmap enters the frame's sums, never a pixel's light */
 	const uint sampled = (world && rm_rtdir_fit_at(px)) ? 1u : 0u;
@@ -379,8 +523,9 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 }
 
 /*
- * r_rt_direct_show over the resolved view: 1 and 3, the direct term
- * alone (the light the resolve reads, on white albedo); 2, the shadow
+ * r_rt_direct_show over the resolved view: 1, 3 and 4, the direct term
+ * alone (the light the resolve reads, on white albedo; 4 the dynamic
+ * lights' term only); 2, the shadow
  * visibility (grey, the share of the lights in range whose ray reached
  * them; dark blue where no light is in range); black on every pixel that
  * is not a traced world pixel.

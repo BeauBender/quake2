@@ -45,6 +45,7 @@
 #include "rm_rtfx.h"
 #include "rm_rtlights.h"
 #include "../common/mtl_shader_math.h"
+#include "../common/mtl_rts_math.h"
 #include "../common/mtl_rtdir_math.h"
 
 /* ---- rm_rtdir.c: no SDL, no Metal ----------------------------------------------------- */
@@ -71,14 +72,31 @@ int rm_rtdir_on(int pres, float direct, int device_rt, float fullbright);
  * visibility (each world pixel's share of the lights in range whose ray
  * reached them: white all, black none; dark blue no light in range), 3
  * the direct term alone with no shadow ray traced (every light in range
- * counts as seen). v clamped to 0 to RM_RTDIR_SHOW_MAX before it is cut
- * to an int; 0 for a value that is not finite.
+ * counts as seen), 4 the dynamic lights' term alone, with their shadow
+ * rays (TASK188 slice 3b). v clamped to 0 to RM_RTDIR_SHOW_MAX before it
+ * is cut to an int; 0 for a value that is not finite.
  */
-#define RM_RTDIR_SHOW_MAX 3
+#define RM_RTDIR_SHOW_MAX 4
 #define RM_RTDIR_SHOW_DIRECT 1
 #define RM_RTDIR_SHOW_VIS 2
 #define RM_RTDIR_SHOW_NOSHADOW 3
+#define RM_RTDIR_SHOW_DLIGHTS 4
 int rm_rtdir_show(float v);
+
+/* a dynamic light as the kernel reads it (rm_rtdir.metal's rm_rtdir_dlight, 32 bytes; TASK188 slice 3b) */
+typedef struct
+{
+	float pos[4];       /* origin, intensity */
+	float color[4];     /* the refdef's rgb, 0 */
+} rm_rtdir_dlight_t;
+
+/*
+ * One dynamic light in the kernel's form: 1 with *out written, 0 when
+ * rm_dlight_ok refuses it (a value not finite or past its bound; the
+ * renderer's checked copy, R_TakeDlights, has none such, so the engine
+ * side's light i is RT3's and rm_rts_carried's light i too).
+ */
+int rm_rtdir_dlight(const float *origin, const float *color, float intensity, rm_rtdir_dlight_t *out);
 
 /* a light as the kernel reads it (rm_rtdir.metal's rm_rtdir_light, 48 bytes) */
 typedef struct
@@ -172,6 +190,16 @@ long rm_rtdir_pack(const rm_rtl_lights_t *l, rm_rtdir_light_t *out, long cap, rm
  */
 void rm_rtdir_reflectivity(const float *mean, int read, float *out);
 
+/*
+ * qrad3's patch light of an emissive face (BaseLightForFace's refl x value,
+ * times the normalized reflectivity, MakePatchForFace) in rgb, in the
+ * lightmap's units: value x refl x refl / max(refl). Returns 1 when it is
+ * at least RM_RTDIR_DIRECT_LIGHT in some channel (qrad3's DIRECT_LIGHT,
+ * which both the face's direct light and its own full-bright light take),
+ * else 0. A value that is not finite or below 0 reads 0.
+ */
+int rm_rtdir_patch_light(int value, const float *refl, float *rgb);
+
 /* an emissive face's polygon, as the engine side reads it from the world */
 typedef struct
 {
@@ -228,6 +256,23 @@ typedef int (*rm_rtdir_face_fn)(void *ctx, long face, rm_rtdir_face_t *out);
 long rm_rtdir_pack_emitters(const rm_rtl_emitters_t *e, rm_rtdir_face_fn face, void *ctx, rm_rtdir_light_t *out,
 		long cap, rm_rtdir_emitpack_t *why);
 
+/*
+ * TASK188 slice 3b: an emissive face drawn at its own light. qrad3 adds a
+ * face's patch light to its own lightmap ("the texture itself should still
+ * be full bright", BuildFacelights); under RT-primary the kernel adds it to
+ * the traced light of a pixel on that face, from this per-triangle table:
+ * out[t] the triangle's word (mtl_rtdir_self_pack of
+ * rm_rtdir_patch_light), 0 for a triangle of no emissive face. The
+ * triangles are the map's index buffer's (rm_rt_materials' walk: surface
+ * record s, which is face s, covers its num_indices / 3 triangles from
+ * first_index / 3), ntris of them, out zeroed first. A face of e is marked
+ * when face says it is a world face and its patch light reaches
+ * RM_RTDIR_DIRECT_LIGHT; a record outside the buffer marks nothing.
+ * Returns the faces marked, or -1 for no table (out NULL or ntris 0).
+ */
+long rm_rtdir_self_table(const rm_rtl_emitters_t *e, rm_rtdir_face_fn face, void *ctx, const rm_surfrec_t *recs,
+		long nrecs, unsigned *out, unsigned long ntris);
+
 /* the emitters' line of the map, once uploaded: 1 when it fits in len; 0 with buf empty otherwise */
 int rm_rtdir_emit_format(const char *map, const rm_rtdir_emitpack_t *p, char *buf, size_t len);
 
@@ -256,7 +301,7 @@ float rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long sa
  */
 float rm_rtdir_exposure(float cvar, float fit, int *fixed);
 
-/* the view of the kernel (rm_rtdir.metal's rm_rtdir_view, 112 bytes) */
+/* the view of the kernel (rm_rtdir.metal's rm_rtdir_view, 128 bytes) */
 typedef struct
 {
 	float inv[16];      /* GL clip coordinates to world, as rm_rts_view */
@@ -266,6 +311,9 @@ typedef struct
 	float exposure;     /* r_rt_direct_exposure's, else 0 for the back end's fit at the lag (rm_rtdir_fit_lag) */
 	unsigned nlights;   /* the lights in the buffer */
 	unsigned show;      /* rm_rtdir_show */
+	unsigned ndlights;  /* the frame's dynamic lights (the back end's, rmb_rtdir_set_dlights), 0 from rm_rtdir_view */
+	unsigned nself;     /* the per-triangle table's entries (the back end's, rmb_rtdir_set_self), 0 from rm_rtdir_view */
+	unsigned pad[2];
 } rm_rtdir_view_t;
 
 /*
@@ -328,6 +376,12 @@ void rmb_rtdir_close(void);
  * exposure fit starts again at 1, from the frames encoded after this call (rm_rtdir_fit_lag's reset)
  */
 int rmb_rtdir_set_lights(const rm_rtdir_light_t *l, long n);
+
+/* TASK188 slice 3b: the map's per-triangle table (rm_rtdir_self_table); 1, or 0 when it cannot be made (n 0 keeps none) */
+int rmb_rtdir_set_self(const unsigned *t, unsigned long n);
+
+/* TASK188 slice 3b: the frame's dynamic lights (rm_rtdir_dlights), at most MTL_RTDIR_MAX_DLIGHTS; before rmb_rtdir_set_view */
+void rmb_rtdir_set_dlights(const rm_rtdir_dlight_t *d, int n);
 
 /* before the raster: the outputs at the render size; 1 when the view can trace */
 int rmb_rtdir_prepare(unsigned long w, unsigned long h);
