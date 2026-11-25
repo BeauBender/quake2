@@ -1591,9 +1591,10 @@ is.
 * **r_rt_temporal**: The Metal renderer's temporal accumulation of the
   ray-traced effects (RT7): the weight of a pixel's history in the
   exponential blend with the frame's own value, so that the effects are
-  steady at low ray counts. `0` (the default) turns it off: no history is
-  made, written or read, and every frame is the same as without it. A
-  value above `0` blends; one above `0.98` counts as `0.98`, and a
+  steady at low ray counts, `0.9` by default. `0` turns it off: no
+  history is made, written or read, no denoiser runs, and every frame is
+  the same as without it. A value above `0` blends; one above `0.98`
+  counts as `0.98`, and a
   negative one or one that is not a finite number as `0`. A young history
   is the plain mean of its samples. The history is read where the
   G-buffer's motion vectors say the point was, and dropped where that is
@@ -1607,20 +1608,28 @@ is.
   also starts again after a frame whose pass it skipped. It accumulates
   `r_rt_shadows` (each light's visibility, before the light is added),
   `r_rt_sun` and `r_rt_ao`, each with its own history and one reset for
-  the three. Under the Ray traced presentation (`r_presentation 3`) it
-  also accumulates that presentation's light (TASK190): the direct
-  light, the sky light, the sun and the bounce, summed and before the
-  albedo, with a history of its own, made only under that presentation
-  and one reset shared with the others; the same rejections apply but
-  the dynamic-light set's, since that light sums every light. The
-  presentation does not set `r_rt_temporal`: the value is the user's,
-  and at `0` the presentation's frames are the same as without it.
+  the three. While it is above `0`, the accumulated AO and sun are also
+  denoised before the resolve: a 5 x 5 blur guided by the distance from
+  the eye and the normal, full on a pixel with one sample in its history
+  and fading to none at 16, so a history that has just started again is
+  smoothed and a settled one is left sharp; the history keeps the
+  accumulation alone. Under the Ray traced presentation
+  (`r_presentation 3`) it also accumulates that presentation's light
+  (TASK190): the direct light, the sky light, the sun and the bounce,
+  summed and before the albedo, with a history of its own, made only under
+  that presentation and one reset shared with the others; the same
+  rejections apply but the dynamic-light set's, since that light sums every
+  light. The presentation does not set `r_rt_temporal`: the value is the
+  user's, and at `0` the presentation's frames are the same as without it.
   `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the
   frame's own trace, before the accumulation; `r_rt_direct_show`'s
-  terms are shown accumulated, as the picture reads them, its history
-  starting again when `r_rt_direct_show` changes. The design's
-  default of `0.9` is set once the denoiser lands and the look is
-  judged. Saved with the configuration; applies from the next frame.
+  terms are shown accumulated, as the picture reads them, except view 2,
+  its history starting again when `r_rt_direct_show` changes. The default
+  moved from `0` to the design's `0.9` (TASK59 slice 2) once the denoiser
+  landed: until then `0` kept every frame as before while the
+  accumulation was built; the committed `rt-*` pin scenarios set it to
+  `0` so that their frames stay those of the passes alone. Saved with the
+  configuration; applies from the next frame.
   Not on the Ray tracing screens yet: it joins the tuning screen, the
   presets and the settings optimizer with its default.
 

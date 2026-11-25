@@ -131,7 +131,7 @@ RM_RTAO_Init(const rmb_caps_t *caps)
 	r_rt_ao_scale = ri.Cvar_Get("r_rt_ao_scale", "0.5", CVAR_ARCHIVE);
 	r_rt_ao_rays = ri.Cvar_Get("r_rt_ao_rays", "2", CVAR_ARCHIVE);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
-	r_rt_temporal = ri.Cvar_Get("r_rt_temporal", "0", CVAR_ARCHIVE);
+	r_rt_temporal = ri.Cvar_Get("r_rt_temporal", "0.9", CVAR_ARCHIVE);
 	rm_rtt_state_reset(&rtt_state);
 	ao_device = caps->raytracing != 0;
 	ao_opened = ao_refused = ao_active = ao_viewed = 0;
