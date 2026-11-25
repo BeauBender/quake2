@@ -970,8 +970,24 @@ TuneMenu_Rules(void)
 	{
 		const vidrt_control_t *c = VidRules_TuneControl(i);
 		const vidrt_control_t *e = VidRules_RTControl(c->effect);
-		const int on = e ? VidRules_RTEffective(c->effect, s_built_renderer, available, pres,
+		int on = e ? VidRules_RTEffective(c->effect, s_built_renderer, available, pres,
 				Cvar_VariableValue(e->cvar)) : 1;
+		int over = e && !on && VidRules_RTOverridden(c->effect, s_built_renderer, available, pres);
+
+		/* TASK59 slice 2b: the accumulation's row is on while any effect it acts on runs */
+		if (c->effect == VIDTUNE_EFFECT_ACCUM)
+		{
+			on = over = 0;
+			for (int k = 0; k < VIDTUNE_ACCUM_ROWS; k++)
+			{
+				const vidrt_control_t *s = VidRules_RTControl(k);
+				const int sk = VidRules_RTEffective(k, s_built_renderer, available, pres, Cvar_VariableValue(s->cvar));
+
+				on = on || sk;
+				over = over || (!sk && VidRules_RTOverridden(k, s_built_renderer, available, pres));
+			}
+			over = over && !on;
+		}
 
 		if (VidRules_HdrItem(c->cvar) >= 0)
 		{
@@ -981,8 +997,7 @@ TuneMenu_Rules(void)
 			continue;
 		}
 		/* TASK188: a row of an effect the mode reads off (Ray traced's sun and AO) is the mode's too */
-		RTSetRule(s_tune_items[i], (VidRules_TuneOverridden(i, s_built_renderer, pres) ||
-			(e && !on && VidRules_RTOverridden(c->effect, s_built_renderer, available, pres))) ?
+		RTSetRule(s_tune_items[i], (VidRules_TuneOverridden(i, s_built_renderer, pres) || over) ?
 			(vidrule_t){ 0, "set by the presentation" } :
 			VidRules_TuneItem(i, s_built_renderer, available, on));
 	}

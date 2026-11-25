@@ -673,7 +673,8 @@ VidRules_TuneOverridden(int i, const char *renderer, float presentation)
 	const vidrt_control_t *c = VidRules_TuneControl(i);
 
 	return c && RTRetroInForce(renderer, presentation) &&
-		(!strcmp(c->cvar, "r_metalfx") || !strcmp(c->cvar, "r_metalfx_scale") || (c->effect >= 0));
+		(!strcmp(c->cvar, "r_metalfx") || !strcmp(c->cvar, "r_metalfx_scale") || (c->effect >= 0) ||
+		(c->effect == VIDTUNE_EFFECT_ACCUM));
 }
 
 /* TASK197: whether Retro reads r_metalfx as 0, so the MetalFX scaler and scale items are not the user's to set */
@@ -779,6 +780,8 @@ static const vidrt_control_t rt_tune[] = {
 	{ "r_rt_sun_angles", "sun azimuth", "55 45", CVAR_ARCHIVE, RT_SUN, 0.0f, 355.0f, 5.0f, "%.0f", NULL, 2, 0 },
 	{ "r_rt_ao_rays", "AO rays", "2", CVAR_ARCHIVE, RT_AO, 1.0f, 2.0f, 1.0f, NULL, tune_rays_names, 0, 0 },
 	{ "r_rt_water_hits", "water hits", "1", CVAR_ARCHIVE, RT_WATER, 0.0f, 1.0f, 1.0f, NULL, tune_hits_names, 0, 0 },
+	/* TASK59 slice 2b: RT7's accumulation (and the denoise and the reflections' blur it runs), 0 off */
+	{ "r_rt_temporal", "accumulate", "0.9", CVAR_ARCHIVE, VIDTUNE_EFFECT_ACCUM, 0.0f, 0.95f, 0.05f, "%.2f", NULL, 0, 0 },
 	{ "r_rt_flatlight", "flat light", "0", 0, -1, 0.0f, 1.0f, 0.05f, "%.2f", NULL, 0, 0 },
 	{ "r_metalfx", "scaler", "0", CVAR_ARCHIVE, -1, 0.0f, 3.0f, 1.0f, NULL, tune_fx_names, 0, 0 },
 	{ "r_rt_shadows_show", "debug view", "0", 0, -1, 0.0f, 5.0f, 1.0f, NULL, tune_debug_names, VIDTUNE_PART_DEBUG, 0 },
@@ -845,6 +848,11 @@ VidRules_TuneItem(int i, const char *renderer, int available, int effect_on)
 	if (c->effect >= 0 && !effect_on)
 	{
 		return (vidrule_t){ 0, (c->effect < ARRSIZE(turn_on)) ? turn_on[c->effect] : "turn on its effect first" };
+	}
+	if (c->effect == VIDTUNE_EFFECT_ACCUM)
+	{
+		return effect_on ? (vidrule_t){ 1, "blends the last frames' rays; 0 off; next frame" } :
+			(vidrule_t){ 0, "turn on shadows, sun, AO or water first" };
 	}
 	if (c->part == VIDTUNE_PART_DEBUG)
 	{
