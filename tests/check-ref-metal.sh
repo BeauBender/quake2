@@ -24,6 +24,11 @@
 #     TASK59), with mutants of both files it must fail and a pin of the
 #     AO kernel's call to the rule with two mutants (the reset dropped, a
 #     material compared with itself),
+#     tests/metal/rm_rtdenoise_test.c, the denoiser's weight rule
+#     (common/mtl_rtd_math.h, RT7, TASK59 slice 2), with mutants of the
+#     header it must fail and pins of rm_rtdenoise.metal's calls with
+#     mutants (the depth guide and the count scale dropped, a history
+#     written), compiled with the Metal compiler where there is one,
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
@@ -1257,7 +1262,10 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	"rm_rtshadow.metal rm_rts_temporal mtl_rtt_lights" "rm_rtshadow.metal rm_rts_temporal rm_rts_shade" \
 	"rm_rtshadow.metal rm_rts_temporal rm_rts_finish" \
 	"rm_rtsun.metal rm_rtsun_temporal mtl_rtt_reproject" "rm_rtsun.metal rm_rtsun_temporal mtl_rtt_reject" \
-	"rm_rtsun.metal rm_rtsun_temporal mtl_rtt_blend" "rm_rtsun.metal rm_rtsun_temporal mtl_rtt_count"; do
+	"rm_rtsun.metal rm_rtsun_temporal mtl_rtt_blend" "rm_rtsun.metal rm_rtsun_temporal mtl_rtt_count" \
+	"rm_rtdenoise.metal rm_rtd_filter mtl_rtd_weight" "rm_rtdenoise.metal rm_rtd_filter mtl_rtd_add" \
+	"rm_rtdenoise.metal rm_rtd_filter mtl_rtd_result" "rm_rtdenoise.metal rm_rtao_denoise rm_rtd_filter" \
+	"rm_rtdenoise.metal rm_rtsun_denoise rm_rtd_filter"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
 	set -- $pair
 	f=$rm_dir/$1 kn=$2 hp=$3
@@ -1294,6 +1302,112 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	fi
 done
 seg 20 "; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused"
+
+# RT7's denoiser (TASK59 slice 2): the weight rule of common/mtl_rtd_math.h, run by
+# tests/metal/rm_rtdenoise_test.c on the real header and on mutants it must fail (each must compile:
+# the depth guide, the normal guide, the material, the count's cut at 16 and its scale dropped one at
+# a time, the sums' guard against a weight or value that is not finite dropped); then the kernels'
+# calls in rm_rtdenoise.metal pinned as text, each with mutants the pin must refuse: the depth guide
+# (the neighbour's distance replaced by the pixel's own), the count scale (the strength's count
+# replaced by 1), and the denoised value fed back into a history (a history written by the
+# denoiser). With the Metal compiler each kernel mutant must also compile, and the real file with it.
+rtd=""
+rtd_tree() { # <dir>: a scratch tree of the test and its headers
+	rm -rf "${1:?}"
+	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
+	cp "$rm_dir/common/mtl_rtd_math.h" "$rm_dir/common/mtl_rtao_math.h" "$rm_dir/common/mtl_shader_math.h" \
+		"$1/src/client/refresh/metal/common/"
+	cp tests/metal/rm_rtdenoise_test.c "$1/tests/metal/"
+}
+rtd_build() { # <tree>: 0 when the tree's test builds
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags -o "$1/t" "$1/tests/metal/rm_rtdenoise_test.c" -lm > "${tmp:?}/cc.out" 2>&1
+}
+rtd_run() { # <tree>: 0 when the tree's test builds and passes
+	rtd_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
+}
+rtd_tree "${tmp:?}/rtd"
+if ! rtd_run "${tmp:?}/rtd"; then
+	cat "${tmp:?}/cc.out" "${tmp:?}/out"
+	bad "tests/metal/rm_rtdenoise_test.c fails on the real files"
+else
+	rtd=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtdenoise_test: //')
+	case $rtd in *", 0 failed") ;; *) bad "tests/metal/rm_rtdenoise_test.c printed no result line"; rtd="";; esac
+fi
+rtd_mutants=0
+for m in depth normal mat countcut countflat finite; do
+	rtd_tree "${tmp:?}/rtdm"
+	h=${tmp:?}/rtdm/src/client/refresh/metal/common/mtl_rtd_math.h
+	case $m in
+		depth) sed 's/return (w > 0.0f) \&\& (w <= 1.0f) ? w : 0.0f;/return 1.0f + 0.0f * w;/' ;;
+		normal) sed 's|const float w = (c - MTL_RTD_NORMAL_MIN) / (1.0f - MTL_RTD_NORMAL_MIN);|const float w = 1.0f + 0.0f * c;|' ;;
+		mat) sed 's/if ((m != mn) || !(cn >= 1.0f))/if (((m != mn) \&\& 0) || !(cn >= 1.0f))/' ;;
+		countcut) sed 's/if (!(n >= MTL_RTD_COUNT_FULL) || !(n < MTL_RTD_COUNT_NONE))/if (!(n >= MTL_RTD_COUNT_FULL) || 0)/' ;;
+		countflat) sed 's|return (MTL_RTD_COUNT_NONE - n) / (MTL_RTD_COUNT_NONE - MTL_RTD_COUNT_FULL);|return 1.0f + 0.0f * n;|' ;;
+		finite) sed 's/if (!(w > 0.0f) || !isfinite(w) || !isfinite(v))/if (!(w > 0.0f))/' ;;
+	esac < "$rm_dir/common/mtl_rtd_math.h" > "$h"
+	if cmp -s "$rm_dir/common/mtl_rtd_math.h" "$h"; then
+		bad "the denoiser mutant ($m) changed nothing"
+	elif ! rtd_build "${tmp:?}/rtdm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the denoiser mutant ($m) does not compile, so it tests nothing"
+	elif rtd_run "${tmp:?}/rtdm"; then
+		bad "tests/metal/rm_rtdenoise_test.c passes the denoiser mutant ($m)"
+	else
+		rtd_mutants=$((rtd_mutants + 1))
+	fi
+done
+rtd_metal=""
+if [ "$(uname -s)" = Darwin ] && command -v xcrun >/dev/null 2>&1 && xcrun -f metal >/dev/null 2>&1; then
+	rtd_metal=1
+fi
+rtd_compile() { # <file.metal>: 0 when it compiles as the Makefile compiles rm_rtdenoise.metal
+	xcrun -sdk macosx metal -c -I"$rm_dir" "$1" -o "${tmp:?}/rtd.air" > "${tmp:?}/metal.out" 2>&1
+}
+rtd_body() { # <file> <function>: the function's body, its name at the start of a line up to the next "}" in column 0
+	strip "$1" | awk -v fn="$2" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 } b { print }' | tr -s ' \t' '  '
+}
+rtd_pin() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		depth) rtd_body "$1" rm_rtd_filter | grep -qF 'mtl_rtd_weight(dx, dy, hc.y, hn.y, nc, nn, mc, mn, hn.w)' ;;
+		count) rtd_body "$1" rm_rtd_filter | grep -qF 'return mtl_rtd_result(acc, hc.x, hc.w);' ;;
+		nohist)
+			# the denoiser writes the light alone: no write but light_out's, no texture it can write but light_out
+			! strip "$1" | grep -E '\.write\(|access::(read_)?write>' | grep -vqE 'light_out' ;;
+	esac
+}
+rtd_kpins=0 rtd_kmut=0
+dn=$rm_dir/rm_rtdenoise.metal
+if [ -n "$rtd_metal" ] && ! rtd_compile "$dn"; then
+	cat "${tmp:?}/metal.out"
+	bad "rm_rtdenoise.metal does not compile"
+fi
+for p in depth count nohist; do
+	if ! rtd_pin "$dn" "$p"; then
+		bad "rm_rtdenoise.metal does not hold the denoiser's $p pin"
+		continue
+	fi
+	rtd_kpins=$((rtd_kpins + 1))
+	case $p in
+		depth) sed 's/hc\.y, hn\.y, nc, nn,/hc.y, hc.y, nc, nn,/' "$dn" ;;
+		count) sed 's/return mtl_rtd_result(acc, hc\.x, hc\.w);/return mtl_rtd_result(acc, hc.x, 1.0f);/' "$dn" ;;
+		nohist) awk '/^rm_rtao_denoise\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && /texture\(8\)/ { print; print "\t\ttexture2d<float, access::write> hist_out [[texture(9)]],"; next }
+			b && /light_out\.write\(/ { print; print "\t\t\thist_out.write(float4(ao, hc.y, hc.z, hc.w), px);"; next }
+			{ print }' "$dn" ;;
+	esac > "${tmp:?}/rtd-kernel.metal"
+	if cmp -s "$dn" "${tmp:?}/rtd-kernel.metal"; then
+		bad "the denoiser kernel mutant ($p) changed nothing"
+	elif [ -n "$rtd_metal" ] && ! rtd_compile "${tmp:?}/rtd-kernel.metal"; then
+		cat "${tmp:?}/metal.out"
+		bad "the denoiser kernel mutant ($p) does not compile, so it tests nothing"
+	elif rtd_pin "${tmp:?}/rtd-kernel.metal" "$p"; then
+		bad "the denoiser's $p pin passes its mutant"
+	else
+		rtd_kmut=$((rtd_kmut + 1))
+	fi
+done
+seg 5.6 "; denoiser ${rtd:-host test}, $rtd_mutants rule mutants, $rtd_kpins kernel pins with $rtd_kmut kernel mutants refused${rtd_metal:+ and compiled}"
 
 # (f) the colour-space probe. probe_run <dir with rmb_device.m or empty> <exe>: builds
 # tests/metal/rmb_cs_probe.m, which includes rmb_device.m (found in <dir> first, else in
