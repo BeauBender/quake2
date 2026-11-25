@@ -304,16 +304,24 @@ sv_forget(int k)
 	sv_named[k] = sv_named[sv_nknown];
 }
 
-/* sv_compact: forget every process whose exit was seen and that is torn down */
+/* sv_torn: entry k is a member whose exit was seen and that is torn down */
+static int
+sv_torn(int k)
+{
+	pid_t g;
+
+	return sv_known[k] != sv_leader && sv_gone[k] && !sv_alive(sv_known[k], &g);
+}
+
+/* sv_compact: forget every member that is torn down */
 static void
 sv_compact(void)
 {
-	pid_t g;
 	int i;
 
 	for (i = 0; i < sv_nknown; i++)
 	{
-		if (sv_known[i] != sv_leader && sv_gone[i] && !sv_alive(sv_known[i], &g))
+		if (sv_torn(i))
 		{
 			sv_forget(i);
 			i--;
@@ -793,11 +801,9 @@ sv_batch(const struct kevent *evs, int n)
 				}
 				if ((e->fflags & NOTE_EXIT) && k >= 0)
 				{
-					pid_t g;
-
 					sv_gone[k] = 1;
 					/* torn down already: forget it now, so the table does not fill while the leader runs */
-					if (p != sv_leader && !sv_alive(p, &g))
+					if (sv_torn(k))
 					{
 						sv_forget(k);
 					}

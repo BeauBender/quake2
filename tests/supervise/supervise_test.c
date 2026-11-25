@@ -108,6 +108,8 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 	int evp[2], clkp[2], errp[2], hs[2], i, n = 0;
 	const char *argv[32];
 	const char *script = "exec \"$@\"";
+	/* the forms that set up a signal state a shell might change run the supervisor with no shell */
+	int chldign = strcmp(form, "chldign") == 0, direct = chldign;
 
 	memset(r, 0, sizeof(*r));
 	r->ev = r->clk = r->hel = r->err = -1;
@@ -123,10 +125,13 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 	{
 		script = "exec /usr/bin/sandbox-exec -p '(version 1)(allow default)(deny signal)' \"$@\"";
 	}
-	argv[n++] = shell;
-	argv[n++] = "-c";
-	argv[n++] = script;
-	argv[n++] = "sh";
+	if (!direct)
+	{
+		argv[n++] = shell;
+		argv[n++] = "-c";
+		argv[n++] = script;
+		argv[n++] = "sh";
+	}
 	argv[n++] = sv_bin;
 	argv[n++] = "--events";
 	argv[n++] = "3";
@@ -179,7 +184,11 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 		}
 		setenv("FAKE_HELLO_FD", "5", 1);
 		signal(SIGPIPE, SIG_DFL);
-		execv(shell, (char *const *)argv);
+		if (chldign)
+		{
+			signal(SIGCHLD, SIG_IGN);
+		}
+		execv(direct ? sv_bin : shell, (char *const *)argv);
 		_exit(121);
 	}
 	close(evp[1]);
@@ -643,13 +652,13 @@ expect_gone(struct run *r, struct chan *c, const char *who)
 }
 
 static int
-c_exit(struct run *r, const char *code)
+c_exit(struct run *r, const char *form, const char *code)
 {
 	const char *args[] = { "exit", code, NULL };
 	struct chan *l;
 	char want[32];
 
-	if (start(r, "exec", NULL, NULL, args) || (l = leader(r)) == NULL)
+	if (start(r, form, NULL, NULL, args) || (l = leader(r)) == NULL)
 	{
 		return 1;
 	}
@@ -658,24 +667,35 @@ c_exit(struct run *r, const char *code)
 		return fail(r, "the command did not start with its signals at their defaults, unblocked: %s", l->hello);
 	}
 	finish(r);
+	if (want_status(r, atoi(code)))
+	{
+		return 1;
+	}
 	snprintf(want, sizeof(want), "reaped status=%s", code);
 	if (at(r, want) < 0 || at(r, "term-sent") >= 0)
 	{
 		return fail(r, "events: %s", r->log);
 	}
-	return want_status(r, atoi(code));
+	return 0;
 }
 
 static int
 c_exit0(struct run *r)
 {
-	return c_exit(r, "0");
+	return c_exit(r, "exec", "0");
 }
 
 static int
 c_exit3(struct run *r)
 {
-	return c_exit(r, "3");
+	return c_exit(r, "exec", "3");
+}
+
+/* the caller ignores SIGCHLD: the supervisor sets it to its default, so its own waitid reaps the leader */
+static int
+c_chld_ignored(struct run *r)
+{
+	return c_exit(r, "chldign", "3");
 }
 
 static int
@@ -1195,6 +1215,7 @@ static const struct
 } cases[] = {
 	{ "exit0", c_exit0, 0 },
 	{ "exit3", c_exit3, 0 },
+	{ "chld-ignored", c_chld_ignored, 0 },
 	{ "deadline", c_deadline, 1 },
 	{ "term-ignored", c_term_ignored, 1 },
 	{ "signal-int", c_signal_int, 0 },

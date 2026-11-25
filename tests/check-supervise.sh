@@ -17,9 +17,10 @@
 #             caller shell, the cases that need no test clock against the
 #             release build, and every case against the table of 8.
 #   sanitizer the same cases built with -fsanitize=address,undefined.
-#   mutants   five one-line changes to a copy of supervise.c, each built
-#             as the test build: each must fail its own case, for its own
-#             reason (the runner's FAIL line names both).
+#   mutants   six one-line changes to a copy of supervise.c, each built
+#             as the test build (no-forget with the table of 8): each must
+#             fail its own case, for its own reason (the runner's FAIL line
+#             names both).
 #   shape     no case waits on time: the test programs and this file hold
 #             no sleep call or sleep command and no ps.
 #
@@ -124,15 +125,15 @@ ASAN_OPTIONS=detect_leaks=0:abort_on_error=0 UBSAN_OPTIONS=halt_on_error=1:print
 	fail "a case failed under -fsanitize=address,undefined"
 echo "check-supervise: the cases pass under -fsanitize=address,undefined"
 
-# mutants: <name> <case> <reason> <sed expression>; each expression must
-# change exactly one line of the source
+# mutants: <name> <case> <reason> <sed expression> [cc flags]; each
+# expression must change exactly one line of the source
 mutant() {
-	_mn=$1 _mc=$2 _mr=$3 _ms=$4
+	_mn=$1 _mc=$2 _mr=$3 _ms=$4 _mf=${5:-}
 	sed "$_ms" "$src" > "$tmp/m-$_mn.c" || fail "mutant $_mn: sed failed"
 	_md=$(diff "$src" "$tmp/m-$_mn.c" | grep -c '^>') || _md=0
 	[ "$_md" -eq 1 ] || fail "mutant $_mn changes $_md lines, not 1: its pattern no longer fits supervise.c"
 	# shellcheck disable=SC2086
-	cc -O1 $W -DSUPERVISE_TEST -o "$tmp/m-$_mn" "$tmp/m-$_mn.c" > "$tmp/m-$_mn.cc" 2>&1 ||
+	cc -O1 $W -DSUPERVISE_TEST $_mf -o "$tmp/m-$_mn" "$tmp/m-$_mn.c" > "$tmp/m-$_mn.cc" 2>&1 ||
 		{ cat "$tmp/m-$_mn.cc" >&2; fail "mutant $_mn does not build"; }
 	_mst=0
 	"$tmp/runner" "$tmp/m-$_mn" "$tmp/fake" /bin/bash "$_mc" > "$tmp/m-$_mn.out" 2>&1 || _mst=$?
@@ -151,6 +152,11 @@ mutant timeout-zero deadline "status 0, want 124" \
 	's/^\([[:space:]]*\)return 124;$/\1return 0;/'
 mutant no-wnowait leader-first "no reaped line: the leader was reaped before its group was empty" \
 	's/WEXITED | WNOWAIT/WEXITED/'
+# No mutant removes the SIGCHLD reset: on macOS exec keeps an ignored
+# SIGCHLD ignored but clears its no-wait, so without the reset the leader
+# is still left to waitid, and the case chld-ignored passes either way.
+mutant no-forget cap "the last member's exit woke nothing" \
+	's/^	return sv_known\[k\] != sv_leader \&\& sv_gone\[k\]/	return 0 \&\& sv_gone[k]/' -DSV_MAXPIDS=8
 
 # shape: no wait on time in the cases. The words are put together so that
 # this line does not match itself.

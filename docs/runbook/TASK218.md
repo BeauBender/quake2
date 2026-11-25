@@ -63,7 +63,9 @@ The events are one line each:
   members are left (status: the leader's own). It sends TERM (or the forwarded signal) and CONT to
   the group, then KILL after the grace.
 - **Setup.** SIGCHLD is set to its default, so no inherited disposition can reap the leader behind
-  the supervisor's back. A closed standard descriptor is opened on `/dev/null` first, for the
+  the supervisor's back. On macOS this is a guard only: exec keeps an ignored SIGCHLD ignored but
+  clears its no-wait, so the leader would be left to `waitid` anyway, and no mutant can show the
+  reset failing (the case `chld-ignored` passes either way). A closed standard descriptor is opened on `/dev/null` first, for the
   supervisor and the command.
 
 ## Stated limits
@@ -100,7 +102,7 @@ The events are one line each:
   runs the cases that need no test clock against the release build, every case against a build
   whose watch table holds 8 processes (`-DSV_MAXPIDS=8`), and every case again built with
   `-fsanitize=address,undefined`.
-- **Mutants.** It runs the five mutants.
+- **Mutants.** It runs the six mutants.
 
 No case waits on time. Each waits on one of three things:
 - a supervisor event;
@@ -119,6 +121,7 @@ the clock in each batch. A last step greps the test files and the check for a sl
 | Case | What it shows |
 |---|---|
 | `exit0`, `exit3` | the status passes through; the command starts with its signals at their defaults and nothing blocked |
+| `chld-ignored` | the supervisor is run with no shell and SIGCHLD ignored: status 3 and `reaped status=3` |
 | `deadline` | 124; TERM reaches the leader, a child and a grandchild; nothing of the group is left |
 | `term-ignored` | a member that ignores TERM is dead once `kill-sent` is read (it cannot answer a ping) |
 | `signal-int`, `signal-term`, `signal-hup` | 130, 143 and 129; the signal reaches the leader, and the group empties |
@@ -141,6 +144,7 @@ the supervisor and the command) holds only `supervise: ` lines, so no job notice
 | `no-forward-term`: TERM is not watched | `signal-term` | TERM to the supervisor was not forwarded |
 | `timeout-zero`: the deadline's 124 becomes 0 | `deadline` | status 0, want 124 |
 | `no-wnowait`: the exit peek reaps | `leader-first` | no reaped line: the leader was reaped before its group was empty |
+| `no-forget`: no member is torn down (built with a table of 8) | `cap` | the last member's exit woke nothing |
 
 The mutants run in this check only. The whole check took 3 s on a development Mac. Thirty runs in a
 row of every case took 2 s, with no failure.
