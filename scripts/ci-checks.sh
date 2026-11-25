@@ -132,4 +132,13 @@ if [ $# -eq 0 ]; then
 	echo "$me: harness: no harness check reads a path this change touches"
 	exit 0
 fi
-exec scripts/gate-checks.sh "" "" "$@"
+# The long checks start first, longest first by run 45683223193, so a group
+# ends near half its check time (the scheduler refuses a name it is not
+# given, so only those given are named).
+first=
+for n in check-metalfx-report.sh check-bench.sh check-require-guards.sh \
+	check-bounded-run.sh check-gate-parallel.sh check-ref-metal.sh \
+	check-bench-entry.sh check-pins.sh check-ci-parity.sh; do
+	case " $* " in *" tests/$n "*) first="$first${first:+ }$n" ;; esac
+done
+exec scripts/gate-checks.sh "" "$first" "$@"
