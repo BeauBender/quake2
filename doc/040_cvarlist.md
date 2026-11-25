@@ -1075,9 +1075,15 @@ marked `(n/a)` and skipped.
   map's own light entities (`r_rt_direct`), one shadow ray a light,
   scaled by one exposure (`r_rt_direct_exposure`). It reads
   `r_rt_direct` and `r_rt_water` as `1` and `r_rt_shadows`, `r_rt_sun`
-  and `r_rt_ao` as `0`; the emissive faces, the sky, the bounce, the
-  dlights as a term and the denoiser are later work, so a part of a map
-  lit by its light faces alone is darker than in stock. Models, the sky,
+  and `r_rt_ao` as `0` (the AO pass does not run: the bounce takes its
+  place). Beside the map's lights it adds the sky light
+  (`r_rt_direct_sky`, one ray a pixel that returns the sky's colour where
+  it reaches a sky face) and the sun (one ray a pixel toward
+  `r_rt_sun_angles` or the map's line of `scripts/rt/sun-angles.txt`,
+  at `r_rt_sunscale`) and one bounce of indirect light
+  (`r_rt_direct_bounce`, one ray a pixel that reads the stock lightmap
+  where it lands); the denoiser is later work, so the sky light and the
+  bounce are noisy (one ray a pixel each, no denoiser yet). Models, the sky,
   water, particles and the 2D layer stay stock. Retro and Ray traced are greyed in
   the menu "awaiting review" until their look is accepted, and work from
   the console; the values are never renumbered. Read at start-up and at
@@ -1274,8 +1280,37 @@ is.
   `r_rt_stats 2` a line a frame (world pixels, lights in range, shadow
   rays, rays that reached their light, the pixels past the bound, the
   view's sums of the lightmap and the traced light at every fourth pixel
-  a row and a column, which are information only, and the exposure).
+  a row and a column, which are information only, and the exposure) and
+  a second line a frame for the sky light and the sun (`ref_metal: rt
+  direct sky:`, their rays and the ones that reached the sky, and the
+  most rays a pixel traces, 67: 32 for the map's lights, 32 for the
+  dynamic lights, one for a light fixture's own light, one sky ray and
+  one sun ray).
   Default `0`; not saved with the configuration.
+
+* **r_rt_direct_bounce**: The scale of the Metal renderer's one bounce
+  of indirect light under RT-primary (`r_presentation 3`, TASK189):
+  each lightmapped world pixel traces one ray, cosine-weighted about its
+  normal, to the nearest face (passing up to four water or translucent
+  faces, as the shadow rays do). Where it meets a lightmapped world face,
+  the pixel takes that face's stock lightmap at the hit (the one the
+  stock renderer draws it with, its lightstyles applied) times the
+  mean colour of the face's texture, times this value. No second shadow
+  ray is traced: the lightmap already holds the map compiler's light at
+  the hit. A ray that reaches the sky adds nothing (the sky light,
+  `r_rt_direct_sky`, counts that light), and neither does one that meets
+  a model or nothing. It is added after the exposure, in the units of
+  the light the resolve reads, as the sky light is. The pixel's own
+  lightmap is never read. A face the stock renderer has not drawn this
+  frame keeps the lightmap it was last drawn with, so a switched light
+  outside the view can still show in the bounce. The lightmap is read
+  bilinearly, like the water's and the stock default
+  `metal_lightmap_filter 0`; with the bicubic option on it reads slightly
+  differently from the stock draw. `1` (the default); `0`
+  traces no bounce ray; at most `4`; a negative value or one that is not
+  a finite number counts as `0`. The ray's noise moves each frame unless
+  `r_rt_direct_seed` fixes it. Read each frame. Saved with the
+  configuration.
 
 * **r_rt_direct_exposure**: The exposure of the Metal renderer's direct
   light (`r_rt_direct`). `0` (the default) takes the map's fit, made once
@@ -1301,6 +1336,15 @@ is.
   is drawn at the same exposure. A value above `0` is a fixed exposure,
   at most `64`. Saved with the configuration.
 
+* **r_rt_direct_seed**: The noise frame of the Metal renderer's sky
+  light ray and bounce ray under RT-primary (`r_rt_direct_sky`,
+  `r_rt_direct_bounce`), with the rule of
+  `r_rt_ao_seed`: `1` or more fixes the noise at that frame (cut to an
+  integer, at most `65535`), the same on every frame, so recorded frames
+  are repeatable; `0` (the default), a negative value or one that is not
+  a finite number moves it on every frame. Not saved with the
+  configuration.
+
 * **r_rt_direct_show**: A development view of the Metal renderer's
   direct light, drawn over the 3D view while `r_rt_direct` runs. `0`
   (the default) the picture; `1` the direct term alone (the light, as on
@@ -1310,10 +1354,34 @@ is.
   range counts as reached, and a light fixture's own light, which needs a
   ray to find, is left out), to compare with `1`; `4` the dynamic
   lights' term alone (the muzzle flashes, explosions and other lights of
-  the frame, each with its shadow ray), on white walls. Every view is at
-  the map's exposure (`r_rt_direct_exposure`); the `r_rt_stats 2` line's
-  sums under views `3` and `4` are of the term shown. Pixels that are
-  not lightmapped world are black. Not saved with the configuration.
+  the frame, each with its shadow ray), on white walls; `5` the sky
+  light's term alone (`r_rt_direct_sky`, with its ray), on white walls;
+  `6` the sun's term alone (with its ray), on white walls; `7` the
+  bounce's term alone (`r_rt_direct_bounce`, with its ray), on white
+  walls. Only the picture (`0`) adds the sky's, the sun's and the
+  bounce's terms to the direct term: views `1` to `4` trace none of their
+  rays, so `1` is the direct term alone and `3` differs from it by its
+  shadows only, and `5`, `6` and `7` each trace only their own. Views `5` and `6` still trace
+  the map's and the dynamic lights' shadow rays, and count them on the
+  `r_rt_stats 2` line, though they show none of that light, and so does
+  view `7`. Every view of the map's lights is at the map's
+  exposure (`r_rt_direct_exposure`); the sky's, the sun's and the
+  bounce's terms are added after it, as RT4's sun is. The `r_rt_stats 2` line's sums under
+  views `3` and `4` are of the term shown. Pixels that are not
+  lightmapped world are black. Not saved with the configuration.
+
+* **r_rt_direct_sky**: The scale of the Metal renderer's sky light under
+  RT-primary (`r_presentation 3`, TASK189): each lightmapped world pixel
+  traces one ray, cosine-weighted about its normal, and where that ray
+  reaches a sky face (passing up to four water or translucent faces, as
+  RT4's sun ray does) the pixel takes the sky's colour, the mean of the
+  sky box's five faces above the horizon, times this value. It is added
+  after the exposure, in the units of the light the resolve reads, so a
+  value of `1` on a sky of mean grey `0.4` lights an open floor as a
+  lightmap of `0.4` would. `1` (the default); `0` traces no sky ray; at
+  most `4`; a negative value or one that is not a finite number counts
+  as `0`. The ray's noise moves each frame unless `r_rt_direct_seed`
+  fixes it. Read each frame. Saved with the configuration.
 
 * **r_rt_flatlight**: A preview and debug setting of the Metal renderer
   (TASK173): with a level from `0` to `1`, every lightmap sample of the
@@ -1535,9 +1603,10 @@ is.
 * **r_rt_temporal**: The Metal renderer's temporal accumulation of the
   ray-traced effects (RT7): the weight of a pixel's history in the
   exponential blend with the frame's own value, so that the effects are
-  steady at low ray counts. `0` (the default) turns it off: no history is
-  made, written or read, and every frame is the same as without it. A
-  value above `0` blends; one above `0.98` counts as `0.98`, and a
+  steady at low ray counts, `0.9` by default. `0` turns it off: no
+  history is made, written or read, no denoiser runs, and every frame is
+  the same as without it. A value above `0` blends; one above `0.98`
+  counts as `0.98`, and a
   negative one or one that is not a finite number as `0`. A young history
   is the plain mean of its samples. The history is read where the
   G-buffer's motion vectors say the point was, and dropped where that is
@@ -1552,11 +1621,44 @@ is.
   `r_rt_shadows` (each light's visibility, before the light is added),
   `r_rt_sun` and `r_rt_ao`, each with its own history and one reset for
   the three. `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show`
-  show the frame's own trace, before the accumulation. The design's
-  default of `0.9` is set once the denoiser lands and the look is
-  judged. Saved with the configuration; applies from the next frame.
-  Not on the Ray tracing screens yet: it joins the tuning screen, the
-  presets and the settings optimizer with its default.
+  show the frame's own trace, before the accumulation. While it is above
+  `0`, the accumulated AO and sun are also denoised before the resolve: a
+  5 x 5 blur guided by the distance from the eye and the normal, full on
+  a pixel with one sample in its history and fading to none at 16, so a
+  history that has just started again is smoothed and a settled one is
+  left sharp; the history keeps the accumulation alone. The default moved
+  from `0` to the design's `0.9` (TASK59 slice 2) once the denoiser
+  landed: until then `0` kept every frame as before while the
+  accumulation was built; the committed `rt-*` pin scenarios set it to
+  `0` so that their frames stay those of the passes alone. While it is
+  above `0`, the water reflections of `r_rt_water`, which have no history
+  (the warp moves every frame), get a 3 x 3 blur guided by the distance
+  from the eye, over the neighbours that hold a reflection on the same
+  water (TASK59 slice 2b); at `0` they are the trace's alone, as before.
+  The blur does not run under RT-primary (`r_presentation 3`), whose
+  water is the trace's alone at any value: RT-primary's denoising is row
+  PM8 of the presentation-modes plan (TASK190, #537), not this one. The
+  AO's and the sun's denoiser do not run there either, since RT-primary
+  reads `r_rt_ao` and `r_rt_sun` as `0`.
+  The accumulation's memory, per pixel of the render size, is 112 bytes
+  for the three effects (the AO 32, the sun 32, the shadows 48), made
+  only for an effect that is on: at 1920 x 1080 that is 232,243,200 bytes
+  with all three on, at 3840 x 2160 928,972,800 (about 0.9 GB); the
+  reflections' blur adds 4 bytes a pixel while the water is on. A failed
+  allocation is logged once and the frames are then the trace's alone;
+  for the reflections' blur, once per render size, since a new size tries
+  it again.
+  Saved with the configuration; applies from the next frame. The Ray
+  tracing menu's tuning screen has it as "accumulate" (0 to 0.98, the
+  renderer's own maximum, in steps of 0.02): live when shadows, sun, AO
+  or water runs, and the presentation is not RT-primary; greyed "turn on
+  shadows, sun, AO or water first" while none of them runs, and "set by
+  the presentation" under Retro and under RT-primary (whose water has
+  no blur and whose other three effects are off); the
+  presets and the A/B hold it. The tuning screen has no rule by device
+  class: the row and its default are the same on every device (whether a
+  default may differ by device class is decision 0014's open question).
+  The settings optimizer does not search it.
 
 * **r_rt_water**: When set to `1`, the Metal renderer gives water a
   ray-traced reflection, one bounce: from each pixel of water (the

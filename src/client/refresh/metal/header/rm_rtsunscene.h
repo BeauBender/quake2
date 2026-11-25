@@ -42,4 +42,14 @@ int RM_RTSun_Active(void);
 int RM_RTSun_ShowOnly(void);
 void RM_RTSun_View(const rm_view_t *view);
 
+/*
+ * TASK189: the sun of RT-primary's light model (rm_rtdirscene.c), as RT2's
+ * view takes it but whatever r_rt_sun reads (RT-primary's overlay reads it
+ * 0): dir the unit direction toward the sun from the map's line of
+ * scripts/rt/sun-angles.txt, else r_rt_sun_angles, else the default; sun
+ * sky_color times r_rt_sunscale, a channel. No map is measured and nothing
+ * is opened.
+ */
+void RM_RTSun_Primary(float *dir, float *sun);
+
 #endif /* RM_RTSUNSCENE_H */

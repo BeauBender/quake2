@@ -185,9 +185,13 @@ static const char *const rtg_cvars[] = {
 	/* TASK188's direct light of RT-primary (PM6): a ray each light in range and pixel, only under
 	   r_presentation 3, whose overlay reads it 1 */
 	"r_rt_direct",
-	/* its fixed exposure and its development view: read only while the direct light runs */
+	/* the bounce's scale (TASK189 slice 2), its fixed exposure, the sky ray's noise seed, its development view
+	   and the sky light's scale (TASK189): read only while the direct light runs */
+	"r_rt_direct_bounce",
 	"r_rt_direct_exposure",
+	"r_rt_direct_seed",
 	"r_rt_direct_show",
+	"r_rt_direct_sky",
 	/* TASK173's preview grey: it replaces a lightmap sample on the G-buffer raster path, which every
 	   Metal GPU runs, and traces nothing itself; left alone, it does nothing where the path is off */
 	"r_rt_flatlight",
@@ -220,7 +224,7 @@ static const char *const rtg_cvars[] = {
 	"r_rt_sunfloor",
 	"r_rt_sunscale",
 	/* RT7's temporal accumulation (TASK59): it blends what the effects traced and traces no ray itself;
-	   read only while an effect it accumulates runs */
+	   read only while an effect it accumulates runs, or the water, whose reflections it blurs (slice 2b) */
 	"r_rt_temporal",
 	/* RT6's water reflections (TASK58): a ray each water pixel */
 	"r_rt_water",
