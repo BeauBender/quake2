@@ -72,7 +72,13 @@
 /*
  * TASK188 slice 3b: the material a shadow ray toward a dynamic light
  * reads at an alias model that carries that light (rm_rts_carried, a
- * rocket's light inside it, a muzzle flash's): it passes, as in RT3.
+ * rocket's light inside it, a muzzle flash's): it passes, as in RT3,
+ * but within the same MTL_RTDIR_LAYERS as water and translucent faces
+ * (mtl_rtdir_at), so the ray stays at MTL_RTDIR_LAYERS + 1
+ * intersections. RT3 counts a carrier's crossings apart from water's,
+ * and past its own budget lets the ray through; here a ray that
+ * crosses the carrier and water or translucent faces more than
+ * MTL_RTDIR_LAYERS times in all is shadowed (TASK188 slice 3c).
  */
 #define MTL_RTDIR_MAT_CARRIER 0xfeu
 
