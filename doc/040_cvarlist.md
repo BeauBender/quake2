@@ -1070,14 +1070,15 @@ marked `(n/a)` and skipped.
   map's own light entities (`r_rt_direct`), one shadow ray a light,
   scaled by one exposure (`r_rt_direct_exposure`). It reads
   `r_rt_direct` and `r_rt_water` as `1` and `r_rt_shadows`, `r_rt_sun`
-  and `r_rt_ao` as `0` (the AO pass does not run: the bounce, a later
-  slice, takes its place). Beside the map's lights it adds the sky light
+  and `r_rt_ao` as `0` (the AO pass does not run: the bounce takes its
+  place). Beside the map's lights it adds the sky light
   (`r_rt_direct_sky`, one ray a pixel that returns the sky's colour where
   it reaches a sky face) and the sun (one ray a pixel toward
   `r_rt_sun_angles` or the map's line of `scripts/rt/sun-angles.txt`,
-  at `r_rt_sunscale`); the bounce and the denoiser are later work, so a
-  part of a map lit by its light faces alone is darker than in stock,
-  and the sky light is noisy (one ray a pixel, no denoiser yet). Models, the sky,
+  at `r_rt_sunscale`) and one bounce of indirect light
+  (`r_rt_direct_bounce`, one ray a pixel that reads the stock lightmap
+  where it lands); the denoiser is later work, so the sky light and the
+  bounce are noisy (one ray a pixel each, no denoiser yet). Models, the sky,
   water, particles and the 2D layer stay stock. Retro and Ray traced are greyed in
   the menu "awaiting review" until their look is accepted, and work from
   the console; the values are never renumbered. Read at start-up and at
@@ -1282,6 +1283,30 @@ is.
   one sun ray).
   Default `0`; not saved with the configuration.
 
+* **r_rt_direct_bounce**: The scale of the Metal renderer's one bounce
+  of indirect light under RT-primary (`r_presentation 3`, TASK189):
+  each lightmapped world pixel traces one ray, cosine-weighted about its
+  normal, to the nearest face (passing up to four water or translucent
+  faces, as the shadow rays do). Where it meets a lightmapped world face,
+  the pixel takes that face's stock lightmap at the hit (the one the
+  stock renderer draws it with, its lightstyles applied) times the
+  mean colour of the face's texture, times this value. No second shadow
+  ray is traced: the lightmap already holds the map compiler's light at
+  the hit. A ray that reaches the sky adds nothing (the sky light,
+  `r_rt_direct_sky`, counts that light), and neither does one that meets
+  a model or nothing. It is added after the exposure, in the units of
+  the light the resolve reads, as the sky light is. The pixel's own
+  lightmap is never read. A face the stock renderer has not drawn this
+  frame keeps the lightmap it was last drawn with, so a switched light
+  outside the view can still show in the bounce. The lightmap is read
+  bilinearly, like the water's and the stock default
+  `metal_lightmap_filter 0`; with the bicubic option on it reads slightly
+  differently from the stock draw. `1` (the default); `0`
+  traces no bounce ray; at most `4`; a negative value or one that is not
+  a finite number counts as `0`. The ray's noise moves each frame unless
+  `r_rt_direct_seed` fixes it. Read each frame. Saved with the
+  configuration.
+
 * **r_rt_direct_exposure**: The exposure of the Metal renderer's direct
   light (`r_rt_direct`). `0` (the default) takes the map's fit, made once
   a map, on its first frame under RT-primary, and kept while that map
@@ -1307,7 +1332,8 @@ is.
   at most `64`. Saved with the configuration.
 
 * **r_rt_direct_seed**: The noise frame of the Metal renderer's sky
-  light ray under RT-primary (`r_rt_direct_sky`), with the rule of
+  light ray and bounce ray under RT-primary (`r_rt_direct_sky`,
+  `r_rt_direct_bounce`), with the rule of
   `r_rt_ao_seed`: `1` or more fixes the noise at that frame (cut to an
   integer, at most `65535`), the same on every frame, so recorded frames
   are repeatable; `0` (the default), a negative value or one that is not
@@ -1325,15 +1351,17 @@ is.
   lights' term alone (the muzzle flashes, explosions and other lights of
   the frame, each with its shadow ray), on white walls; `5` the sky
   light's term alone (`r_rt_direct_sky`, with its ray), on white walls;
-  `6` the sun's term alone (with its ray), on white walls. Only the
-  picture (`0`) adds the sky's and the sun's terms to the direct term:
-  views `1` to `4` trace neither the sky's nor the sun's ray, so `1` is
-  the direct term alone and `3` differs from it by its shadows only, and
-  `5` and `6` each trace only their own. Views `5` and `6` still trace
+  `6` the sun's term alone (with its ray), on white walls; `7` the
+  bounce's term alone (`r_rt_direct_bounce`, with its ray), on white
+  walls. Only the picture (`0`) adds the sky's, the sun's and the
+  bounce's terms to the direct term: views `1` to `4` trace none of their
+  rays, so `1` is the direct term alone and `3` differs from it by its
+  shadows only, and `5`, `6` and `7` each trace only their own. Views `5` and `6` still trace
   the map's and the dynamic lights' shadow rays, and count them on the
-  `r_rt_stats 2` line, though they show none of that light. Every view of the map's lights is at the map's
-  exposure (`r_rt_direct_exposure`); the sky's and the sun's terms are
-  added after it, as RT4's sun is. The `r_rt_stats 2` line's sums under
+  `r_rt_stats 2` line, though they show none of that light, and so does
+  view `7`. Every view of the map's lights is at the map's
+  exposure (`r_rt_direct_exposure`); the sky's, the sun's and the
+  bounce's terms are added after it, as RT4's sun is. The `r_rt_stats 2` line's sums under
   views `3` and `4` are of the term shown. Pixels that are not
   lightmapped world are black. Not saved with the configuration.
 
