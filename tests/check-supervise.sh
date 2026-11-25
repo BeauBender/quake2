@@ -142,11 +142,11 @@ mutant() {
 mutant drop-kill term-ignored "a member that ignores TERM was alive after kill-sent" \
 	's/sv_group(SIGKILL, "kill-sent")/sv_group(0, "kill-sent")/'
 mutant reap-early leader-first "the leader was reaped while a member of its group was alive" \
-	's/if (sv_exited \&\& live == 0)$/if (sv_exited)/'
+	's/if (sv_exited && live == 0)$/if (sv_exited)/'
 mutant no-forward-term signal-term "TERM to the supervisor was not forwarded" \
 	's/^static const int sv_watch\[\] = { SIGINT, SIGTERM, SIGHUP };$/static const int sv_watch[] = { SIGINT, SIGHUP };/'
 mutant timeout-zero deadline "status 0, want 124" \
-	's/^		return 124;$/		return 0;/'
+	's/^\([[:space:]]*\)return 124;$/\1return 0;/'
 mutant no-wnowait leader-first "no reaped line: the leader was reaped before its group was empty" \
 	's/WEXITED | WNOWAIT/WEXITED/'
 
