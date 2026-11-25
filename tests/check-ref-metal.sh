@@ -25,7 +25,8 @@
 #     (rm_rtsun.c and common/mtl_rtsun_math.h, RT4, TASK56),
 #     tests/metal/rm_rtdir_test.c, the pure part of RT-primary's direct light
 #     (rm_rtdir.c and common/mtl_rtdir_math.h, TASK188; eight scratch mutants
-#     of the exposure fit in rm_rtdir.c must fail it),
+#     of the exposure fit in rm_rtdir.c must fail it; TASK189's sky light and
+#     sun, common/mtl_rtsky_math.h, and the kernel's mutants of them),
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and

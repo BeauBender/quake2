@@ -1076,6 +1076,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/common/mtl_rtsun_math.h \
 		src/client/refresh/metal/common/mtl_rtw_math.h \
 		src/client/refresh/metal/common/mtl_rtdir_math.h \
+		src/client/refresh/metal/common/mtl_rtsky_math.h \
 		src/client/refresh/metal/common/mtl_retro_math.h \
 		src/client/refresh/metal/common/mtl_hdr_math.h
 	@echo "===> METAL $<"

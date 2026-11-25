@@ -416,7 +416,8 @@ rm_rtdir_direct(constant rm_rtdir_view &v, float3 p, float3 n, constant packed_f
  * face is passed, the nearest first, up to MTL_RTSUN_LAYERS of them, and
  * what is behind the last still decides; nothing met, or one more such
  * face, is shadowed. At most MTL_RTSUN_LAYERS + 1 intersections. inst and
- * tmat as rm_rtdir_seen's. RT2's own loop (rm_rtsun.metal's rm_rtsun_hit)
+ * tmat as rm_rtdir_seen's (a map triangle outside the table counts as the
+ * world's). RT2's own loop (rm_rtsun.metal's rm_rtsun_hit)
  * is left as it is: this is its rule in a function of this file.
  */
 static float
@@ -438,7 +439,6 @@ rm_rtdir_sky_hit(ray r, instance_acceleration_structure ias, device const uint *
 
 		b = inst[2 * hit.instance_id];
 
-		/* a map triangle outside the table (none uploaded) counts as the world's */
 		if (b != 0xffffffffu)
 		{
 			m = (b + hit.primitive_id < ntris) ? (uint)tmat[b + hit.primitive_id] : (uint)MTL_GB_MAT_WORLD;
