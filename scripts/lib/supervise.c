@@ -85,6 +85,7 @@ static int sv_phase = PH_RUN;
 static int sv_why;         /* 0, SV_DEADLINE, or 128+n: what started the stop */
 static int sv_exited;      /* the leader's exit has been seen */
 static int sv_status;      /* and its status: the exit code, or 128+n */
+static int sv_lost;        /* the errno of a failed peek at the leader's exit */
 
 /* the processes watched: the leader and the members seen; gone once their exit is seen */
 static pid_t sv_known[SV_MAXPIDS];
@@ -501,8 +502,20 @@ sv_stop(int sig)
 static int
 sv_step(void)
 {
-	int live = sv_scan();
+	int live;
 
+	if (sv_lost != 0)
+	{
+		sv_say("cannot read the status of the command %d: %s; the group is killed", (int)sv_leader, strerror(sv_lost));
+		(void)kill(-sv_leader, SIGKILL);
+		return 126;
+	}
+	/* while the leader runs and no stop is due, the forks are watched and nothing is counted */
+	if (sv_phase == PH_RUN && !sv_exited && sv_why == 0)
+	{
+		return -1;
+	}
+	live = sv_scan();
 	if (sv_exited && live == 0)
 	{
 		return sv_finish();
@@ -612,9 +625,9 @@ sv_batch(const struct kevent *evs, int n)
 				{
 					sv_gone[k] = 1;
 				}
-				if ((e->fflags & NOTE_EXIT) && p == sv_leader)
+				if ((e->fflags & NOTE_EXIT) && p == sv_leader && sv_peek(0) < 0)
 				{
-					(void)sv_peek(0);
+					sv_lost = errno;
 				}
 			}
 			else if (pass == 1 && e->filter == EVFILT_SIGNAL)
@@ -773,6 +786,18 @@ main(int argc, char **argv)
 	if (sigprocmask(SIG_BLOCK, &block, NULL) < 0)
 	{
 		sv_say("cannot block the stop signals: %s", strerror(errno));
+		return 125;
+	}
+	/*
+	 * SIGCHLD at its default, with no SA_NOCLDWAIT: whatever the caller left,
+	 * no child of this program is reaped but by its own waitid
+	 */
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = SIG_DFL;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGCHLD, &sa, NULL) < 0)
+	{
+		sv_say("cannot set SIGCHLD to its default: %s", strerror(errno));
 		return 125;
 	}
 	signal(SIGPIPE, SIG_IGN);

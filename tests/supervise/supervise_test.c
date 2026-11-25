@@ -816,13 +816,13 @@ c_int_ignored(struct run *r)
 
 /* the leader exits while a member lives: the member is stopped, and the leader reaped after group-empty */
 static int
-c_leader_first(struct run *r)
+leader_first(struct run *r, const char *form)
 {
 	struct chan *l, *c;
 	const char *a;
 	long ge, rp;
 
-	if (start(r, "exec", NULL, NULL, NULL) || (l = leader(r)) == NULL || (c = fork_fake(r, l, "child")) == NULL)
+	if (start(r, form, NULL, NULL, NULL) || (l = leader(r)) == NULL || (c = fork_fake(r, l, "child")) == NULL)
 	{
 		return 1;
 	}
@@ -856,6 +856,12 @@ c_leader_first(struct run *r)
 		return fail(r, "events: %s", r->log);
 	}
 	return want_status(r, 5);
+}
+
+static int
+c_leader_first(struct run *r)
+{
+	return leader_first(r, "exec");
 }
 
 /* a member that moved into a session of its own is named and not signalled */
