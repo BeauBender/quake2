@@ -1625,7 +1625,8 @@ is.
   summed and before the albedo, with a history of its own, made only under
   that presentation and one reset shared with the others; the same
   rejections apply but the dynamic-light set's, since that light sums every
-  light. The presentation does not set `r_rt_temporal`: the value is the
+  light. That light is accumulated but not yet denoised: the 5 x 5
+  denoiser applies to the AO and the sun only. The presentation does not set `r_rt_temporal`: the value is the
   user's, and at `0` the presentation's frames are the same as without it.
   `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the
   frame's own trace, before the accumulation; `r_rt_direct_show`'s

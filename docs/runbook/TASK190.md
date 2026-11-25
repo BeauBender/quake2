@@ -24,7 +24,7 @@ Traced in the code at `origin/task189s2` with main merged:
   (`RM_RTT_ViewFor`, `rm_rtaoscene.c`, stepped once a world view at the first effect that asks), the
   rejection rule (the view's reset, off the screen, the depth, the material, the dynamic-light set, an empty
   history), the count and the exponential blend, and a per-effect record of the last view encoded
-  (`rm_rtt_hist_take`). `r_rt_temporal` defaults to `0`. Under RT-primary the overlay reads `r_rt_shadows`,
+  (`rm_rtt_hist_take`). `r_rt_temporal` defaulted to `0` (then). Under RT-primary the overlay reads `r_rt_shadows`,
   `r_rt_sun` and `r_rt_ao` as `0`, so none of RT7's three accumulations runs there.
 
 ## What it adds
@@ -60,7 +60,7 @@ Traced in the code at `origin/task189s2` with main merged:
   change of the render size or of the view's rectangle, and a frame that accumulated nothing reset it as
   they reset RT7's. A change of `r_rt_direct_show` also resets it (the light then holds another term).
 - **`r_rt_temporal`.** The user's value: the presentation's overlay has no row for it, and the scene reads
-  the cvar itself. At `0` (the default) `RM_RTT_ViewFor` returns none, `rmb_rtdir_temporal` releases the
+  the cvar itself. At `0` (not the default, which is `0.9` since TASK59's slice 2) `RM_RTT_ViewFor` returns none, `rmb_rtdir_temporal` releases the
   histories and hands no view over, `rmb_rtdir_accumulate` returns nil before encoding anything, and the
   resolve reads `t_light` as before: the frames are the trace's, bit for bit.
 - **Allocation.** The pipeline, the timestamps, the histories and `t_acc` are made only while the
@@ -72,7 +72,8 @@ Traced in the code at `origin/task189s2` with main merged:
 - **The development view.** `r_rt_direct_show`'s terms are drawn from what the resolve reads: accumulated
   where the view accumulated, the trace's otherwise. RT3 to RT5's show views stay the trace's own.
 - **The pins.** Every `scripts/pins/scenarios/rtprimary-*.cfg` sets `r_rt_temporal 0`, so each RT-primary
-  record stays byte-identical to TASK189's when TASK59's slice 2 makes `0.9` the default. The line changes
+  record stays byte-identical to TASK189's: TASK59's slice 2 has made `0.9` the default, so RT-primary's
+  accumulation is on by default under the Ray traced presentation. The line changes
   each scenario's id (`pins.sh`'s scenario hash is of the file); the frames are compared by their hashes.
 
 ## Tests
@@ -125,6 +126,12 @@ Written as the scratchpad's `task190s1-hold.sh` and run by the orchestrator; the
 - Frames for the owner (base2, `demo1.dm2` captures 21 and 22 outdoors and 12 indoors, at `0` and `0.9`):
   the frames of captures 21, 22 and 12, for the world and the bounce scenarios, at `0` and at `0.9` (12
   frames), went to the owner directly and were not committed.
+
+The hold was run again on the carried head `d78d736743e6`, on main `8ef64ddfb44d`, after TASK189 slice 2 and
+TASK59 slice 2 merged. The stock pins: 29 of 29 byte-identical to main. RT-primary: 12 of 12 records
+byte-identical to main. The scratch runs at `0.9` are deterministic: 0 of 23 frames differ between runs. The
+hashes are the same as in the first hold (`2f6e7791f25d` for the world and `6629d6d589f3` for the bounce at
+`0.9`, `96a043d6d138` and `a94e7ce56a82` at `0`).
 
 ## Notes from review
 
