@@ -32,6 +32,9 @@
 #     (rm_rtdir.c and common/mtl_rtdir_math.h, TASK188; eight scratch mutants
 #     of the exposure fit in rm_rtdir.c must fail it; TASK189's sky light and
 #     sun, common/mtl_rtsky_math.h, and the kernel's mutants of them),
+#     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
+#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; seven
+#     scratch mutants of the two must fail it, and all seven must),
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -662,6 +665,75 @@ if [ -n "$rtdir" ]; then
 	done
 fi
 seg 7.6 ", $rtdir_mutants fit mutants and $rtdir_sky sky mutants refused"
+
+# RT-primary's light on alias models (TASK191 slice 1, PM9): rm_rtmodel.c and common/mtl_rtm_math.h, held
+# to gl1's model colour (rm_pure.c) and to the G-buffer's split (rm_gbuf.c), with rm_rtshadow.c for the
+# weapon's view and rm_rt.c, which it needs
+rtm_tree() { # <dir>: the test, rm_rtmodel.c and the headers, laid out as the test includes them
+	rm -rf "${1:?}"
+	mkdir -p "$1/src/client/refresh/metal" "$1/tests/metal"
+	cp -R "$rm_dir/header" "$rm_dir/common" "$1/src/client/refresh/metal/"
+	cp "$rm_dir/rm_rtmodel.c" "$1/src/client/refresh/metal/"
+	cp tests/metal/rm_rtmodel_test.c "$1/tests/metal/"
+}
+rtm_run() { # <tree>: 0 when the tree's test builds (1 when not) and passes (2 when not)
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "$1/t" "$1/tests/metal/rm_rtmodel_test.c" \
+		"$1/src/client/refresh/metal/rm_rtmodel.c" "$rm_dir/rm_gbuf.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" \
+		"$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" src/common/shared/shared.c \
+		-lm > "${tmp:?}/cc.out" 2>&1 || return 1
+	UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1 || return 2
+}
+rtm=""
+rtm_tree "${tmp:?}/rtm"
+r=0
+rtm_run "${tmp:?}/rtm" || r=$?
+case $r in
+	0)
+		rtm=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtmodel_test: //')
+		case $rtm in *", 0 failed") ;; *) bad "tests/metal/rm_rtmodel_test.c printed no result line"; rtm="";; esac ;;
+	1) cat "${tmp:?}/cc.out"; bad "tests/metal/rm_rtmodel_test.c does not compile" ;;
+	*) cat "${tmp:?}/out"; bad "tests/metal/rm_rtmodel_test.c failed" ;;
+esac
+# the mutants, each of which must compile and fail the test: the shadedot applied twice, the minlight floor
+# skipped, the glow pulse's sign flipped, the split with the weapon traced, the split with a fullbright model
+# traced, the tag's decode dropping a bit, the weapon unprojected with the view's projection
+rtm_mutants=0
+if [ -n "$rtm" ]; then
+	for m in shadedot-twice minlight-skipped glow-sign weapon-traced fullbright-traced tag-bit weapon-view-inv; do
+		rtm_tree "${tmp:?}/rtmm"
+		h=${tmp:?}/rtmm/src/client/refresh/metal/common/mtl_rtm_math.h
+		c=${tmp:?}/rtmm/src/client/refresh/metal/rm_rtmodel.c
+		case $m in
+			shadedot-twice) sed 's/const float f = dot \* s \* 255.0f;/const float f = dot * dot * s * 255.0f;/' \
+				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			minlight-skipped) sed 's/if (f & MTL_RTM_MINLIGHT)/if ((f \& MTL_RTM_MINLIGHT) \&\& 0)/' \
+				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			glow-sign) sed 's/const float g = s + scale;/const float g = s - scale;/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			weapon-traced) sed 's/if (flags & RM_RF_WEAPONMODEL)$/if (0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			fullbright-traced) sed 's/(rm_rtm_stock_light(flags, rdflags) || (flags & RM_RF_DEPTHHACK))/((rm_rtm_stock_light(flags, rdflags) \&\& !(flags \& RM_RF_FULLBRIGHT)) || (flags \& RM_RF_DEPTHHACK))/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			tag-bit) sed 's/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) & MTL_RTM_FLAGS;/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) \& 3u;/' \
+				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			weapon-view-inv) sed 's/rm_weapon_projection(p, w->fovy, w->gunfov, w->hand, w->width/rm_projection(p, w->fovy, w->width/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+		esac
+		r=0
+		rtm_run "${tmp:?}/rtmm" || r=$?
+		if cmp -s "$rm_dir/common/mtl_rtm_math.h" "$h" && cmp -s "$rm_dir/rm_rtmodel.c" "$c"; then
+			bad "the model-light mutant ($m) changed nothing"
+		elif [ "$r" -eq 1 ]; then
+			cat "${tmp:?}/cc.out"
+			bad "the model-light mutant ($m) does not compile, so it tests nothing"
+		elif [ "$r" -eq 0 ]; then
+			bad "tests/metal/rm_rtmodel_test.c passes the model-light mutant ($m)"
+		else
+			rtm_mutants=$((rtm_mutants + 1))
+		fi
+	done
+	[ "$rtm_mutants" -eq 7 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 7 model-light mutants"
+fi
+seg 7.7 "; model light ${rtm:-host test}, $rtm_mutants of 7 mutants refused"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)
