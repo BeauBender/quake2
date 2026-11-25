@@ -141,10 +141,51 @@ rm_rtdir_reflectivity(const float *mean, int read, float *out)
 	}
 }
 
+/* qrad3's patch light in light, its largest channel in *big: 1 when that is at least RM_RTDIR_DIRECT_LIGHT */
+static int
+rm_rtdir_patch_light_d(int value, const float *refl, double *light, double *big)
+{
+	double rmax = 0;
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		const double r = (refl && isfinite(refl[k]) && (refl[k] > 0)) ? refl[k] : 0.0;
+
+		rmax = (r > rmax) ? r : rmax;
+		light[k] = r;
+	}
+
+	*big = 0;
+
+	for (k = 0; k < 3; k++)
+	{
+		light[k] = ((rmax > 0) && (value > 0)) ? (double)value * light[k] * light[k] / rmax : 0.0;
+		*big = (light[k] > *big) ? light[k] : *big;
+	}
+
+	return isfinite(*big) && (*big >= RM_RTDIR_DIRECT_LIGHT);
+}
+
+int
+rm_rtdir_patch_light(int value, const float *refl, float *rgb)
+{
+	double light[3], big;
+	const int ok = rm_rtdir_patch_light_d(value, refl, light, &big);
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		rgb[k] = ok ? (float)light[k] : 0.0f;
+	}
+
+	return ok;
+}
+
 int
 rm_rtdir_emitter(const rm_rtdir_face_t *f, int value, const float *refl, rm_rtdir_light_t *out, int *clamped)
 {
-	double c[3] = { 0, 0, 0 }, area2[3] = { 0, 0, 0 }, area, nlen, light[3], big, rmax = 0, intensity;
+	double c[3] = { 0, 0, 0 }, area2[3] = { 0, 0, 0 }, area, nlen, light[3], big, intensity;
 	const float *p0;
 	int i, k;
 
@@ -208,23 +249,7 @@ rm_rtdir_emitter(const rm_rtdir_face_t *f, int value, const float *refl, rm_rtdi
 	}
 
 	/* the patch's light: BaseLightForFace's refl x value, times the normalized reflectivity (MakePatchForFace) */
-	for (k = 0; k < 3; k++)
-	{
-		const double r = (refl && isfinite(refl[k]) && (refl[k] > 0)) ? refl[k] : 0.0;
-
-		rmax = (r > rmax) ? r : rmax;
-		light[k] = r;
-	}
-
-	big = 0;
-
-	for (k = 0; k < 3; k++)
-	{
-		light[k] = (rmax > 0) ? (double)value * light[k] * light[k] / rmax : 0.0;
-		big = (light[k] > big) ? light[k] : big;
-	}
-
-	if (!isfinite(big) || !(big >= RM_RTDIR_DIRECT_LIGHT))
+	if (!rm_rtdir_patch_light_d(value, refl, light, &big))
 	{
 		return RM_RTDIR_EMIT_DIM;
 	}
@@ -319,6 +344,85 @@ rm_rtdir_pack_emitters(const rm_rtl_emitters_t *e, rm_rtdir_face_fn face, void *
 	}
 
 	return n;
+}
+
+long
+rm_rtdir_self_table(const rm_rtl_emitters_t *e, rm_rtdir_face_fn face, void *ctx, const rm_surfrec_t *recs,
+		long nrecs, unsigned *out, unsigned long ntris)
+{
+	long i, marked = 0;
+
+	if (!out || (ntris == 0))
+	{
+		return -1;
+	}
+
+	memset(out, 0, ntris * sizeof(*out));
+
+	for (i = 0; e && face && recs && (i < e->n) && (i < RM_RTL_MAX_EMITTERS); i++)
+	{
+		static const float grey0[3] = { 0, 0, 0 };
+		const rm_rtl_emit_t *s = &e->emit[i];
+		const rm_rtl_tex_t *t = ((s->tex >= 0) && (s->tex < e->ntex) && (s->tex < RM_RTL_MAX_TEXTURES)) ?
+			&e->tex[s->tex] : NULL;
+		rm_rtdir_face_t f;
+		float refl[3], rgb[3];
+		unsigned long first, n, k;
+		unsigned w;
+
+		if ((s->face < 0) || (s->face >= nrecs) || !face(ctx, s->face, &f))
+		{
+			continue;
+		}
+
+		rm_rtdir_reflectivity(t ? t->mean : grey0, t ? t->read : 0, refl);
+
+		if (!rm_rtdir_patch_light(s->value, refl, rgb))
+		{
+			continue;
+		}
+
+		/* the face's triangles: whole, inside the buffer */
+		first = recs[s->face].first_index;
+		n = recs[s->face].num_indices;
+
+		if ((first % 3) || (n % 3) || (first / 3 > ntris) || (n / 3 > ntris - first / 3))
+		{
+			continue;
+		}
+
+		w = mtl_rtdir_self_pack(rgb[0], rgb[1], rgb[2]);
+
+		for (k = 0; k < n / 3; k++)
+		{
+			out[first / 3 + k] = w;
+		}
+
+		marked++;
+	}
+
+	return marked;
+}
+
+int
+rm_rtdir_dlight(const float *origin, const float *color, float intensity, rm_rtdir_dlight_t *out)
+{
+	int k;
+
+	if (!origin || !color || !out || !rm_dlight_ok(origin, color, intensity))
+	{
+		return 0;
+	}
+
+	for (k = 0; k < 3; k++)
+	{
+		out->pos[k] = origin[k];
+		out->color[k] = color[k];
+	}
+
+	out->pos[3] = intensity;
+	out->color[3] = 0.0f;
+	return 1;
 }
 
 void

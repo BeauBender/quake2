@@ -1,4 +1,4 @@
-# RT-primary direct light from the map's point lights and emissive faces, one shadow ray each (TASK188, PM6 slices 1, 2 and 3a)
+# RT-primary direct light from the map's point lights, emissive faces and dynamic lights, one shadow ray each (TASK188, PM6 slices 1 to 3b)
 
 Card: TASK188 (#535). Plan: `docs/plans/presentation-modes.md`, section 4.1 and row PM6 of section 7.
 Under `r_presentation 3` (*Ray traced*) the lightmap is off at the visible world surface, and each
@@ -328,7 +328,7 @@ order (the maps measured have 417 and 280).
 **Not yet**: a face is not drawn at its own emission. qrad3 adds the face's light to its own lightmap
 ("the texture itself should still be full bright"); under RT-primary a light fixture's pixel takes only
 the light other lights send it. The kernel cannot tell an emitter's pixel from the G-buffer (its material
-is the world's), so this needs a material bit or a per-triangle table; it is slice 3's.
+is the world's), so this needs a material bit or a per-triangle table; slice 3b adds the table (see there).
 
 **Lines.** `r_rt_stats 1` adds the emitters' map line:
 `ref_metal: rt direct: <map>: N emissive faces uploaded (B not the world's, S shapeless, D below qrad3's
@@ -632,12 +632,232 @@ In one hold on the code of the final commit (`cfd8d3ba`): `make ref_metal`, `mak
 `tests/check-video-menu.sh` and `tests/check-pin-chars.sh`, all ok; the stock pin compare (29 of 29) and the
 RT-primary records, three runs each with one hash. No frame was looked at by the agent.
 
-## Left for slice 3b (and later rows)
+## Slice 3b: the dynamic lights as a term, and an emissive face drawn at its own light
 
-- **An emissive face drawn at its own emission** (see above): a material bit in the G-buffer or a
-  per-triangle table, under RT-primary only.
+Slice 3b takes two items of the list slice 3a left (now "Left for slice 3c" below): RT3's dlights as a term,
+and an emissive face at its own emission, both under RT-primary only.
+
+### What the stock and RT3 layers do, and what RT-primary did with them
+
+Traced in the code before this slice:
+
+- **Stock** (`rm_light.c`, `rm_pure.c`): `R_PushDlights` marks the surfaces a dynamic light reaches, and
+  `R_BuildLightMap` adds gl1's term to the marked surfaces' lightmaps while `r_dlight_term` is on
+  (`rm_lm_dlight`: `frad = intensity - |plane distance|`; nothing when `frad` is under `DLIGHT_CUTOFF`, 64;
+  at a luxel, `frad - fdist` times the light's colour where `fdist`, the larger in-plane offset along the
+  texture axes plus half the smaller, both truncated to int, is under `frad - 64`). The lightmap is in
+  bytes, so the term is in the lightmap's units, with no `r_modulate` and no lightstyle.
+- **RT3** (`r_rt_shadows`, `rm_rtshadowscene.c`): `RM_RTS_View` turns `r_dlight_term` off once it can trace,
+  and the resolve adds the term back from the kernel (`mtl_rts_add_lm`, the four luxels' adds against the
+  surface's own texture axes, interpolated), the four lights that add the most each with one shadow ray and
+  the rest unshadowed. A model that carries a light (`rm_rts_carried`, a rocket's light inside it) passes
+  that light's rays.
+- **RT-primary** reads `r_rt_shadows` 0 (`pres_rtprimary`), so RT3 is off and `r_dlight_term` stays on:
+  the dynamic lights went into the lightmaps, which the kernel reads only for the exposure fit's sums
+  (`rm_rtdir_fit_sample`). So no world pixel showed a dynamic light: a muzzle flash or an explosion lit the
+  models (through `R_LightPoint`) and not the walls.
+
+### The dynamic lights, a term of their own
+
+`rm_rtdir_dyn` (`rm_rtdir.metal`), called from `rm_rtdir_direct` after the map lights' walk:
+
+- **The rule.** `mtl_rtdir_dlight_add` (`common/mtl_rtdir_math.h`) is gl1's, as RT3 measures it where a
+  surface's own texture axes are not known: `mtl_rts_add(mtl_rts_reach(p, n, o, intensity))`, the compiler's
+  base axes at scale 1. A light behind the plane adds nothing (gl1 marks the front only). No N.L, as gl1. The
+  sum is times the light's colour, in the lightmap's units like the map's lights, and goes through the same
+  exposure and clamp.
+- **One shadow ray each**, from the same biased start as the map lights' rays to a unit short of the light,
+  through the same `rm_rtdir_seen` walk, which now also passes an alias model whose carried lights hold the
+  light's bit (`mtl_rtdir_dlight_bit`, `MTL_RTDIR_MAT_CARRIER`). The carried lights are worked out under
+  RT-primary too (`rm_rtscene.c`: `RM_RTS_Wanted() || RM_RTDir_Wanted()`); a map light's ray passes no model,
+  as before.
+- **A term of its own, not ranked with the map's lights.** The dynamic lights are at most 32 (the refdef's
+  `MAX_DLIGHTS`, the renderer's checked copy), so each can have its ray, and none of the map's lights takes
+  a dynamic light's place: ranked with them, a muzzle flash next to 16 strong static lights would be left
+  out, and a dynamic light's reach would change between the modes. So every dynamic light in range lights
+  exactly where gl1's rule says, unless its ray is blocked.
+- **The bound.** `mtl_rtdir_dlight_walk` stops at `MTL_RTDIR_MAX_DLIGHTS` (32) whatever the view says; the
+  back end holds the count to 32 (`rmb_rtdir_set_dlights`) and binds the whole array (`setBytes`, 1 KB, at
+  index 10). So a pixel traces at most 32 map-light rays (slice 3a) and 32 dynamic-light rays, each of at
+  most 5 intersections, and one ray from the eye for the own light (below), whatever the map or the frame
+  holds. A busy frame raises the dynamic lights' share to its 32, no further.
+- **Differences from the stock term, knowingly.** The point is lit by the rule at the point itself, where
+  the lightmap holds it at luxels 16 units apart and interpolates, so the edge of a light's reach is smooth
+  rather than stepped by a luxel. The in-plane distance is in world units on the base axes, so on a
+  texture scaled or rotated from the base axes the reach differs from gl1's by that scale (RT3 reads the
+  surface's own axes through its surface tables, which RT-primary does not build). The term is times the
+  frame's exposure, like every traced light, so its brightness follows the fit; where it reaches does not.
+- **Counts.** A dynamic light in range is counted in the stats line's "in range", its ray in "shadow rays"
+  and "lit"; the line's format is unchanged.
+- **The debug view.** `r_rt_direct_show 4` is the dynamic lights' term alone, with its rays, on white albedo
+  (the views 1 to 3 are of the whole direct term; this is the first per-term one).
+
+### An emissive face at its own light
+
+qrad3 adds a light-emitting face's patch light to its own lightmap ("the texture itself should still be
+full bright", `BuildFacelights`); slice 2 left such a face lit only by its neighbours.
+
+- **The table.** A per-triangle table, chosen over a material bit: the G-buffer's material is per draw
+  (`m.material`), and the world's draws are by texture chain, so a bit would need the world drawn again in
+  other batches or a new G-buffer attachment; TASK59 may add a material id to the G-buffer, and this slice
+  leaves its layout as it is. `rm_rtdir_self_table` (`rm_rtdir.c`) gives each triangle of the map's index
+  buffer one word (`mtl_rtdir_self_pack`): `MTL_RTDIR_SELF_ON` and the face's patch light, 10 bits a channel
+  in the lightmap's units, at most 1023, for the triangles of each world face TASK187 lists whose patch
+  light (`rm_rtdir_patch_light`, the same light as its area light's) reaches qrad3's `DIRECT_LIGHT`; 0
+  elsewhere. A brush entity's face is not marked (qrad3 lets only the world's emit). Uploaded once a map at
+  index 11 (`rmb_rtdir_set_self`), 4 bytes a triangle.
+- **The lookup.** The G-buffer does not say which triangle a pixel is on, so `rm_rtdir_own` casts one ray
+  from the eye to the pixel's point (passing water and translucent faces as a shadow ray does, at most 5
+  intersections) and reads the word of the triangle it meets, inside the table (`v.nself`); an alias model,
+  nothing met, or a triangle past the table read 0. A pixel at a face's edge can read the neighbouring
+  triangle, so a fixture's outline can be off by a pixel.
+- **The light.** The word's rgb times style 0 (qrad3 adds it to the style-0 lightmap, which the engine scales
+  by style 0 and `r_modulate`) is added to the traced light before the exposure. The 1023 cap is exact while
+  the exposure is at least 0.25 (the fit's floor): 1023 / 255 x 0.25 is over 1, so a capped channel is white
+  either way. A fixed `r_rt_direct_exposure` under 0.25 dims a channel brighter than 1023.
+- `r_rt_stats 1` adds the map line `ref_metal: rt direct: <map>: N emissive faces drawn at their own light`.
+- The pass stays one kernel; no new texture. The view is 128 bytes (the dynamic lights' and the table's
+  counts, set by the back end).
+
+### Tests
+
+`tests/metal/rm_rtdir_test.c`, `rm_rtdir_test: 680 checks, 0 failed`:
+
+- `test_dlight`: the falloff against the stock rule, `rm_lm_dlight` at the one luxel of a 1 x 1 surface on
+  the base axes, at twelve placings (straight above, 100 out, the two offsets, just inside and at the
+  radius, past it, the cut at `frad` 64 and 60, a fractional offset that gl1 truncates, a light of 1000),
+  each value checked too; behind the plane, a wall's normal, a NaN intensity; the record and what
+  `rm_dlight_ok` refuses.
+- `test_dlight_bound`: the walk with N of 0, 1, 4, 31, 32, 33, 100, 4096 and 2^32 - 1 dynamic lights traces
+  min(N, 32) rays; a pixel whose 4096 map lights are all occluded and 4096 dynamic lights in range traces
+  32 + 32 = 64; the carried bits are 32 distinct ones, 0 past them; `MTL_RTDIR_MAX_DLIGHTS` is `RM_MAX_DLIGHTS`.
+- `test_self`: the patch light (`300 x refl x refl / 0.8`), `DIRECT_LIGHT`, the word (rounded, held to 1023,
+  NaN and below 0 to 0, none without the flag), and the table over six surface records: an emitter's three
+  triangles, a fourth face's one, and not a dim face, a submodel's, a face past the records or one whose
+  record leaves the buffer.
+- `test_at` (the carrier passes, up to the same layers), `test_view_lines` (the view's size and counts),
+  `test_on` (view 4).
+
+Red first, in scratch copies of the tree (`git archive` of the branch with one change each):
+
+```
+slice 3a's kernel and back end: rm_rtdir.metal: the kernel's parameters are not its known seven textures and buffers | rm_rtdir_test: 680 checks, 20 failed
+dlight walk unbounded: FAIL tests/metal/rm_rtdir_test.c:2085: rays == ((ns[a] < MTL_RTDIR_MAX_DLIGHTS) ? ns[a] : MTL_RTDIR_MAX_DLIGHTS) | rm_rtdir_test: 680 checks, 5 failed
+dlight falloff without the cutoff: FAIL tests/metal/rm_rtdir_test.c:2033: near(a, cases[i][4], 1e-3) | rm_rtdir_test: 680 checks, 13 failed
+own light not marked on: FAIL tests/metal/rm_rtdir_test.c:2175: (w & MTL_RTDIR_SELF_ON) && c.r == 240 && ... | rm_rtdir_test: 680 checks, 6 failed
+own light unclamped: FAIL tests/metal/rm_rtdir_test.c:2177: c.r == MTL_RTDIR_SELF_MAX && ... | rm_rtdir_test: 680 checks, 1 failed
+table past the buffer: FAIL tests/metal/rm_rtdir_test.c:2198: rm_rtdir_self_table(&e, self_face, NULL, recs, 6, table, 10) == 2 | rm_rtdir_test: 680 checks, 2 failed
+table marks dim faces: FAIL tests/metal/rm_rtdir_test.c:2198: rm_rtdir_self_table(&e, self_face, NULL, recs, 6, table, 10) == 2 | rm_rtdir_test: 680 checks, 2 failed
+carrier shadows: FAIL tests/metal/rm_rtdir_test.c:129: mtl_rtdir_at(MTL_RTDIR_MAT_CARRIER, 0) == MTL_RTDIR_AT_PASS | rm_rtdir_test: 680 checks, 1 failed
+```
+
+**The kernel pin** pins `rm_rtdir_dyn`'s walk whole (`KERNEL_DYN`), the three terms' sum (`KERNEL_TERMS`),
+the own light's lookup (`KERNEL_OWN`), the walk's bound and `dl[` once in the file, `rm_rtdir_seen(` three
+times (its definition, the map lights' walk, the dynamic lights'), and the kernel's and `rm_rtdir_direct`'s
+parameter lists whole with the two new buffers; the host pin holds the dynamic lights' array and its clamp
+and count, at index 10, and the table at index 11 with its count. New mutants, each refused, each compiling
+with `xcrun metal`:
+
+```
+mutant dlight-noshadow: rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound, summed in
+mutant dlight-unbounded: rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound, summed in
+mutant dlight-falloff: rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound, summed in
+mutant dlight-no-carrier: rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound, summed in
+mutant dlight-dropped: rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound, summed in
+mutant self-ignored: rm_rtdir_own is not the face's own light from its triangle's word
+mutant self-unbounded: rm_rtdir_own is not the face's own light from its triangle's word
+mutant self-dropped: rm_rtdir_dyn is not the dynamic lights by gl1's rule, one ray each, under their bound, summed in
+rm_rtdir_test: 680 checks, 0 failed
+```
+
+`dlight-noshadow` is the term without its shadow ray (the ray's result never decides), `dlight-unbounded`
+the bound dropped, `dlight-falloff` a falloff of distance alone, `dlight-no-carrier` the carried bit
+dropped (a rocket's light shadowed by the rocket), `dlight-dropped` the term not summed;
+`self-ignored` an emissive face read as not emissive, `self-unbounded` the table read past its end,
+`self-dropped` the own light not summed. On the host: `dlights-cap` (the clamp to 32 dropped),
+`dlights-count` and `self-count` (the view's counts not the back end's). The mutants `trace-in-range` and
+`seen-before-ray` now name the map lights' loop by its keep, since the dynamic lights' loop comes first in
+the file.
+
+
+### The records are pins (M6, apple9, 640 x 480)
+
+Recorded at `251451f7` (the code of the final commit), three runs each (`--run 2`, `--run 3`), hashed as the
+hash of the frames' sha256s. Every row is three runs and one hash:
+
+| Record | Frames | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|---|
+| `rtprimary-world` (`demo1.dm2`, `base2`) | 23 | `0b44b41a739d` | `0b44b41a739d` | `0b44b41a739d` |
+| `rtprimary-direct` | 23 | `c9a2f64eee98` | `c9a2f64eee98` | `c9a2f64eee98` |
+| `rtprimary-vis` | 23 | `469ce42fec8c` | `469ce42fec8c` | `469ce42fec8c` |
+| `rtprimary-noshadow` | 23 | `fe4e7d8028f1` | `fe4e7d8028f1` | `fe4e7d8028f1` |
+| `rtprimary-world`, `PINS_DEMO=demo2.dm2 PINS_EVERY=7` (`waste2`, the lightstyles) | 89 | `491fb53deed4` | `491fb53deed4` | `491fb53deed4` |
+| `rtprimary-dlights` (new) | 23 | `af586c32f8cb` | `af586c32f8cb` | `af586c32f8cb` |
+| `rtprimary-dlights`, `PINS_DEMO=demo2.dm2 PINS_EVERY=7` (new) | 89 | `aa8b1b87d17b` | `aa8b1b87d17b` | `aa8b1b87d17b` |
+
+Slice 3a's own records, run again in the hold on its code (`7383bf09`) as the before: `rtprimary-world`
+`e6caa48ee013` and `rtprimary-dlights` `55c66bcc68ec` (23 frames each). `rtprimary-world` moves from
+`e6caa48ee013` to `0b44b41a739d` (the emissive faces at their own light), and `rtprimary-dlights` from
+`55c66bcc68ec` to `af586c32f8cb` (the dynamic lights as a term). `rtprimary-vis` is unchanged at
+`469ce42fec8c`. The `r_rt_stats 2` runs below (scratch copies, the stats changing no pixel) give the branch's
+hashes again, `af586c32f8cb` and `491fb53deed4`.
+
+These hashes are the RT-primary pins from here, provisional until the owner accepts the look (PM11), where
+they are recorded again (the scenarios README; `docs/plans/presentation-modes.md` section 6, item 4). A
+later slice that changes the look says so and records them again. The harness cannot carry a scenario's
+threshold, so these are compared by hash for now, which is stricter than the 0.02 default. For the owner's
+look, not in the repository: the emissive frame is `rtprimary-world` capture 6 (score 0.007358 against slice
+3a's), the dynamic-light frame is `rtprimary-dlights` capture 20 (score 0.058856 against the branch's
+`rtprimary-world`), and `rtprimary-world` captures 12, 61 and 67.
+
+### Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
+
+The before is slice 3a (`7383bf09`), built in a scratch copy and run by `PINS_BIN`; the after is `251451f7`.
+`rtprimary-s3bstats` is `demo1.dm2` (`base2`, 687 frame lines) and `rtprimary-s3bstyles` is `demo2.dm2` every
+7th (`waste2`, 617 frame lines); the time is the mean of 687 and of 616 frame lines. The numbers are
+information only (decision 0014), not a gate:
+
+| Map | Side | Capped (mean share of world pixels) | Lights in range (mean) | Rays a world pixel (mean) | Pass time (mean) |
+|---|---|---|---|---|---|
+| `base2` | slice 3a | 5.5 % | 16.01 | 15.71 | 7.763 ms |
+| `base2` | branch | 5.5 % | 16.12 | 15.82 | 7.064 ms |
+| `waste2` | slice 3a | 34.5 % | 28.40 | 26.10 | 10.743 ms |
+| `waste2` | branch | 34.5 % | 28.40 | 26.10 | 9.027 ms |
+
+The digests of the runs are `55c66bcc68ec` (slice 3a, `base2`), `0c678f1b2ea1` (slice 3a, `waste2`),
+`af586c32f8cb` (branch, `base2`) and `491fb53deed4` (branch, `waste2`). The map lights' share is the same on
+both sides; `base2` has 248 lights uploaded and none past the cap.
+
+### Stock is unchanged
+
+The same method as slice 3a (every committed `metal` scenario but RT-primary's, seeded, the water scenarios
+on one `water.dm2` copied to both, `cinematic` on `idlog.cin` at `PINS_EVERY=7`), base main at `8870daa5`
+and the branch at `251451f7`: `base: 29 scenarios, 0 failed`, `branch: 29 scenarios, 0 failed`, and
+`pins: 29 of 29 stock scenarios byte-identical to the base`. At `r_presentation 0` the slice changes no
+pixel.
+
+### Checks
+
+In one hold on the code of the final commit (`251451f7`; main merged: no), each check's last line:
+
+- `make ref_metal` and `make`: exit 0.
+- `make test`: `yq2test: 591 tests, 0 failed`.
+- `tests/check-ref-metal.sh`: `check-ref-metal: ok (13162 checks, 0 failed; ... direct light 680 checks, 0 failed; ...; ref_metal built)`.
+- `tests/check-cvar-docs.sh`: `check-cvar-docs: ok`.
+- `tests/check-runbook-index.sh`: `check-runbook-index: ok`.
+- `tests/check-doc-links.sh`: `check-doc-links: ok`.
+- `tests/check-video-menu.sh`: `check-video-menu: ok`.
+- `tests/check-pin-chars.sh`: `check-pin-chars: ok`.
+
+The stock pin compare (29 of 29) and the RT-primary records, three runs each with one hash. No frame was
+looked at by the agent.
+
+## Left for slice 3c (and later rows)
+
+- Done in slice 3b: RT3's dlights as a term, and an emissive face drawn at its own light (above).
 - **A face cut into qrad3's 64-unit patches**, if the frames near a fixture call for it.
-- **RT3's dlights as a term** of the light model, in place of the layer this mode turns off.
+- **The dynamic lights on a surface's own texture axes** (RT3's surface tables), if a scaled texture's
+  reach is seen to differ in the frames.
 - **A PVS cull of emitters**, as qrad3 has, if the share of pixels past slice 3a's bound calls for it.
 - **A finer exposure fit**: at map load from a sample of luxels (the plan's wording), or a fixed value the
   owner picks from frames, and a fit that leaves out the near-black parts the emissive faces now light.
