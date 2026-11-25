@@ -44,7 +44,9 @@
  * SUPERVISE_TEST_CLOCK_FD when it is set: the byte D ends the deadline, G
  * the grace and A the after-kill wait (a byte that comes before its timer
  * is set is kept for it), and P answers "probe" once everything the kernel
- * posted before it has been handled. Built on first use by
+ * posted before it has been handled; a probe only observes, so a batch of
+ * probes alone does not count the group again. SV_MAXPIDS, the size of the
+ * watch table (4096), can be set smaller for a test. Built on first use by
  * scripts/lib/supervise.sh; tested by tests/check-supervise.sh.
  */
 
@@ -65,7 +67,9 @@
 
 extern char **environ;
 
+#ifndef SV_MAXPIDS
 #define SV_MAXPIDS 4096
+#endif
 #define SV_DEADLINE 124
 
 enum { T_DEADLINE, T_GRACE, T_AFTER, T_COUNT };
@@ -86,6 +90,7 @@ static int sv_why;         /* 0, SV_DEADLINE, or 128+n: what started the stop */
 static int sv_exited;      /* the leader's exit has been seen */
 static int sv_status;      /* and its status: the exit code, or 128+n */
 static int sv_lost;        /* the errno of a failed peek at the leader's exit */
+static int sv_woke = 1;    /* the last batch held more than probes: the state is looked at again */
 
 /* the processes watched: the leader and the members seen; gone once their exit is seen */
 static pid_t sv_known[SV_MAXPIDS];
@@ -285,15 +290,43 @@ sv_alive(pid_t pid, pid_t *pgid)
 	return 1;
 }
 
+/* sv_forget: entry k leaves the table, so its pid can be a new process */
+static void
+sv_forget(int k)
+{
+	sv_nknown--;
+	sv_known[k] = sv_known[sv_nknown];
+	sv_gone[k] = sv_gone[sv_nknown];
+	sv_named[k] = sv_named[sv_nknown];
+}
+
+/* sv_compact: forget every process whose exit was seen and that is torn down */
+static void
+sv_compact(void)
+{
+	pid_t g;
+	int i;
+
+	for (i = 0; i < sv_nknown; i++)
+	{
+		if (sv_known[i] != sv_leader && sv_gone[i] && !sv_alive(sv_known[i], &g))
+		{
+			sv_forget(i);
+			i--;
+		}
+	}
+}
+
 /*
  * sv_track: watch pid and every child of it not yet watched (they may have
  * forked before the watch was set). A pid whose watch cannot be set is gone.
+ * A pid whose exit was seen and that is listed again is a new process.
  */
 static void
 sv_track(pid_t pid)
 {
 	static pid_t stack[SV_MAXPIDS], kids[SV_MAXPIDS];
-	int top = 0, i, n;
+	int top = 0, i, n, k;
 	struct kevent ev;
 
 	stack[top++] = pid;
@@ -301,7 +334,16 @@ sv_track(pid_t pid)
 	{
 		pid_t p = stack[--top];
 
-		if (p <= 0 || sv_index(p) >= 0 || sv_nknown >= SV_MAXPIDS)
+		k = p > 0 ? sv_index(p) : -1;
+		if (p <= 0 || (k >= 0 && !sv_gone[k]))
+		{
+			continue;
+		}
+		if (k < 0 && sv_nknown >= SV_MAXPIDS)
+		{
+			sv_compact();
+		}
+		if (k < 0 && sv_nknown >= SV_MAXPIDS)
 		{
 			continue;
 		}
@@ -310,10 +352,13 @@ sv_track(pid_t pid)
 		{
 			continue;
 		}
-		sv_known[sv_nknown] = p;
-		sv_gone[sv_nknown] = 0;
-		sv_named[sv_nknown] = 0;
-		sv_nknown++;
+		if (k < 0)
+		{
+			k = sv_nknown++;
+			sv_known[k] = p;
+		}
+		sv_gone[k] = 0;
+		sv_named[k] = 0;
 		n = proc_listchildpids(p, kids, (int)sizeof(kids));
 		for (i = 0; i < n && i < SV_MAXPIDS && top < SV_MAXPIDS; i++)
 		{
@@ -357,23 +402,11 @@ sv_scan(void)
 	{
 		live++;
 	}
+	sv_compact();
 	for (i = 0; i < sv_nknown; i++)
 	{
-		if (sv_known[i] == sv_leader || sv_named[i])
+		if (sv_known[i] == sv_leader || sv_named[i] || !sv_alive(sv_known[i], &g))
 		{
-			continue;
-		}
-		if (!sv_alive(sv_known[i], &g))
-		{
-			if (sv_gone[i])
-			{
-				/* torn down: forget it, so its pid can be a new process */
-				sv_nknown--;
-				sv_known[i] = sv_known[sv_nknown];
-				sv_gone[i] = sv_gone[sv_nknown];
-				sv_named[i] = sv_named[sv_nknown];
-				i--;
-			}
 			continue;
 		}
 		if (!sv_gone[i] && g != sv_leader)
@@ -571,6 +604,7 @@ sv_tick(void)
 		EV_SET(&ev, sv_clock, EVFILT_READ, EV_DELETE, 0, 0, NULL);
 		(void)kevent(sv_kq, &ev, 1, NULL, 0, NULL);
 		sv_clock = -2;
+		sv_woke = 1;
 		return;
 	}
 	for (i = 0; i < n; i++)
@@ -579,9 +613,12 @@ sv_tick(void)
 
 		if (buf[i] == 'P')
 		{
+			/* a probe only observes: it wakes nothing */
 			sv_probes++;
+			continue;
 		}
-		else if (t >= 0 && sv_armed[t])
+		sv_woke = 1;
+		if (t >= 0 && sv_armed[t])
 		{
 			sv_armed[t] = 0;
 			sv_fired[t] = 1;
@@ -606,6 +643,10 @@ sv_batch(const struct kevent *evs, int n)
 		{
 			const struct kevent *e = &evs[i];
 
+			if (pass == 0 && e->filter != EVFILT_READ)
+			{
+				sv_woke = 1;
+			}
 			if (pass == 0 && e->filter == EVFILT_PROC)
 			{
 				pid_t p = (pid_t)e->ident;
@@ -623,7 +664,14 @@ sv_batch(const struct kevent *evs, int n)
 				}
 				if ((e->fflags & NOTE_EXIT) && k >= 0)
 				{
+					pid_t g;
+
 					sv_gone[k] = 1;
+					/* torn down already: forget it now, so the table does not fill while the leader runs */
+					if (p != sv_leader && !sv_alive(p, &g))
+					{
+						sv_forget(k);
+					}
 				}
 				if ((e->fflags & NOTE_EXIT) && p == sv_leader && sv_peek(0) < 0)
 				{
@@ -897,7 +945,7 @@ main(int argc, char **argv)
 		struct kevent evs[64];
 		int n;
 
-		st = sv_step();
+		st = sv_woke ? sv_step() : -1;
 		if (st >= 0)
 		{
 			return st;
@@ -908,6 +956,7 @@ main(int argc, char **argv)
 			sv_emit("probe");
 		}
 #endif
+		sv_woke = 0;
 		n = kevent(sv_kq, NULL, 0, evs, (int)(sizeof(evs) / sizeof(evs[0])), NULL);
 		if (n < 0)
 		{

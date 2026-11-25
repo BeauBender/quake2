@@ -20,6 +20,7 @@
  */
 
 #include <sys/types.h>
+#include <sys/event.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
@@ -33,7 +34,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define MAXCH 8
+#define MAXCH 32
 
 struct chan
 {
@@ -428,6 +429,51 @@ probe(struct run *r)
 {
 	tick(r, 'P');
 	return ev_wait(r, "probe") != NULL;
+}
+
+/* watch_exit: a kqueue of the runner's own that fires at the exit of pid, which must still run */
+static int
+watch_exit(struct run *r, pid_t pid)
+{
+	struct kevent ev;
+	int kq = kqueue();
+
+	if (kq < 0)
+	{
+		fail(r, "kqueue: %s", strerror(errno));
+		return -1;
+	}
+	EV_SET(&ev, pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+	if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0)
+	{
+		fail(r, "cannot watch %d: %s", (int)pid, strerror(errno));
+		close(kq);
+		return -1;
+	}
+	return kq;
+}
+
+/*
+ * wait_exit: until that exit is read. The kernel posts an exit to every
+ * watch of the process in one pass under its note lock, and reading the
+ * runner's own note takes that lock too, so the supervisor's watch has
+ * fired by the time this returns.
+ */
+static int
+wait_exit(struct run *r, int kq, const char *who)
+{
+	struct kevent ev;
+	int n;
+
+	while ((n = kevent(kq, NULL, 0, &ev, 1, NULL)) < 0 && errno == EINTR)
+	{
+	}
+	close(kq);
+	if (n != 1 || !(ev.fflags & NOTE_EXIT))
+	{
+		return fail(r, "no exit read for %s", who);
+	}
+	return 0;
 }
 
 /* finish: closes every channel (each fake exits), reads the events and the output to their end, and the status */
@@ -908,6 +954,67 @@ c_escaped(struct run *r)
 	return want_status(r, 0);
 }
 
+/*
+ * more short-lived members than the watch table holds (the check also runs
+ * every case against a build with 8 entries), then a member that the
+ * leader's exit stops: the stop ends at that member's exit, at once, and
+ * not at the grace
+ */
+static int
+c_cap(struct run *r)
+{
+	struct chan *l, *b, *c;
+	const char *a;
+	int i, kq;
+
+	if (start(r, "exec", NULL, NULL, NULL) || (l = leader(r)) == NULL)
+	{
+		return 1;
+	}
+	for (i = 0; i < 12; i++)
+	{
+		/* the probe: the leader's fork has been handled, so the member is watched */
+		if ((b = fork_fake(r, l, "brief")) == NULL || !probe(r))
+		{
+			return fail(r, "brief member %d: no hello or no probe (events: %s)", i, r->log);
+		}
+		send_line(b, "exit 0\n");
+		if (expect_gone(r, b, "a brief member"))
+		{
+			return 1;
+		}
+		if ((a = ask(l, "wait")) == NULL || strncmp(a, "waited pid=", 11) != 0 || atoi(a + 11) != (int)b->pid)
+		{
+			return fail(r, "the leader's wait answered %s", a != NULL ? a : "nothing");
+		}
+	}
+	if (!probe(r) || (c = fork_fake(r, l, "child")) == NULL || (kq = watch_exit(r, c->pid)) < 0 || !probe(r))
+	{
+		return fail(r, "no last member (events: %s)", r->log);
+	}
+	send_line(l, "exit 0\n");
+	if (ev_wait(r, "term-sent") == NULL)
+	{
+		return fail(r, "no term-sent event: %s", r->log);
+	}
+	if (expect_line(r, c, "sig=TERM", "the member") || expect_gone(r, c, "the member") ||
+		wait_exit(r, kq, "the member"))
+	{
+		return 1;
+	}
+	/* its exit is posted: a supervisor that watches it has ended; the probe wakes nothing */
+	if (probe(r) || at(r, "group-empty") < 0)
+	{
+		return fail(r, "the last member's exit woke nothing: the stop waits for the grace (events: %s)", r->log);
+	}
+	finish(r);
+	if (at(r, "grace-end") >= 0 || at(r, "reaped status=0") < 0)
+	{
+		return fail(r, "events: %s", r->log);
+	}
+	return want_status(r, 0);
+}
+
 static int
 c_closed_std(struct run *r)
 {
@@ -1016,6 +1123,7 @@ static const struct
 	{ "int-ignored", c_int_ignored, 0 },
 	{ "leader-first", c_leader_first, 0 },
 	{ "escaped", c_escaped, 1 },
+	{ "cap", c_cap, 1 },
 	{ "closed-std", c_closed_std, 0 },
 	{ "stuck", c_stuck, 1 },
 	{ "stderr", c_stderr, 0 },

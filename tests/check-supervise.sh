@@ -5,17 +5,17 @@
 #
 # The parts, in order:
 #
-#   builds    supervise.c, its test build (-DSUPERVISE_TEST, the test clock)
-#             and the two test programs build clean with -Wall -Wextra
-#             -Werror.
+#   builds    supervise.c, its test build (-DSUPERVISE_TEST, the test clock),
+#             the test build with a watch table of 8 (-DSV_MAXPIDS=8) and the
+#             two test programs build clean with -Wall -Wextra -Werror.
 #   helper    sv_path builds the binary on first use into the tool cache
 #             (SUPERVISE_CACHE here, a scratch directory), keyed by the
 #             source's hash; a second call builds nothing, and a source that
 #             does not build is a failure with no path printed.
 #   cases     tests/supervise/supervise_test.c runs every case against the
 #             test build, with /bin/bash (3.2) and then /bin/sh as the
-#             caller shell, and the cases that need no test clock against
-#             the release build.
+#             caller shell, the cases that need no test clock against the
+#             release build, and every case against the table of 8.
 #   sanitizer the same cases built with -fsanitize=address,undefined.
 #   mutants   five one-line changes to a copy of supervise.c, each built
 #             as the test build: each must fail its own case, for its own
@@ -56,6 +56,7 @@ SAN="-g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recov
 {
 	cc -O2 $W -o "$tmp/supervise" "$src" &&
 		cc -O1 $W -DSUPERVISE_TEST -o "$tmp/supervise-test" "$src" &&
+		cc -O1 $W -DSUPERVISE_TEST -DSV_MAXPIDS=8 -o "$tmp/supervise-cap" "$src" &&
 		cc -O1 $W -o "$tmp/fake" "$tdir/fake.c" &&
 		cc -O1 $W -o "$tmp/runner" "$tdir/supervise_test.c"
 } > "$tmp/cc.log" 2>&1 || {
@@ -106,6 +107,7 @@ for sh in /bin/bash /bin/sh; do
 	"$tmp/runner" "$tmp/supervise-test" "$tmp/fake" "$sh" || fail "a case failed with $sh as the caller"
 done
 "$tmp/runner" --no-clock "$tmp/supervise" "$tmp/fake" /bin/bash || fail "a case failed against the release build"
+"$tmp/runner" "$tmp/supervise-cap" "$tmp/fake" /bin/bash || fail "a case failed against the build with a watch table of 8"
 
 # sanitizer
 # shellcheck disable=SC2086

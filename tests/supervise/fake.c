@@ -23,6 +23,7 @@
  *   setsid        moves into a session of its own; answers "sid=S"
  *   ignore-term   TERM is reported and then ignored; answers "ok"
  *   ping          answers "alive"
+ *   wait          reaps one child; answers "waited pid=C"
  *
  * INT, TERM and HUP each write "sig=NAME" on the channel ("sig=TERM
  * ignored" after ignore-term) and then end the process with that signal.
@@ -31,6 +32,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/wait.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -227,6 +229,16 @@ main(int argc, char **argv)
 		else if (strcmp(line, "ping") == 0)
 		{
 			put("alive\n", 6);
+		}
+		else if (strcmp(line, "wait") == 0)
+		{
+			pid_t w;
+
+			while ((w = waitpid(-1, NULL, 0)) < 0 && errno == EINTR)
+			{
+			}
+			snprintf(out, sizeof(out), "waited pid=%d\n", (int)w);
+			put(out, strlen(out));
 		}
 		else
 		{

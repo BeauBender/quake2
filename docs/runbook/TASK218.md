@@ -54,6 +54,10 @@ The events are one line each:
   `proc_pidinfo` answers for it, in the group, and no exit has been seen for it. Only at zero is the
   leader reaped. While a member lives, neither the leader's pid nor the group's id can go to
   another process.
+- **The watch table.** It holds 4096 processes. A member leaves it when its exit is read and it is
+  torn down, and a full table is compacted before a new member is refused, so a long run does not
+  fill it. A pid whose exit was read and that is listed again is a new process, and is watched
+  again.
 - **Stop.** A stop is due at the deadline, at a forwarded signal, and when the leader exits while
   members are left (status: the leader's own). It sends TERM (or the forwarded signal) and CONT to
   the group, then KILL after the grace.
@@ -84,8 +88,9 @@ The events are one line each:
 - **The helper.** It checks that the helper builds into the cache once, keyed by the hash of the
   compiler version, the flags and the source, and that a broken source fails with no path printed.
 - **Cases.** It runs every case with `/bin/bash` (3.2) and with `/bin/sh` as the caller shell. It
-  runs the cases that need no test clock against the release build, and every case again built
-  with `-fsanitize=address,undefined`.
+  runs the cases that need no test clock against the release build, every case against a build
+  whose watch table holds 8 processes (`-DSV_MAXPIDS=8`), and every case again built with
+  `-fsanitize=address,undefined`.
 - **Mutants.** It runs the five mutants.
 
 No case waits on time. Each waits on one of three things:
@@ -96,7 +101,8 @@ No case waits on time. Each waits on one of three things:
 
 A timeout is a byte on the test clock (`SUPERVISE_TEST_CLOCK_FD`). The runner writes it only when
 the supervisor cannot go on without it. The byte `P` is a barrier: its `probe` event comes once the
-supervisor has handled every kernel event posted before it. The supervisor handles signals before
+supervisor has handled every kernel event posted before it. A probe only observes: a batch that
+holds nothing but probes does not count the group again. The supervisor handles signals before
 the clock in each batch. A last step greps the test files and the check for a sleep or `ps`.
 
 | Case | What it shows |
@@ -108,6 +114,7 @@ the clock in each batch. A last step greps the test files and the check for a sl
 | `int-ignored` | `(trap '' INT; exec ...) & wait`: INT is named as ignored, the command has INT at its default, and the deadline (the TERM without the clock) still stops it |
 | `leader-first` | the leader exits with 5 while a member lives: the member gets TERM, `group-empty` comes before `reaped`, and the member is dead when `reaped` is read |
 | `escaped` | a `setsid` member is named before `group-empty`, gets no signal, and still answers |
+| `cap` | 12 short-lived members, then a member the leader's exit stops: with a watch table of 8, the stop still ends at that member's exit (`term-sent`, then `group-empty`), not at the grace |
 | `closed-std` | standard input, output and error closed: status 7, and the command sees all three open |
 | `stuck` | under `sandbox-exec` with `(deny signal)`, nothing can be signalled: `group-left` and 126 |
 | `stderr` | a command that cannot run: 125 and exactly one `supervise: <label>:` line |
