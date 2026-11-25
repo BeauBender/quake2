@@ -610,7 +610,7 @@ rm_rtdir_bounce(constant rm_rtdir_view &v, uint2 px, float3 p, float3 n, instanc
 	r = ray(o, dir, 0.0f, MTL_RTSUN_RANGE);
 	t.bounce_rays++;
 
-	for (int layer = 0; layer <= MTL_RTDIR_LAYERS; layer++)
+	for (int face = 0; face <= MTL_RTDIR_LAYERS; face++)
 	{
 		intersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);
 		uint b, tri = 0xffffffffu, m = 0xffu, at, rec, slice;
@@ -630,7 +630,7 @@ rm_rtdir_bounce(constant rm_rtdir_view &v, uint2 px, float3 p, float3 n, instanc
 			m = (tri < ntris) ? (uint)tmat[tri] : (uint)MTL_GB_MAT_WORLD;
 		}
 
-		at = mtl_rtsky_bounce_at(m, layer);
+		at = mtl_rtsky_bounce_at(m, face);
 
 		if (at == MTL_RTSKY_BOUNCE_PASS)
 		{

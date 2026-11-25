@@ -86,7 +86,9 @@ test_on(void)
 	CHECK(rm_rtdir_show(4) == RM_RTDIR_SHOW_DLIGHTS);
 	/* TASK189: the sky light's and the sun's terms alone */
 	CHECK(rm_rtdir_show(5) == RM_RTDIR_SHOW_SKY && RM_RTDIR_SHOW_SKY == 5);
-	CHECK(rm_rtdir_show(6.5f) == RM_RTDIR_SHOW_SUN && RM_RTDIR_SHOW_SUN == 6 && RM_RTDIR_SHOW_MAX == 6);
+	CHECK(rm_rtdir_show(6.5f) == RM_RTDIR_SHOW_SUN && RM_RTDIR_SHOW_SUN == 6);
+	/* slice 2: the bounce's term alone */
+	CHECK(rm_rtdir_show(7.5f) == RM_RTDIR_SHOW_BOUNCE && RM_RTDIR_SHOW_BOUNCE == 7 && RM_RTDIR_SHOW_MAX == 7);
 	CHECK(rm_rtdir_show(99) == RM_RTDIR_SHOW_MAX);
 	CHECK(rm_rtdir_show(-1) == 0);
 	CHECK(rm_rtdir_show(NAN) == 0);
@@ -379,6 +381,11 @@ pin_and(int a, int b)
 	"\t\tconstant rm_rtdir_dlight *dl [[buffer(10)]],\n" \
 	"\t\tdevice const uint *self [[buffer(11)]],\n" \
 	"\t\tdevice const ushort *tile [[buffer(12)]],\n" \
+	"\t\ttexture2d_array<float> atlas [[texture(7)]],\n" \
+	"\t\tdevice const float4 *verts [[buffer(13)]],\n" \
+	"\t\tdevice const uint *idx [[buffer(14)]],\n" \
+	"\t\tconstant rm_rtdir_geom &g [[buffer(15)]],\n" \
+	"\t\tdevice const uint *brec [[buffer(16)]],\n" \
 	"\t\tuint2 px [[thread_position_in_grid]])"
 
 /* the traced light, the whole statement */
@@ -403,6 +410,7 @@ static const char *const kernel_defines[] = {
 	"#define RM_RTDIR_C_FIT_N 6\n", "#define RM_RTDIR_C_INRANGE_HI 7\n", "#define RM_RTDIR_C_RAYS_HI 8\n",
 	"#define RM_RTDIR_C_LIT_HI 9\n", "#define RM_RTDIR_C_CAPPED 10\n", "#define RM_RTDIR_C_SKY_RAYS 11\n",
 	"#define RM_RTDIR_C_SKY_HITS 12\n", "#define RM_RTDIR_C_SUN_RAYS 13\n", "#define RM_RTDIR_C_SUN_LIT 14\n",
+	"#define RM_RTDIR_C_BOUNCE_RAYS 15\n", "#define RM_RTDIR_C_BOUNCE_HITS 16\n",
 };
 
 /*
@@ -491,8 +499,8 @@ static const char *const kernel_defines[] = {
 	"\t\t\treturn float3(c.r, c.g, c.b);\n" \
 	"\t\t}\n"
 
-/* the world's write (TASK189: with the sky light and the sun, rm_rtdir_out_open) */
-#define KERNEL_WRITE "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show), px);"
+/* the world's write (TASK189: with the sky light and the sun, rm_rtdir_out_open; slice 2: and the bounce) */
+#define KERNEL_WRITE "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open + bounce, v.show), px);"
 
 #define KERNEL_WORLD_BRANCH \
 	"\t\tif (world)\n" \
@@ -797,9 +805,9 @@ test_no_lightmap_kernel(void)
 		const char *name, *edit[3][2];
 	} mutants[] = {
 		{ "add-lm", { { KERNEL_WRITE,
-			"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show) + lm.read(px), px);" } } },
+			"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open + bounce, v.show) + lm.read(px), px);" } } },
 		{ "reuse-sample", { { KERNEL_WRITE,
-			"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + float3(float(fit.x)) / 64.0f, v.exposure), open, v.show), px);" } } },
+			"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + float3(float(fit.x)) / 64.0f, v.exposure), open + bounce, v.show), px);" } } },
 		{ "world-from-base", { { KERNEL_WRITE, "light_out.write(base.read(px), px);" } } },
 		{ "branch-swap", { { KERNEL_WORLD_BRANCH,
 			"\t\tif (world)\n\t\t{\n\t\t\tlight_out.write(base.read(px), px);\n\t\t\tvis_out.write(float4(0.0f), px);\n"
@@ -921,7 +929,7 @@ test_no_lightmap_kernel(void)
 
 	/* the spec review's wrap of the world's write: refused, and the message says the pin is exact */
 	CHECK(mutate(src, KERNEL_WRITE,
-		"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show),\n\t\t\t\tpx);", m, sizeof(m)));
+		"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open + bounce, v.show),\n\t\t\t\tpx);", m, sizeof(m)));
 	why = kernel_broken(m);
 	CHECK(why && strstr(why, "reformatted? the pin is exact"));
 }
@@ -931,6 +939,8 @@ static const char *const host_bindings[] = {
 	"[ce setTexture:depth atIndex:0];", "[ce setTexture:normal atIndex:1];", "[ce setTexture:material atIndex:2];",
 	"[ce setTexture:lm atIndex:3];", "[ce setTexture:base atIndex:4];", "[ce setTexture:t_vis atIndex:5];",
 	"[ce setTexture:t_light atIndex:6];",
+	/* TASK189 slice 2: the bounce's lightmap array, the one the stock draw samples (read at a hit, never at a pixel) */
+	"[ce setTexture:(lm_ok ? atlas : white_arr) atIndex:7];",
 };
 
 /*
@@ -966,7 +976,7 @@ binding_broken(const char *src)
 
 	if (r != PIN_OK)
 	{
-		return PIN_WHY(r, "the direct pass binds a texture beyond its known seven");
+		return PIN_WHY(r, "the direct pass binds a texture beyond its known eight");
 	}
 
 	/* TASK188 slice 2: the lights and the emissive faces in one buffer, bound once at the kernel's index 9 */
@@ -1960,7 +1970,7 @@ test_view_lines(void)
 	rm_rtdir_pack_t p;
 	char line[512];
 
-	CHECK(sizeof(rm_rtdir_view_t) == 176);
+	CHECK(sizeof(rm_rtdir_view_t) == 192);
 	CHECK(sizeof(rm_rtdir_dlight_t) == 32);
 	CHECK(sizeof(rm_rtdir_light_t) == 48);
 	CHECK(rm_rtdir_view(ident, ident, &vp, eye, 4, 2.0f, 7, 2, &v) == 1);
@@ -2705,8 +2715,9 @@ open_broken(const char *src)
 	}
 
 	/* the rays and the noise: the two calls of the walk, the tile read twice and named nowhere else */
-	if ((count_in(text, strlen(text), "rm_rtdir_sky_hit(") != 3) || (count_in(text, strlen(text), "tile[") != 2) ||
-		(words_in(text, strlen(text), "tile") != 5) || (count_in(text, strlen(text), "mtl_rtsky_at(") != 1))
+	/* slice 2: and the bounce's two numbers, read in rm_rtdir_bounce (bounce_broken) */
+	if ((count_in(text, strlen(text), "rm_rtdir_sky_hit(") != 3) || (count_in(text, strlen(text), "tile[") != 4) ||
+		(words_in(text, strlen(text), "tile") != 9) || (count_in(text, strlen(text), "mtl_rtsky_at(") != 1))
 	{
 		return "the sky's and the sun's rays are not rm_rtdir_open's two, on the tile's noise";
 	}
@@ -2801,7 +2812,7 @@ test_open_kernel(void)
 		{ "sky-no-frame", { { "v.frame, 0u)", "0u, 0u)" } } },
 		{ "sky-ungated", { { "mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SKY, max(v.sky.r, max(v.sky.g, v.sky.b)))",
 			"(max(v.sky.r, max(v.sky.g, v.sky.b)) > 0.0f)" } } },
-		{ "open-dropped", { { "rm_rtdir_out(raw, v.exposure), open, v.show)", "rm_rtdir_out(raw, v.exposure), float3(0.0f), v.show)" } } },
+		{ "open-dropped", { { "rm_rtdir_out(raw, v.exposure), open + bounce, v.show)", "rm_rtdir_out(raw, v.exposure), float3(0.0f), v.show)" } } },
 		{ "sun-no-ndotl", { { "mtl_rtsky_term(v.sun.r, vis * nl)", "mtl_rtsky_term(v.sun.r, vis)" } } },
 		{ "sun-dir", { { "ray(o, v.sun_dir.xyz, 0.0f, MTL_RTSUN_RANGE)", "ray(o, n, 0.0f, MTL_RTSUN_RANGE)" } } },
 		{ "sun-backface", { { "\t\tif (nl > 0.0f)\n", "\t\tif (nl > -2.0f)\n" } } },
@@ -2811,7 +2822,7 @@ test_open_kernel(void)
 				"\tconst mtl_rtao_v3_t nv = mtl_rtao_v3(n.x, n.y, n.z);\n\tfloat3 sum = lm.read(px).rgb;\n" },
 			{ "ntris, tile, t) : float3(0.0f);", "ntris, tile, t, lm) : float3(0.0f);" } } },
 		{ "alone-ignored", { { "mtl_rtsky_alone(show)", "0" } } },
-		{ "open-exposed", { { KERNEL_WRITE, "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + open, v.exposure), open, v.show), px);" } } },
+		{ "open-exposed", { { KERNEL_WRITE, "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + open, v.exposure), open + bounce, v.show), px);" } } },
 		{ "sky-view-dropped", { { "mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SKY,", "mtl_rtsky_traces(0u, MTL_RTSKY_TERM_SKY," } } },
 		{ "sun-view-dropped", { { "mtl_rtsky_traces(v.show, MTL_RTSKY_TERM_SUN,", "mtl_rtsky_traces(v.show & 4u, MTL_RTSKY_TERM_SUN," } } },
 	};
@@ -3015,7 +3026,9 @@ test_sky_sun(void)
 
 	/* the ray bound: one sky ray and one sun ray a pixel, beside the direct light's */
 	CHECK(MTL_RTSKY_RAYS == 1 && MTL_RTSKY_SUN_RAYS == 1);
-	CHECK(MTL_RTSKY_PIXEL_RAYS == MTL_RTDIR_MAX_RAYS + MTL_RTDIR_MAX_DLIGHTS + 3 && MTL_RTSKY_PIXEL_RAYS == 67);
+	/* slice 2: and one bounce ray */
+	CHECK(MTL_RTSKY_BOUNCE_RAYS == 1);
+	CHECK(MTL_RTSKY_PIXEL_RAYS == MTL_RTDIR_MAX_RAYS + MTL_RTDIR_MAX_DLIGHTS + 4 && MTL_RTSKY_PIXEL_RAYS == 68);
 
 	/* the sky ray: unit, above the plane by MTL_RTAO_MIN_COS, cosine-weighted (mean cosine 2/3), the whole circle */
 	for (i = 0; i < 64; i++)
@@ -3071,8 +3084,11 @@ test_sky_sun(void)
 	s.sky_hits = 20;
 	s.sun_rays = 30;
 	s.sun_lit = 10;
+	s.bounce_rays = 50;
+	s.bounce_hits = 40;
 	CHECK(rm_rtdir_open_format(&s, line, sizeof(line)) && !strcmp(line,
-		"ref_metal: rt direct sky: frame 9: 50 world, 50 sky rays (20 reached the sky), 30 sun rays (10 lit), at most 67 rays a pixel"));
+		"ref_metal: rt direct sky: frame 9: 50 world, 50 sky rays (20 reached the sky), 30 sun rays (10 lit), "
+		"50 bounce rays (40 read a lightmap), at most 68 rays a pixel"));
 	CHECK(!rm_rtdir_open_format(&s, line, 16) && line[0] == 0);
 
 	/* the AO off under RT-primary and on under enhanced, as the overlay reads r_rt_ao; RT2's sun likewise, its scale the user's */
