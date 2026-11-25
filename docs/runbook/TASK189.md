@@ -119,7 +119,8 @@ alone from the branch. The view that faces open sky is `demo1.dm2`'s captures 21
 ## Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
 
 The before is TASK188 slice 3c (`d18c0c48229b`), built in a scratch copy and run by `PINS_BIN`; the after is
-`cab3f0310a06`. Information only (decision 0014), not a gate:
+`cab3f0310a06`. Information only (decision 0014), not a gate. The times are milliseconds as the hold's summary states them, measured
+with the screen locked, and are not a timing measurement; no performance conclusion is drawn from them:
 
 | Map (scenario, `cl_lights`) | Side | Exposure (mean) | Shadow rays a world pixel | Sky rays, reached | Sun rays, lit | Pass time (mean) |
 |---|---|---|---|---|---|---|
@@ -173,7 +174,7 @@ In one hold on the code of the final commit (`cab3f0310a06`; main merged: no), e
 - `check-cvar-docs`: `ok`; `check-runbook-index`: `ok`; `check-doc-links`: `ok`; `check-video-menu`: `ok`; `check-pin-chars`: `ok`.
 - `check-scenario-parsers`: `ok (4 tests, 10 mutants caught)`.
 
-No frame was looked at by the agent.
+No frame was looked at by the agent. The frames went to the owner directly and were not committed.
 
 ## Left for later rows
 
@@ -305,63 +306,76 @@ RT-primary, a change to the lightmap path itself; it is left to a later card (se
 
 ## The records (M6, apple9, 640 x 480, in the hold)
 
-Recorded at `@COMMIT@`, three runs each, hashed as the hash of the frames' sha256s:
+Recorded at `7fe879bd9763`, three runs each, hashed as the hash of the frames' sha256s:
 
 | Record | Frames | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|---|
-| `rtprimary-world` | 23 | `@WORLD1@` | `@WORLD2@` | `@WORLD3@` |
-| `rtprimary-direct` | 23 | `@DIRECT1@` | `@DIRECT2@` | `@DIRECT3@` |
-| `rtprimary-vis` | 23 | `@VIS1@` | `@VIS2@` | `@VIS3@` |
-| `rtprimary-noshadow` | 23 | `@NOSHADOW1@` | `@NOSHADOW2@` | `@NOSHADOW3@` |
-| `rtprimary-sky` | 23 | `@SKY1@` | `@SKY2@` | `@SKY3@` |
-| `rtprimary-sun` | 23 | `@SUN1@` | `@SUN2@` | `@SUN3@` |
-| `rtprimary-bounce` | 23 | `@BOUNCE1@` | `@BOUNCE2@` | `@BOUNCE3@` |
-| `rtprimary-styles` (`waste2`) | 89 | `@STYLES1@` | `@STYLES2@` | `@STYLES3@` |
-| `rtprimary-bounce` on `waste2` | 89 | `@BOUNCED21@` | `@BOUNCED22@` | `@BOUNCED23@` |
-| `rtprimary-pool` (`water.dm2`) | 4 | `@POOL1@` | `@POOL2@` | `@POOL3@` |
-| `rtprimary-bounce` on `water.dm2` | 4 | `@BOUNCEW1@` | `@BOUNCEW2@` | `@BOUNCEW3@` |
-| `rtprimary-dlights` | 23 | `@DL1@` | `@DL2@` | `@DL3@` |
-| `rtprimary-dlights` on `waste2` | 89 | `@DLD21@` | `@DLD22@` | `@DLD23@` |
+| `rtprimary-world` | 23 | `c2d7b7d94e6c` | `c2d7b7d94e6c` | `c2d7b7d94e6c` |
+| `rtprimary-direct` | 23 | `8975350df42b` | `8975350df42b` | `8975350df42b` |
+| `rtprimary-vis` | 23 | `469ce42fec8c` | `469ce42fec8c` | `469ce42fec8c` |
+| `rtprimary-noshadow` | 23 | `b3d10fafdc08` | `b3d10fafdc08` | `b3d10fafdc08` |
+| `rtprimary-sky` | 23 | `9acbe75f592b` | `9acbe75f592b` | `9acbe75f592b` |
+| `rtprimary-sun` | 23 | `6f6c37b9a084` | `6f6c37b9a084` | `6f6c37b9a084` |
+| `rtprimary-bounce` | 23 | `e2a45f031fcc` | `e2a45f031fcc` | `e2a45f031fcc` |
+| `rtprimary-styles` (`waste2`) | 89 | `a254ac92e157` | `a254ac92e157` | `a254ac92e157` |
+| `rtprimary-bounce` on `waste2` | 89 | `c8462545efc0` | `c8462545efc0` | `c8462545efc0` |
+| `rtprimary-pool` (`water.dm2`) | 4 | `e73ffa9aea7d` | `e73ffa9aea7d` | `e73ffa9aea7d` |
+| `rtprimary-bounce` on `water.dm2` | 4 | `0182c9d94cd0` | `0182c9d94cd0` | `0182c9d94cd0` |
+| `rtprimary-dlights` | 23 | `6d01f9bb9bca` | `6d01f9bb9bca` | `6d01f9bb9bca` |
+| `rtprimary-dlights` on `waste2` | 89 | `8f8b43a1f6ee` | `8f8b43a1f6ee` | `8f8b43a1f6ee` |
 
-Views 1, 2, 3, 5 and 6 against slice 1's code (`@S1@`), which trace no bounce: `rtprimary-direct` @VSDIRECT@,
-`rtprimary-vis` @VSVIS@, `rtprimary-noshadow` @VSNOSHADOW@, `rtprimary-sky` @VSSKY@, `rtprimary-sun` @VSSUN@.
+Views 1, 2, 3, 5 and 6 against slice 1's code (`0b8880dda497`), which trace no bounce: `rtprimary-direct` `8975350df42b`, identical,
+`rtprimary-vis` `469ce42fec8c`, identical, `rtprimary-noshadow` `b3d10fafdc08`, identical, `rtprimary-sky` `9acbe75f592b`, identical, `rtprimary-sun` `6f6c37b9a084`, identical.
 
 For the owner's look, not in the repository: `base2`'s `demo1.dm2` captures 21 and 22 (outdoors) and 12
 (indoors), of `rtprimary-world` from the branch and from slice 1's code and of `rtprimary-bounce` from the branch
 (slice 1 has no view 7: `r_rt_direct_show 7` reads its maximum, 6, there). The shaded frames scored against slice
-1: 21 @SCORE21@, 22 @SCORE22@, 12 @SCORE12@. No frame was looked at by the agent.
+1: 21 0.008723, 22 0.009646, 12 0.007054. No frame was looked at by the agent. The frames went to the owner directly and were not committed.
 
 ## Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
 
-The before is slice 1 (`@S1@`), built in a scratch copy and run by `PINS_BIN`; the after is `@COMMIT@`.
-Information only (decision 0014), not a gate:
+The before is slice 1 (`0b8880dda497`), built in a scratch copy and run by `PINS_BIN`; the after is `7fe879bd9763`.
+Information only (decision 0014), not a gate. The times are milliseconds as the hold's summary states them, measured
+with the screen locked, and are not a timing measurement; no performance conclusion is drawn from them:
 
 | Map (scenario, `cl_lights`) | Side | Exposure (mean) | Shadow rays a world pixel | Bounce rays a world pixel, read a lightmap | Pass time (mean) |
 |---|---|---|---|---|---|
-| `base2` (`rtprimary-dlights`) | slice 1 | @EXP_B2_S1@ | @RAYS_B2_S1@ | n/a | @MS_B2_S1@ ms |
-| `base2` (`rtprimary-dlights`) | branch | @EXP_B2@ | @RAYS_B2@ | @BNC_B2@ | @MS_B2@ ms |
-| `waste2` (`rtprimary-styles`) | slice 1 | @EXP_W2_S1@ | @RAYS_W2_S1@ | n/a | @MS_W2_S1@ ms |
-| `waste2` (`rtprimary-styles`) | branch | @EXP_W2@ | @RAYS_W2@ | @BNC_W2@ | @MS_W2@ ms |
-| `base1` pool (`rtprimary-outdoor`, `water.dm2`) | slice 1 | @EXP_B1_S1@ | @RAYS_B1_S1@ | n/a | @MS_B1_S1@ ms |
-| `base1` pool (`rtprimary-outdoor`, `water.dm2`) | branch | @EXP_B1@ | @RAYS_B1@ | @BNC_B1@ | @MS_B1@ ms |
+| `base2` (`rtprimary-dlights`) | slice 1 | 1.4609 | 15.82 | n/a | 7.717 ms |
+| `base2` (`rtprimary-dlights`) | branch | 1.4609 | 15.82 | 1.000, 97.3 % | 8.116 ms |
+| `waste2` (`rtprimary-styles`) | slice 1 | 1.4715 | 26.10 | n/a | 10.242 ms |
+| `waste2` (`rtprimary-styles`) | branch | 1.4715 | 26.10 | 1.000, 100.0 % | 10.721 ms |
+| `base1` pool (`rtprimary-outdoor`, `water.dm2`) | slice 1 | 1.7564 | 19.98 | n/a | 10.623 ms |
+| `base1` pool (`rtprimary-outdoor`, `water.dm2`) | branch | 1.7564 | 19.98 | 1.000, 100.0 % | 11.300 ms |
 
-The map lines: @MAPLINES@.
+The map lines (triangles that read a lightmap at a bounce's hit, per map): `base2`: 24720 of 25856 triangles read a lightmap at a bounce's hit; `waste2`: 20107 of 20944; `base1`: 20789 of 21767.
 
 ## Stock is unchanged (slice 2)
 
 Every committed `metal` scenario but RT-primary's, seeded, the water scenarios on one `water.dm2` copied to every
-tree, `cinematic` on `idlog.cin` at `PINS_EVERY=7`, base main at `@BASE@` and the branch at `@COMMIT@`:
-@PINS@.
+tree, `cinematic` on `idlog.cin` at `PINS_EVERY=7`, base main at `0f99e9cfcdad` and the branch at `7fe879bd9763`:
+29 of 29 stock scenarios byte-identical to the base (29 scenarios on each side, 0 failed).
 
 ## Checks (slice 2)
 
-In one hold on the code of the final commit (`@COMMIT@`; main merged: @MERGED@), each check's last line:
+In one hold on the code of the final commit (`7fe879bd9763`; main merged: yes (main and slice 1)), each check's last line:
 
-- make ref_metal: `@MAKE_RM@`; make: `@MAKE@`.
-- `make test`: `@MAKE_TEST@`.
-- `check-ref-metal`: `@CHECK_RM@`.
+- make ref_metal: `===> LD release/ref_metal.dylib`; make: `===> LD release/quake2`.
+- `make test`: `yq2test: 591 tests, 0 failed`.
+- `check-ref-metal`: `check-ref-metal: ok (13162 checks, 0 failed; ray tracing 169 checks, 0 failed; G-buffer 177 checks, 0 failed; shadows 4384 checks, 0 failed; AO 283 checks, 0 failed; water 727 checks, 0 failed; sun 711 checks, 0 failed; direct light 1000 checks, 0 failed, 8 fit mutants, 18 sky mutants and 19 bounce mutants refused; RT data 170 checks, 0 failed; MetalFX 335 checks, 0 failed; ray-tracing gate 992 ch`; the hold's summary cut the line there, the rest not recorded by the hold.
 - `check-cvar-docs`, `check-runbook-index`, `check-doc-links`, `check-video-menu`, `check-pin-chars`,
-  `check-scenario-parsers`: @CHECKS@.
+  `check-scenario-parsers`: each `ok` (`check-scenario-parsers`: ok, 4 tests, 10 mutants caught).
+
+## Notes from review (slice 2)
+
+- **Bilinear read.** The bounce samples the lightmap bilinearly, like RT6's water and the stock default
+  `metal_lightmap_filter 0`. With the bicubic option on, the bounce reads slightly differently from the stock draw.
+- **Grey albedo.** A texture that is not a `.wal` gets the fixed grey albedo (`RM_RTL_UNREAD_GREY`), as TASK187's
+  emitters do.
+- **A stale lightmap texture id on reloading the same map.** `RM_RTDir_Lights` returns early when the world
+  pointer and the name match, so `brec_lmtex` could name a freed texture. The kernel then reads none, so the bounce
+  goes dark and nothing is read out of bounds. This is a follow-up, not fixed here.
+- **Mutant names.** The kernel mutants are caught by the whole-body pin of `rm_rtdir_bounce` and
+  `rm_rtdir_tri_lm`, so their names describe what they would break, not which check refuses them.
 
 ## Left for later rows (slice 2)
 
