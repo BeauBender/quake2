@@ -242,6 +242,38 @@ with all three effects on (one AO ray a pixel, the noise moving), each at `r_rt_
 (run twice) and at 0. Their frames 12 and 22 are for the owner and are kept outside the
 repository.
 
+Results of the hold (code commit `7ef2b286`, base main at `3d02c2ac`). The first hold of
+this slice (`98a095ba`) failed the stock shadows pins; the cause paragraph above says why,
+and `7ef2b286` is the fix.
+
+- `pins: 29 of 29 stock scenarios byte-identical to the base`, 0 differ: accumulation off
+  changes no stock frame.
+- The shadows at `r_rt_temporal 0` hash to `2b8d11a25392`, main's `rt-shadows` digest, and
+  the sun at 0 to `b7e0212dfda8`, main's `rt-sun` digest (the stock digests; the scratch
+  scenarios are seeded alike, so only the frames are compared by hash). All three at 0 hash
+  to `d900f43703bd`.
+- Determinism, 23 frames of `demo1.dm2` at 640 x 480, two runs at 0.9 each, 0 frames
+  different between the two runs:
+
+  | Effect | One hash at 0.9 | At 0.9 against 0 |
+  | --- | --- | --- |
+  | shadows | `721a6ef80b2d` | 3 frames differ |
+  | sun | `91cf74b316b8` | 1 frame differs |
+  | all three | `31eebeb590cf` | 23 frames differ |
+
+- The frames kept for the owner are frames 12 and 22 of each scenario's accumulated run and
+  its run at 0 (the sun's: frame 12 of each). The summary names how many frames differ, not
+  which.
+- Allocation, one `ref_metal: rt temporal ...: N bytes allocated` line per effect at
+  640 x 480, none at 0: the shadows 14,843,904 bytes; the sun 9,895,936; the AO 9,895,936
+  (all three on: the three lines, one each).
+- Checks: `check-ref-metal: ok (13162 checks, 0 failed; ...)` with `temporal 123 checks, 0
+  failed, 11 rule mutants, 7 kernel pins with 10 kernel mutants and 3 back-end mutants
+  refused, 3 stock-trace pins with 4 mutants refused` and `21 kernel calls, 210
+  kernel-call mutants refused`; `yq2test: 591 tests, 0 failed`; `check-cvar-docs: ok`,
+  `check-doc-links: ok`, `check-runbook-index: ok`, `check-video-menu: ok`,
+  `check-pin-chars: ok`.
+
 ## Left for the next slices
 
 - The 5x5 bilateral denoiser on AO and sun, scaled by the sample count, and the reflections'
