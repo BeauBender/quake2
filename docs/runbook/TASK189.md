@@ -98,9 +98,10 @@ Recorded at `@CODE@`, three runs each, hashed as the hash of the frames' sha256s
 @RECORDS@
 
 For the owner's look, not in the repository: slice 3c's captures (`rtprimary-world` 6 and 12, `waste2` 61 and
-67, `rtprimary-dlights` 20) from the branch and from slice 3c's code, and the outdoor view, every capture of
-`rtprimary-world` on `water.dm2` (`base1`, its sun from the table's line) from both, with the sky's and the
-sun's terms alone from the branch. @FRAMES@
+67, `rtprimary-dlights` 20) from the branch and from slice 3c's code, and the pool of `base1`, every capture of
+`rtprimary-world` on `water.dm2` (its sun from the table's line) from both, with the sky's and the sun's terms
+alone from the branch. The view that faces open sky is `demo1.dm2`'s captures 21 and 22 (`base2`), of
+`rtprimary-world`, `rtprimary-sky` and `rtprimary-sun` (round 2). @FRAMES@
 
 ## Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
 
@@ -112,6 +113,30 @@ The before is TASK188 slice 3c (`@S3C@`), built in a scratch copy and run by `PI
 @STATS@
 
 @STATSNOTE@
+
+## Why the sky and the sun are rare on these views (round 2)
+
+Round 1's means were low (`base2` 2.8 % of the sky rays reached the sky, `waste2` and `water.dm2` 0.0 %). The
+trace found no fault in the chain:
+
+- *The scene.* RT-primary's kernel binds the frame's scene and the map's material ids with the same calls as
+  RT2's sun (`rmb_rt_bind_scene`, `rmb_rt_bind_materials` in `rmb_rtdir.m` and `rmb_rtsun.m`). The world's
+  structure holds every triangle of the world's index buffer, the sky's among them, each with its material
+  id from `rm_rt_material` (a `SURF_SKY` face is `RM_RT_MAT_SKY`, 4, which is `MTL_GB_MAT_SKY`), and every map
+  instance carries the AO bit (`mtl_rtao_inst_mask`) that the sky and sun rays test (`MTL_RTAO_MASK`).
+- *The rule.* `rm_rtdir_sky_hit` is RT2's `rm_rtsun_hit` loop, and `mtl_rtsky_at` is `mtl_rtsun_step` of
+  `mtl_rtsun_at`, under which material 4 is lit. The origin and its bias are the direct light's
+  (`mtl_rtao_bias` of the same `bias_k`), and the range is RT2's `MTL_RTSUN_RANGE`.
+- *The views.* In round 1's lines of `rtprimary-dlights` on `demo1.dm2`, more than 1 % of a frame's sky rays
+  reach the sky only on 79 frames, the pass's frames 625 to 704 (23.5 % of them on the mean there, 26.2 % on
+  the frame of capture 21, where 57,675 of 307,200 pixels are not world pixels). That is the demo's one outdoor
+  stretch, which holds captures 21 and 22, and the 2.8 % is that stretch spread over 687 frames. On `waste2`
+  (`demo2.dm2`, every frame of the run) and on `water.dm2` nearly every pixel of every frame is a world pixel,
+  and at most 1 and 54 of 307,200 sky rays a frame reach the sky. `water.dm2` looks at the pool of `base1` from
+  just above and under its surface (TASK70), not outdoors.
+
+The probe hold sets RT2's sun (`r_presentation 1`, `r_rt_sun 1`, at `r_rt_sunfloor 0.5` and at `1`) beside
+RT-primary's sky light and sun on the same three views, joined frame by frame: @SKYCMP@
 
 ## Stock is unchanged
 
