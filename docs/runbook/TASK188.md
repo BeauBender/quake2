@@ -1012,51 +1012,78 @@ every-floor: rm_rtdir_test: 840 checks, 34 failed
 
 ### The records are pins (M6, apple9, 640 x 480)
 
-Recorded at `@CODE@` (the code of the final commit), three runs each (`--run 2`, `--run 3`), hashed as the
-hash of the frames' sha256s:
+Recorded at `300b4bf4` (the code of the final commit), three runs each (`--run 2`, `--run 3`), hashed as the
+hash of the frames' sha256s. Every row is three runs and one hash:
 
 | Record | Frames | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|---|
-@RECORDS@
+| `rtprimary-world` (`demo1.dm2`, `base2`) | 23 | `a8b7641d0739` | `a8b7641d0739` | `a8b7641d0739` |
+| `rtprimary-direct` | 23 | `8975350df42b` | `8975350df42b` | `8975350df42b` |
+| `rtprimary-vis` | 23 | `469ce42fec8c` | `469ce42fec8c` | `469ce42fec8c` |
+| `rtprimary-noshadow` | 23 | `b3d10fafdc08` | `b3d10fafdc08` | `b3d10fafdc08` |
+| `rtprimary-world`, `PINS_DEMO=demo2.dm2 PINS_EVERY=7` (`waste2`, the lightstyles) | 89 | `66b4cf67a706` | `66b4cf67a706` | `66b4cf67a706` |
+| `rtprimary-dlights` | 23 | `921311e433c6` | `921311e433c6` | `921311e433c6` |
+| `rtprimary-dlights`, `PINS_DEMO=demo2.dm2 PINS_EVERY=7` | 89 | `b66770b8ac1c` | `b66770b8ac1c` | `b66770b8ac1c` |
 
 Slice 3b's records were, at `251451f7`: `rtprimary-world` `0b44b41a739d`, `rtprimary-direct`
 `c9a2f64eee98`, `rtprimary-vis` `469ce42fec8c`, `rtprimary-noshadow` `fe4e7d8028f1`, `waste2` `491fb53deed4`,
-`rtprimary-dlights` `af586c32f8cb` and `aa8b1b87d17b`. @MOVED@ These hashes are the RT-primary pins from here,
+`rtprimary-dlights` `af586c32f8cb` and `aa8b1b87d17b`. Every RT-primary record's hash moves, because the exposure is now fitted at map load and is one value for the map, except `rtprimary-vis`, which keeps `469ce42fec8c`: `rtprimary-world` from `0b44b41a739d` to `a8b7641d0739`, `rtprimary-direct` from `c9a2f64eee98` to `8975350df42b`, `rtprimary-noshadow` from `fe4e7d8028f1` to `b3d10fafdc08`, `waste2` from `491fb53deed4` to `66b4cf67a706`, `rtprimary-dlights` from `af586c32f8cb` to `921311e433c6` and its `demo2.dm2` record from `aa8b1b87d17b` to `b66770b8ac1c`. These hashes are the RT-primary pins from here,
 provisional until the owner accepts the look (PM11), where they are recorded again. For the owner's look,
 not in the repository: the same captures as slice 3b, from the branch and from slice 3b's code
 (`058c609c`), `rtprimary-world` captures 6 and 12, `waste2` captures 61 and 67, and `rtprimary-dlights`
 capture 20.
 
-The maps' fits (`r_rt_stats 1`, in the stats runs):
+The maps' fits (`r_rt_stats 1`, in the stats runs), from round 0 (`6f298f45`) and from round 1 (the branch):
 
 ```
-@FITLINES@
+r0     ref_metal: rt direct: maps/base2.bsp: exposure fit 1.4609 over 4211 luxels of 5344 (1133 near black, 0 clipped), 64708 lines
+branch ref_metal: rt direct: maps/base2.bsp: exposure fit 1.4609 over 4211 luxels of 5344 (1133 near black, 0 clipped), 64708 lines, 2214782 node visits, every 1-th point
+r0     ref_metal: rt direct: maps/waste2.bsp: exposure fit 1.4715 over 4232 luxels of 5466 (1234 near black, 0 clipped), 86060 lines
+branch ref_metal: rt direct: maps/waste2.bsp: exposure fit 1.4715 over 4232 luxels of 5466 (1234 near black, 0 clipped), 86060 lines, 3367327 node visits, every 1-th point
 ```
+
+Round 0 and round 1 give the same exposure, 1.4609 for `base2` and 1.4715 for `waste2`, so the round-1
+refactor did not move the fit. Round 1's node visits, 2214782 and 3367327, are well under the 2^26 cap.
 
 ### Before and after (`r_rt_stats 2`, M6, apple9, 640 x 480, in the hold)
 
-The before is slice 3b (`058c609c`), built in a scratch copy and run by `PINS_BIN`; the after is `@CODE@`.
+The before is slice 3b (`058c609c`), built in a scratch copy and run by `PINS_BIN`; the after is `300b4bf4`, and `r0` is round 0 (`6f298f45`).
 `rtprimary-s3cstats` is a scratch copy of `rtprimary-dlights` with `r_rt_stats 2` (`demo1.dm2`, `base2`,
 `cl_lights 1`, `PINS_SEED=1`) and `rtprimary-s3cstyles` one of `rtprimary-world` (`demo2.dm2` every 7th,
 `waste2`, `cl_lights 0`). The numbers are information only (decision 0014), not a gate:
 
-| Map (scenario, `cl_lights`) | Side | Exposure (mean) | Capped (mean share) | Rays a world pixel (mean) | Pass time (mean) |
-|---|---|---|---|---|---|
-@STATS@
+| Map (scenario, `cl_lights`) | Side | Exposure (mean; range) | Capped (mean share) | Lights in range (mean) | Rays a world pixel (mean) | Pass time (mean) |
+|---|---|---|---|---|---|---|
+| `base2` (`rtprimary-s3cstats`, 1) | slice 3b | 1.4919 (0.7131 to 2.4919) | 5.5 % | 16.12 | 15.82 | 7.041 ms |
+| `base2` (`rtprimary-s3cstats`, 1) | r0 | 1.4609 (1.4609 to 1.4609) | 5.5 % | 16.12 | 15.82 | 7.010 ms |
+| `base2` (`rtprimary-s3cstats`, 1) | branch | 1.4609 (1.4609 to 1.4609) | 5.5 % | 16.12 | 15.82 | 7.055 ms |
+| `waste2` (`rtprimary-s3cstyles`, 0) | slice 3b | 1.3123 (0.7503 to 2.6009) | 34.5 % | 28.40 | 26.10 | 9.028 ms |
+| `waste2` (`rtprimary-s3cstyles`, 0) | r0 | 1.4715 (1.4715 to 1.4715) | 34.5 % | 28.42 | 26.12 | 9.035 ms |
+| `waste2` (`rtprimary-s3cstyles`, 0) | branch | 1.4715 (1.4715 to 1.4715) | 34.5 % | 28.40 | 26.10 | 9.036 ms |
 
-@STATSNOTE@
+The exposure is now one value per map, where slice 3b's ranged from 0.71 to 2.49 on `base2` and from 0.75 to
+2.60 on `waste2`. The times are information only (decision 0014): the mean of 687 frame lines on `base2` and
+of 616 on `waste2` (686 and 617 on the branch's `base2` and `waste2` runs; 616 for slice 3b's and r0's `waste2`).
 
 ### Stock is unchanged
 
 The same method as slice 3b (every committed `metal` scenario but RT-primary's, seeded, the water
 scenarios on one `water.dm2` copied to both, `cinematic` on `idlog.cin` at `PINS_EVERY=7`), base main at
-`@BASE@` and the branch at `@CODE@`: @PINS@ At `r_presentation 0` the slice changes no pixel.
+`3d02c2ac` and the branch at `300b4bf4`: `base: 29 scenarios, 0 failed`, `branch: 29 scenarios, 0 failed`, and
+`pins: 29 of 29 stock scenarios byte-identical to the base`. At `r_presentation 0` the slice changes no pixel.
 
 ### Checks
 
-In one hold on the code of the final commit (`@CODE@`; main merged: @MERGED@), each check's last line:
+In one hold on the code of the final commit (`300b4bf4`; main merged: no, the branch is stacked on slice 3b, PR #727), each check's last line:
 
-@CHECKS@
+- `make ref_metal` and `make`: exit 0.
+- `make test`: `yq2test: 591 tests, 0 failed`.
+- `tests/check-ref-metal.sh`: `check-ref-metal: ok (13162 checks, 0 failed; ... direct light 840 checks, 0 failed, 8 fit mutants refused; ...; ref_metal built)`.
+- `tests/check-cvar-docs.sh`: `check-cvar-docs: ok`.
+- `tests/check-runbook-index.sh`: `check-runbook-index: ok`.
+- `tests/check-doc-links.sh`: `check-doc-links: ok`.
+- `tests/check-video-menu.sh`: `check-video-menu: ok`.
+- `tests/check-pin-chars.sh`: `check-pin-chars: ok`.
 
 The stock pin compare and the RT-primary records, three runs each with one hash. No frame was looked at
 by the agent.
