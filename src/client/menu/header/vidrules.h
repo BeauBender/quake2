@@ -245,6 +245,25 @@ int VidRules_TuneOverridden(int i, const char *renderer, float presentation);
 
 /* TASK197: whether Retro reads r_metalfx as 0, so the main menu's MetalFX scaler and scale items are greyed "set by the presentation" */
 int VidRules_MetalFXOverridden(const char *renderer, float presentation);
+
+/*
+ * TASK190 slice 3: the r_metalfx the presentation reads in place of the
+ * user's, as ref_metal's overlay does (rm_pres_fx), or -1 when the user's
+ * value stands. Retro reads 0 on Metal, whatever the device. Ray traced,
+ * where it runs (Metal, ray tracing available), reads 0 on a GPU without
+ * the temporal scaler (modemask, VidRules_ModeMask's, lacks
+ * VIDMFX_TEMPORAL), else 2, the temporal scaler, while the view is scaled
+ * down (r_metalfx_scale, scale, not a finite value from 1 up: the menu
+ * counts the default as scaled down); at a scale of 1 or more the user's.
+ * Ray traced also reads 0 while the tuning screen's debug view debugview
+ * (VidRules_DebugView's numbering, 0 for none) is one the mode draws, the
+ * view of an effect it runs (the water's): the renderer draws a
+ * development view unscaled (rm_rtfx_show_asked).
+ * *why, when not NULL, gets the scaler item's reason line for a decided
+ * value, else NULL.
+ */
+int VidRules_MetalFXDecided(const char *renderer, int available, float presentation, int modemask, float scale,
+	int debugview, const char **why);
 int VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user);
 vidrule_t VidRules_RTRow(int i, const char *renderer, int available, float presentation, float effect_user);
 

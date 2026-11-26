@@ -1008,6 +1008,9 @@ marked `(n/a)` and skipped.
   colour (the spatial scaler in its HDR mode), and a change of `r_hdr`
   makes it anew in the new format, without its history; a GPU that will
   not make it in that format leaves the scaler off with one line.
+  The Retro and Ray traced presentations read it in place of your value
+  without writing it (`r_presentation`): Retro as `0`, Ray traced as `2`
+  while the view is scaled down, `0` on a GPU without the temporal scaler.
   Other renderers do not have it. Saved with the configuration; applies
   from the next frame.
 
@@ -1083,7 +1086,30 @@ marked `(n/a)` and skipped.
   at `r_rt_sunscale`) and one bounce of indirect light
   (`r_rt_direct_bounce`, one ray a pixel that reads the stock lightmap
   where it lands); the denoiser is later work, so the sky light and the
-  bounce are noisy (one ray a pixel each, no denoiser yet). Models, the sky,
+  bounce are noisy (one ray a pixel each, no denoiser yet). Ray traced
+  also reads `r_metalfx` as `2`, `MTLFXTemporalScaler`, while the 3D
+  view's internal size (`r_metalfx_scale`, whose value stays yours) is
+  below its own; at the view's own size (a scale of `1`, or the default
+  in a 3D view no taller than the GPU's default rows: a small window, or
+  `viewsize` below `100` shrinking the view to those rows or fewer) the
+  mode runs no scaler of its own and `r_metalfx` is yours. The player
+  model of the menu's player setup, drawn over the world, keeps the
+  world view's value. On a GPU without the
+  temporal scaler it reads `r_metalfx` as `0`, never as the spatial
+  scaler, and says so at start-up and at `vid_restart` (`ref_metal:
+  presentation: ray traced: r_metalfx reads 0 (off): no MetalFX temporal
+  scaler on this device`); while a development view of an effect it
+  runs (`r_rt_direct_show` or `r_rt_water_show`) is asked for it reads
+  `0` too, so the view is drawn unscaled. The video menu's "MetalFX
+  scaler" item and the Tuning screen's "scaler" row are then greyed with
+  the value in use ("set by the presentation: temporal", "off: no
+  temporal scaler on this GPU", or, with the Tuning screen's water debug
+  view chosen, "off: the debug view is drawn unscaled"). The menu does
+  not see the 3D view's height and counts the default scale as below
+  it, so in a small window or at a `viewsize` that shrinks the view to
+  the default rows or fewer it says "temporal" while `r_metalfx` is
+  yours; nor does it see `r_rt_direct_show`, which has no menu row.
+  Models, the sky,
   water, particles and the 2D layer stay stock. Retro and Ray traced are greyed in
   the menu "awaiting review" until their look is accepted, and work from
   the console; the values are never renumbered. Read at start-up and at
@@ -1371,7 +1397,9 @@ is.
   lightmapped world are black. When `r_rt_temporal` is above `0` the
   views show the accumulated term, except view `2` (the visibility),
   which stays the trace's own; changing `r_rt_direct_show` starts the
-  history again. Not saved with the configuration.
+  history again. Ray traced (`r_presentation 3`) reads `r_metalfx` as
+  `0` while a view is asked for, so it is drawn unscaled. Not saved with
+  the configuration.
 
 * **r_rt_direct_sky**: The scale of the Metal renderer's sky light under
   RT-primary (`r_presentation 3`, TASK189): each lightmapped world pixel
@@ -1787,7 +1815,10 @@ is.
   and translucent surfaces are left out of these views. `0` (the
   default) shows the picture; a value above `2` counts as `2`, one that
   is not a finite number as `0`, and a fraction is cut to the whole
-  number below it. Cheat-protected: reset to `0` in multiplayer. Applies
+  number below it. Ray traced (`r_presentation 3`) reads `r_metalfx` as
+  `0` while a view is asked for, so it is drawn unscaled; it goes by the
+  value alone, so the scaler stays off on a map without water too, where
+  no view is drawn. Cheat-protected: reset to `0` in multiplayer. Applies
   from the next frame.
 
 

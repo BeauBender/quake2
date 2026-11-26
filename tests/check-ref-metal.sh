@@ -37,7 +37,9 @@
 #     tests/metal/rm_rttab_test.c, r_rt_temporal through the A/B layer
 #     (slice 2b): the real text of RM_Effect, RM_RTT_On and RM_RTT_ViewFor's
 #     alpha over the real rm_ab_value and rm_rtt_alpha, with mutants that
-#     read r_rt_temporal->value directly,
+#     read r_rt_temporal->value directly, and RM_PresBelow's view size
+#     (TASK190 slice 3) with a mutant that drops its early return for the
+#     menu's player model,
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
@@ -788,6 +790,59 @@ else
 	case $rtg in *", 0 failed") ;; *) bad "tests/metal/rm_rtgate_test.c printed no result line"; rtg="";; esac
 fi
 seg 10 "; ray-tracing gate ${rtg:-host test}"
+
+# TASK190 slice 3: the menu's copy of RT-primary's scaler row (vidrules.c) against the renderer's (rm_rtgate.c,
+# with rm_metalfx.c's view size), one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must
+# refuse: the renderer's row dropped; the renderer's, then the menu's, capability rule dropped; the renderer's,
+# then the menu's, size rule dropped; the menu's debug-view rule dropped (round 2, N2)
+pmbuild() {
+	# shellcheck disable=SC2086 # flags and fxhost are word lists
+	# (vidrules.c's control tables leave their trailing fields to zero, which -Wextra names)
+	$cc $flags $fxhost -Wno-missing-field-initializers -I"$rm_dir" -Isrc/client/menu -o "$3" tests/metal/rm_pres_menu_test.c "$1/rm_rtgate.c" \
+		"$rm_dir/rm_rtfx.c" "$rm_dir/rm_metalfx.c" "$2" -lm
+}
+pm=""
+pm_mutants=0
+if ! pmbuild "$rm_dir" src/client/menu/vidrules.c "${tmp:?}/rm_pres_menu_test" > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_pres_menu_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_pres_menu_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_pres_menu_test.c failed: the menu and the renderer disagree on RT-primary's scaler"
+else
+	pm=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_pres_menu_test: //')
+	case $pm in *", 0 failed") ;; *) bad "tests/metal/rm_pres_menu_test.c printed no result line"; pm="";; esac
+fi
+if [ -n "$pm" ]; then
+	mkdir "${tmp:?}/pmm"
+	for pmm in row rcaps mcaps rsize msize mshow; do
+		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c "${tmp:?}/pmm/"
+		case $pmm in
+			row) sed '/{ "r_metalfx", 2\.0f },/d' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			# each keeps its parameter read, so -Werror's unused-parameter does not refuse it before the test runs
+			rcaps) sed 's/(!temporal || show))/((void)temporal, show))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			mcaps) sed 's/if (!(modemask \& VIDMFX_TEMPORAL))/if (!(modemask | VIDMFX_TEMPORAL))/' src/client/menu/vidrules.c \
+				> "${tmp:?}/pmm/vidrules.c" ;;
+			rsize) sed 's/\&\& !below)/\&\& ((void)below, 0))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			msize) sed 's/else if (!(isfinite(scale) \&\& (scale >= 1.0f)))/else if (!(isfinite(scale) \&\& (scale >= 1.0f)) || 1)/' \
+				src/client/menu/vidrules.c > "${tmp:?}/pmm/vidrules.c" ;;
+			mshow) sed 's/else if ((e >= 0) \&\& VidRules_RTEffective/else if ((e >= 0) \&\& 0 \&\& VidRules_RTEffective/' \
+				src/client/menu/vidrules.c > "${tmp:?}/pmm/vidrules.c" ;;
+		esac
+		if cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/pmm/rm_rtgate.c" && cmp -s src/client/menu/vidrules.c "${tmp:?}/pmm/vidrules.c"; then
+			bad "the menu-parity mutant ($pmm) changed nothing"
+		elif ! pmbuild "${tmp:?}/pmm" "${tmp:?}/pmm/vidrules.c" "${tmp:?}/pmm/t" > "${tmp:?}/pmm.out" 2>&1; then
+			cat "${tmp:?}/pmm.out"
+			bad "the menu-parity mutant ($pmm) does not compile"
+		elif "${tmp:?}/pmm/t" > "${tmp:?}/pmm.out" 2>&1; then
+			bad "tests/metal/rm_pres_menu_test.c passes the menu-parity mutant ($pmm)"
+		else
+			pm_mutants=$((pm_mutants + 1))
+		fi
+	done
+	[ "$pm_mutants" = 6 ] || bad "tests/metal/rm_pres_menu_test.c refuses $pm_mutants of its 6 mutants"
+fi
+seg 10.2 "; menu and renderer scaler rule ${pm:-host test}, $pm_mutants parity mutants refused"
 
 # the effect table (TASK179): tests/metal/rm_rtfx_test.c over rm_rtfx.c and rm_rtgate.c, the order every walk
 # takes, each row's switch against the gate's table, and the pipeline rule of rmb_gbuf_pipe3d. fxbuild <dir>
@@ -1596,25 +1651,30 @@ seg 5.6 "; denoiser ${rtd:-host test}, $rtd_mutants rule mutants, $rtd_kpins ker
 # (rm_main.c), RM_RTT_On and the alpha line, copied into its rttab_body.c, over the real rm_ab_value and
 # rm_rtt_alpha: a B side holding 0 turns the accumulation off, one holding 0.9 with A at 0 turns it on.
 # Mutants: either site restored to the direct read of r_rt_temporal->value; each must build and fail it.
+# TASK190 slice 3 adds RM_PresBelow (rm_main.c) and rm_view_rect (rm_pure.c) to rttab_body.c, over the real
+# rm_fx_scale (rm_metalfx.c), and a third mutant: RM_PresBelow without its early return for RDF_NOWORLDMODEL.
 rttab_fn() { # <file> <function>: the function's definition, its return type's line to the "}" in column 0
 	awk -v fn="$2" 'b { print; if (/^}/) exit } $0 ~ "^" fn "\\(" { print prev; print; b = 1 } { prev = $0 }' "$1"
 }
-rttab_tree() { # <dir> <rm_rtaoscene.c>: rttab_body.c in <dir> from rm_main.c and the scene file given
+rttab_tree() { # <dir> <rm_rtaoscene.c> [<rm_main.c>]: rttab_body.c in <dir> from rm_main.c and the scene file given
 	rm -rf "${1:?}"
 	mkdir -p "$1"
 	al=$(awk '/^RM_RTT_ViewFor\(/ { b = 1 } b && /^}/ { b = 0 } b && /^\talpha = / { print }' "$2")
 	[ -n "$al" ] && [ "$(printf '%s\n' "$al" | wc -l | tr -d ' ')" = 1 ] || return 1
 	{
-		rttab_fn "$rm_dir/rm_main.c" RM_Effect
+		rttab_fn "${3:-$rm_dir/rm_main.c}" RM_Effect
+		rttab_fn "${3:-$rm_dir/rm_main.c}" RM_PresBelow
+		rttab_fn "$rm_dir/rm_pure.c" rm_view_rect
 		rttab_fn "$2" RM_RTT_On
 		printf '%s\n' '' 'static float' 'rttab_view_alpha(void)' '{' '	float alpha;' '' "$al" '	return alpha;' '}'
 	} > "$1/rttab_body.c"
-	grep -q '^RM_Effect(' "$1/rttab_body.c" && grep -q '^RM_RTT_On(' "$1/rttab_body.c"
+	grep -q '^RM_Effect(' "$1/rttab_body.c" && grep -q '^RM_PresBelow(' "$1/rttab_body.c" &&
+		grep -q '^rm_view_rect(' "$1/rttab_body.c" && grep -q '^RM_RTT_On(' "$1/rttab_body.c"
 }
 rttab_build() { # <dir>: 0 when the test builds over the dir's rttab_body.c
 	# shellcheck disable=SC2086 # flags and fxhost are word lists
 	$cc $flags $fxhost -I"$1" -o "$1/t" tests/metal/rm_rttab_test.c "$rm_dir/rm_rtgate.c" "$rm_dir/rm_rtfx.c" \
-		"$rm_dir/rm_rttemporal.c" -lm > "${tmp:?}/cc.out" 2>&1
+		"$rm_dir/rm_rttemporal.c" "$rm_dir/rm_metalfx.c" -lm > "${tmp:?}/cc.out" 2>&1
 }
 rttab_run() { # <dir>: 0 when the test builds and passes
 	rttab_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
@@ -1645,6 +1705,23 @@ else
 			rttab_mut=$((rttab_mut + 1))
 		fi
 	done
+	# TASK190 slice 3, I1: RM_PresBelow without its early return for the menu's player model (RDF_NOWORLDMODEL),
+	# which then reads r_metalfx 0 between two world views reading 2; it must build and fail the two-view case
+	sed '/^RM_PresBelow(/,/^}/s/if (fd->rdflags & RDF_NOWORLDMODEL)/if (0)/' "$rm_dir/rm_main.c" > "${tmp:?}/rttab-main.c"
+	if cmp -s "$rm_dir/rm_main.c" "${tmp:?}/rttab-main.c"; then
+		bad "the two-view mutant of RM_PresBelow changed nothing"
+	elif ! rttab_tree "${tmp:?}/rttabm" "$aos" "${tmp:?}/rttab-main.c" || ! rttab_build "${tmp:?}/rttabm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the two-view mutant of RM_PresBelow does not build, so it tests nothing"
+	elif rttab_run "${tmp:?}/rttabm"; then
+		bad "tests/metal/rm_rttab_test.c passes the two-view mutant of RM_PresBelow"
+	elif ! grep -q '^FAIL .*model_view' "${tmp:?}/out"; then
+		cat "${tmp:?}/out"
+		bad "tests/metal/rm_rttab_test.c refuses the two-view mutant of RM_PresBelow, but not on the two-view case"
+	else
+		rttab_mut=$((rttab_mut + 1))
+	fi
+	[ "$rttab_mut" = 3 ] || bad "tests/metal/rm_rttab_test.c refuses $rttab_mut of its 3 mutants"
 fi
 seg 5.65 "; temporal through A/B ${rttab:-host test}, $rttab_mut mutants refused"
 

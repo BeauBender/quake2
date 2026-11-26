@@ -294,6 +294,13 @@ RM_RTSun_ShowOnly(void)
 	return sun_active && sun_viewed && r_rt_sun_show && rm_rtsun_show(r_rt_sun_show->value);
 }
 
+/* TASK190 slice 3: the view is asked for, whether or not this frame traces it yet (rm_main.c sizes the scaler before Frame) */
+int
+RM_RTSun_ShowAsked(void)
+{
+	return RM_RTSun_Wanted() && r_rt_sun_show && rm_rtsun_show(r_rt_sun_show->value);
+}
+
 void
 RM_RTSun_View(const rm_view_t *view)
 {

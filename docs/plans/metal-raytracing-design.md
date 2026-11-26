@@ -1422,6 +1422,7 @@ entry points, `NULL` where the effect has none:
 | `frame` | `RI_RenderFrame` (`rm_main.c`) | whether this frame traces the effect |
 | `active` | `RM_GB_Choose` (`rm_gbufscene.c`) | an effect on takes the G-buffer path |
 | `view`, `show_only` | `R_RenderViewGB` (`rm_main.c`) | the view handed over; a development view that drops the forward pass |
+| `show_asked` | `RM_Effect` (`rm_main.c`) | a development view asked for (the effect wanted, its `_show` cvar on), before `frame` and `view`: RT-primary's scaler reads off for it (TASK190) |
 | `mark` | `rmb_gbuf_resolve` (`rmb_gbuf.m`) | on the raster's last draw |
 | `trace` | the same | between the raster and the resolve; may replace the light the resolve reads |
 | `resolve`, `show` | the same | in the resolve's pass: the first effect that draws the resolve replaces the stock one; overlays after it |

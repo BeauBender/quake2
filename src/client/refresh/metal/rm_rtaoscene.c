@@ -250,6 +250,13 @@ RM_RTAO_ShowOnly(void)
 	return ao_active && ao_viewed && r_rt_ao_show && rm_rtao_show(r_rt_ao_show->value);
 }
 
+/* TASK190 slice 3: the view is asked for, whether or not this frame traces it yet (rm_main.c sizes the scaler before Frame) */
+int
+RM_RTAO_ShowAsked(void)
+{
+	return RM_RTAO_Wanted() && r_rt_ao_show && rm_rtao_show(r_rt_ao_show->value);
+}
+
 void
 RM_RTAO_View(const rm_view_t *view)
 {
