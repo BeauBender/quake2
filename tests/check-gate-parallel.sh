@@ -86,7 +86,10 @@
 #             is gone after the run, and so are a check and its grandchild
 #             after a SIGTERM to the scheduler;
 #   intskip   interrupt, testsh and sigs, run by this self-test started
-#             with SIGINT ignored, each say what they skip and pass.
+#             with SIGINT ignored, pass: interrupt and testsh each say what
+#             they skip, and sigs says it skips nothing (its check gets
+#             SIGINT at its default from its supervisor, TASK221, so it
+#             still asserts SIGINT delivered).
 # Then each case is shown failing against at least one mutant of the
 # scheduler (or of scripts/test.sh, for wiring and testsh). Every run of the
 # scheduler is bounded in time here; one that outlives its bound fails its
@@ -98,9 +101,11 @@
 # a signal ignored on entry cannot be trapped or reset). It asks first, as
 # tests/check-bench.sh does, whether SIGINT reaches a command here; when it
 # does not, the parts that need it are skipped, each with a line that says
-# so: interrupt sends SIGTERM in its place, testsh sends no SIGINT, sigs
-# does not ask for SIGINT delivered, and the mutants that only SIGINT can
-# catch are counted as skipped, never as caught. Every other assertion runs.
+# so: interrupt sends SIGTERM in its place, testsh sends no SIGINT, and the
+# mutants that only SIGINT can catch are counted as skipped, never as
+# caught. sigs skips nothing: each check's supervisor starts it with every
+# signal at its default (TASK221), so a check gets SIGINT however this
+# self-test was started. Every other assertion runs.
 # GP_ONLY="<case>..." runs those cases alone, stopping at the first that
 # fails, and no mutant (intskip uses it).
 #
@@ -817,10 +822,10 @@ c_kgrp() {
 
 # sigs: a probe check-a.sh run through scripts/test.sh (or $WIRING), on a
 # copy of the gate's layout, gets SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGTSTP,
-# SIGTTIN and SIGTTOU as it does when it is started directly from here, as
-# origin/main's test.sh ran each check (in its own foreground, no trap set),
-# and SIGINT is delivered to it (when SIGINT is ignored here, both show it
-# ignored, and that last is skipped)
+# SIGTTIN and SIGTTOU as it does when it is started directly from here with
+# every signal at its default, and SIGINT is delivered to it. When SIGINT is
+# ignored here, the direct start shows it ignored and is read as delivered:
+# the check's supervisor resets it (TASK221), so nothing is skipped
 c_sigs() {
 	_tf=${WIRING:-$top/scripts/test.sh}
 	dc=$(newcase)
@@ -1633,8 +1638,10 @@ printf "%s\n" "$*"' 2>&1)
 }
 
 # intskip: interrupt, testsh and sigs, run by this self-test (or $SELF)
-# alone (GP_ONLY), started with SIGINT ignored: each says what it skips,
-# none fails, and the run passes
+# alone (GP_ONLY), started with SIGINT ignored: interrupt and testsh each
+# say what they skip, sigs says it skips nothing (its assertion that SIGINT
+# is delivered runs: a supervisor gives each check every signal at its
+# default, TASK221), none fails, and the run passes
 c_intskip() {
 	_xf=${SELF:-$top/tests/check-gate-parallel.sh}
 	d=$(newcase)
@@ -1642,10 +1649,14 @@ c_intskip() {
 	bounded 240 "$d/out" env GP_ONLY="sigs testsh interrupt" TMPDIR="$d/td" \
 		sh -c 'trap "" INT; exec sh "$1"' sh "$_xf" || rc=$?
 	[ "$rc" -eq 0 ] || { say "intskip: the cases that need SIGINT, run with SIGINT ignored, gave status $rc:"; [ "$quiet" = 1 ] || sed 's/^/  | /' "$d/out"; return 1; }
-	for _xp in "interrupt's SIGINT (SIGTERM is sent in its place)" "testsh's SIGINT" "sigs' assertion that SIGINT is delivered"; do
+	for _xp in "interrupt's SIGINT (SIGTERM is sent in its place)" "testsh's SIGINT"; do
 		grep -qxF "$me: SIGINT is ignored where this check runs, so $_xp is skipped" "$d/out" ||
 			{ say "intskip: no line says that $_xp is skipped"; return 1; }
 	done
+	if grep -F "$me: SIGINT is ignored where this check runs, so sigs" "$d/out" > /dev/null; then
+		say "intskip: sigs skipped a part, though its check gets SIGINT at its default from its supervisor"
+		return 1
+	fi
 	for _xc in sigs testsh interrupt; do
 		grep -qx "  ok   $_xc" "$d/out" || { say "intskip: $_xc did not pass"; return 1; }
 	done

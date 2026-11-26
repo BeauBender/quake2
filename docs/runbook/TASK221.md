@@ -59,6 +59,12 @@ staged tree. It builds the supervisor once up front and exports that tool cache 
   the SIGTERM or after it. Its `drop-emptied` mutant is gone: the reap waits no grace any more,
   so no signal can arrive in one.
 - **`ttyfork`.** The case looks for the trace line `+ gate_start 1` in place of `+ set -m`.
+- **`intskip`.** `sigs` no longer skips its assertion that SIGINT is delivered when the
+  self-test runs with SIGINT ignored. That skip is now impossible by design: the supervisor
+  spawns each check with every signal at its default (`POSIX_SPAWN_SETSIGDEF`), so a check gets
+  SIGINT however the scheduler was started. `intskip` now asserts the new contract: `interrupt`
+  and `testsh` each still say what they skip, `sigs` says it skips nothing, and all three pass.
+  With SIGINT ignored, `sigs` passing means its unconditional `sig a INT delivered` check held.
 
 ### Mutants
 
