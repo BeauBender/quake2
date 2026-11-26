@@ -764,7 +764,7 @@ if [ -n "$rtm" ]; then
 			gunshadow-kept) sed 's/return gunshadow && !models;/return gunshadow \&\& (models >= 0);/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
 			weapon-flag) sed 's/p->weapon = (unsigned)rm_rtm_weapon_view(/p->weapon = 1u | (unsigned)rm_rtm_weapon_view(/' \
 				"$rm_dir/rm_rtmodel.c" > "$c" ;;
-			wall-alias) sed 's/return !alias && (mat != 3u)/return (alias >= 0) \&\& (mat != 3u)/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			wall-alias) sed 's/return !alias && (mat != MTL_GB_MAT_WATER)/return (alias >= 0) \&\& (mat != MTL_GB_MAT_WATER)/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 			tag-no-normals) sed 's/if (!extra_ok)$/if (!extra_ok \&\& 0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
 			tag-bit) sed 's/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) & MTL_RTM_FLAGS;/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) \& 3u;/' \
 				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;

@@ -27,13 +27,16 @@
  * carries a model's flags to the kernel through the G-buffer's light
  * attachment, the view weapon's depth and the pull-back point. Plain C99
  * that the Metal shading language compiles too; after mtl_shader_math.h
- * (MTL_SQRT).
+ * (MTL_SQRT, and mtl_gbuf_math.h's types; it includes mtl_gbuf_math.h for
+ * the material ids).
  *
  * =======================================================================
  */
 
 #ifndef MTL_RTM_MATH_H
 #define MTL_RTM_MATH_H
+
+#include "mtl_gbuf_math.h"   /* MTL_GB_MAT_*, for mtl_rtm_wall */
 
 /* the flags a tag carries (RF_GLOW, RF_MINLIGHT, RF_WEAPONMODEL) */
 #define MTL_RTM_GLOW 1u
@@ -324,7 +327,7 @@ mtl_rtm_weapon_ndc(float d)
 static inline int
 mtl_rtm_wall(unsigned mat, int alias)
 {
-	return !alias && (mat != 3u) && (mat != 5u);
+	return !alias && (mat != MTL_GB_MAT_WATER) && (mat != MTL_GB_MAT_TRANS);
 }
 
 static inline mtl_rtm_v3_t
