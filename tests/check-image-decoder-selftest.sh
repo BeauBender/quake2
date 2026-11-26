@@ -339,6 +339,18 @@ if mutant plainkill 's|^[[:space:]]*"\$sv" --timeout .*$|( "$@" \& _p=$!; ( slee
 	elif gone "${tmp:?}/stop.pids" leakprobe; then
 		fail "(h) a plain kill in place of the supervisor was not refused: the probe's stopped target is gone"
 	fi
+	# the mutant leaves its targets stopped, and a process group that
+	# holds a stopped member gets SIGHUP and SIGCONT from the kernel when
+	# it becomes orphaned (POSIX): in the self-test's own group that HUP
+	# ends the self-test (status 129 in CI, FIX201). So no stopped target
+	# may be in the self-test's own group.
+	_own=$(ps -o pgid= -p $$ | tr -d ' ')
+	while read -r _p; do
+		_g=$(ps -o pgid= -p "$_p" 2>/dev/null | tr -d ' ')
+		if [ -n "$_g" ] && [ "$_g" = "$_own" ]; then
+			fail "(h) the mutant's stopped target (pid $_p) is in the self-test's own process group"
+		fi
+	done < "${tmp:?}/stop.pids"
 	end_own "$(cat "${tmp:?}/stop.pids" 2>/dev/null | head -n 1)" leakprobe
 fi
 
