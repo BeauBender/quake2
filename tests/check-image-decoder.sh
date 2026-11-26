@@ -80,11 +80,12 @@ whole IMGDEC_LEAKS_PROBE_SECONDS "$probe"
 # and returns its status. The supervisor ends the command's whole group at
 # the deadline (TERM, then KILL after 2 s), so a target leaks(1) leaves
 # stopped goes with it. Its status 124 (the deadline) is written to
-# ${tmp}/expired; 126 (a group it could not empty) fails the check; a
-# process it saw leave the group (an "escaped" event) fails the check and
-# is named, whatever the status (the supervisor reports an escape at the
-# deadline, so the escape and status 124 arrive together). The events go to ${tmp}/events, and are appended to
-# $IMGDEC_SELFTEST_EVENTS when the self-test sets it.
+# ${tmp}/expired; 126 (a group it could not empty after the KILL, or could
+# not go on watching) fails the check; every process it saw leave the group
+# (an "escaped" event) fails the check and is named, whatever the status
+# (the supervisor reports an escape at the deadline, so the escape and
+# status 124 arrive together). The events go to ${tmp}/events, and are
+# appended to $IMGDEC_SELFTEST_EVENTS when the self-test sets it.
 . scripts/lib/supervise.sh
 sv=$(sv_path) || { echo "check-image-decoder: no process supervisor"; exit 1; }
 # fd 3 is the check's own standard output: bounded is called with its
@@ -102,12 +103,12 @@ bounded()
 		echo "$limit" > "${tmp:?}/expired"
 	fi
 	if grep -q '^escaped pid=' "${tmp:?}/events"; then
-		echo "check-image-decoder: a process left the run's group: escaped pid $(sed -n 's/^escaped pid=//p' "${tmp:?}/events" | head -n 1)" >&3
+		echo "check-image-decoder: a process left the run's group: escaped pid $(sed -n 's/^escaped pid=//p' "${tmp:?}/events" | tr '\n' ' ' | sed 's/ $//')" >&3
 		[ "$rc" -ne 124 ] || echo "check-image-decoder: the run outlived its $limit s bound and was killed" >&3
 		exit 1
 	fi
 	if [ "$rc" -eq 126 ]; then
-		echo "check-image-decoder: the run's group could not be emptied after its $limit s bound" >&3
+		echo "check-image-decoder: the supervisor could not empty the run's group after its KILL, or could not go on watching it (status 126): the run may still be running" >&3
 		exit 1
 	fi
 	return "$rc"
