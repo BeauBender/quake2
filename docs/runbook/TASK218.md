@@ -143,6 +143,7 @@ the clock in each batch. A last step greps the test files and the check for a sl
 | `leader-first` | the leader exits with 5 while a member lives: the member gets TERM, `group-empty` comes before `reaped`, and the member is dead when `reaped` is read |
 | `escaped` | a `setsid` member is named before `group-empty`, gets no signal, and still answers |
 | `term-trap` | a member that survives the TERM forks a child and exits while a listing is held (`H`, `L`): no `group-empty` while the child runs; the child is KILLed after the grace; 124 and nothing left |
+| `untracked` | with the table of 8 full of escaped members, a member that is never watched forks a child in its TERM trap and exits while a listing is held: no `group-empty` while the child runs; the mutant `no-relist` (the extra listing for an unwatched member removed) fails it |
 | `cap` | 12 short-lived members, then a member the leader's exit stops: with a watch table of 8, the stop still ends at that member's exit (`term-sent`, then `group-empty`), not at the grace |
 | `closed-std` | standard input, output and error closed: status 7, and the command sees all three open |
 | `stuck` | under `sandbox-exec` with `(deny signal)`, nothing can be signalled: `group-left` and 126 |
