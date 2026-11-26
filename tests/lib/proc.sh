@@ -43,8 +43,11 @@ proc_await() {
 	done
 }
 
-# proc_eof: reads fd 6 until end of file: true then. False at the bound.
+# proc_eof: reads fd 6 until end of file: true then. False at the bound,
+# and false at once when fd 6 is not open (a read there fails at once,
+# which would otherwise pass for end of file before the bound).
 proc_eof() {
+	{ :; } <&6 || return 1
 	_pe_end=$(($(date +%s) + ${PROC_BOUND:-60}))
 	while :; do
 		_pe_left=$((_pe_end - $(date +%s)))
