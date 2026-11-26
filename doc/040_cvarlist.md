@@ -1368,7 +1368,10 @@ is.
   exposure (`r_rt_direct_exposure`); the sky's, the sun's and the
   bounce's terms are added after it, as RT4's sun is. The `r_rt_stats 2` line's sums under
   views `3` and `4` are of the term shown. Pixels that are not
-  lightmapped world are black. Not saved with the configuration.
+  lightmapped world are black. When `r_rt_temporal` is above `0` the
+  views show the accumulated term, except view `2` (the visibility),
+  which stays the trace's own; changing `r_rt_direct_show` starts the
+  history again. Not saved with the configuration.
 
 * **r_rt_direct_sky**: The scale of the Metal renderer's sky light under
   RT-primary (`r_presentation 3`, TASK189): each lightmapped world pixel
@@ -1525,9 +1528,13 @@ is.
   (the list of its pixels, the trace) and the time from the first's start
   to the last's end, the pass's time being their sum (the water's marks
   are a draw of the G-buffer raster, timed with it, so there are no
-  raster figures). At `1` and above, with a MetalFX scaler on
+  raster figures); and under the Ray traced presentation with
+  `r_rt_temporal` above `0` a line for its accumulation,
+  `ref_metal: rt direct temporal: frame N: X ms` (`- ms` when no time was
+  measured). At `1` and above, with a MetalFX scaler on
   (`r_metalfx`), a 3D view that drops the scaler's history or that of
-  `r_rt_temporal` prints one line naming both sets of reasons,
+  `r_rt_temporal` (the history RT-primary's accumulation shares with the
+  other effects) prints one line naming both sets of reasons,
   `ref_metal: r_rt_stats: reset: scaler <reasons>, temporal <reasons>`:
   the scaler's as `r_metalfx` lists them, the temporal history's as
   `first` (a map load, a `vid_restart`, a frame that accumulated no view),
@@ -1620,14 +1627,25 @@ is.
   also starts again after a frame whose pass it skipped. It accumulates
   `r_rt_shadows` (each light's visibility, before the light is added),
   `r_rt_sun` and `r_rt_ao`, each with its own history and one reset for
-  the three. `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show`
-  show the frame's own trace, before the accumulation. While it is above
-  `0`, the accumulated AO and sun are also denoised before the resolve: a
-  5 x 5 blur guided by the distance from the eye and the normal, full on
-  a pixel with one sample in its history and fading to none at 16, so a
-  history that has just started again is smoothed and a settled one is
-  left sharp; the history keeps the accumulation alone. The default moved
-  from `0` to the design's `0.9` (TASK59 slice 2) once the denoiser
+  the three. While it is above `0`, the accumulated AO and sun are also
+  denoised before the resolve: a 5 x 5 blur guided by the distance from
+  the eye and the normal, full on a pixel with one sample in its history
+  and fading to none at 16, so a history that has just started again is
+  smoothed and a settled one is left sharp; the history keeps the
+  accumulation alone. Under the Ray traced presentation
+  (`r_presentation 3`) it also accumulates that presentation's light
+  (TASK190): the direct light, the sky light, the sun and the bounce,
+  summed and before the albedo, with a history of its own, made only under
+  that presentation and one reset shared with the others; the same
+  rejections apply but the dynamic-light set's, since that light sums every
+  light. That light is accumulated but not yet denoised: the 5 x 5
+  denoiser applies to the AO and the sun only. The presentation does not set `r_rt_temporal`: the value is the
+  user's, and at `0` the presentation's frames are the same as without it.
+  `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the
+  frame's own trace, before the accumulation; `r_rt_direct_show`'s
+  terms are shown accumulated, as the picture reads them, except view 2,
+  its history starting again when `r_rt_direct_show` changes. The default
+  moved from `0` to the design's `0.9` (TASK59 slice 2) once the denoiser
   landed: until then `0` kept every frame as before while the
   accumulation was built; the committed `rt-*` pin scenarios set it to
   `0` so that their frames stay those of the passes alone. While it is
