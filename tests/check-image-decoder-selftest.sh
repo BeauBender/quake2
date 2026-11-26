@@ -19,8 +19,8 @@
 #     (scripts/lib/supervise.sh) and leaves nothing behind, checked on the
 #     supervisor's events (IMGDEC_SELFTEST_EVENTS): deadline, group-empty and
 #     reaped, and no escaped;
-# (g) a stub whose helper leaves the process group: the check fails and names
-#     the escaped pid from the events.
+# (g) a stub whose two helpers leave the process group: the check fails and names
+#     every escaped pid from the events.
 # (h) (i) (j) the mutants, each the check with one guard taken out and
 #     refused by its own case: a plain kill in place of the supervisor (the
 #     stopped target survives), --events dropped (no events), the escaped
@@ -208,6 +208,7 @@ exec "sh", "-c", "read x < $ARGV[1]";
 EOF
 stub escape "echo \$\$ >> \"${tmp:?}/hang.pids\"
 perl \"${tmp:?}/escape.pl\" \"${tmp:?}/esc.pids\" \"${tmp:?}/never\" \"${IMGDEC_SELFTEST_INTERRUPT:-}\" &
+perl \"${tmp:?}/escape.pl\" \"${tmp:?}/esc.pids\" \"${tmp:?}/never\" \"${IMGDEC_SELFTEST_INTERRUPT:-}\" &
 read _x < \"${tmp:?}/never\""
 
 # the inner run of case (k): case (g) alone, then the self-test is
@@ -286,10 +287,13 @@ gone "${tmp:?}/hang.pids" sh || fail "(f) the hanging stub is still there (or wa
 # must be named whatever the status).
 : > "${tmp:?}/ev.g"
 run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.g"
-_esc=$(sed -n 's/^escaped pid=//p' "${tmp:?}/ev.g" | head -n 1)
-if [ "$rc" -eq 0 ] || [ -z "$_esc" ] || ! grep -qF "escaped pid $_esc" "${tmp:?}/out"; then
+_esc=$(sed -n 's/^escaped pid=//p' "${tmp:?}/ev.g" | tr '\n' ' ' | sed 's/ $//')
+if [ "$(grep -c '^escaped pid=' "${tmp:?}/ev.g")" -lt 2 ]; then
 	cat "${tmp:?}/out" "${tmp:?}/ev.g"
-	fail "(g) a helper that left the group: the check did not fail naming its pid (status $rc)"
+	fail "(g) the supervisor did not report both escaped helpers: the case proves nothing (status $rc)"
+elif [ "$rc" -eq 0 ] || ! grep -qF "escaped pid $_esc" "${tmp:?}/out"; then
+	cat "${tmp:?}/out" "${tmp:?}/ev.g"
+	fail "(g) two helpers that left the group: the check did not fail naming every escaped pid (status $rc)"
 fi
 end_esc()
 {
