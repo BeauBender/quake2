@@ -30,6 +30,9 @@ level.
 /ref_gl1.dylib
 /ref_gl3.dylib
 /ref_soft.dylib
+# Only from `make ref_metal` (macOS only, not part of `make all`):
+/ref_metal.dylib
+/ref_metal.metallib
 
 # The Executables:
 /quake2

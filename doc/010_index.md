@@ -14,7 +14,9 @@ Some general hints:
   game is running, the console is always opened and closed by pressing
   **Left Shift + Escape**.
 * Portmanbeau Quake II saves its configuration, savegames and screenshots to
-  *~/.local/share/YamagiQ2* (or *~/.yq2*, if that directory already exists).
+  *~/.local/share/YamagiQ2* (or *$XDG_DATA_HOME/YamagiQ2*, if the
+  `XDG_DATA_HOME` environment variable is set, or *~/.yq2*, if that directory
+  already exists).
   If Portmanbeau Quake II is started with the `-portable` switch all data is
   saved in the same directory as the executables. On iOS, iPadOS, tvOS and
   visionOS the app's *Documents* folder is used instead, see the
