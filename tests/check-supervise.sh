@@ -88,6 +88,47 @@ echo "check-supervise: builds clean with $W"
 	st=0
 	"$p" -- /bin/sh -c 'exit 3' || st=$?
 	[ "$st" -eq 3 ] || { echo "supervise -- sh -c 'exit 3' gave $st" >&2; exit 1; }
+	# refused <what>: sv_path fails, prints no path, and says why in supervise: lines that name no path
+	refused() {
+		st=0
+		out=$(sv_path 2> "$tmp/refused.err") || st=$?
+		[ "$st" -ne 0 ] || { echo "sv_path accepted $1: $out" >&2; return 1; }
+		[ -z "$out" ] || { echo "sv_path printed a path for $1: $out" >&2; return 1; }
+		grep -q '^supervise: ' "$tmp/refused.err" || { echo "sv_path said nothing for $1" >&2; return 1; }
+		if grep -v '^supervise: ' "$tmp/refused.err" | grep -q . || grep -qF "$tmp" "$tmp/refused.err"; then
+			echo "sv_path printed a line that is not its own, or a path, for $1" >&2
+			return 1
+		fi
+	}
+	m=$(ls -ld "$tmp/cache") || exit 1
+	case $m in drwx------*) ;; *) echo "the tool cache was made as $m, not mode 0700" >&2; exit 1 ;; esac
+	# a binary planted in a cache directory that others can write, then a group-writable one
+	SUPERVISE_CACHE=$tmp/c777
+	p7=$(sv_path) || exit 1
+	chmod 777 "$tmp/c777" || exit 1
+	printf '#!/bin/sh\necho PLANTED-RAN\n' > "$p7" || exit 1
+	refused "a binary in a directory of mode 0777" || exit 1
+	chmod 700 "$tmp/c777" && chmod 775 "$p7" || exit 1
+	refused "a group-writable binary" || exit 1
+	# a symbolic link where the binary should be
+	SUPERVISE_CACHE=$tmp/clink
+	pl=$(sv_path) || exit 1
+	mv "$pl" "$pl.real" && ln -s "$pl.real" "$pl" || exit 1
+	refused "a symbolic link in place of the binary" || exit 1
+	# a relative SUPERVISE_CACHE is refused; a relative XDG_CACHE_HOME is ignored, as the XDG spec says
+	mkdir "$tmp/cwd" || exit 1
+	(
+		cd "$tmp/cwd" || exit 1
+		SUPERVISE_CACHE=rel
+		refused "a relative SUPERVISE_CACHE" || exit 1
+		unset SUPERVISE_CACHE
+		XDG_CACHE_HOME=rel HOME=$tmp/home
+		export XDG_CACHE_HOME HOME
+		px=$(sv_path) || exit 1
+		case $px in "$tmp/home/.cache/quake2-tools/"*) ;; *) echo "a relative XDG_CACHE_HOME gave $px" >&2; exit 1 ;; esac
+	) || exit 1
+	[ -z "$(ls "$tmp/cwd")" ] || { echo "a relative cache path made a directory" >&2; exit 1; }
+	SUPERVISE_CACHE=$tmp/cache
 	# a source that does not build: the helper's copy beside a broken one
 	mkdir -p "$tmp/broken" || exit 1
 	cp "$helper" "$tmp/broken/supervise.sh" || exit 1

@@ -19,6 +19,11 @@ sv=$(sv_path) || exit 1
   end of file when the supervisor exits.
 - **`--name`.** The label in the supervisor's own lines on standard error. It defaults to the
   command's base name.
+- **The tool cache.** `sv_path` builds into `$SUPERVISE_CACHE`, else `$XDG_CACHE_HOME/quake2-tools`,
+  else `$HOME/.cache/quake2-tools`. A relative `SUPERVISE_CACHE` is refused, and a relative
+  `XDG_CACHE_HOME` is ignored. The directory is made with mode 0700. The directory and the binary
+  must be owned by the user and not writable by group or others, and the binary must be a regular
+  file, not a symbolic link; otherwise `sv_path` fails and prints no path.
 
 ## Contract
 
@@ -100,6 +105,10 @@ The events are one line each:
   and `tests/supervise/supervise_test.c` with `-Wall -Wextra -Werror`.
 - **The helper.** It checks that the helper builds into the cache once, keyed by the hash of the
   compiler version, the flags and the source, and that a broken source fails with no path printed.
+  It checks that the cache is made with mode 0700, and that `sv_path` refuses, with `supervise:`
+  lines that name no path and no path printed, a binary planted in a cache of mode 0777, a
+  group-writable binary, a symbolic link in place of the binary and a relative `SUPERVISE_CACHE`.
+  A relative `XDG_CACHE_HOME` falls back to `$HOME/.cache`.
 - **Cases.** It runs every case with `/bin/bash` (3.2) and with `/bin/sh` as the caller shell. It
   runs the cases that need no test clock against the release build, every case against a build
   whose watch table holds 8 processes (`-DSV_MAXPIDS=8`), and every case again built with
