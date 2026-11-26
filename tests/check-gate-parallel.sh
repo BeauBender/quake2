@@ -53,6 +53,9 @@
 #   watchfork the same for test.sh's start of the lock watcher, under the
 #             lock, and the scheduler's own standard error reaches test.sh's;
 #   leave    what a passing check leaves running is gone after the run;
+#   killgrace SIGTERM to the scheduler, its check ignoring SIGTERM, then
+#             SIGKILL to the scheduler once the check has said it got the
+#             TERM: the check still ends after the grace (TASK221);
 #   stop      the disposition probe of the gate's stop (FIX186, through the
 #             bounded-run primitive): a check and its grandchild, each held
 #             by a flag file and each writing every signal it gets to a
@@ -149,6 +152,7 @@ quiet=0
 SCHED=$real
 # (printf, not echo: this shell's echo decodes backslashes, and a line can
 # hold process text, which is printed as it is)
+. "$top/tests/lib/proc.sh"
 bad() { printf '%s\n' "$me: $*"; fail=1; }
 say() { [ "$quiet" = 1 ] || printf '%s\n' "$me: $*"; }
 # skipint <part>: says that <part> is skipped, as SIGINT is ignored here
@@ -1372,6 +1376,49 @@ c_leave() {
 	[ "$rc" -eq 0 ] && [ "$(status "$d" a)" = ok ] || { say "leave: status $rc, want 0, and check-a.sh passed"; return 1; }
 }
 
+# killgrace (TASK221): the scheduler gets SIGTERM while its one check ignores
+# it, and SIGKILL once the check has said it got the TERM: the stop still
+# ends the check after the grace, since the check's own supervisor owns it,
+# not the scheduler. The check writes its lines to a FIFO and holds its write
+# end, so end of file there means it has exited (tests/lib/proc.sh). On a
+# scheduler that stops its checks itself, the KILL ends that stop, and the
+# check outlives the bound.
+c_killgrace() {
+	d=$(newcase)
+	mkfifo "$d/fifo"
+	cat > "$d/check-k.sh" << 'EOF'
+#!/bin/sh
+exec > "$GP_FIFO"
+trap 'echo term' TERM
+echo "ready $$"
+while :; do sleep 1 > /dev/null; done
+EOF
+	chmod +x "$d/check-k.sh"
+	launch "$d" env GATE_JOBS=1 GP_FIFO="$d/fifo" TMPDIR="$d/td" sh "$SCHED" "" "" "$d/check-k.sh"
+	proc_open "$d/fifo"
+	_kr=0 _kp=
+	if ! proc_await 'ready *'; then
+		say "killgrace: the check did not start: $(cat "$d/out")"
+		_kr=1
+	fi
+	_kp=${PROC_LINE#ready }
+	proc_alone
+	if [ "$_kr" -eq 0 ]; then
+		kill -s TERM "$_lp" 2> /dev/null || :
+		proc_await term || { say "killgrace: the check did not get the scheduler's TERM"; _kr=1; }
+	fi
+	kill -s KILL "$_lp" 2> /dev/null || :
+	wait "$_lp" 2> /dev/null || :
+	_lp=
+	if [ "$_kr" -eq 0 ] && ! proc_eof; then
+		say "killgrace: the check (pid $_kp) outlived the scheduler's KILL by ${PROC_BOUND:-60} s: no one ended its stop"
+		_kr=1
+	fi
+	proc_close
+	case $_kp in '' | *[!0-9]*) ;; *) kill -s KILL "$_kp" 2> /dev/null || : ;; esac
+	return "$_kr"
+}
+
 # stop_one <signal> <status> [ignore] [intign] [<how>]: one run of the stop
 # case (see the top of this file) on a check-a.sh stand-in, GATE_JOBS=1.
 # Once both stand-ins have written their pids, the scheduler gets <signal>
@@ -1623,7 +1670,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave stop stopnoerr drop dropabsent intskip ttyself"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave killgrace stop stopnoerr drop dropabsent intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
@@ -1771,6 +1818,8 @@ smut() {
 	cp "$top/scripts/test.sh" "$top/scripts/gate-checks.sh" "$_sm/scripts/"
 	mkdir -p "${_sm:?}/scripts/bench/core"
 	cp "$top/scripts/bench/core/common.sh" "$_sm/scripts/bench/core/common.sh"
+	mkdir -p "${_sm:?}/tests/lib"
+	cp "$top/tests/lib/proc.sh" "$_sm/tests/lib/proc.sh"
 	lit "$top/tests/check-gate-parallel.sh" "$3" "$4" "smut " > "$_sm/tests/check-gate-parallel.sh" ||
 		{ bad "mutant $1 does not apply to this self-test"; return 0; }
 	shift 4
