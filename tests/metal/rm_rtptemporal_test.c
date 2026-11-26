@@ -256,6 +256,17 @@ test_nan(void)
 	CHECK(kept(bad) & MTL_RTT_REJ_EMPTY);
 	p = mtl_rtp_pixel(1, kept(bad), rgba(0.2f, 0.3f, 0.4f, 1.0f), bad, 0.9f);
 	CHECK((p.out.r == 0.2f) && (p.hist.a == 1.0f));
+
+	/* TASK190 slice 2: an infinite count, or one past MTL_RTT_COUNT_MAX, is a bad history, never a NaN blend */
+	bad = h;
+	bad.a = INFINITY;
+	CHECK(kept(bad) & MTL_RTP_REJ_BAD);
+	p = mtl_rtp_pixel(1, kept(bad), rgba(0.2f, 0.3f, 0.4f, 1.0f), bad, 0.9f);
+	CHECK((p.out.r == 0.2f) && (p.out.g == 0.3f) && (p.out.b == 0.4f) && (p.hist.a == 1.0f));
+	bad.a = MTL_RTT_COUNT_MAX + 1.0f;
+	CHECK(kept(bad) & MTL_RTP_REJ_BAD);
+	bad.a = MTL_RTT_COUNT_MAX;
+	CHECK(kept(bad) == 0u);
 }
 
 /* every pixel that is not a traced world pixel: its light bit for bit, a history with no sample */
