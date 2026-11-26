@@ -93,10 +93,12 @@ rm_rtm_px_flags(uint m, float4 c)
  * Slice 3: the distance along the eye ray from eye toward weapon point w
  * to the first wall it meets (mtl_rtm_wall: a map face that is not water
  * or translucent; an alias model passes), within |w - eye|, at most
- * MTL_RTDIR_LAYERS + 1 intersections; |w - eye| itself when it meets
- * none, so mtl_rtm_pullback keeps w. The view weapon is never in the
- * scene under the traced models (rm_rtm_gunshadow), so the ray cannot
- * meet the weapon itself.
+ * MTL_RTDIR_LAYERS + 1 intersections; past |w - eye| when it meets none
+ * (2 |w - eye| + 1, finite: fast math may fold a compare with an
+ * infinity, and |w - eye| itself may differ by an ulp from the length
+ * mtl_rtm_pullback computes), so mtl_rtm_pullback keeps w. The view
+ * weapon is never in the scene under the traced models
+ * (rm_rtm_gunshadow), so the ray cannot meet the weapon itself.
  */
 static float
 rm_rtm_wall_t(float3 eye, float3 w, instance_acceleration_structure ias, device const uint *inst,
@@ -105,6 +107,7 @@ rm_rtm_wall_t(float3 eye, float3 w, instance_acceleration_structure ias, device 
 	intersector<triangle_data, instancing> isect;
 	const float3 to = w - eye;
 	const float len = length(to);
+	const float none = 2.0f * len + 1.0f;
 	ray r;
 
 	if (!(len > 0.0f))
@@ -122,7 +125,7 @@ rm_rtm_wall_t(float3 eye, float3 w, instance_acceleration_structure ias, device 
 
 		if (hit.type == intersection_type::none)
 		{
-			return len;
+			return none;
 		}
 
 		b = inst[2 * hit.instance_id];
@@ -142,11 +145,11 @@ rm_rtm_wall_t(float3 eye, float3 w, instance_acceleration_structure ias, device 
 
 		if (!(r.min_distance < r.max_distance))
 		{
-			return len;
+			return none;
 		}
 	}
 
-	return len;
+	return none;
 }
 
 /*

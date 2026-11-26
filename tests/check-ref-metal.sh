@@ -2598,7 +2598,8 @@ seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, $rt
 # depth hack's depth, the world's unprojection called once, for the other models (weapon-world-view: the
 # view's inverse; weapon-depth-raw: the stored depth read as the clip depth; weapon-world-point: the trace
 # shades every model at the world's unprojection), pulled back before the first wall, a model no wall
-# (no-pullback: the hit distance not used; wall-models: a model read as a wall). The back end binds the view with no own-light table
+# (no-pullback: the hit distance not used; wall-models: a model read as a wall), a ray that meets no wall
+# past the weapon's distance, finite (miss-len: the distance itself, which fast math may put an ulp short). The back end binds the view with no own-light table
 # (model-own-ray: nself left as the trace's) and exactly its seven textures (bind-extra), each mutant
 # compiled where the compiler is there.
 rtk_metal=""
@@ -2632,7 +2633,10 @@ rtk_pin() { # <file> <pin>: 0 when the file holds the pin
 			strip "$1" | grep -qF 'const float4 h = p.winv * float4(cx, cy, mtl_rtm_weapon_ndc(d), 1.0f);' ;;
 		pullback) strip "$1" | grep -qF 'const float t = rm_rtm_wall_t(v.eye.xyz, w, ias, inst, tmat, ntris);' &&
 			strip "$1" | grep -qF 'mtl_rtm_v3(w.x, w.y, w.z), t);' &&
-			strip "$1" | grep -qF 'if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))' ;;
+			strip "$1" | grep -qF 'if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))' &&
+			strip "$1" | grep -qF 'const float none = 2.0f * len + 1.0f;' &&
+			[ "$(strip "$1" | grep -cxF '			return none;')" = 2 ] && [ "$(strip "$1" | grep -cxF '	return none;')" = 1 ] &&
+			[ "$(strip "$1" | grep -cxF '		return len;')" = 1 ] ;;
 	esac
 }
 rtk_kpins=0 rtk_kmut=0
@@ -2656,7 +2660,7 @@ for p in rename gate base nolm fit dot tagmat weapon pullback; do
 		dot) kms="shadedot-back" ;;
 		tagmat) kms="tag-no-material" ;;
 		weapon) kms="weapon-world-view weapon-depth-raw weapon-world-point" ;;
-		*) kms="no-pullback wall-models" ;;
+		*) kms="no-pullback wall-models miss-len" ;;
 	esac
 	for m in $kms; do
 		case $m in
@@ -2674,6 +2678,7 @@ for p in rename gate base nolm fit dot tagmat weapon pullback; do
 			weapon-world-point) sed 's/const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);/const float3 pt = rm_rtdir_position(v, px, d);/' ;;
 			no-pullback) sed 's/mtl_rtm_v3(w.x, w.y, w.z), t);/mtl_rtm_v3(w.x, w.y, w.z), INFINITY);/' ;;
 			wall-models) sed 's/if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))/if (mtl_rtm_wall(m, 0))/' ;;
+			miss-len) sed 's/^			return none;$/			return len;/' ;;
 		esac < "$rtk_k" > "${tmp:?}/rtk-kernel.metal"
 		if cmp -s "$rtk_k" "${tmp:?}/rtk-kernel.metal"; then
 			bad "the model pass's kernel mutant ($m) changed nothing"
@@ -2687,8 +2692,8 @@ for p in rename gate base nolm fit dot tagmat weapon pullback; do
 		fi
 	done
 done
-[ "$rtk_kpins" = 9 ] && [ "$rtk_kmut" = 13 ] ||
-	bad "rm_rtmodel.metal holds $rtk_kpins of its 9 pins and refuses $rtk_kmut of its 13 mutants"
+[ "$rtk_kpins" = 9 ] && [ "$rtk_kmut" = 14 ] ||
+	bad "rm_rtmodel.metal holds $rtk_kpins of its 9 pins and refuses $rtk_kmut of its 14 mutants"
 # the back end: the view bound with no own-light table (model-own-ray), and exactly the kernel's seven textures
 rtk_bpins=0 rtk_bmut=0
 rtk_b=$rm_dir/rmb_rtmodel.m
