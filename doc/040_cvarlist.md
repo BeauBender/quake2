@@ -1529,7 +1529,8 @@ is.
   to the last's end, the pass's time being their sum (the water's marks
   are a draw of the G-buffer raster, timed with it, so there are no
   raster figures); and under the Ray traced presentation with
-  `r_rt_temporal` above `0` a line for its accumulation,
+  `r_rt_temporal` above `0` a line for its accumulation and its 5 x 5
+  filter, timed together,
   `ref_metal: rt direct temporal: frame N: X ms` (`- ms` when no time was
   measured). At `1` and above, with a MetalFX scaler on
   (`r_metalfx`), a 3D view that drops the scaler's history or that of
@@ -1638,8 +1639,11 @@ is.
   summed and before the albedo, with a history of its own, made only under
   that presentation and one reset shared with the others; the same
   rejections apply but the dynamic-light set's, since that light sums every
-  light. That light is accumulated but not yet denoised: the 5 x 5
-  denoiser applies to the AO and the sun only. The presentation does not set `r_rt_temporal`: the value is the
+  light. That light is then denoised by the same 5 x 5 filter, the sum
+  rather than each term, each of red, green and blue with its own
+  neighbours, by the same guides and the same strength by the sample
+  count (TASK190 slice 2); the history keeps the accumulation alone. The
+  presentation does not set `r_rt_temporal`: the value is the
   user's, and at `0` the presentation's frames are the same as without it.
   `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the
   frame's own trace, before the accumulation; `r_rt_direct_show`'s
@@ -1653,11 +1657,9 @@ is.
   (the warp moves every frame), get a 3 x 3 blur guided by the distance
   from the eye, over the neighbours that hold a reflection on the same
   water (TASK59 slice 2b); at `0` they are the trace's alone, as before.
-  The blur does not run under RT-primary (`r_presentation 3`), whose
-  water is the trace's alone at any value: RT-primary's denoising is row
-  PM8 of the presentation-modes plan (TASK190, #537), not this one. The
-  AO's and the sun's denoiser do not run there either, since RT-primary
-  reads `r_rt_ao` and `r_rt_sun` as `0`.
+  The blur runs under RT-primary (`r_presentation 3`) too, which turns
+  the water on (TASK190 slice 2). The AO's and the sun's denoiser do not
+  run there, since RT-primary reads `r_rt_ao` and `r_rt_sun` as `0`.
   The accumulation's memory, per pixel of the render size, is 112 bytes
   for the three effects (the AO 32, the sun 32, the shadows 48), made
   only for an effect that is on: at 1920 x 1080 that is 232,243,200 bytes
@@ -1669,10 +1671,10 @@ is.
   Saved with the configuration; applies from the next frame. The Ray
   tracing menu's tuning screen has it as "accumulate" (0 to 0.98, the
   renderer's own maximum, in steps of 0.02): live when shadows, sun, AO
-  or water runs, and the presentation is not RT-primary; greyed "turn on
+  or water runs, so also under RT-primary, whose water is on and whose
+  light it accumulates; greyed "turn on
   shadows, sun, AO or water first" while none of them runs, and "set by
-  the presentation" under Retro and under RT-primary (whose water has
-  no blur and whose other three effects are off); the
+  the presentation" under Retro; the
   presets and the A/B hold it. The tuning screen has no rule by device
   class: the row and its default are the same on every device (whether a
   default may differ by device class is decision 0014's open question).

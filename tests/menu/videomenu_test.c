@@ -1476,13 +1476,17 @@ test_tuning_screen(void)
 	SetCv("r_rt_temporal", "0.9");
 	SetCv("r_rt_sun", "1");
 	tm->draw(tm);
-	/* round 2: under RT-primary nothing it drives runs (shadows, sun and AO read 0, the water's blur off),
-	   and Retro reads every effect off: greyed by the mode, whatever the user's switches say */
-	SetCv("r_rt_water", "1");
+	/* TASK190 slice 2: under RT-primary it drives the mode's light and the water's blur, the water on by the
+	   mode whatever the user's switch says; Retro reads every effect off: greyed by the mode */
+	SetCv("r_rt_water", "0");
+	SetCv("r_rt_sun", "0");
 	SetCv("r_presentation", "3");
 	tm->draw(tm);
-	CHECK(RTGreyed("accumulate") && !strcmp(RTItem("accumulate")->statusbar, "set by the presentation"),
+	CHECK(!RTGreyed("accumulate") &&
+		!strcmp(RTItem("accumulate")->statusbar, "blends the last frames' rays; 0 off; next frame"),
 		"accumulate under RT-primary says %s", RTItem("accumulate")->statusbar);
+	SetCv("r_rt_sun", "1");
+	SetCv("r_rt_water", "1");
 	SetCv("r_presentation", "2");
 	tm->draw(tm);
 	CHECK(RTGreyed("accumulate") && !strcmp(RTItem("accumulate")->statusbar, "set by the presentation"),

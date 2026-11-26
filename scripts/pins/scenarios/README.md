@@ -50,6 +50,7 @@ scenario through it. The cases each of them is held to are in
 | `rtprimary-sky` | `rtprimary-world` with `r_rt_direct_show 5`: the sky light's term alone, one cosine-weighted ray a pixel that returns the sky's colour where it reaches a sky face, on white albedo; a pin as `rtprimary-world` (TASK189) |
 | `rtprimary-sun` | `rtprimary-world` with `r_rt_direct_show 6`: the sun's term alone, one ray a pixel toward TASK56's direction times N.L, on white albedo; a pin as `rtprimary-world` (TASK189) |
 | `rtprimary-bounce` | `rtprimary-world` with `r_rt_direct_show 7`: the bounce alone, one cosine-weighted closest-hit ray a pixel that reads the stock lightmap at its hit times the hit face's albedo, on white albedo; a pin as `rtprimary-world` (TASK189 slice 2) |
+| `rtprimary-denoise` | `rtprimary-world` with `r_rt_temporal 0.9`: RT-primary's light accumulated over the views (TASK190 slice 1) and then filtered by the 5 x 5 edge-aware filter, the summed light and not each term, full at one sample and none from 16 (slice 2), and the water reflections' 3 x 3 blur where water is in view; the sky ray's noise fixed by `r_rt_direct_seed 1`, so the frames are the same run to run; also recorded with `PINS_DEMO=water.dm2`, the pool of `base1`, where the blur runs (the warp follows the client clock, as in `skywater`); a pin as `rtprimary-world` (TASK190) |
 | `rtprimary-dlights` | `rtprimary-world` with `cl_lights 1`: the dynamic lights as a term of RT-primary's light, each in range with one shadow ray, by gl1's radius rule; recorded with `PINS_SEED` (the engine PRNG sets a muzzle flash's radius, as in `dlights`), at the default demo and with `PINS_DEMO=demo2.dm2 PINS_EVERY=7`; seeded, a pin as `rtprimary-world`, provisional until the owner accepts the look (TASK188 slice 3b, PM11) |
 | `hdr` | `world` with `r_hdr 1`: `ref_metal`'s float16 frame target, read back as its SDR fallback (each channel clamped to white, in 8 bits); its own reference, not compared with `world`, since float16 blends round once where 8-bit ones round at each layer; other renderers ignore the cvar and draw it as `world` (TASK196, HD2); `r_hdr_peak 1` holds HD3's tone map to that clamp on any display, so the frames do not follow a display's headroom |
 | `hdr-metalfx2` | `hdr` with `r_metalfx 2` at `r_metalfx_scale 0.5`: `MTLFXTemporalScaler` on `ref_metal`'s float16 view and frame, before the tone map; its own reference, not compared with `hdr` or `world-metalfx2`; where the device lacks the scaler `r_metalfx` reads the best supported mode below; other renderers ignore the cvars and draw it as `world` (TASK196, HD4) |
@@ -166,6 +167,7 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `rtprimary-sky` | world | `models` |
 | `rtprimary-sun` | world | `models` |
 | `rtprimary-bounce` | world | `models` |
+| `rtprimary-denoise` | world | `models` |
 | `rtprimary-dlights` | world,dynamic-lights | `particles` |
 | `hdr` | world | `models` |
 | `hdr-metalfx2` | world | `models` |

@@ -272,7 +272,7 @@ void rmb_rtw_set_view(const rm_rtw_view_t *v);
 /*
  * TASK59 slice 2b: 1 when the next view's reflection gets the 3 x 3
  * depth-guided blur after its trace (rm_rtwdenoise.metal; r_rt_temporal
- * above 0 and the presentation not RT-primary, rm_rtt_wblur); 0 releases
+ * above 0, under every presentation since TASK190 slice 2); 0 releases
  * the blur's pipeline and output.
  */
 void rmb_rtw_set_blur(int on);
