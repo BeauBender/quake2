@@ -21,7 +21,7 @@ need() { # $1 = tool, $2 = why, $3 = install hint
 need cc "the gate builds q2ded and the game module" "Xcode command line tools, or build-essential"
 need make "GNU Make is the only build" "Xcode command line tools, or build-essential"
 need git "worktrees and the commit hook" "your package manager"
-need gh "cards are GitHub Issues; work lands through pull requests" "brew install gh, or apt install gh"
+need gh "cards are GitHub Issues; work lands through pull requests" "install gh from cli.github.com"
 
 # The client and renderers need SDL3; the gate
 # does not. On macOS it is built from the vendored
