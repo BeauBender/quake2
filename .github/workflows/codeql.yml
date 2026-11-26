@@ -10,10 +10,12 @@ on:
       - synchronize
 concurrency:
   # A pull request has one group, and a newer push to it cancels the run it
-  # supersedes. A push to main has a group of its own commit (github.sha),
-  # so it is never queued behind, replaced by or cancelled for another run.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # supersedes. A push to main has one group too (TASK211), so a newer push
+  # cancels the main run it supersedes and no pull request run; the newer
+  # run analyses a tree that holds the older one's commits. Any other run
+  # has a group of its own run id. tests/check-ci-map.sh holds this line.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && 'main' || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 # No token permission unless a job names it.
 permissions: {}
 jobs:

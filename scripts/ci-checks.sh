@@ -16,7 +16,20 @@
 # anywhere is refused. --list prints the names and runs nothing, for that
 # check to compare.
 #
-# Usage: scripts/ci-checks.sh [--list]
+# The invariants job is a matrix of three (TASK211): CI_CHECKS_GROUP is
+# fast, harness or ios, and the job runs the checks of tests/ci-checks.txt
+# that scripts/ci-select.sh chooses for that group from tests/ci-map.txt.
+# For harness on a pull request (GITHUB_EVENT_NAME pull_request), it passes
+# the paths the change touches, HEAD^1..HEAD of the merge commit the
+# checkout is, NUL-delimited; any other event, a HEAD that is not a merge
+# commit or a git that fails passes "every path", so every harness check
+# runs. Fails closed: a selector that fails, or prints a name it was not
+# given or none for fast or ios, makes the job run every check of the list.
+# Only the harness group may run none, and then the job passes. Unset, every
+# check runs, as before. --select prints the names the group would run and
+# runs nothing, for tests/check-ci-map.sh.
+#
+# Usage: scripts/ci-checks.sh [--list | --select]
 set -eu
 me=ci-checks
 
@@ -25,10 +38,12 @@ me=ci-checks
 unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
 
 list=
+select=
 case ${1-} in
 	--list) list=1 ;;
+	--select) select=1 ;;
 	"") ;;
-	*) echo "$me: usage: scripts/ci-checks.sh [--list]" >&2; exit 2 ;;
+	*) echo "$me: usage: scripts/ci-checks.sh [--list | --select]" >&2; exit 2 ;;
 esac
 cr=$(printf '\r')
 
@@ -62,4 +77,68 @@ if [ -n "$list" ]; then
 	for t; do printf '%s\n' "${t#tests/}"; done
 	exit 0
 fi
-exec scripts/gate-checks.sh "" "" "$@"
+
+# The group of the invariants job's matrix (TASK211), or none: every check.
+group=${CI_CHECKS_GROUP-}
+case $group in
+	"" | fast | harness | ios) ;;
+	*) echo "$me: CI_CHECKS_GROUP is fast, harness or ios, or unset" >&2; exit 2 ;;
+esac
+if [ -n "$group" ]; then
+	set -f
+	# the candidates by name, kept for the fallback
+	for t do set -- "$@" "${t#tests/}"; shift; done
+	cands=" $* "
+	tmp=$(mktemp -d "${TMPDIR:-/tmp}/ci-checks.XXXXXX")
+	changed=-
+	if [ "$group" = harness ] && [ "${GITHUB_EVENT_NAME-}" = pull_request ]; then
+		# the checkout of a pull request is the merge of its head into its
+		# base: HEAD^1 is the base, and the change is HEAD^1..HEAD
+		if git rev-parse -q --verify 'HEAD^2^{commit}' > /dev/null 2>&1 &&
+			git diff --no-renames --no-relative --name-only -z 'HEAD^1' HEAD > "$tmp/changed" 2> /dev/null; then
+			changed=$tmp/changed
+		else
+			echo "$me: harness: the change cannot be read (HEAD is not a merge commit, or git failed); every harness check runs" >&2
+		fi
+	fi
+	ok=1
+	if bash scripts/ci-select.sh tests/ci-map.txt "$group" "$changed" "$@" > "$tmp/sel"; then
+		set --
+		while IFS= read -r n || [ -n "$n" ]; do
+			case $cands in *" $n "*) ;; *) ok=0; break ;; esac
+			case " $* " in *" tests/$n "*) ok=0; break ;; esac
+			set -- "$@" "tests/$n"
+		done < "$tmp/sel"
+		# only the harness group may be empty (no harness check reads a
+		# path the change touches)
+		[ $# -gt 0 ] || [ "$group" = harness ] || ok=0
+	else
+		ok=0
+	fi
+	rm -rf "${tmp:?}"
+	if [ "$ok" != 1 ]; then
+		# fail closed: never fewer checks than the list
+		echo "$me: $group: the selector failed or printed a name it was not given; every check of tests/ci-checks.txt runs" >&2
+		set --
+		for n in $cands; do set -- "$@" "tests/$n"; done
+	fi
+	set +f
+fi
+if [ -n "$select" ]; then
+	for t; do printf '%s\n' "${t#tests/}"; done
+	exit 0
+fi
+if [ $# -eq 0 ]; then
+	echo "$me: harness: no harness check reads a path this change touches"
+	exit 0
+fi
+# The long checks start first, longest first by run 45683223193, so a group
+# ends near half its check time (the scheduler refuses a name it is not
+# given, so only those given are named).
+first=
+for n in check-metalfx-report.sh check-bench.sh check-require-guards.sh \
+	check-bounded-run.sh check-gate-parallel.sh check-ref-metal.sh \
+	check-bench-entry.sh check-pins.sh check-ci-parity.sh; do
+	case " $* " in *" tests/$n "*) first="$first${first:+ }$n" ;; esac
+done
+exec scripts/gate-checks.sh "" "$first" "$@"
