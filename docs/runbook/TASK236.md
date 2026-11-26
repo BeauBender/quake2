@@ -19,6 +19,8 @@ configuration and multiplayer text stays. One commit per file.
   mods first: `CLAUDE.md`), the macOS build (Xcode toolchain, vendored SDL3, `make ref_metal`,
   `METAL_SHADERS=no`, `make config`) and the `-portable` run line. The iOS, tvOS, visionOS and
   static-module sections are untouched.
+- `stuff/cdripper.sh` is still in the tree but no longer documented: it needs `cdparanoia` and
+  `oggenc`, which this fork does not provide.
 - `doc/030_configuration.md`: the "especially on Windows" and "Raspberry Pi" remarks.
 - `doc/040_cvarlist.md`: "especially on Windows" (busywait), the Windows 98 VM example, the
   Wayland high-DPI claim, `game.dll` to "the game library". No entry removed;
