@@ -1490,7 +1490,11 @@ is.
   player's eye it would shadow most of the view. It is not part of the
   scene either way when `hand` is `2` (the weapon is not drawn), nor
   under the Ray traced presentation while `r_rt_direct_models` lights the
-  models (the weapon is then lit by traced light and casts no shadow).
+  models (the weapon is then lit by traced light and casts no shadow). The
+  weapon is left out only on the frames whose models are traced, so not
+  under `r_fullbright`, on a view without the world, or once the direct
+  light or the model pass failed to start, apart from the one frame on
+  which it first fails.
   Saved with the configuration.
   Can be set from Video options > Ray tracing (TASK194), live.
 

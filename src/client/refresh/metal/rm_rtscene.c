@@ -495,7 +495,7 @@ RM_RT_Frame(const refdef_t *fd)
 	}
 
 	/* TASK191 slice 3: the weapon casts no shadow while the models are traced, and no ray of its own pixels meets it */
-	gun = rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants());
+	gun = rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants(fd));
 	ne = r_drawentities->value ? rm_entity_count(fd->num_entities) : 0;
 
 	for (i = 0; i < ne; i++)

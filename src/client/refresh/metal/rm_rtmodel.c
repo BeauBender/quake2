@@ -154,6 +154,12 @@ rm_rtm_gunshadow(int gunshadow, int models)
 }
 
 int
+rm_rtm_wants(int device, int refused, float models, int direct)
+{
+	return device && !refused && (models != 0.0f) && direct;
+}
+
+int
 rm_rtm_tag_verts(rm_avert_t *v, long n, unsigned f, int extra_ok)
 {
 	const mtl_rgba_t c = mtl_rtm_tag(f);

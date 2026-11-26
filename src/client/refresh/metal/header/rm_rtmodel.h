@@ -118,6 +118,17 @@ int rm_rtm_tag_wanted(int flags, int rdflags, int extra_ok, int mode, unsigned *
 int rm_rtm_gunshadow(int gunshadow, int models);
 
 /*
+ * Slice 3's review: 1 when the frame's models will be traced once its
+ * scene is built (rm_rtm_gunshadow's models): a device with ray tracing
+ * (device), the model pass not refused in this context (refused 0),
+ * r_rt_direct_models' value models not 0, and the direct light about to
+ * trace the frame (direct, RM_RTDir_Will). The scene is built before the
+ * passes open, so on the one frame a pass first fails to open, the weapon
+ * is out of the scene and stock-lit.
+ */
+int rm_rtm_wants(int device, int refused, float models, int direct);
+
+/*
  * Overwrites the colour of the n vertices v (rm_alias_emit's) with the
  * tag of flags f (mtl_rtm_tag) and returns 1, only when extra_ok (the
  * model's normals were written, rm_gb_alias_extra); else leaves them and

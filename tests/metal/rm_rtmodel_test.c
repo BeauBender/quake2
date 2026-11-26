@@ -459,6 +459,27 @@ test_gunshadow(void)
 	}
 }
 
+/*
+ * slice 3's review: the models are wanted traced (the weapon then stays out of the scene) only when the model
+ * pass will run once the scene is built: a device with ray tracing, the pass not refused, r_rt_direct_models
+ * on, and the direct light about to trace the frame (RM_RTDir_Will: r_fullbright, a view without the world,
+ * the direct pass refused all say no)
+ */
+static void
+test_wants(void)
+{
+	int dev, ref, dir, mi;
+	const float models[] = { 0.0f, 1.0f, 0.5f, -1.0f };
+
+	for (dev = 0; dev < 2; dev++)
+	for (ref = 0; ref < 2; ref++)
+	for (dir = 0; dir < 2; dir++)
+	for (mi = 0; mi < 4; mi++)
+	{
+		CHECK(rm_rtm_wants(dev, ref, models[mi], dir) == (dev && !ref && dir && (models[mi] != 0.0f)));
+	}
+}
+
 /* slice 3: the material a pull-back ray stops at, a wall: a map face that is not water or translucent; a model passes */
 static void
 test_wall(void)
@@ -928,6 +949,7 @@ main(void)
 	test_split_mode();
 	test_tag_wanted();
 	test_gunshadow();
+	test_wants();
 	test_wall();
 	test_tag();
 	test_weapon();

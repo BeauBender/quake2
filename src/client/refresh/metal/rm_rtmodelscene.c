@@ -60,10 +60,12 @@ RM_RTModel_Shutdown(void)
 	rtm_opened = rtm_active = 0;
 }
 
+/* slice 3's review: decided as the scene is built, by what this frame's model pass and direct light will decide */
 int
-RM_RTModel_Wants(void)
+RM_RTModel_Wants(const refdef_t *fd)
 {
-	return rtm_device && r_rt_direct_models && (RM_Effect(r_rt_direct_models) != 0.0f) && RM_RTDir_Wanted();
+	return rm_rtm_wants(rtm_device, rtm_refused, r_rt_direct_models ? RM_Effect(r_rt_direct_models) : 0.0f,
+		RM_RTDir_Will(fd));
 }
 
 /* the scene is the direct light's to ask for (RM_RTDir_Wanted) */

@@ -38,6 +38,7 @@
 void RM_RTDir_Init(const rmb_caps_t *caps);
 void RM_RTDir_Shutdown(void);
 int RM_RTDir_Wanted(void);
+int RM_RTDir_Will(const refdef_t *fd);   /* TASK191 slice 3: Frame traces fd once its scene is built (Frame's own test) */
 void RM_RTDir_Frame(const refdef_t *fd, int scene_ready);
 int RM_RTDir_Active(void);
 int RM_RTDir_ShowOnly(void);
