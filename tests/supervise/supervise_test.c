@@ -1156,6 +1156,72 @@ c_term_trap(struct run *r)
 	return 0;
 }
 
+/* the table (8) full of escaped members, a member never watched, whose TERM trap starts a child and exits while a listing is held */
+static int
+c_untracked(struct run *r)
+{
+	const char *opts[] = { "--timeout", "100", NULL };
+	struct chan *l, *f, *m, *c;
+	const char *a;
+	int i;
+
+	if (start(r, "exec", opts, NULL, NULL) || (l = leader(r)) == NULL)
+	{
+		return 1;
+	}
+	for (i = 0; i < 7; i++)
+	{
+		if ((f = fork_fake(r, l, "filler")) == NULL || ask(f, "setsid") == NULL || !probe(r))
+		{
+			return fail(r, "filler %d", i);
+		}
+	}
+	if ((m = fork_fake(r, l, "member")) == NULL || (a = ask(m, "ignore-term")) == NULL || strcmp(a, "ok") != 0 || !probe(r))
+	{
+		return fail(r, "no member");
+	}
+	tick(r, 'D');
+	if (ev_wait(r, "term-sent") == NULL || ev_wait(r, "exited") == NULL)
+	{
+		return fail(r, "no term-sent and exited: %s", r->log);
+	}
+	if (expect_line(r, l, "sig=TERM", "the leader") || expect_gone(r, l, "the leader") || expect_line(r, m, "sig=TERM ignored", "the member"))
+	{
+		return 1;
+	}
+	tick(r, 'H');
+	if (ev_wait(r, "held") == NULL)
+	{
+		return fail(r, "no held event: %s", r->log);
+	}
+	if ((c = fork_fake(r, m, "cleanup")) == NULL)
+	{
+		return 1;
+	}
+	send_line(m, "exit 0\n");
+	if (expect_gone(r, m, "the member"))
+	{
+		return 1;
+	}
+	tick(r, 'L');
+	if (!probe(r) || at(r, "group-empty") >= 0)
+	{
+		return fail(r, "group-empty came while the child of an unwatched member ran (events: %s)", r->log);
+	}
+	tick(r, 'G');
+	if (ev_wait(r, "kill-sent") == NULL || expect_gone(r, c, "the child"))
+	{
+		return fail(r, "no kill-sent: %s", r->log);
+	}
+	tick(r, 'A');
+	finish(r);
+	if (at(r, "group-empty") < 0)
+	{
+		return fail(r, "events: %s", r->log);
+	}
+	return want_status(r, 124);
+}
+
 static int
 c_closed_std(struct run *r)
 {
@@ -1312,6 +1378,7 @@ static const struct
 	{ "escaped", c_escaped, 1 },
 	{ "cap", c_cap, 1 },
 	{ "term-trap", c_term_trap, 1 },
+	{ "untracked", c_untracked, 1 },
 	{ "closed-std", c_closed_std, 0 },
 	{ "stuck", c_stuck, 1 },
 	{ "stderr", c_stderr, 0 },
