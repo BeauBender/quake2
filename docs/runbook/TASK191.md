@@ -74,7 +74,7 @@ calls them, so no frame changes (the hold, below).
 
 ## The test, red then green
 
-`tests/metal/rm_rtmodel_test.c`, built by `tests/check-ref-metal.sh` (segment 7.7) with
+`tests/metal/rm_rtmodel_test.c`, built by `tests/check-ref-metal.sh` (segment 7.9) with
 `rm_gbuf.c`, `rm_rtshadow.c`, `rm_rt.c` and `rm_pure.c`, under ASAN and UBSAN:
 
 - colour parity over 1024 flag combinations (minlight, glow, fullbright, weapon, IR and the
@@ -114,9 +114,11 @@ and `xcrun metal -c` of a translation unit that includes `mtl_rtm_math.h` and ca
 function. The hold builds main and the branch in scratch, runs `make test` and
 `check-ref-metal`, and records:
 
-- the stock scenarios at `r_presentation 0`: 29 of 29 stock scenarios byte-identical to the base (main e76c846e) byte-identical to main;
+- the stock scenarios at `r_presentation 0`: 29 of 29 stock scenarios byte-identical to main;
 - every committed `rtprimary-*` record, with `rtprimary-world` on `demo2.dm2` and on the
-  pool demo and `rtprimary-dlights` on `demo2.dm2`: 10 of 10 RT-primary records byte-identical to main's (the 7 rtprimary-* scenarios and the styles, pool and dlights-d2 demo variants) byte-identical to main.
+  pool demo and `rtprimary-dlights` on `demo2.dm2`: 10 of 10 RT-primary records byte-identical to main (the 7 rtprimary-* scenarios and the styles, pool and dlights-d2 demo variants).
+
+Those results were taken against main e76c846e. After main was merged in at 227f87ea (main d7817081), `make ref_metal` built, and `tests/check-ref-metal.sh` passed with 13162 checks and 0 failed. The model-light segment ran 3446 checks with 0 failed, and 7 of 7 mutants were refused.
 
 ## Left to the next slices
 
