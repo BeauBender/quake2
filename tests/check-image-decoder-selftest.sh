@@ -324,7 +324,12 @@ if mutant plainkill 's|^[[:space:]]*"\$sv" --timeout .*$|( "$@" \& _p=$!; ( slee
 	rm -f "${tmp:?}/stop.pids"
 	run stop
 	check=$real
-	if gone "${tmp:?}/stop.pids" leakprobe; then
+	# the positive control: a mutant that never reached its probe would
+	# leave no stop.pids, which gone reads as "not gone"
+	if [ ! -s "${tmp:?}/stop.pids" ]; then
+		cat "${tmp:?}/out"
+		fail "(h) the mutant never started its target: the case proves nothing (status $rc)"
+	elif gone "${tmp:?}/stop.pids" leakprobe; then
 		fail "(h) a plain kill in place of the supervisor was not refused: the probe's stopped target is gone"
 	fi
 	end_own "$(cat "${tmp:?}/stop.pids" 2>/dev/null | head -n 1)" leakprobe
@@ -336,7 +341,13 @@ if mutant noevents 's| --events 9||' i; then
 	: > "${tmp:?}/ev.i"
 	run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.i"
 	check=$real
-	if [ -s "${tmp:?}/ev.i" ] || grep -qF 'escaped pid ' "${tmp:?}/out"; then
+	# the positive control: the escape stub ran and its helper started (end_esc
+	# removed (g)'s esc.pids), so the empty events are the mutant's, not a
+	# mutant that never reached its probe
+	if [ ! -s "${tmp:?}/esc.pids" ]; then
+		cat "${tmp:?}/out"
+		fail "(i) the mutant never started the escape stub: the case proves nothing (status $rc)"
+	elif [ -s "${tmp:?}/ev.i" ] || grep -qF 'escaped pid ' "${tmp:?}/out"; then
 		fail "(i) --events dropped was not refused: the supervisor's events or the escaped pid still show"
 	fi
 	end_esc
