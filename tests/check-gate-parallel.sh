@@ -1565,6 +1565,26 @@ c_stopnoerr() {
 	stop_one none 0 "" "" nostderr || return 1
 	stop_one TERM 143 "" "" nostderr
 }
+# termign: a scheduler started with SIGTERM ignored refuses to start. A
+# signal ignored at entry cannot be trapped, and every check's supervisor
+# would inherit the ignore and never begin a stop, so a stop would wait,
+# with no bound, for each check to end by itself. Status 2, within a few
+# seconds, one line that says why, and no check run (the one given holds
+# for 15 s: a scheduler that runs it outlives the 10 s bound).
+c_termign() {
+	d=$(newcase)
+	spec "$d" a 1 0 0 hold 15
+	rc=0
+	_ti0=$(date +%s)
+	bounded 10 "$d/out" env GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
+		sh -c 'trap "" TERM; exec sh "$1" "" "" "$2"' sh "$SCHED" "$d/check-a.sh" || rc=$?
+	_ti=$(($(date +%s) - _ti0))
+	[ "$rc" -eq 2 ] && [ ! -s "$d/events" ] ||
+		{ say "termign: SIGTERM ignored at the start: status $rc, want 2 and no check run ($(tr '\n' '|' < "$d/out"))"; return 1; }
+	[ "$_ti" -le 10 ] || { say "termign: the refusal took $_ti s, want at most 10"; return 1; }
+	[ "$(wc -l < "$d/out" | tr -d ' ')" = 1 ] && grep -q '^gate: SIGTERM is ignored' "$d/out" ||
+		{ say "termign: want one line, 'gate: SIGTERM is ignored ...', got: $(tr '\n' '|' < "$d/out")"; return 1; }
+}
 
 # drop: see the top of this file. check-a.sh (x) starts a child that
 # ignores SIGTERM and exits: its stop waits the grace, and in it check-b.sh
@@ -1709,7 +1729,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave killgrace stop stopnoerr drop dropabsent intskip ttyself"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave killgrace stop stopnoerr termign drop dropabsent intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
