@@ -349,6 +349,20 @@ MetalModeMask(void)
  */
 static char s_built_renderer[32];
 
+/* the tuning screen's debug view: the first of VidRules_DebugView's views whose cvar is set, 0 for none */
+static int
+DebugViewChosen(void)
+{
+	for (int v = 1; v < VidRules_NumDebugViews(); v++)
+	{
+		if (Cvar_VariableValue(VidRules_DebugView(v)) != 0)
+		{
+			return v;
+		}
+	}
+	return 0;
+}
+
 /*
  * TASK190 slice 3: the r_metalfx the presentation reads in place of the
  * player's (Retro off, Ray traced its temporal scaler, or off where the
@@ -358,7 +372,8 @@ static int
 MetalFXDecided(const char **why)
 {
 	return VidRules_MetalFXDecided(s_built_renderer, Cvar_VariableValue("r_rt_available") != 0,
-			Cvar_VariableValue("r_presentation"), MetalModeMask(), Cvar_VariableValue("r_metalfx_scale"), why);
+			Cvar_VariableValue("r_presentation"), MetalModeMask(), Cvar_VariableValue("r_metalfx_scale"),
+			DebugViewChosen(), why);
 }
 
 /* Greys an item with its reason, or enables it with its note. */
@@ -946,14 +961,7 @@ TuneMenu_Values(void)
 		}
 		else if (c->part == VIDTUNE_PART_DEBUG)
 		{
-			l->curvalue = 0;
-			for (int v = VidRules_NumDebugViews() - 1; v > 0; v--)
-			{
-				if (Cvar_VariableValue(VidRules_DebugView(v)) != 0)
-				{
-					l->curvalue = v;
-				}
-			}
+			l->curvalue = DebugViewChosen();
 		}
 		else if (c->choices)
 		{
@@ -1083,6 +1091,8 @@ TuneChanged(void *self)
 		{
 			Cvar_SetValue(VidRules_DebugView(i), (i == l->curvalue) ? 1.0f : 0.0f);
 		}
+		/* TASK190 slice 3: Ray traced's scaler row reads off while a view it draws is chosen, and shows it */
+		TuneMenu_Values();
 	}
 	else if (c->restart && !VidRules_PresentationMode(l->curvalue, s_built_renderer,
 				Cvar_VariableValue("r_rt_available") != 0).enabled)

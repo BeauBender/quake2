@@ -255,11 +255,15 @@ int VidRules_MetalFXOverridden(const char *renderer, float presentation);
  * VIDMFX_TEMPORAL), else 2, the temporal scaler, while the view is scaled
  * down (r_metalfx_scale, scale, not a finite value from 1 up: the menu
  * counts the default as scaled down); at a scale of 1 or more the user's.
+ * Ray traced also reads 0 while the tuning screen's debug view debugview
+ * (VidRules_DebugView's numbering, 0 for none) is one the mode draws, the
+ * view of an effect it runs (the water's): the renderer draws a
+ * development view unscaled (rm_rtfx_show_asked).
  * *why, when not NULL, gets the scaler item's reason line for a decided
  * value, else NULL.
  */
 int VidRules_MetalFXDecided(const char *renderer, int available, float presentation, int modemask, float scale,
-	const char **why);
+	int debugview, const char **why);
 int VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user);
 vidrule_t VidRules_RTRow(int i, const char *renderer, int available, float presentation, float effect_user);
 

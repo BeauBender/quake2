@@ -12,7 +12,10 @@
  * the family's default rows (the menu does not see the window's height,
  * and assumes so). The menu's reason line is checked too: a decided value
  * has one, and RT-primary's names the missing temporal scaler where the
- * row reads off.
+ * row reads off. Round 2 (N2): every debug view of the tuning screen
+ * (VidRules_DebugView), which the renderer counts as a development view
+ * drawn unscaled when it is the view of a row of its effect table that
+ * the mode runs (renderer_show).
  */
 
 #include <math.h>
@@ -48,21 +51,53 @@ static int checks, failures;
 /* an output of 2160 lines, above apple9's default 1080 rows */
 #define OUT_H 2160
 
+/*
+ * Whether the renderer counts the tuning screen's debug view v as a
+ * development view asked for (rm_rtfx_show_asked): v's cvar is the _show
+ * cvar of a row of the effect table, and the mode runs that effect
+ * (RM_xxx_Wanted reads the effect's switch through the mode's overlay,
+ * rm_pres_value; the user's switch is on here). The G-buffer's view is no
+ * row of the table.
+ */
+static int
+renderer_show(int mode, int v)
+{
+	static const char *const rows[] = { "r_rt_shadows", "r_rt_ao", "r_rt_sun", "r_rt_water", "r_rt_direct" };
+	const char *cv = VidRules_DebugView(v);
+	char effect[64];
+	size_t n;
+
+	if (!cv || (n = strlen(cv)) <= 5 || strcmp(cv + n - 5, "_show") || n - 5 >= sizeof(effect))
+	{
+		return 0;
+	}
+	memcpy(effect, cv, n - 5);
+	effect[n - 5] = '\0';
+	for (size_t k = 0; k < sizeof(rows) / sizeof(rows[0]); k++)
+	{
+		if (!strcmp(effect, rows[k]))
+		{
+			return rm_pres_value(mode, effect, 1.0f) != 0.0f;
+		}
+	}
+	return 0;
+}
+
 /* the scaler the renderer reads: the mode it runs for the request on this device, then the overlay */
 static float
-renderer_fx(float presentation, int available, int modemask, float scale, float user)
+renderer_fx(float presentation, int available, int modemask, float scale, int debugview, float user)
 {
 	const int mode = rm_pres_decide(presentation, available ? RM_RTG_COMPUTE : RM_RTG_NONE, NULL);
 	const int below = rm_fx_scale(scale, RM_FX_ROWS_APPLE9, OUT_H, RM_FX_RATIO_MAX) < 1.0f;
 
 	/* r_metalfx_modes holds RM_FX_HAS(m) for each mode m the device has: bit 2 is the temporal scaler */
-	return rm_pres_fx(mode, user, (modemask & VIDMFX_TEMPORAL) != 0, 0, below);
+	return rm_pres_fx(mode, user, (modemask & VIDMFX_TEMPORAL) != 0, renderer_show(mode, debugview), below);
 }
 
 static float
-menu_fx(float presentation, int available, int modemask, float scale, float user, const char **why)
+menu_fx(float presentation, int available, int modemask, float scale, int debugview, float user, const char **why)
 {
-	const int d = VidRules_MetalFXDecided("metal", available, presentation, modemask, scale, why);
+	const int d = VidRules_MetalFXDecided("metal", available, presentation, modemask, scale, debugview, why);
 
 	return (d >= 0) ? (float)d : user;
 }
@@ -82,17 +117,22 @@ main(void)
 			{
 				for (size_t s = 0; s < sizeof(scales) / sizeof(scales[0]); s++)
 				{
-					for (size_t u = 0; u < sizeof(users) / sizeof(users[0]); u++)
+					for (int dv = 0; dv < VidRules_NumDebugViews(); dv++)
 					{
-						const char *why = "unset";
-						const float r = renderer_fx(pres[p], available, mask, scales[s], users[u]);
-						const float m = menu_fx(pres[p], available, mask, scales[s], users[u], &why);
-						const int d = VidRules_MetalFXDecided("metal", available, pres[p], mask, scales[s], NULL);
+						for (size_t u = 0; u < sizeof(users) / sizeof(users[0]); u++)
+						{
+							const char *why = "unset";
+							const float r = renderer_fx(pres[p], available, mask, scales[s], dv, users[u]);
+							const float m = menu_fx(pres[p], available, mask, scales[s], dv, users[u], &why);
+							const int d = VidRules_MetalFXDecided("metal", available, pres[p], mask, scales[s], dv, NULL);
 
-						CHECK(r == m, "r_presentation %g, ray tracing %d, modes %d, scale %g, r_metalfx %g: the renderer "
-							"reads %g, the menu shows %g", pres[p], available, mask, scales[s], users[u], r, m);
-						CHECK((d >= 0) == (why != NULL), "r_presentation %g, ray tracing %d, modes %d, scale %g: decided "
-							"%d, reason %s", pres[p], available, mask, scales[s], d, why ? why : "(none)");
+							CHECK(r == m, "r_presentation %g, ray tracing %d, modes %d, scale %g, debug view %d, "
+								"r_metalfx %g: the renderer reads %g, the menu shows %g", pres[p], available, mask,
+								scales[s], dv, users[u], r, m);
+							CHECK((d >= 0) == (why != NULL), "r_presentation %g, ray tracing %d, modes %d, scale %g, "
+								"debug view %d: decided %d, reason %s", pres[p], available, mask, scales[s], dv, d,
+								why ? why : "(none)");
+						}
 					}
 				}
 			}
@@ -103,20 +143,28 @@ main(void)
 	{
 		const char *why = NULL;
 
-		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 7, 0.5f, &why) == 2 && why &&
+		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 7, 0.5f, 0, &why) == 2 && why &&
 			!strcmp(why, "set by the presentation: temporal"), "RT-primary with the temporal scaler: %s",
 			why ? why : "(none)");
-		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 7, 0.0f, &why) == 2 && why, "RT-primary at the default scale");
-		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 7, 1.0f, &why) == -1 && !why, "RT-primary at scale 1");
-		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 3, 0.5f, &why) == 0 && why &&
+		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 7, 0.0f, 0, &why) == 2 && why, "RT-primary at the default scale");
+		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 7, 1.0f, 0, &why) == -1 && !why, "RT-primary at scale 1");
+		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 3, 0.5f, 0, &why) == 0 && why &&
 			!strcmp(why, "off: no temporal scaler on this GPU"), "RT-primary without the temporal scaler: %s",
 			why ? why : "(none)");
-		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 3, 1.0f, &why) == 0 && why, "RT-primary without it at scale 1");
-		CHECK(VidRules_MetalFXDecided("metal", 0, 3.0f, 7, 0.5f, &why) == -1 && !why, "RT-primary without ray tracing");
-		CHECK(VidRules_MetalFXDecided("gl1", 1, 3.0f, 7, 0.5f, &why) == -1 && !why, "RT-primary under gl1");
-		CHECK(VidRules_MetalFXDecided("metal", 0, 2.0f, 7, 0.5f, &why) == 0 && why &&
+		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 3, 1.0f, 0, &why) == 0 && why, "RT-primary without it at scale 1");
+		CHECK(VidRules_MetalFXDecided("metal", 0, 3.0f, 7, 0.5f, 0, &why) == -1 && !why, "RT-primary without ray tracing");
+		CHECK(VidRules_MetalFXDecided("gl1", 1, 3.0f, 7, 0.5f, 0, &why) == -1 && !why, "RT-primary under gl1");
+		CHECK(VidRules_MetalFXDecided("metal", 0, 2.0f, 7, 0.5f, 0, &why) == 0 && why &&
 			!strcmp(why, "set by the presentation"), "Retro: %s", why ? why : "(none)");
-		CHECK(VidRules_MetalFXDecided("metal", 1, 1.0f, 7, 0.5f, &why) == -1 && !why, "Enhanced");
+		CHECK(VidRules_MetalFXDecided("metal", 1, 1.0f, 7, 0.5f, 0, &why) == -1 && !why, "Enhanced");
+
+		/* the water's debug view (4) under Ray traced is drawn unscaled, so off at any scale; AO's (3) is not drawn */
+		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 7, 0.5f, 4, &why) == 0 && why &&
+			!strcmp(why, "off: the debug view is drawn unscaled"), "RT-primary with the water's debug view: %s",
+			why ? why : "(none)");
+		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 7, 1.0f, 4, &why) == 0 && why, "the water's debug view at scale 1");
+		CHECK(VidRules_MetalFXDecided("metal", 1, 3.0f, 7, 0.5f, 3, &why) == 2 && why, "RT-primary with the AO's debug view");
+		CHECK(VidRules_MetalFXDecided("metal", 1, 1.0f, 7, 0.5f, 4, &why) == -1 && !why, "Enhanced with the water's debug view");
 	}
 
 	printf("rm_pres_menu_test: %d checks, %d failed\n", checks, failures);

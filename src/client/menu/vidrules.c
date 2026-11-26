@@ -693,10 +693,12 @@ VidRules_MetalFXOverridden(const char *renderer, float presentation)
  */
 int
 VidRules_MetalFXDecided(const char *renderer, int available, float presentation, int modemask, float scale,
-	const char **why)
+	int debugview, const char **why)
 {
 	const char *w = NULL;
 	int v = -1;
+
+	(void)debugview;
 
 	if (RTRetroInForce(renderer, presentation))
 	{
