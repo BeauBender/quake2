@@ -43,6 +43,7 @@
 #include "header/rm_rtsun.h"
 #include "header/rm_rtwater.h"
 #include "header/rm_rtdir.h"
+#include "header/rm_rtmodelscene.h"
 
 #ifdef RM_RTFX_HOST
 #include "rm_rtfx_host.h"
@@ -109,9 +110,18 @@ static const rm_rtfx_t rm_rtfx[RM_RTFX_COUNT] = {
 		FX(RM_RTDir_ShowOnly), FX(RM_RTDir_ShowAsked), FX(RM_RTDir_View),
 		NULL, FX(rmb_rtdir_fx_trace), NULL, FX(rmb_rtdir_fx_show), NULL, NULL, NULL, NULL
 	},
+	/* TASK191 slice 2: a term of the direct light, under its switch; its view is the direct light's */
+	[RM_RTFX_MODELS] = {
+		"models", "r_rt_direct",
+		FX(RM_RTModel_Init), FX(RM_RTModel_Shutdown), FX(RM_RTModel_Wanted), FX(RM_RTModel_Frame),
+		FX(RM_RTModel_Active), FX(RM_RTModel_ShowOnly), FX(RM_RTModel_ShowAsked), FX(RM_RTModel_View),
+		NULL, FX(rmb_rtmodel_fx_trace), NULL, NULL, NULL, NULL, NULL, NULL
+	},
 };
 
-const int rm_rtfx_order[RM_RTFX_COUNT] = { RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER };
+const int rm_rtfx_order[RM_RTFX_COUNT] = {
+	RM_RTFX_DIRECT, RM_RTFX_MODELS, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER
+};
 
 /* the k-th row of the order */
 #define ROW(k) (&rm_rtfx[rm_rtfx_order[k]])

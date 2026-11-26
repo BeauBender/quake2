@@ -36,6 +36,7 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/header/rm_rtmodel.h"
+#include "../../src/client/refresh/metal/header/rm_rtmodelscene.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
 
 /* src/common/shared/shared.c, linked for rm_pure.c, prints through the engine */
@@ -267,11 +268,9 @@ test_split_mode(void)
 	const int gun = RM_RF_MINLIGHT | RM_RF_DEPTHHACK | RM_RF_WEAPONMODEL;
 	int flags, kind, s, rd, bad = 0;
 
-	/* the models that are traced: an opaque alias model, a glowing item, a minlight model, IR without goggles */
+	/* the models that are traced: an opaque alias model, IR without goggles */
 	CHECK(rm_rtm_entity_split(0, A, 0, 0, 1) == R);
 	CHECK(rm_rtm_entity_split(0, A, 1, 0, 1) == (R | S));
-	CHECK(rm_rtm_entity_split(RM_RF_GLOW, A, 0, 0, 1) == R);
-	CHECK(rm_rtm_entity_split(RM_RF_MINLIGHT, A, 0, 0, 1) == R);
 	CHECK(rm_rtm_entity_split(RM_RF_IR_VISIBLE, A, 0, 0, 1) == R);
 	CHECK(rm_rtm_entity_split(0, B, 1, 0, 1) == R);
 
@@ -281,6 +280,19 @@ test_split_mode(void)
 	CHECK(rm_rtm_entity_split(RM_RF_IR_VISIBLE, A, 0, IR, 1) == F);
 	CHECK(rm_rtm_entity_split(RM_RF_DEPTHHACK | RM_RF_FULLBRIGHT, A, 0, 0, 1) == F);
 	CHECK(rm_rtm_entity_split(RM_RF_DEPTHHACK, A, 0, 0, 1) == F);
+
+	/* slice 2: a glowing item and a minlight model go forward, untagged, until slice 3 tags them */
+	CHECK(rm_rtm_entity_split(RM_RF_GLOW, A, 0, 0, 1) == F);
+	CHECK(rm_rtm_entity_split(RM_RF_MINLIGHT, A, 1, 0, 1) == F);
+	CHECK(rm_rtm_entity_split(RM_RF_GLOW, B, 0, 0, 1) == rm_gb_entity_split(RM_RF_GLOW, B, 0));
+
+	/* the stock-lit rule for good: the crosshair model is, the weapon (RF_DEPTHHACK too) is not (slice 3 traces it) */
+	CHECK(rm_rtm_stock_model(RM_RF_DEPTHHACK, 0) == 1);
+	CHECK(rm_rtm_stock_model(RM_RF_DEPTHHACK | RM_RF_FULLBRIGHT, 0) == 1);
+	CHECK(rm_rtm_stock_model(gun, 0) == 0);
+	CHECK(rm_rtm_stock_model(RM_RF_DEPTHHACK | RM_RF_WEAPONMODEL, 0) == 0);
+	CHECK(rm_rtm_stock_model(gun | RM_RF_SHELL_RED, 0) == 1);
+	CHECK(rm_rtm_stock_model(RM_RF_GLOW, 0) == 0);
 
 	/* the weapon goes forward in this slice; so do translucent models, shells and beams, as now */
 	CHECK(rm_rtm_entity_split(gun, A, 0, 0, 1) == F);
@@ -304,9 +316,12 @@ test_split_mode(void)
 		const int rdflags = rd ? IR : 0;
 		const int got = rm_rtm_entity_split(flags, kind, (float)s, rdflags, 1);
 		const int base = rm_gb_entity_split(flags, kind, (float)s);
-		const int stock = (kind == A) && (rm_rtm_stock_light(flags, rdflags) || (flags & RM_RF_DEPTHHACK));
+		const int depthhack = (flags & RM_RF_DEPTHHACK) && !(flags & RM_RF_WEAPONMODEL);
+		const int stock = (kind == A) && (rm_rtm_stock_light(flags, rdflags) || depthhack ||
+				(flags & (RM_RF_GLOW | RM_RF_MINLIGHT)));
 
 		bad += got != (stock ? F : base);
+		bad += rm_rtm_stock_model(flags, rdflags) != (rm_rtm_stock_light(flags, rdflags) || depthhack);
 	}
 
 	CHECK(bad == 0);
@@ -314,9 +329,9 @@ test_split_mode(void)
 	/* traced: what the mode rasters, with its normals written */
 	CHECK(rm_rtm_traced(0, 0, 1) == 1);
 	CHECK(rm_rtm_traced(0, 0, 0) == 0);
-	CHECK(rm_rtm_traced(RM_RF_GLOW, 0, 1) == 1);
+	CHECK(rm_rtm_traced(RM_RF_GLOW, 0, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_GLOW, 0, 0) == 0);
-	CHECK(rm_rtm_traced(RM_RF_MINLIGHT, 0, 1) == 1);
+	CHECK(rm_rtm_traced(RM_RF_MINLIGHT, 0, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_IR_VISIBLE, 0, 1) == 1);
 	CHECK(rm_rtm_traced(RM_RF_IR_VISIBLE, IR, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_FULLBRIGHT, 0, 1) == 0);
@@ -425,7 +440,15 @@ test_tag(void)
 		v[i].uv[1] = 0.5f;
 	}
 
-	rm_rtm_tag_verts(v, 2, MTL_RTM_GLOW | MTL_RTM_WEAPON);
+	/* slice 2: a model without its normals is never tagged */
+	CHECK(rm_rtm_tag_verts(v, 2, MTL_RTM_GLOW | MTL_RTM_WEAPON, 0) == 0);
+
+	for (i = 0; i < 3; i++)
+	{
+		CHECK(v[i].color[0] == 0.0f && v[i].color[1] == 0.0f && v[i].color[2] == 0.0f && v[i].color[3] == 0.0f);
+	}
+
+	CHECK(rm_rtm_tag_verts(v, 2, MTL_RTM_GLOW | MTL_RTM_WEAPON, 1) == 1);
 
 	for (i = 0; i < 2; i++)
 	{
@@ -600,6 +623,122 @@ test_pullback(void)
 	CHECK(fabs(sqrt(q.x * q.x + q.y * q.y) - (5 - MTL_RTM_PULLBACK)) < 1e-5 && fabs(q.x * 8 - q.y * 6) < 1e-5);
 }
 
+/*
+ * The minlight floor's test under Metal (slice 2): MTL_RTM_ABOVE there is
+ * s >= 0.1f, gl1's double test s > 0.1 here. The two are the same test
+ * for every float: here over the 4096 floats on each side of 0.1f, the
+ * two that a float can stand nearest 0.1 among them.
+ */
+static void
+test_floor_metal(void)
+{
+	float s = 0.1f;
+	int i, bad = 0;
+
+	for (i = 0; i < 4096; i++)
+	{
+		s = nextafterf(s, 0.0f);
+	}
+
+	for (i = 0; i < 8193; i++)
+	{
+		bad += ((double)s > 0.1) != (s >= 0.1f);
+		bad += MTL_RTM_ABOVE(s) != (s >= 0.1f);
+		s = nextafterf(s, 1.0f);
+	}
+
+	CHECK(bad == 0);
+	CHECK(MTL_RTM_ABOVE(0.1f) && !MTL_RTM_ABOVE(nextafterf(0.1f, 0.0f)) && !MTL_RTM_ABOVE(NAN));
+}
+
+/* gl1's index rule with float compares (IEEE here, no fast math): what mtl_rtm_index1 must give */
+static int
+index_ref(float f)
+{
+	return !(f > 0.0f) ? 0 : ((f >= 255.0f) ? 255 : (int)f);
+}
+
+static float
+float_of_bits(unsigned u)
+{
+	float f;
+
+	memcpy(&f, &u, sizeof(f));
+	return f;
+}
+
+/*
+ * The colour index's guard (slice 2's review): the index tests the bit
+ * pattern (MTL_RTM_BITS), not a float compare, so a NaN of either sign
+ * and any payload, -inf and -0 give 0 and +inf 255; and over a sweep of
+ * 65536 patterns spread across every sign and exponent the index is
+ * gl1's float-compare rule and lies in 0 .. 255.
+ */
+static void
+test_index_guard(void)
+{
+	const unsigned nans[] = {0x7f800001u, 0x7fc00000u, 0x7fffffffu, 0xff800001u, 0xffc00000u, 0xffffffffu};
+	unsigned k;
+	int i, bad = 0, out = 0;
+
+	CHECK(sizeof(unsigned) == sizeof(float));
+	CHECK(MTL_RTM_BITS(INFINITY) == MTL_RTM_BITS_INF && MTL_RTM_BITS(255.0f) == MTL_RTM_BITS_255);
+
+	CHECK(mtl_rtm_index1(1.0f, NAN) == 0);
+	CHECK(mtl_rtm_index1(1.0f, -NAN) == 0);
+	CHECK(mtl_rtm_index1(1.0f, INFINITY) == 255);
+	CHECK(mtl_rtm_index1(1.0f, -INFINITY) == 0);
+	CHECK(mtl_rtm_index1(-1.0f, INFINITY) == 0);
+	CHECK(mtl_rtm_index1(0.0f, INFINITY) == 0);
+	CHECK(mtl_rtm_index1(1.0f, -0.0f) == 0);
+	CHECK(mtl_rtm_index1(1.0f, -1.0f) == 0);
+	CHECK(mtl_rtm_index1(1.0f, 1.0f) == 255 && mtl_rtm_index1(1.0f, 0.5f) == 127);
+
+	for (i = 0; i < (int)(sizeof(nans) / sizeof(nans[0])); i++)
+	{
+		const float n = float_of_bits(nans[i]);
+
+		bad += mtl_rtm_index1(1.0f, n) != 0;
+		bad += mtl_rtm_index1(n, 0.5f) != 0;
+	}
+
+	for (k = 0; k < 65536u; k++)
+	{
+		const float s = float_of_bits(k * 0x10001u);
+		const int got = mtl_rtm_index1(1.0f, s);
+
+		out += (got < 0) || (got > 255);
+		bad += got != index_ref(1.0f * s * 255.0f);
+	}
+
+	CHECK(bad == 0);
+	CHECK(out == 0);
+}
+
+/* slice 2: the r_rt_stats 2 line, with and without the GPU time, and a buffer it does not fit */
+static void
+test_stats_line(void)
+{
+	rm_rtm_stats_t s;
+	char buf[256];
+
+	memset(&s, 0, sizeof(s));
+	s.frame = 12;
+	s.pixels = 3456;
+	s.rays = 789;
+	s.open = 10;
+	s.ms = 0.25;
+	CHECK(rm_rtm_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(!strcmp(buf, "ref_metal: rt models: frame 12: 3456 model pixels, 789 shadow rays, 10 sky, sun and bounce rays, "
+			"0.250 ms"));
+	s.ms = -1;
+	CHECK(rm_rtm_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(!strcmp(buf, "ref_metal: rt models: frame 12: 3456 model pixels, 789 shadow rays, 10 sky, sun and bounce rays, "
+			"- ms"));
+	CHECK(rm_rtm_stats_format(&s, buf, 16) == 0 && buf[0] == '\0');
+	CHECK(rm_rtm_stats_format(&s, buf, 0) == 0);
+}
+
 int
 main(void)
 {
@@ -614,6 +753,9 @@ main(void)
 	test_tag();
 	test_weapon();
 	test_pullback();
+	test_floor_metal();
+	test_index_guard();
+	test_stats_line();
 
 	printf("rm_rtmodel_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

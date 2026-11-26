@@ -26,15 +26,23 @@
  */
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "header/rm_rtmodel.h"
+#include "header/rm_rtmodelscene.h"
 
 int
 rm_rtm_stock_light(int flags, int rdflags)
 {
 	return ((flags & (RM_RF_SHELLS | RM_RF_FULLBRIGHT)) != 0) ||
 		((rdflags & RM_RDF_IRGOGGLES) && (flags & RM_RF_IR_VISIBLE));
+}
+
+int
+rm_rtm_stock_model(int flags, int rdflags)
+{
+	return rm_rtm_stock_light(flags, rdflags) || ((flags & RM_RF_DEPTHHACK) && !(flags & RM_RF_WEAPONMODEL));
 }
 
 int
@@ -58,7 +66,13 @@ rm_rtm_entity_split(int flags, int kind, float shadows, int rdflags, int mode)
 	}
 
 	/* the alias models that stay stock-lit, the crosshair model (RF_DEPTHHACK, not the weapon) among them */
-	if ((kind == RM_GB_KIND_ALIAS) && (rm_rtm_stock_light(flags, rdflags) || (flags & RM_RF_DEPTHHACK)))
+	if ((kind == RM_GB_KIND_ALIAS) && rm_rtm_stock_model(flags, rdflags))
+	{
+		return RM_GB_ENT_FORWARD;
+	}
+
+	/* slice 2: a glowing or minlight model, whose flags no tag carries to the kernel yet (slice 3) */
+	if ((kind == RM_GB_KIND_ALIAS) && (flags & (RM_RF_GLOW | RM_RF_MINLIGHT)))
 	{
 		return RM_GB_ENT_FORWARD;
 	}
@@ -119,11 +133,17 @@ rm_rtm_color(const float *light, float dot, int flags, int rdflags, float time, 
 	rgba[3] = alpha / 255.0f;
 }
 
-void
-rm_rtm_tag_verts(rm_avert_t *v, long n, unsigned f)
+int
+rm_rtm_tag_verts(rm_avert_t *v, long n, unsigned f, int extra_ok)
 {
 	const mtl_rgba_t c = mtl_rtm_tag(f);
 	long i;
+
+	/* a model without its normals is not traced: its own colour stays, never a tag */
+	if (!extra_ok)
+	{
+		return 0;
+	}
 
 	for (i = 0; i < n; i++)
 	{
@@ -132,6 +152,8 @@ rm_rtm_tag_verts(rm_avert_t *v, long n, unsigned f)
 		v[i].color[2] = c.b;
 		v[i].color[3] = c.a;
 	}
+
+	return 1;
 }
 
 int
@@ -156,4 +178,34 @@ int
 rm_rtm_weapon_unproject(const rm_rts_view_t *v, float px, float py, float d, float *out)
 {
 	return rm_rts_unproject(v, px, py, mtl_rtm_weapon_depth(d), out);
+}
+
+int
+rm_rtm_stats_format(const rm_rtm_stats_t *s, char *buf, int len)
+{
+	int n;
+
+	if (len <= 0)
+	{
+		return 0;
+	}
+
+	if (s->ms >= 0)
+	{
+		n = snprintf(buf, (size_t)len, "ref_metal: rt models: frame %lu: %lu model pixels, %lu shadow rays, "
+				"%lu sky, sun and bounce rays, %.3f ms", s->frame, s->pixels, s->rays, s->open, s->ms);
+	}
+	else
+	{
+		n = snprintf(buf, (size_t)len, "ref_metal: rt models: frame %lu: %lu model pixels, %lu shadow rays, "
+				"%lu sky, sun and bounce rays, - ms", s->frame, s->pixels, s->rays, s->open);
+	}
+
+	if ((n < 0) || (n >= len))
+	{
+		buf[0] = '\0';
+		return 0;
+	}
+
+	return 1;
 }

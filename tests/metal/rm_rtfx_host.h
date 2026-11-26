@@ -96,6 +96,7 @@ RM_RTFX_HOST_SCENE(RM_RTAO, "ao")
 RM_RTFX_HOST_SCENE(RM_RTSun, "sun")
 RM_RTFX_HOST_SCENE(RM_RTW, "water")
 RM_RTFX_HOST_SCENE(RM_RTDir, "direct")
+RM_RTFX_HOST_SCENE(RM_RTModel, "models")
 
 /* the backend's, each under the entry it is in its row */
 RM_RTFX_HOST_IO(rmb_rts_fx_trace, "shadows:trace")
@@ -111,5 +112,6 @@ RM_RTFX_HOST_IO(rmb_rtw_fx_bind, "water:bind")
 RM_RTFX_HOST_VOID(rmb_rtw_view_end, "water:view_end")
 RM_RTFX_HOST_IO(rmb_rtdir_fx_trace, "direct:trace")
 RM_RTFX_HOST_IO(rmb_rtdir_fx_show, "direct:show")
+RM_RTFX_HOST_IO(rmb_rtmodel_fx_trace, "models:trace")
 
 #endif
