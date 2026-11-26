@@ -136,5 +136,28 @@ expect_refused "in a symlinked action"
 mutant_tree
 printf '    - uses: Homebrew/actions/setup-homebrew@%s\n' 0123456789012345678901234567890123456789 >> "$mut/t/.github/workflows/macos.yml"
 expect_refused "uses: Homebrew/actions"
+mutant_tree
+mkdir -p "$mut/t/docs/x"
+printf '    - run: brew install make\n' > "$mut/t/docs/x/action.yml"
+printf '    - uses: ./docs/x\n' >> "$mut/t/.github/workflows/macos.yml"
+expect_refused "in an action under docs/"
+mutant_tree
+mkdir -p "$mut/t/docs"
+printf 'brew install make\n' > "$mut/t/docs/x.sh"
+expect_refused "in a script under docs/"
+mutant_tree
+mkdir -p "$mut/t/docs"
+printf 'brew install make\n' > "$mut/t/docs/real.yml"
+ln -s ../../../docs/real.yml "$mut/t/.github/actions/x/link.yml"
+rm "$mut/t/.github/actions/x/action.yml"
+expect_refused "in an action symlinked into docs/"
+mutant_tree
+mkdir -p "$mut/t/docs/a/b" "$mut/t/doc/c"
+printf 'brew install make\n' > "$mut/t/docs/a/b/note.md"
+printf 'brew install make\n' > "$mut/t/doc/c/note.md"
+if [ -n "$(brew_scan_tree "$mut/t")" ]; then
+	echo "check-removed-deps: a nested prose file under doc/ or docs/ was not excluded"
+	fail=1
+fi
 [ "$fail" -eq 0 ] && echo "check-removed-deps: ok"
 exit "$fail"
