@@ -66,32 +66,36 @@ if [ -n "$hits" ]; then
 	fail=1
 fi
 # Homebrew: the owner has not approved it anywhere, CI included, and macOS
-# needs nothing beyond Xcode's toolchain. No workflow, local action or CI
-# script runs brew (a run: line or block, /opt/homebrew/bin/brew,
-# /usr/local/bin/brew, a Homebrew action) or Homebrew's gmake; the build
-# calls Xcode's make. Deliberately loose (any case, no word bounds): an
-# over-refusal is fixed by rewording, a false pass is not.
+# needs nothing beyond Xcode's toolchain. The scan covers every tracked file,
+# so every place CI can run something from (workflows, local actions wherever
+# they live, scripts, tests, the Makefile) and a symlink's target is scanned
+# as itself; untracked files are ignored, like the rest of this check. Only
+# prose (doc/, docs/, CLAUDE.md), vendored code (third_party/) and this file
+# are left out. Deliberately loose (any case, no word bounds): an over-refusal
+# is fixed by rewording, a false pass is not.
 brew='brew|gmake'
-brew_scan()
+brew_excludes=':!doc :!docs :!third_party :!CLAUDE.md :!tests/check-removed-deps.sh'
+# brew_scan_tree DIR: DIR is the repository (tracked files) or, for a mutant,
+# a scratch tree scanned with --no-index.
+brew_scan_tree()
 {
 	rc=0
-	out=$(grep -rIiE "$brew" "$@" 2>/dev/null) || rc=$?
+	if [ "$1" = . ]; then
+		out=$(git grep -I -i -n -E "$brew" -- . $brew_excludes 2>/dev/null) || rc=$?
+	else
+		out=$(cd "$1" && git grep --no-index -I -i -n -E "$brew" -- . $brew_excludes 2>/dev/null) || rc=$?
+	fi
 	if [ "$rc" -gt 1 ]; then
-		echo "check-removed-deps: grep failed (status $rc): the Homebrew scan did not run" >&2
+		echo "check-removed-deps: git grep failed (status $rc): the Homebrew scan did not run" >&2
 		exit 1
 	fi
 	printf '%s' "$out"
 }
 
-brew_scan_tree()
-{
-	(cd "$1" && brew_scan .github scripts/ci-*.sh)
-}
-
-[ -d .github/workflows ] || { echo "check-removed-deps: .github/workflows is missing: the Homebrew scan did not run"; exit 1; }
-hits=$(brew_scan .github scripts/ci-*.sh)
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "check-removed-deps: not a git work tree: the Homebrew scan did not run"; exit 1; }
+hits=$(brew_scan_tree .)
 if [ -n "$hits" ]; then
-	echo "check-removed-deps: Homebrew (brew, gmake) in CI:"
+	echo "check-removed-deps: Homebrew (brew, gmake) in a tracked file:"
 	echo "$hits" | sed 's/^/  /'
 	fail=1
 fi
