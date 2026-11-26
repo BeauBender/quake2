@@ -53,6 +53,8 @@ scenario through it. The cases each of them is held to are in
 | `rtprimary-dlights` | `rtprimary-world` with `cl_lights 1`: the dynamic lights as a term of RT-primary's light, each in range with one shadow ray, by gl1's radius rule; recorded with `PINS_SEED` (the engine PRNG sets a muzzle flash's radius, as in `dlights`), at the default demo and with `PINS_DEMO=demo2.dm2 PINS_EVERY=7`; seeded, a pin as `rtprimary-world`, provisional until the owner accepts the look (TASK188 slice 3b, PM11) |
 | `hdr` | `world` with `r_hdr 1`: `ref_metal`'s float16 frame target, read back as its SDR fallback (each channel clamped to white, in 8 bits); its own reference, not compared with `world`, since float16 blends round once where 8-bit ones round at each layer; other renderers ignore the cvar and draw it as `world` (TASK196, HD2); `r_hdr_peak 1` holds HD3's tone map to that clamp on any display, so the frames do not follow a display's headroom |
 | `hdr-metalfx2` | `hdr` with `r_metalfx 2` at `r_metalfx_scale 0.5`: `MTLFXTemporalScaler` on `ref_metal`'s float16 view and frame, before the tone map; its own reference, not compared with `hdr` or `world-metalfx2`; where the device lacks the scaler `r_metalfx` reads the best supported mode below; other renderers ignore the cvars and draw it as `world` (TASK196, HD4) |
+| `rt-all-metalfx2` | `dlights` with every ray-traced effect of `ref_metal` on, each at its `rt-*` scenario's values (`r_rt_shadows`, `r_rt_ao`, `r_rt_sun`, `r_rt_water`), `r_rt_temporal 0` (explicit, so a later default cannot move this pin; the `rt-*` pins rely on the default of 0), and `r_metalfx 2` at the default `r_metalfx_scale 0`: the effects traced at the scaler's internal size and upscaled by `MTLFXTemporalScaler`; at the harness's 480 lines the default scale is the view's own size (the GPU family's default rows are 720 or 1080), so `r_metalfx_scale 0.5` is recorded from a scratch copy; recorded with `PINS_SEED`, as `dlights`; `demo1.dm2` shows no warped water, so `r_rt_water` is exercised by recording it a second time on `skywater`'s camera path (`PINS_DEMO=water.dm2`), as `rt-water`; where the device lacks the temporal scaler `r_metalfx` reads the best supported mode below; other renderers ignore the cvars and draw it as `dlights` (TASK109) |
+| `rtprimary-metalfx2` | `rtprimary-world` with `r_metalfx 2` at the default `r_metalfx_scale 0`: RT-primary traced at the scaler's internal size and upscaled by `MTLFXTemporalScaler`, `r_rt_temporal 0`; the default scale as `rt-all-metalfx2`; provisional as `rtprimary-world`; other renderers ignore the cvars and draw it as `world` (TASK109) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the GL renderers' screen blend off (`gl_polyblend 0`, TASK82) |
@@ -184,6 +186,8 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `rt-water` | world | `rt-water-entities` |
 | `rt-water-entities` | world,entities,alias-models | `-` |
 | `rt-sun` | world | `models` |
+| `rt-all-metalfx2` | world,dynamic-lights | `particles` |
+| `rtprimary-metalfx2` | world | `models` |
 
 TASK55 adds `rt-shadows` (tags `world`, `dynamic-lights`; companion
 `rt-shadows-entities`) and `rt-shadows-entities` (tags `world`, `entities`,
