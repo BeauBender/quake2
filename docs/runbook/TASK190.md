@@ -178,6 +178,10 @@ summed light is denoised, not each term) and 10 (the water blur runs under RT-pr
   `rt direct temporal` times both. The pipeline is made with the accumulation's and released when the pass
   closes; one that cannot be made is latched (`ref_metal: rt temporal: no direct-light denoise pipeline`) and
   the light is then accumulated alone. It allocates nothing.
+- **The size guard.** The filter reads the G-buffer's normal and material at its neighbours, not only at the
+  pixel, so `rmb_rtdir_accumulate` also requires `normal` and `material` to be the light's size before it
+  dispatches (added in review; slice 1's note above). They are G-buffer attachments made at one size, so this
+  changes no frame today.
 - **The count.** `mtl_rtp_reject` also rejects a history whose count is past `MTL_RTT_COUNT_MAX`, infinite
   included (`MTL_RTP_REJ_BAD`), so no count can make the blend a NaN (slice 1's note).
 - **The water.** `rm_rtt_wblur` is removed and the scene calls `rmb_rtw_set_blur(RM_RTT_On())`: the blur

@@ -929,7 +929,8 @@ rmb_rtdir_accumulate(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture>
 	tview_set = 0;
 
 	if (!dir_open || !tmp_pipe || !t_hist[0] || !t_hist[1] || !t_key[0] || !t_key[1] || !t_acc || (t_acc.width != w) ||
-		(t_acc.height != h) || !mv || (mv.width != w) || (mv.height != h) || (depth.width != w) || (depth.height != h))
+		(t_acc.height != h) || !mv || (mv.width != w) || (mv.height != h) || (depth.width != w) || (depth.height != h) ||
+		(normal.width != w) || (normal.height != h) || (material.width != w) || (material.height != h))
 	{
 		return nil;
 	}
