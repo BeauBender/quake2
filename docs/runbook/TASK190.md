@@ -209,6 +209,49 @@ summed light is denoised, not each term) and 10 (the water blur runs under RT-pr
   draw nothing this slice changes, and every other `rtprimary-*` sets `r_rt_temporal 0`, so neither the
   accumulation, the filter nor the water's blur runs there.
 
+## Slice 2 hold
+
+Run by the orchestrator; the numbers below are its `task190s2-summary.log`'s.
+
+- Builds, `make test` and the checks: the hold ran at `e778d9b6a956`, on main `157f1a346d25` (main not
+  merged into the branch; main's tree built separately as the base); every build and every check exited 0.
+  `make test`: 591 tests, 0 failed. `check-ref-metal`: ok, 13162 checks, 0 failed, with the RT-primary filter
+  at 35 checks, 0 failed, 5 rule mutants, and 3 kernel pins with 4 kernel mutants refused and compiled, and
+  the blur under every presentation pinned with 2 mutants refused. The cvar-docs, runbook-index, doc-links,
+  video-menu, pin-chars and scenario-parsers checks: ok.
+- The stock pins at `r_presentation 0`, against main: 30 of 30 stock scenarios byte-identical to the base
+  (30 scenarios on each side, 0 failed).
+- Every other RT-primary record (at `r_rt_temporal 0` by its scenario) against main: 12 of 12 records
+  byte-identical to main's.
+
+  | Record | Frames | Hash (branch and main) |
+  |---|---|---|
+  | `rtprimary-world` | 23 | `c2d7b7d94e6c` |
+  | `rtprimary-direct` | 23 | `8975350df42b` |
+  | `rtprimary-vis` | 23 | `469ce42fec8c` |
+  | `rtprimary-noshadow` | 23 | `b3d10fafdc08` |
+  | `rtprimary-sky` | 23 | `9acbe75f592b` |
+  | `rtprimary-sun` | 23 | `6f6c37b9a084` |
+  | `rtprimary-bounce` | 23 | `e2a45f031fcc` |
+  | `rtprimary-metalfx2` | 23 | `b03c73ee59d1` |
+  | `rtprimary-world` on `demo2.dm2` | 89 | `a254ac92e157` |
+  | `rtprimary-world` on `water.dm2` | 4 | `e73ffa9aea7d` |
+  | `rtprimary-dlights` | 23 | `6d01f9bb9bca` |
+  | `rtprimary-dlights` on `demo2.dm2` | 89 | `8f8b43a1f6ee` |
+
+- `rtprimary-denoise` at `demo1.dm2`: three branch runs of 23 frames, `371419d919dd` in all three, 0 of 23
+  frames differ between run 1 and 2 and between run 1 and 3. Main's code (the accumulation alone) records
+  `d9428ae6ae4f`: 23 of 23 frames differ from the branch's.
+- `rtprimary-denoise` on `water.dm2` (the same demo file on both sides, `6a7eaf9ec2bb`): two branch runs of 4
+  frames, `b5cc3f8dd8bf` in both, 0 of 4 frames differ between them. Main's code (no blur under RT-primary)
+  records `d728871280c4`: 4 of 4 frames differ from the branch's.
+- The engine lines: at `demo1.dm2`, `ref_metal: rt temporal direct 640x480: 12369920 bytes allocated`, and 0
+  `no direct-light denoise pipeline` lines. On `water.dm2`, `ref_metal: rt temporal direct 640x480: 12369920
+  bytes allocated`, `ref_metal: rt water 640x480: 3883008 bytes allocated` and `ref_metal: rt water blur
+  640x480: 1327104 bytes allocated`.
+- Frames for the owner (`demo1.dm2` captures 21, 22 and 12, filtered and accumulated alone; `water.dm2`
+  captures 1 and 3, the blur on and off) were set aside for the owner and not committed.
+
 ## Left for the next slices
 
 - Slice 3: the scaler through the overlay (`r_metalfx 2` in `pres_rtprimary`).
