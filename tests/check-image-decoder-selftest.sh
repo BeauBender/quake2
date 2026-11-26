@@ -55,6 +55,14 @@ cleanup()
 			end_own "$_p" "$_n"
 		done < "${tmp:?}/pids"
 	fi
+	# the group run_apart made, if the self-test ends before end_apart
+	if [ -f "${tmp:?}/apart.pid" ]; then
+		read -r _p < "${tmp:?}/apart.pid" || _p=
+		_c=$(ps -o comm= -p "${_p:-0}" 2>/dev/null || :)
+		case ${_c##*/} in
+			perl*) kill -KILL -- "-$_p" 2>/dev/null || : ;;
+		esac
+	fi
 	# a target a stub stopped, whichever program it was (a red run leaves one)
 	for _f in "${tmp:?}/stop.pids" "${tmp:?}/late.pids"; do
 		[ -f "$_f" ] || continue
@@ -102,6 +110,54 @@ run()
 	rc=0
 	env PATH="${tmp:?}/$_d:$PATH" IMGDEC_CHECK_SECONDS=8 IMGDEC_LEAKS_PROBE_SECONDS=2 "$@" \
 		perl -e 'alarm shift; exec @ARGV' "$secs" sh "$check" > "${tmp:?}/out" 2>&1 || rc=$?
+}
+
+# run_apart <stub> [VAR=value...]: run, for a run that leaves a target
+# stopped (case (h)), with the check in a process group of its own. A
+# process group that holds a stopped member gets SIGHUP and SIGCONT from the
+# kernel when it becomes orphaned (POSIX): in this self-test's own group that
+# HUP would end the self-test, and in an orphaned group of the run's the CONT
+# would let the target run on. So the group's leader, an anchor whose parent
+# is this self-test, outlives the check until end_apart ends the whole group
+# at once: the group is never orphaned while it holds a stopped member. Its
+# status in $rc, the group (the anchor's pid) in $apart.
+run_apart()
+{
+	_d=$1
+	shift
+	rm -f "${tmp:?}/apart.ctl"
+	mkfifo "${tmp:?}/apart.ctl"
+	env PATH="${tmp:?}/$_d:$PATH" IMGDEC_CHECK_SECONDS=8 IMGDEC_LEAKS_PROBE_SECONDS=2 "$@" \
+		perl -MPOSIX=pause -e '
+			setpgrp(0, 0) or exit 125;
+			alarm 2 * shift;
+			my $ctl = shift;
+			my $c = fork;
+			defined $c or exit 125;
+			if ($c == 0) { exec @ARGV; exit 127; }
+			waitpid($c, 0);
+			my $st = ($? & 127) ? 128 + ($? & 127) : $? >> 8;
+			open(my $w, ">", $ctl) or exit 125;
+			print $w "$st\n";
+			close $w;
+			pause;
+		' "$secs" "${tmp:?}/apart.ctl" perl -e 'alarm shift; exec @ARGV' "$secs" sh "$check" > "${tmp:?}/out" 2>&1 &
+	apart=$!
+	echo "$apart" > "${tmp:?}/apart.pid"
+	rc=$(perl -e 'alarm shift; open(F, "<", shift) or exit 2; print scalar <F>' "$((secs + 10))" "${tmp:?}/apart.ctl") || rc=
+	[ -n "$rc" ] || rc=125
+}
+
+# end_apart: ends the group run_apart made, every process in it at once
+# (the anchor, and any target the run left stopped), and reaps the anchor
+end_apart()
+{
+	_c=$(ps -o comm= -p "$apart" 2>/dev/null || :)
+	case ${_c##*/} in
+		perl*) kill -KILL -- "-$apart" 2>/dev/null || : ;;
+	esac
+	{ wait "$apart"; } 2>/dev/null || :
+	rm -f "${tmp:?}/apart.pid"
 }
 
 # gone <pidfile> <name>: every PID the stub recorded no longer runs <name>
@@ -329,7 +385,7 @@ real=$check
 if mutant plainkill 's|^[[:space:]]*"\$sv" --timeout .*$|( "$@" \& _p=$!; ( sleep "$limit"; kill "$_p" 2>/dev/null ) \& wait "$_p" ) \|\| rc=$?|' h; then
 	check=${tmp:?}/plainkill/tests/check-image-decoder.sh
 	rm -f "${tmp:?}/stop.pids"
-	run stop
+	run_apart stop
 	check=$real
 	# the positive control: a mutant that never reached its probe would
 	# leave no stop.pids, which gone reads as "not gone"
@@ -351,7 +407,13 @@ if mutant plainkill 's|^[[:space:]]*"\$sv" --timeout .*$|( "$@" \& _p=$!; ( slee
 			fail "(h) the mutant's stopped target (pid $_p) is in the self-test's own process group"
 		fi
 	done < "${tmp:?}/stop.pids"
-	end_own "$(cat "${tmp:?}/stop.pids" 2>/dev/null | head -n 1)" leakprobe
+	end_apart
+	while read -r _p; do
+		_c=$(ps -o comm= -p "$_p" 2>/dev/null || :)
+		case ${_c##*/} in
+			leakprobe | imgdecode_plain) fail "(h) the mutant's stopped target (pid $_p) outlived the end of its group" ;;
+		esac
+	done < "${tmp:?}/stop.pids"
 fi
 
 # (i) --events dropped: the escaped helper is not named, which case (g) refuses
