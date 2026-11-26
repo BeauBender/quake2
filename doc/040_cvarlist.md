@@ -94,7 +94,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   a relatively high CPU usage. If set to `0` Quake II lays itself to
   sleep and tells the operating system to send a wakeup signal when it's
   time for the next frame. The latter is more CPU friendly but can be
-  rather inaccurate, especially on Windows. Use with care.
+  rather inaccurate. Use with care.
 
 * **sv_optimize_sp_loadtime** / **sv_optimize_mp_loadtime**: These cvars
   enable/disable optimizations that speed up level load times (or more
@@ -258,8 +258,8 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   both `coop` and `deathmatch` are forced to `0` and `maxclients` is
   forced to `1`. This can be used to run a dedicated server with an old
   single player mod, where the source code isn't available, inside a
-  Windows 98 or XP VM and connect over network from a non Windows
-  system.
+  virtual machine running an old operating system and connect over
+  network from another system.
 
 * **coop_pickup_weapons**: In coop a weapon can be picked up only once.
   For example, if the player already has the shotgun they cannot pickup
@@ -316,20 +316,20 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   By default this is set to `0`, this keeps the original machine gun 
   recoil in single player. When set to `1` the recoil is disabled in
   single player, the same way as in multiplayer.  
-  This cvar only works if the game.dll implements this behaviour.
+  This cvar only works if the game library implements this behaviour.
 
 * **g_quick_weap**: If set to `1`, both *weapprev* and *weapnext*
   commands will "count" how many times they have been called, making
   possible to skip weapons by quickly tapping one of these keys.
-  By default this cvar is set to `1`, and will only work if the
-  game.dll implements this behaviour.
+  By default this cvar is set to `1`, and will only work if
+  the game library implements this behaviour.
 
 * **g_swap_speed**: Sets the speed of the "changing weapon" animation.
   Default is `1`. If set to `2`, it will be double the speed, `3` is
   the triple... up until the max of `8`, since there are at least 2
   frames of animation that will be played compulsorily, on every weapon.
   Cheat-protected, has to be a positive integer. As with the last one,
-  will only work if the game.dll implements this behaviour.
+  will only work if the game library implements this behaviour.
 
 * **g_disruptor (Ground Zero only)**: This boolean cvar controls the
   availability of the Disruptor weapon to players. The Disruptor is
@@ -591,8 +591,8 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   When set to `0` the client leaves the decision if the window should
   be scaled to the underlying compositor. Scaling applied by the
   compositor may introduce blur and sluggishness.  
-  High dpi awareness is supported under Wayland and on Apple platforms
-  (macOS, iOS, iPadOS, tvOS and visionOS). On a Retina display of
+  High dpi awareness is supported on Apple platforms (macOS, iOS,
+  iPadOS, tvOS and visionOS). On a Retina display of
   scaling factor 2 a 640x480 window draws 1280x960 pixels and the
   default 2D scale is 2, so menus, console and HUD keep their size on
   the screen; with `0` it draws 640x480 pixels, which the system
