@@ -1613,8 +1613,10 @@ c_drop() {
 	[ "$_prs" -eq 143 ] || { say "drop: status $_prs, want 143"; return 1; }
 	[ -z "$_pleft" ] || { say "drop: left running:$_pleft"; return 1; }
 	[ "$_pcs" = 'TERM ' ] && [ "$_pgs" = 'TERM ' ] || { say "drop: the running check and its grandchild must each get one SIGTERM"; return 1; }
-	[ "$_pbef" -gt 0 ] || { say "drop: the ps shim saw no call on the first check's pid (the shim is not in use)"; return 1; }
-	[ "$_paft" -eq 0 ] || { say "drop: the stop on the way out asked about the first check's pid again ($_paft ps calls): it was still in the running list after its record went"; return 1; }
+	# the supervisor owns each check's identity and reap (TASK221): the
+	# scheduler asks ps nothing about a check, before the SIGTERM or after
+	grep -q . "$_pd/ps.log" || { say "drop: the ps shim saw no call at all (the shim is not in use)"; return 1; }
+	[ "$_pbef" -eq 0 ] && [ "$_paft" -eq 0 ] || { say "drop: the scheduler asked ps about the first check's pid ($_pbef ps calls before the SIGTERM, $_paft after)"; return 1; }
 }
 # dropabsent: gate_drop, taken from the scheduler, on a list of two entries
 c_dropabsent() {
@@ -1750,13 +1752,20 @@ mutant no-checks errors 'if [ $# -eq 0 ]; then' 'if false; then'
 # case's own scratch and does not exist, so every write fails there
 mutant no-scratch errors '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX") ||' '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX" || echo "${TMPDIR:?}/gate.none") ||'
 mutant guard-off guard 'if [ "$_gnext" -le "$_gn" ]; then' 'if false; then'
-mutant no-process-group interrupt '	set -m' '	:'
+# the check run without its supervisor (TASK221): what the deleted set -m
+# job, its trap - TTOU and gate_end at the reap covered, the supervisor now
+# covers, so each of those cases fails without it
+mutant no-supervisor interrupt '"$gate_sv" --grace "$gate_grace" --name "${_gsc##*/}" -- "$_gsc"' '"$_gsc"'
+mutant no-supervisor-leave leave '"$gate_sv" --grace "$gate_grace" --name "${_gsc##*/}" -- "$_gsc"' '"$_gsc"'
+mutant no-supervisor-killgrace killgrace '"$gate_sv" --grace "$gate_grace" --name "${_gsc##*/}" -- "$_gsc"' '"$_gsc"'
+mutant no-supervisor-sigs sigs '"$gate_sv" --grace "$gate_grace" --name "${_gsc##*/}" -- "$_gsc"' '"$_gsc"'
+mutant grace-unpassed interrupt '--grace "$gate_grace"' '--grace 3600'
 mutant grace-3s interrupt 'gate_grace=10' 'gate_grace=3'
 mutant grace-3s-stop stop 'gate_grace=10' 'gate_grace=3'
-mutant no-stop stop '	bench_stop_groups "$gate_grace" group "$@" || :' '	:'
+mutant no-stop stop '	for _gep; do kill -s TERM "$_gep" 2> /dev/null || :; done' '	:'
+mutant no-stop-wait interrupt '	for _gep; do wait "$_gep" 2> /dev/null || :; done' '	:'
 mutant stderr-closed-unguarded-sched stopnoerr '{ :; } 8>&2 2> /dev/null || exec 2> /dev/null' ':'
 mutant no-parent-check kgrp 'if [ -n "$_gparent" ] && ! gate_parent "$_gparent"; then' 'if false; then'
-mutant no-end-at-exit leave '			gate_end "$_grpid"' '			:'
 intmut mutant int-passes interrupt "trap 'exit 130' INT" "trap 'exit 0' INT"
 mutant term-goes-on interrupt1 "trap 'exit 143' TERM" "trap ':' TERM"
 mutant term-passes interrupt1 "trap 'exit 143' TERM" "trap 'exit 0' TERM"
@@ -1764,24 +1773,30 @@ mutant hup-passes interrupt1 "trap 'exit 129' HUP" "trap 'exit 0' HUP"
 
 # mutants of the bounded-run primitive the scheduler sources (FIX186):
 # cmutant <name> <case> <old> <new>, the scheduler as it is beside it
+# cmutant <name> <case> <old> <new>: the scheduler with a supervisor built
+# from scripts/lib/supervise.c with <old> replaced, in a tool cache of its
+# own, must fail <case> (TASK221: the stop's TERM, CONT and KILL are the
+# supervisor's)
 cmutant() {
 	_cm=$tmp/cm-$1
-	mkdir -p "${_cm:?}/bench/core"
+	mkdir -p "${_cm:?}/bench/core" "${_cm:?}/lib" "${_cm:?}/cache"
 	cp "$real" "$_cm/gate-checks.sh"
-	lit "$top/scripts/bench/core/common.sh" "$3" "$4" > "$_cm/bench/core/common.sh" ||
-		{ bad "mutant $1 does not apply to scripts/bench/core/common.sh"; return 0; }
-	SCHED=$_cm/gate-checks.sh quiet=1
+	cp "$top/scripts/bench/core/common.sh" "$_cm/bench/core/common.sh"
+	cp "$top/scripts/lib/supervise.sh" "$_cm/lib/supervise.sh"
+	lit "$top/scripts/lib/supervise.c" "$3" "$4" > "$_cm/lib/supervise.c" ||
+		{ bad "mutant $1 does not apply to scripts/lib/supervise.c"; return 0; }
+	chmod 700 "$_cm/cache"
+	SCHED=$_cm/gate-checks.sh quiet=1 SUPERVISE_CACHE=$_cm/cache
 	if "c_$2"; then bad "mutant $1 was not caught by case $2"; else mutants=$((mutants + 1)); fi
-	SCHED=$real quiet=0
+	SCHED=$real quiet=0 SUPERVISE_CACHE=$(dirname "$_gsv")
 }
-cmutant group-kill-dropped interrupt 'kill -s "$1" -- "-$2" 2> /dev/null' 'kill -s "$1" -- "$2" 2> /dev/null'
-cmutant no-kill-after-grace interrupt 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
-cmutant no-kill-after-grace-stop stop 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
-cmutant no-cont stop 'bench_signal_group CONT "$_sg_p" "$_sg_o" || true' ':'
-# gate_drop (FIX186, slice 2): emptied, the first of two checks ended in one
-# poll is still in the running list when a signal comes in the second's
-# grace; absent-entry guard dropped, an absent entry doubles the list
-mutant drop-emptied drop '	_grun="${_gdr%% "$1" *} ${_gdr#* "$1" }"' '	:'
+cmutant group-kill-dropped interrupt 'kill(-sv_leader, sig) < 0' 'kill(sv_leader, sig) < 0'
+cmutant no-kill-after-grace interrupt '		sv_group(SIGKILL, "kill-sent");' '		sv_group(0, "kill-sent");'
+cmutant no-kill-after-grace-stop stop '		sv_group(SIGKILL, "kill-sent");' '		sv_group(0, "kill-sent");'
+cmutant no-cont stop '	sv_group(SIGCONT, NULL);' '	(void)0;'
+# gate_drop (FIX186, slice 2): absent-entry guard dropped, an absent entry
+# doubles the list. (Its drop-emptied mutant went with TASK221: the reap
+# waits no grace any more, so no signal can come in one.)
 mutant drop-absent-doubles dropabsent '	case " $_grun " in *" $1 "*) ;; *) return 0 ;; esac' '	:'
 
 # mutants of scripts/test.sh: wmut <name> <case> <old> <new>
@@ -1797,13 +1812,10 @@ wmut wiring-subset wiring 'scripts/gate-checks.sh "$gate_serial" "$gate_first" t
 wmut wiring-no-errexit wiring 'set -eu' 'set -u'
 wmut stop-not-passed testsh '		kill -s TERM "$gate_sched" 2> /dev/null || :' '		:'
 wmut stop-passes testsh "trap 'gate_stop 143' TERM" "trap 'gate_stop 0' TERM"
-mutant ttou-to-checks sigs '	trap - TTOU' '	:'
 # (the two re-ignores: the one in gate_start is told apart by its comment)
-mutant ttou-after-start tty "trap '' TTOU # the scheduler again" ':'
 mutant ttou-scheduler tty "trap '' TTOU" ':' "	trap '' TTOU #"
 # (the shell's standard error left on the terminal for the fork of a check,
 # and of the scheduler; the scheduler's own standard error lost with it)
-mutant start-stderr-on-tty ttyfork '{ "$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 & } 2> /dev/null' '"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &'
 wmut sched-stderr-on-tty ttyfork '{ 2>&3 3>&- GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh & } 3>&2 2> /dev/null' 'GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &'
 wmut sched-stderr-lost wiring '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
 wmut sched-stderr-lost-run watchfork '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
