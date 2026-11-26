@@ -1816,7 +1816,9 @@ is.
   default) shows the picture; a value above `2` counts as `2`, one that
   is not a finite number as `0`, and a fraction is cut to the whole
   number below it. Ray traced (`r_presentation 3`) reads `r_metalfx` as
-  `0` while a view is asked for, so it is drawn unscaled. Cheat-protected: reset to `0` in multiplayer. Applies
+  `0` while a view is asked for, so it is drawn unscaled; it goes by the
+  value alone, so the scaler stays off on a map without water too, where
+  no view is drawn. Cheat-protected: reset to `0` in multiplayer. Applies
   from the next frame.
 
 

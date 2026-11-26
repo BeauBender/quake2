@@ -380,6 +380,45 @@ Run by the orchestrator at `f89121ee19fc`, on main `d580216f8033` (merged), with
 - Frames for the owner (`rtprimary-overlayfx` captures 21, 22 and 12, branch and base) were set aside for the
   owner and not committed. 0 untracked files left.
 
+## Slice 3, review round 1
+
+- **Two views in one frame (I1).** The menu's player model (`RDF_NOWORLDMODEL`) is a second view drawn over the
+  running world. `RM_PresBelow` sized it on its own, so with a world view taller than the default rows and the
+  model's shorter (688 lines at menu scale 4) `r_metalfx` read `2` for the world and `0` for the model, and
+  `RM_FX_Read` freed and remade the temporal scaler every frame. `RM_PresBelow` now returns for that view, which
+  takes the forward path and is never scaled, so it keeps the world view's value.
+  - `tests/metal/rm_rttab_test.c` now also runs the real text of `RM_PresBelow` (and of `rm_view_rect`, from
+    `rm_pure.c`) over the real `rm_fx_scale`: views at `viewsize` 100, 80, 75 and 70 on 1440 lines (`2`, `2`,
+    then the default rows or fewer, the player's `0`), a 1080-line window, an odd height, a scale of its own, and
+    three frames of world then model. Red before the fix (3 of 34 checks failed, all on the model's view), then
+    34 checks, 0 failed.
+  - `check-ref-metal` refuses a third mutant, the early return dropped, and requires its failure on the two-view
+    case (3 of 34 failed).
+- **The menu and the debug view (N2).** `VidRules_MetalFXDecided` takes the Tuning screen's debug view
+  (`VidRules_DebugView`'s numbering; `videomenu.c` finds the chosen one with `DebugViewChosen`) and, under Ray
+  traced with the temporal scaler, reads `0`, "off: the debug view is drawn unscaled", for the view of an effect
+  the mode runs: the water's. The views of shadows, sun and AO (effects Ray traced does not run) and the G-buffer's
+  (no row of the effect table) leave the temporal scaler, as in the renderer. A change of debug view re-reads the
+  Tuning screen's values, so the scaler row shows the value in use at once.
+  - `tests/metal/rm_pres_menu_test.c` adds every debug view to its grid, the renderer's side counting a view
+    when its cvar is the `_show` of a row of the effect table that the mode runs (through the real
+    `rm_pres_value`): red before the rule (1218 failed), then 337933 checks, 0 failed. A sixth mutant, the
+    menu's debug-view rule dropped, is refused (1218 failed).
+  - `tests/menu/videomenu_test.c` expects the main menu's scaler greyed "off: the debug view is drawn unscaled"
+    with `r_rt_water_show 1`, and "temporal" with `r_rt_ao_show 1`: 3411 checks, 0 failed.
+  - The menu has no row for `r_rt_direct_show`, so it does not see that view; `doc/040_cvarlist.md` says so.
+- **The documentation (N4, spec N1).** `doc/040_cvarlist.md` now says the menu's guess is wrong too when
+  `viewsize` below 100 shrinks the 3D view to the default rows or fewer, that `r_rt_water_show` turns the scaler
+  off as `r_rt_direct_show` does (both entries say so), and that the player model keeps the world's value.
+- **Asked, not shown (N1): kept, by choice.** `RM_RTW_ShowAsked` and `RM_RTDir_ShowAsked` go by the effect being
+  wanted and the `_show` cvar alone, not by `_ShowOnly`'s per-frame state (the map's water present, the pass
+  active, a view drawn). So with `r_rt_water_show` set on a map without water, and during load frames, the
+  scaler reads `0` while no development view is drawn: the picture is drawn unscaled, which is a correct picture.
+  Following `_ShowOnly` would make the scaler follow state that changes from frame to frame, water coming into
+  and out of view as the player turns, and free and remake the scaler each time, the class of I1. The menu
+  reads the same cvars, so the two agree, and both views are development cvars (cheat-protected, reset to `0` in
+  multiplayer). `doc/040_cvarlist.md`'s `r_rt_water_show` entry says so.
+
 ## Left for the next slices
 
 - Slice 4: the cost table of section 4.5, measured in the owner's quiet window.
