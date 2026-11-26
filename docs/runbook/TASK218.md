@@ -165,3 +165,5 @@ the supervisor and the command) holds only `supervise: ` lines, so no job notice
 
 The mutants run in this check only. The whole check took 3 to 4 s on a development Mac. Thirty runs
 in a row of every case, against the test build and the table of 8, took 5 s, with no failure.
+
+The cases set their own signal dispositions: the runner sets INT, TERM and HUP to their defaults and an empty mask in the child before the exec (a case that wants an ignored signal ignores it itself), because the merge gate runs with INT ignored and the supervisor honours what it inherits.

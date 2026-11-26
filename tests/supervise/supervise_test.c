@@ -184,7 +184,17 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 			unsetenv("SUPERVISE_TEST_CLOCK_FD");
 		}
 		setenv("FAKE_HELLO_FD", "5", 1);
+		/* no case depends on how the gate was started: dispositions and mask are set here */
+		{
+			sigset_t none;
+
+			sigemptyset(&none);
+			sigprocmask(SIG_SETMASK, &none, NULL);
+		}
 		signal(SIGPIPE, SIG_DFL);
+		signal(SIGINT, SIG_DFL);
+		signal(SIGTERM, SIG_DFL);
+		signal(SIGHUP, SIG_DFL);
 		if (chldign)
 		{
 			signal(SIGCHLD, SIG_IGN);
