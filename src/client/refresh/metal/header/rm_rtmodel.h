@@ -41,6 +41,7 @@
 #include "rmb.h"
 #include "rm_gbuf.h"
 #include "rm_rtshadow.h"
+#include "rm_rtmodelscene.h"
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_rtm_math.h"
 
@@ -54,9 +55,10 @@ int rm_rtm_stock_light(int flags, int rdflags);
 
 /*
  * 1 when an alias model of flags stays stock-lit under the mode for good:
- * rm_rtm_stock_light's, and a model with RF_DEPTHHACK that is not the
- * view weapon (the crosshair model; the weapon has RF_DEPTHHACK too, and
- * slice 3 traces it).
+ * rm_rtm_stock_light's, a model with RF_DEPTHHACK that is not the view
+ * weapon (the crosshair model), and a view weapon without RF_DEPTHHACK,
+ * whose depth is not the 0 .. 0.3 the kernel unprojects (the client's
+ * weapon always has it; slice 3 traces it).
  */
 int rm_rtm_stock_model(int flags, int rdflags);
 
@@ -65,10 +67,11 @@ int rm_rtm_stock_model(int flags, int rdflags);
  * under the RT-primary presentation when mode is not 0. With mode 0 it is
  * rm_gb_entity_split(flags, kind, shadows) for every input. Under the
  * mode the raster takes what rm_gb_entity_split's raster takes, less the
- * alias models that stay stock-lit (rm_rtm_stock_model) and, in slice 2,
- * an RF_GLOW or RF_MINLIGHT model, whose flags no tag carries yet. The
- * view weapon, a translucent model, a shell and a beam go forward, as now
- * (slice 3 rasters the weapon and tags the flagged models).
+ * alias models that stay stock-lit (rm_rtm_stock_model), and the view
+ * weapon too (slice 3), an alias model alone, without a shadow. An
+ * RF_GLOW or RF_MINLIGHT model is rastered (slice 3), its flags carried
+ * by its tag (rm_rtm_tag_wanted). A translucent model, a shell and a beam
+ * go forward, as now.
  */
 int rm_rtm_entity_split(int flags, int kind, float shadows, int rdflags, int mode);
 
@@ -98,6 +101,23 @@ void rm_rtm_color(const float *light, float dot, int flags, int rdflags, float t
 		const unsigned char *minlight, const unsigned char *gamma, unsigned char alpha, float *rgba);
 
 /*
+ * Slice 3: 1 with the tag flags in *f when a rastered alias draw of a
+ * model of flags writes its tag: under the mode (mode not 0), on a traced
+ * model (rm_rtm_traced, its normals written: extra_ok) that carries a flag
+ * (rm_rtm_flags). Else 0 with *f 0: a model without a flag keeps its own
+ * colour in the light attachment, which reads as no flags.
+ */
+int rm_rtm_tag_wanted(int flags, int rdflags, int extra_ok, int mode, unsigned *f);
+
+/*
+ * Slice 3: whether the view weapon enters the ray-traced scene
+ * (rm_rt_instances' gunshadow): r_rt_gunshadow's gunshadow, never while
+ * the traced models are wanted (models not 0), so no ray meets the
+ * weapon, its own pixels' rays among them.
+ */
+int rm_rtm_gunshadow(int gunshadow, int models);
+
+/*
  * Overwrites the colour of the n vertices v (rm_alias_emit's) with the
  * tag of flags f (mtl_rtm_tag) and returns 1, only when extra_ok (the
  * model's normals were written, rm_gb_alias_extra); else leaves them and
@@ -124,6 +144,14 @@ typedef struct
  */
 int rm_rtm_weapon_view(const rm_rtm_weapon_t *w, const float *world, const rm_viewport_t *vp, const float *eye,
 		rm_rts_view_t *out);
+
+/*
+ * Slice 3: the view weapon's view into the kernel's parameters p: winv its
+ * inverse (rm_rtm_weapon_view's) and weapon 1; all 0 and weapon 0 when
+ * there is none. The other fields are left as they were. weapon's value.
+ */
+int rm_rtm_weapon_params(const rm_rtm_weapon_t *w, const float *world, const rm_viewport_t *vp, const float *eye,
+		rm_rtm_params_t *p);
 
 /* the world position of a weapon pixel (px, py) at stored depth d (0 .. 0.3), as rm_rts_unproject */
 int rm_rtm_weapon_unproject(const rm_rts_view_t *v, float px, float py, float d, float *out);

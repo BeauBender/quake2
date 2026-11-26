@@ -56,8 +56,8 @@
 #     light (common/mtl_rtpd_math.h, TASK190 slice 2), with five mutants of
 #     the header and five pins of rm_rtpdenoise.metal with six mutants,
 #     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
-#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eleven
-#     scratch mutants of the two must fail it, and all eleven must),
+#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; sixteen
+#     scratch mutants of the two must fail it, and all sixteen must),
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -724,14 +724,19 @@ case $r in
 	*) cat "${tmp:?}/out"; bad "tests/metal/rm_rtmodel_test.c failed" ;;
 esac
 # the mutants, each of which must compile and fail the test: the shadedot applied twice, the minlight floor
-# skipped, the glow pulse's sign flipped, the split with the weapon traced, the split with a fullbright model
-# traced, the tag's decode dropping a bit, the weapon unprojected with the view's projection; slice 2's: the
-# weapon's depth hack read as the crosshair's, a glowing or minlight model rastered untagged, a model tagged
-# without its normals, the colour index's NaN and sign guard on the bit pattern dropped
+# skipped, the glow pulse's sign flipped, the split with a fullbright model traced, the tag's decode dropping
+# a bit, the weapon unprojected with the view's projection; slice 2's: the weapon's depth hack read as the
+# crosshair's, a model tagged without its normals, the colour index's NaN and sign guard on the bit pattern
+# dropped; slice 3's: the weapon sent forward again (weapon-forward), a glowing or minlight model sent forward
+# again (flagged-forward), a weapon without its depth hack traced (weapon-nohack), a model without a flag
+# tagged (tag-unflagged), the weapon kept in the ray-traced scene under the traced models (gunshadow-kept), a
+# model read as a wall by the pull-back ray (wall-alias), the weapon view's flag set when there is none
+# (weapon-flag)
 rtm_mutants=0
 if [ -n "$rtm" ]; then
-	for m in shadedot-twice minlight-skipped glow-sign weapon-traced fullbright-traced tag-bit weapon-view-inv \
-		depthhack-weapon untagged-traced tag-no-normals nan-guard; do
+	for m in shadedot-twice minlight-skipped glow-sign fullbright-traced tag-bit weapon-view-inv \
+		depthhack-weapon tag-no-normals nan-guard weapon-forward flagged-forward weapon-nohack tag-unflagged \
+		gunshadow-kept wall-alias weapon-flag; do
 		rtm_tree "${tmp:?}/rtmm"
 		h=${tmp:?}/rtmm/src/client/refresh/metal/common/mtl_rtm_math.h
 		c=${tmp:?}/rtmm/src/client/refresh/metal/rm_rtmodel.c
@@ -741,12 +746,21 @@ if [ -n "$rtm" ]; then
 			minlight-skipped) sed 's/if (f & MTL_RTM_MINLIGHT)/if ((f \& MTL_RTM_MINLIGHT) \&\& 0)/' \
 				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 			glow-sign) sed 's/const float g = s + scale;/const float g = s - scale;/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
-			weapon-traced) sed 's/if (flags & RM_RF_WEAPONMODEL)$/if (0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
 			fullbright-traced) sed 's/return rm_rtm_stock_light(flags, rdflags) || /return (rm_rtm_stock_light(flags, rdflags) \&\& !(flags \& RM_RF_FULLBRIGHT)) || /' \
 				"$rm_dir/rm_rtmodel.c" > "$c" ;;
-			depthhack-weapon) sed 's/((flags & RM_RF_DEPTHHACK) && !(flags & RM_RF_WEAPONMODEL))/(flags \& RM_RF_DEPTHHACK)/' \
+			depthhack-weapon) sed 's/(((flags & RM_RF_DEPTHHACK) != 0) != ((flags & RM_RF_WEAPONMODEL) != 0))/(flags \& RM_RF_DEPTHHACK)/' \
 				"$rm_dir/rm_rtmodel.c" > "$c" ;;
-			untagged-traced) sed 's/&& (flags & (RM_RF_GLOW | RM_RF_MINLIGHT)))$/\&\& 0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			weapon-forward) sed 's/if ((flags & RM_RF_WEAPONMODEL) && (kind != RM_GB_KIND_ALIAS))$/if (flags \& RM_RF_WEAPONMODEL)/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			flagged-forward) sed 's/!= ((flags & RM_RF_WEAPONMODEL) != 0));$/!= ((flags \& RM_RF_WEAPONMODEL) != 0)) || (flags \& (RM_RF_GLOW | RM_RF_MINLIGHT));/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			weapon-nohack) sed 's/(((flags & RM_RF_DEPTHHACK) != 0) != ((flags & RM_RF_WEAPONMODEL) != 0))/((flags \& RM_RF_DEPTHHACK) \&\& !(flags \& RM_RF_WEAPONMODEL))/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			tag-unflagged) sed 's/ || (rm_rtm_flags(flags) == 0u))$/)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			gunshadow-kept) sed 's/return gunshadow && !models;/return gunshadow \&\& (models >= 0);/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			weapon-flag) sed 's/p->weapon = (unsigned)rm_rtm_weapon_view(/p->weapon = 1u | (unsigned)rm_rtm_weapon_view(/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			wall-alias) sed 's/return !alias && (mat != 3u)/return (alias >= 0) \&\& (mat != 3u)/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 			tag-no-normals) sed 's/if (!extra_ok)$/if (!extra_ok \&\& 0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
 			tag-bit) sed 's/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) & MTL_RTM_FLAGS;/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) \& 3u;/' \
 				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
@@ -767,7 +781,7 @@ if [ -n "$rtm" ]; then
 			rtm_mutants=$((rtm_mutants + 1))
 		fi
 	done
-	[ "$rtm_mutants" -eq 11 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 11 model-light mutants"
+	[ "$rtm_mutants" -eq 16 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 16 model-light mutants"
 fi
 # slice 2's review: under Metal the colour index's guard reads the bit pattern by as_type, which fast math
 # does not fold (the host test sees only the host's union); the index tests the pattern, not the float
@@ -785,7 +799,7 @@ if [ "$(grep -cxF '#define MTL_RTM_ABOVE(s) ((s) >= MTL_RTM_FLOOR)' "$rm_dir/com
 		"$rm_dir/common/mtl_rtm_math.h" | grep -qF '>= MTL_RTM_FLOOR'; then
 	bad "common/mtl_rtm_math.h: the minlight floor's test under Metal is not s >= 0.1f"
 fi
-seg 7.9 "; model light ${rtm:-host test}, $rtm_mutants of 11 mutants refused"
+seg 7.9 "; model light ${rtm:-host test}, $rtm_mutants of 16 mutants refused"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)

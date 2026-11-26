@@ -23,13 +23,16 @@
  * rm_alias_color (rm_pure.c) to the bit, the split under the mode held to
  * rm_gb_entity_split, which models are traced, the tag through 8- and
  * 16-bit stores, the view weapon's unprojection against its own
- * projection and the pull-back point. Run by tests/check-ref-metal.sh
+ * projection and the pull-back point; slice 3's tag rule, the weapon's
+ * kernel parameters, the wall a pull-back ray stops at and the weapon
+ * kept out of the ray-traced scene. Run by tests/check-ref-metal.sh
  * from the repository's top directory.
  *
  * =======================================================================
  */
 
 #include <float.h>
+#include <stddef.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +40,9 @@
 
 #include "../../src/client/refresh/metal/header/rm_rtmodel.h"
 #include "../../src/client/refresh/metal/header/rm_rtmodelscene.h"
+#include "../../src/client/refresh/metal/header/rm_rt.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
+#include "../../src/client/refresh/metal/common/mtl_gbuf_math.h"
 
 /* src/common/shared/shared.c, linked for rm_pure.c, prints through the engine */
 void
@@ -281,22 +286,36 @@ test_split_mode(void)
 	CHECK(rm_rtm_entity_split(RM_RF_DEPTHHACK | RM_RF_FULLBRIGHT, A, 0, 0, 1) == F);
 	CHECK(rm_rtm_entity_split(RM_RF_DEPTHHACK, A, 0, 0, 1) == F);
 
-	/* slice 2: a glowing item and a minlight model go forward, untagged, until slice 3 tags them */
-	CHECK(rm_rtm_entity_split(RM_RF_GLOW, A, 0, 0, 1) == F);
-	CHECK(rm_rtm_entity_split(RM_RF_MINLIGHT, A, 1, 0, 1) == F);
+	/* slice 3: a glowing item and a minlight model are rastered, their flags in the tag; a brush model as without the mode */
+	CHECK(rm_rtm_entity_split(RM_RF_GLOW, A, 0, 0, 1) == R);
+	CHECK(rm_rtm_entity_split(RM_RF_GLOW, A, 1, 0, 1) == (R | S));
+	CHECK(rm_rtm_entity_split(RM_RF_MINLIGHT, A, 1, 0, 1) == (R | S));
+	CHECK(rm_rtm_entity_split(RM_RF_GLOW | RM_RF_MINLIGHT, A, 0, 0, 1) == R);
+	CHECK(rm_rtm_entity_split(RM_RF_GLOW | RM_RF_FULLBRIGHT, A, 0, 0, 1) == F);
 	CHECK(rm_rtm_entity_split(RM_RF_GLOW, B, 0, 0, 1) == rm_gb_entity_split(RM_RF_GLOW, B, 0));
 
-	/* the stock-lit rule for good: the crosshair model is, the weapon (RF_DEPTHHACK too) is not (slice 3 traces it) */
+	/* the stock-lit rule: the crosshair model is, the weapon with its depth hack is not, a weapon without one is */
 	CHECK(rm_rtm_stock_model(RM_RF_DEPTHHACK, 0) == 1);
 	CHECK(rm_rtm_stock_model(RM_RF_DEPTHHACK | RM_RF_FULLBRIGHT, 0) == 1);
 	CHECK(rm_rtm_stock_model(gun, 0) == 0);
 	CHECK(rm_rtm_stock_model(RM_RF_DEPTHHACK | RM_RF_WEAPONMODEL, 0) == 0);
+	CHECK(rm_rtm_stock_model(RM_RF_WEAPONMODEL, 0) == 1);
+	CHECK(rm_rtm_stock_model(RM_RF_WEAPONMODEL | RM_RF_MINLIGHT, 0) == 1);
 	CHECK(rm_rtm_stock_model(gun | RM_RF_SHELL_RED, 0) == 1);
 	CHECK(rm_rtm_stock_model(RM_RF_GLOW, 0) == 0);
 
-	/* the weapon goes forward in this slice; so do translucent models, shells and beams, as now */
-	CHECK(rm_rtm_entity_split(gun, A, 0, 0, 1) == F);
+	/* slice 3: the view weapon is rastered, without a shadow (gl1 draws it none); a weapon without its depth hack is not */
+	CHECK(rm_rtm_entity_split(gun, A, 0, 0, 1) == R);
+	CHECK(rm_rtm_entity_split(gun, A, 1, 0, 1) == R);
+	CHECK(rm_rtm_entity_split(gun, A, 1, IR, 1) == R);
+	CHECK(rm_rtm_entity_split(RM_RF_DEPTHHACK | RM_RF_WEAPONMODEL, A, 0, 0, 1) == R);
 	CHECK(rm_rtm_entity_split(RM_RF_WEAPONMODEL, A, 0, 0, 1) == F);
+	CHECK(rm_rtm_entity_split(gun, B, 0, 0, 1) == F);
+	CHECK(rm_rtm_entity_split(gun | RM_RF_FULLBRIGHT, A, 0, 0, 1) == F);
+	CHECK(rm_rtm_entity_split(gun | RM_RF_TRANSLUCENT, A, 0, 0, 1) == F);
+	CHECK(rm_rtm_entity_split(gun | RM_RF_SHELL_GREEN, A, 0, 0, 1) == F);
+
+	/* translucent models, shells and beams go forward, as now */
 	CHECK(rm_rtm_entity_split(RM_RF_TRANSLUCENT, A, 0, 0, 1) == F);
 	CHECK(rm_rtm_entity_split(RM_RF_SHELL_RED, A, 0, 0, 1) == F);
 	CHECK(rm_rtm_entity_split(RM_RF_SHELL_HALF_DAM, A, 0, 0, 1) == F);
@@ -307,7 +326,10 @@ test_split_mode(void)
 	CHECK(rm_rtm_entity_split(RM_RF_FULLBRIGHT, B, 0, 0, 1) == rm_gb_entity_split(RM_RF_FULLBRIGHT, B, 0));
 	CHECK(rm_rtm_entity_split(RM_RF_DEPTHHACK, B, 0, IR, 1) == rm_gb_entity_split(RM_RF_DEPTHHACK, B, 0));
 
-	/* every combination: the mode's split is the stock split, or forward for a stock-lit or depth-hacked alias model */
+	/*
+	 * every combination: the mode's split is the stock split, forward for a stock-lit alias model (the crosshair
+	 * model, a weapon without its depth hack among them), and the raster without a shadow for the view weapon
+	 */
 	for (flags = 0; flags < (1 << 19); flags++)
 	for (kind = 0; kind < KINDS; kind++)
 	for (s = 0; s < 2; s++)
@@ -316,12 +338,12 @@ test_split_mode(void)
 		const int rdflags = rd ? IR : 0;
 		const int got = rm_rtm_entity_split(flags, kind, (float)s, rdflags, 1);
 		const int base = rm_gb_entity_split(flags, kind, (float)s);
-		const int depthhack = (flags & RM_RF_DEPTHHACK) && !(flags & RM_RF_WEAPONMODEL);
-		const int stock = (kind == A) && (rm_rtm_stock_light(flags, rdflags) || depthhack ||
-				(flags & (RM_RF_GLOW | RM_RF_MINLIGHT)));
+		const int hack = (flags & RM_RF_DEPTHHACK) != 0, weapon = (flags & RM_RF_WEAPONMODEL) != 0;
+		const int stock = (kind == A) && (rm_rtm_stock_light(flags, rdflags) || (hack != weapon));
+		const int gun_r = (kind == A) && weapon && !(flags & (RM_RF_TRANSLUCENT | RM_RF_BEAM | RM_RF_SHELLS));
 
-		bad += got != (stock ? F : base);
-		bad += rm_rtm_stock_model(flags, rdflags) != (rm_rtm_stock_light(flags, rdflags) || depthhack);
+		bad += got != (stock ? F : gun_r ? R : base);
+		bad += rm_rtm_stock_model(flags, rdflags) != (rm_rtm_stock_light(flags, rdflags) || (hack != weapon));
 	}
 
 	CHECK(bad == 0);
@@ -329,13 +351,15 @@ test_split_mode(void)
 	/* traced: what the mode rasters, with its normals written */
 	CHECK(rm_rtm_traced(0, 0, 1) == 1);
 	CHECK(rm_rtm_traced(0, 0, 0) == 0);
-	CHECK(rm_rtm_traced(RM_RF_GLOW, 0, 1) == 0);
+	CHECK(rm_rtm_traced(RM_RF_GLOW, 0, 1) == 1);
 	CHECK(rm_rtm_traced(RM_RF_GLOW, 0, 0) == 0);
-	CHECK(rm_rtm_traced(RM_RF_MINLIGHT, 0, 1) == 0);
+	CHECK(rm_rtm_traced(RM_RF_MINLIGHT, 0, 1) == 1);
 	CHECK(rm_rtm_traced(RM_RF_IR_VISIBLE, 0, 1) == 1);
 	CHECK(rm_rtm_traced(RM_RF_IR_VISIBLE, IR, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_FULLBRIGHT, 0, 1) == 0);
-	CHECK(rm_rtm_traced(gun, 0, 1) == 0);
+	CHECK(rm_rtm_traced(gun, 0, 1) == 1);
+	CHECK(rm_rtm_traced(gun, 0, 0) == 0);
+	CHECK(rm_rtm_traced(RM_RF_WEAPONMODEL, 0, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_DEPTHHACK, 0, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_TRANSLUCENT, 0, 1) == 0);
 	CHECK(rm_rtm_traced(RM_RF_SHELL_GREEN, 0, 1) == 0);
@@ -349,6 +373,108 @@ test_split_mode(void)
 	}
 
 	CHECK(bad == 0);
+}
+
+/*
+ * Slice 3: the tag a rastered alias draw writes. Only under the mode, only
+ * on a traced model (rm_rtm_traced: rastered, its normals written), and
+ * only when it carries a flag: a model without one keeps its own colour in
+ * the light attachment, as in slice 2, and reads as no flags.
+ */
+static void
+test_tag_wanted(void)
+{
+	const int gun = RM_RF_MINLIGHT | RM_RF_DEPTHHACK | RM_RF_WEAPONMODEL, IR = RM_RDF_IRGOGGLES;
+	unsigned f;
+	int flags, rd, e, bad = 0;
+
+	f = 99;
+	CHECK(rm_rtm_tag_wanted(gun, 0, 1, 1, &f) == 1 && f == (MTL_RTM_MINLIGHT | MTL_RTM_WEAPON));
+	CHECK(rm_rtm_tag_wanted(RM_RF_GLOW, 0, 1, 1, &f) == 1 && f == MTL_RTM_GLOW);
+	CHECK(rm_rtm_tag_wanted(RM_RF_MINLIGHT, 0, 1, 1, &f) == 1 && f == MTL_RTM_MINLIGHT);
+	f = 99;
+	CHECK(rm_rtm_tag_wanted(0, 0, 1, 1, &f) == 0 && f == 0);
+	CHECK(rm_rtm_tag_wanted(gun, 0, 0, 1, &f) == 0 && f == 0);
+	CHECK(rm_rtm_tag_wanted(gun, 0, 1, 0, &f) == 0 && f == 0);
+	CHECK(rm_rtm_tag_wanted(RM_RF_GLOW | RM_RF_FULLBRIGHT, 0, 1, 1, &f) == 0);
+	CHECK(rm_rtm_tag_wanted(RM_RF_GLOW | RM_RF_IR_VISIBLE, IR, 1, 1, &f) == 0);
+	CHECK(rm_rtm_tag_wanted(RM_RF_GLOW | RM_RF_IR_VISIBLE, 0, 1, 1, &f) == 1 && f == MTL_RTM_GLOW);
+	CHECK(rm_rtm_tag_wanted(RM_RF_GLOW | RM_RF_TRANSLUCENT, 0, 1, 1, &f) == 0);
+	CHECK(rm_rtm_tag_wanted(RM_RF_WEAPONMODEL | RM_RF_MINLIGHT, 0, 1, 1, &f) == 0);
+
+	for (flags = 0; flags < (1 << 19); flags++)
+	for (rd = 0; rd < 2; rd++)
+	for (e = 0; e < 2; e++)
+	{
+		const int want = rm_rtm_traced(flags, rd ? IR : 0, e) && (rm_rtm_flags(flags) != 0);
+
+		f = 99;
+		bad += rm_rtm_tag_wanted(flags, rd ? IR : 0, e, 1, &f) != want;
+		bad += f != (want ? rm_rtm_flags(flags) : 0u);
+		bad += rm_rtm_tag_wanted(flags, rd ? IR : 0, e, 0, &f) != 0;
+	}
+
+	CHECK(bad == 0);
+}
+
+/*
+ * Slice 3: the weapon and the player's own model cast no shadow. Under the
+ * traced models the view weapon never enters the ray-traced scene, so no
+ * ray (its own pixels' among them) meets it, whatever r_rt_gunshadow says;
+ * without them r_rt_gunshadow is as before. The player's own model
+ * (RF_VIEWERMODEL) never reaches the refdef in the first person
+ * (CL_AddPacketEntities), so no instance is made of it.
+ */
+static void
+test_gunshadow(void)
+{
+	rm_rt_ent_t ents[2];
+	rm_rt_inst_t inst[4];
+	rm_rt_excl_t excl;
+	int g, m;
+
+	CHECK(rm_rtm_gunshadow(0, 0) == 0);
+	CHECK(rm_rtm_gunshadow(1, 0) == 1);
+	CHECK(rm_rtm_gunshadow(0, 1) == 0);
+	CHECK(rm_rtm_gunshadow(1, 1) == 0);
+
+	memset(ents, 0, sizeof(ents));
+	ents[0].kind = RM_RT_ENT_ALIAS;
+	ents[0].flags = RM_RF_MINLIGHT | RM_RF_DEPTHHACK | RM_RF_WEAPONMODEL;
+	ents[0].model = 1;
+	ents[0].alpha = 1;
+	ents[1] = ents[0];
+	ents[1].flags = 0;
+
+	for (g = 0; g < 2; g++)
+	for (m = 0; m < 2; m++)
+	{
+		long n;
+
+		memset(&excl, 0, sizeof(excl));
+		n = rm_rt_instances(ents, 2, 0, rm_rtm_gunshadow(g, m), 0, inst, 4, &excl);
+		CHECK(n == ((g && !m) ? 2 : 1));
+		CHECK((long)excl.weapon == ((g && !m) ? 0 : 1));
+		CHECK(inst[n - 1].ent == 1);
+	}
+}
+
+/* slice 3: the material a pull-back ray stops at, a wall: a map face that is not water or translucent; a model passes */
+static void
+test_wall(void)
+{
+	unsigned m;
+
+	CHECK(mtl_rtm_wall(MTL_GB_MAT_WORLD, 0) == 1);
+	CHECK(mtl_rtm_wall(MTL_GB_MAT_SKY, 0) == 1);
+	CHECK(mtl_rtm_wall(MTL_GB_MAT_NONE, 0) == 1);
+	CHECK(mtl_rtm_wall(MTL_GB_MAT_WATER, 0) == 0);
+	CHECK(mtl_rtm_wall(MTL_GB_MAT_TRANS, 0) == 0);
+
+	for (m = 0; m < 256; m++)
+	{
+		CHECK(mtl_rtm_wall(m, 1) == 0);
+	}
 }
 
 /* a stored channel: saturated, then rounded to bits of unorm and read back */
@@ -507,6 +633,7 @@ test_weapon(void)
 		rm_rtm_weapon_t w;
 		rm_viewport_t vp;
 		rm_rts_view_t v;
+		rm_rtm_params_t pr;
 		float world[16], proj[16], pj[16], mvp[16];
 		const float *an = a ? ang2 : ang;
 		int ok;
@@ -530,6 +657,13 @@ test_weapon(void)
 		world_matrix(world, org, an);
 		ok = rm_rtm_weapon_view(&w, world, &vp, org, &v);
 		CHECK(ok);
+
+		/* slice 3: the kernel's parameters carry that view's inverse, the rest of them left as they were */
+		memset(&pr, 0x5a, sizeof(pr));
+		pr.glow = 0.25f;
+		pr.overbright = 2;
+		CHECK(rm_rtm_weapon_params(&w, world, &vp, org, &pr) == 1);
+		CHECK(pr.weapon == 1 && !memcmp(pr.winv, v.inv, sizeof(pr.winv)) && pr.glow == 0.25f && pr.overbright == 2);
 
 		/* the weapon's own projection, jittered, as R_DrawAliasModel and RM_GB_JitterProj draw it */
 		CHECK(rm_weapon_projection(proj, w.fovy, w.gunfov, w.hand, w.width, w.height, w.znear, 0, 0, 0, 0));
@@ -563,6 +697,24 @@ test_weapon(void)
 			d = zn + (zf - zn) * (clip[2] / clip[3] + 1) * 0.5;
 
 			CHECK(rm_rtm_weapon_unproject(&v, (float)px, (float)py, (float)d, back));
+
+			/* the kernel's arithmetic (rm_rtm_point): winv times the pixel's centre at mtl_rtm_weapon_ndc, over the view's viewport */
+			{
+				const float cx = ((float)px + 0.5f - v.vp[0]) / v.vp[2] * 2.0f - 1.0f;
+				const float cy = 1.0f - ((float)py + 0.5f - v.vp[1]) / v.vp[3] * 2.0f;
+				const float cz = mtl_rtm_weapon_ndc((float)d);
+				float hk[4];
+				int q;
+
+				for (q = 0; q < 4; q++)
+				{
+					hk[q] = pr.winv[q] * cx + pr.winv[4 + q] * cy + pr.winv[8 + q] * cz + pr.winv[12 + q];
+				}
+
+				CHECK(hk[3] > 0);
+				CHECK(fabs(hk[0] / hk[3] - wp[0]) < 1e-3 && fabs(hk[1] / hk[3] - wp[1]) < 1e-3 &&
+						fabs(hk[2] / hk[3] - wp[2]) < 1e-3);
+			}
 			CHECK(fabs(back[0] - wp[0]) < 1e-3 && fabs(back[1] - wp[1]) < 1e-3 && fabs(back[2] - wp[2]) < 1e-3);
 
 			if (!(fabs(back[0] - wp[0]) < 1e-3 && fabs(back[1] - wp[1]) < 1e-3 && fabs(back[2] - wp[2]) < 1e-3))
@@ -578,7 +730,9 @@ test_weapon(void)
 		rm_rtm_weapon_t w;
 		rm_viewport_t vp = {0, 0, 640, 480, 0, 1};
 		rm_rts_view_t v;
+		rm_rtm_params_t pr;
 		float world[16];
+		int i, nz = 0;
 
 		memset(&w, 0, sizeof(w));
 		w.fovy = 90;
@@ -588,7 +742,29 @@ test_weapon(void)
 		w.znear = 4;
 		mtl_mat_identity(world);
 		CHECK(!rm_rtm_weapon_view(&w, world, &vp, org, &v));
+
+		/* slice 3: no weapon view in the parameters (the kernel shades such a pixel at the eye) */
+		memset(&pr, 0x5a, sizeof(pr));
+		CHECK(rm_rtm_weapon_params(&w, world, &vp, org, &pr) == 0 && pr.weapon == 0);
+
+		for (i = 0; i < 16; i++)
+		{
+			nz += pr.winv[i] != 0;
+		}
+
+		CHECK(nz == 0);
 	}
+}
+
+/* slice 3: the parameters as rm_rtmodel.metal's rm_rtm_params lays them out (float4x4 first, 16-aligned) */
+static void
+test_params(void)
+{
+	CHECK(sizeof(rm_rtm_params_t) == 80);
+	CHECK(offsetof(rm_rtm_params_t, winv) == 0);
+	CHECK(offsetof(rm_rtm_params_t, glow) == 64);
+	CHECK(offsetof(rm_rtm_params_t, overbright) == 68);
+	CHECK(offsetof(rm_rtm_params_t, weapon) == 72);
 }
 
 static void
@@ -750,8 +926,12 @@ main(void)
 	test_color_rule();
 	test_split_off();
 	test_split_mode();
+	test_tag_wanted();
+	test_gunshadow();
+	test_wall();
 	test_tag();
 	test_weapon();
+	test_params();
 	test_pullback();
 	test_floor_metal();
 	test_index_guard();

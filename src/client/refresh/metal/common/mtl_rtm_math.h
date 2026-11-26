@@ -319,6 +319,19 @@ mtl_rtm_weapon_ndc(float d)
  */
 #define MTL_RTM_PULLBACK 0.25f
 
+/*
+ * Slice 3: 1 when the pull-back ray (the eye ray toward a weapon pixel)
+ * stops at a face of material mat (the map's per-triangle id,
+ * mtl_gbuf_math.h's MTL_GB_MAT_*), a wall: any map face but water and a
+ * translucent one, which it passes as a shadow ray does. An alias model
+ * (alias not 0) is no wall: it passes.
+ */
+static inline int
+mtl_rtm_wall(unsigned mat, int alias)
+{
+	return !alias && (mat != 3u) && (mat != 5u);
+}
+
 static inline mtl_rtm_v3_t
 mtl_rtm_pullback(mtl_rtm_v3_t eye, mtl_rtm_v3_t p, float t)
 {

@@ -42,7 +42,8 @@ rm_rtm_stock_light(int flags, int rdflags)
 int
 rm_rtm_stock_model(int flags, int rdflags)
 {
-	return rm_rtm_stock_light(flags, rdflags) || ((flags & RM_RF_DEPTHHACK) && !(flags & RM_RF_WEAPONMODEL));
+	/* the depth hack without the weapon (the crosshair model), or the weapon without the depth range the kernel reads */
+	return rm_rtm_stock_light(flags, rdflags) || (((flags & RM_RF_DEPTHHACK) != 0) != ((flags & RM_RF_WEAPONMODEL) != 0));
 }
 
 int
@@ -59,24 +60,22 @@ rm_rtm_entity_split(int flags, int kind, float shadows, int rdflags, int mode)
 		return RM_GB_ENT_FORWARD;
 	}
 
-	/* the view weapon: forward until slice 3 rasters it */
-	if (flags & RM_RF_WEAPONMODEL)
+	/* slice 3: the view weapon is rastered as an alias model alone, as gl1 draws it */
+	if ((flags & RM_RF_WEAPONMODEL) && (kind != RM_GB_KIND_ALIAS))
 	{
 		return RM_GB_ENT_FORWARD;
 	}
 
-	/* the alias models that stay stock-lit, the crosshair model (RF_DEPTHHACK, not the weapon) among them */
+	/*
+	 * the alias models that stay stock-lit, the crosshair model and a weapon without its depth hack among them;
+	 * a glowing or minlight model is rastered, its flags in its tag (slice 3)
+	 */
 	if ((kind == RM_GB_KIND_ALIAS) && rm_rtm_stock_model(flags, rdflags))
 	{
 		return RM_GB_ENT_FORWARD;
 	}
 
-	/* slice 2: a glowing or minlight model, whose flags no tag carries to the kernel yet (slice 3) */
-	if ((kind == RM_GB_KIND_ALIAS) && (flags & (RM_RF_GLOW | RM_RF_MINLIGHT)))
-	{
-		return RM_GB_ENT_FORWARD;
-	}
-
+	/* the weapon casts no shadow: rm_shadow_drawn leaves it out, as gl1 does */
 	return RM_GB_ENT_RASTER | (((kind == RM_GB_KIND_ALIAS) && rm_shadow_drawn(flags, shadows)) ? RM_GB_ENT_SHADOW : 0);
 }
 
@@ -134,6 +133,27 @@ rm_rtm_color(const float *light, float dot, int flags, int rdflags, float time, 
 }
 
 int
+rm_rtm_tag_wanted(int flags, int rdflags, int extra_ok, int mode, unsigned *f)
+{
+	*f = 0u;
+
+	/* a model without a flag keeps its own colour: it reads as no flags (rm_rtm_px_flags) */
+	if (!mode || !rm_rtm_traced(flags, rdflags, extra_ok) || (rm_rtm_flags(flags) == 0u))
+	{
+		return 0;
+	}
+
+	*f = rm_rtm_flags(flags);
+	return 1;
+}
+
+int
+rm_rtm_gunshadow(int gunshadow, int models)
+{
+	return gunshadow && !models;
+}
+
+int
 rm_rtm_tag_verts(rm_avert_t *v, long n, unsigned f, int extra_ok)
 {
 	const mtl_rgba_t c = mtl_rtm_tag(f);
@@ -172,6 +192,17 @@ rm_rtm_weapon_view(const rm_rtm_weapon_t *w, const float *world, const rm_viewpo
 
 	rm_gb_jitter(p, w->jx, w->jy, vp->w, vp->h, pj);
 	return rm_rts_view(pj, world, vp, eye, w->znear, out);
+}
+
+int
+rm_rtm_weapon_params(const rm_rtm_weapon_t *w, const float *world, const rm_viewport_t *vp, const float *eye,
+		rm_rtm_params_t *p)
+{
+	rm_rts_view_t v;
+
+	p->weapon = (unsigned)rm_rtm_weapon_view(w, world, vp, eye, &v);
+	memcpy(p->winv, v.inv, sizeof(p->winv));   /* all 0 when refused: rm_rtm_weapon_view clears it */
+	return (int)p->weapon;
 }
 
 int

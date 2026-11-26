@@ -34,12 +34,14 @@
 
 #include "rm_rtfx.h"
 
-/* rm_rtmodel.metal's rm_rtm_params */
+/* rm_rtmodel.metal's rm_rtm_params: a float4x4 first, so 80 bytes in Metal's layout */
 typedef struct
 {
+	float winv[16];     /* slice 3: the view weapon's GL clip coordinates to world (rm_rtm_weapon_params) */
 	float glow;         /* RF_GLOW's pulse at the frame's time (rm_rtm_glow_scale) */
 	float overbright;   /* gl1_overbrightbits as rm_alias_shade reads it, 0 for none */
-	unsigned pad0, pad1;
+	unsigned weapon;    /* 1 when winv holds the frame's weapon view; 0: a weapon pixel is shaded at the eye */
+	unsigned pad1;
 } rm_rtm_params_t;
 
 /* the minlight table then the gamma table, the kernel's tabs */

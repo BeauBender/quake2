@@ -50,9 +50,10 @@
 /* rm_rtmodelscene.h's rm_rtm_params_t */
 struct rm_rtm_params
 {
+	float4x4 winv;      /* slice 3: the view weapon's GL clip coordinates to world, when weapon is 1 */
 	float glow;         /* RF_GLOW's pulse at the frame's time (rm_rtm_glow_scale) */
 	float overbright;   /* gl1_overbrightbits as rm_alias_shade reads it, 0 for none */
-	uint pad0;
+	uint weapon;        /* 1 when winv holds the frame's weapon view */
 	uint pad1;
 };
 
