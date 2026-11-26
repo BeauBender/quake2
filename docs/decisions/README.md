@@ -25,3 +25,4 @@ them (record 0004); one becomes a record here when it is settled.
 | [0012](0012-metalfx-in-the-client.md) | MetalFX is also linked, weak, into the macOS client, used only by `upscale_textures <2\|4> metalfx` (extends 0011) |
 | [0014](0014-no-performance-gating.md) | No feature is gated on performance: capability only, no performance target as acceptance, no card needs an M1-class Mac (supersedes the RT7 apple7 target and RT-primary's apple9-only limit) |
 | [0015](0015-acceptance-verdicts.md) | A card closes as completed only when every acceptance criterion has a verdict (met, moved to #N, dropped: reason), checked by a script; a card closed without them is reopened |
+| [0016](0016-harness-supervision.md) | Harness process control lives in one native supervisor; the bench core supports bash 3.2 only, and the shell primitive is frozen while it is replaced (supersedes the "Language" line of the bench plan) |
