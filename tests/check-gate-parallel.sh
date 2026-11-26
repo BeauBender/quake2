@@ -82,9 +82,11 @@
 #   dropabsent gate_drop of an entry that is not in the running list leaves
 #             the list as it is, and of one that is takes it out;
 #   stopnoerr the scheduler itself started with its standard error closed:
-#             what a passing check left running (its flag-held grandchild)
-#             is gone after the run, and so are a check and its grandchild
-#             after a SIGTERM to the scheduler;
+#             a bad GATE_JOBS still gives status 2 and runs no check (the
+#             line it writes there cannot fail under set -e); what a
+#             passing check left running (its flag-held grandchild) is gone
+#             after the run, and so are a check and its grandchild after a
+#             SIGTERM to the scheduler;
 #   intskip   interrupt, testsh and sigs, run by this self-test started
 #             with SIGINT ignored, pass: interrupt and testsh each say what
 #             they skip, and sigs says it skips nothing (its check gets
@@ -1546,10 +1548,20 @@ c_stop() {
 	stop_one TERM 143 ignore || return 1
 	stop_one INTTERM 143 "" intign
 }
-# stopnoerr: the stop case's stand-ins under a scheduler whose own standard
-# error is closed (as scripts/ci-checks.sh can start it): its stops must not
-# depend on that standard error (FIX186)
+# stopnoerr: a scheduler whose own standard error is closed (as
+# scripts/ci-checks.sh can start it): neither its status nor its stops may
+# depend on that standard error (FIX186). Its error before any check starts
+# (a bad GATE_JOBS) is status 2, as in errors: a scheduler that leaves the
+# closed fd as it is fails the write of that line, and set -e ends it with
+# status 1. Then the stop case's stand-ins under it.
 c_stopnoerr() {
+	d=$(newcase)
+	spec "$d" a 1 0 0
+	rc=0
+	bounded 30 "$d/out" env GATE_JOBS=abc GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
+		sh -c 'exec 2>&-; exec sh "$1" "" "" "$2"' sh "$SCHED" "$d/check-a.sh" || rc=$?
+	[ "$rc" -eq 2 ] && [ ! -s "$d/events" ] ||
+		{ say "stopnoerr: GATE_JOBS=abc, the scheduler's standard error closed: status $rc, want 2 and no check run"; return 1; }
 	stop_one none 0 "" "" nostderr || return 1
 	stop_one TERM 143 "" "" nostderr
 }

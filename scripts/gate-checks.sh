@@ -54,7 +54,8 @@ me=gate
 gate_grace=10
 # A standard error that is closed (scripts/ci-checks.sh execs this as it was
 # started) becomes /dev/null first, so that a line this script writes there
-# cannot fail under set -e before a stop.
+# cannot fail under set -e: an error before any check starts keeps its
+# status 2 (it would be 1, set -e's, from the failed write).
 { :; } 8>&2 2> /dev/null || exec 2> /dev/null
 gate_core=$(dirname "$0")/bench/core/common.sh
 if [ ! -r "$gate_core" ]; then
