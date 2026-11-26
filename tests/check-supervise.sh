@@ -198,6 +198,8 @@ mutant no-wnowait leader-first "no reaped line: the leader was reaped before its
 # is still left to waitid, and the case chld-ignored passes either way.
 mutant no-forget cap "the last member's exit woke nothing" \
 	's/^	return sv_known\[k\] != sv_leader \&\& sv_gone\[k\]/	return 0 \&\& sv_gone[k]/' -DSV_MAXPIDS=8
+mutant no-relist untracked "group-empty came while the child of an unwatched member ran" \
+	's/more |= j == nseen;/more |= 0;/' -DSV_MAXPIDS=8
 
 # shape: no wait on time in the cases. The words are put together so that
 # this line does not match itself.
