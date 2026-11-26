@@ -6,6 +6,8 @@
 #   one_fail  one failing check fails the run and is named; the checks
 #             after it still run;
 #   two_fail  two failing checks are both named;
+#   sv126     a supervisor that exits 126 (a group it cannot empty) fails
+#             its check, shown as FAILED (status 126);
 #   signal    a check that dies from a signal fails the run;
 #   log       a log that cannot be printed fails the run;
 #   order     each check's output (standard output and error) is printed
@@ -402,6 +404,30 @@ c_two_fail() {
 	[ "$rc" -eq 1 ] || { say "two_fail: status $rc, want 1"; return 1; }
 	[ "$(status "$d" a)" = "FAILED (status 1)" ] && [ "$(status "$d" c)" = "FAILED (status 2)" ] || { say "two_fail: a failing check is not shown as failed"; return 1; }
 	has "$d" "gate: checks: 2 of 4 FAILED in N s, 2 at a time: check-a.sh check-c.sh" || { say "two_fail: the last line does not name both failing checks"; return 1; }
+}
+
+# sv126: a supervisor that exits 126 (its check's group could not be
+# emptied) fails its check, shown as FAILED (status 126). The supervisor is
+# a stand-in that exits 126 at once, in a tool cache of the case's own,
+# under the name the real one has there (the same compiler and source).
+c_sv126() {
+	d=$(newcase)
+	spec "$d" a 1 0 0
+	spec "$d" b 1 0 0
+	mkdir "$d/cache"
+	chmod 700 "$d/cache"
+	printf '%s\n' '#!/bin/sh' 'exit 126' > "$d/cache/${_gsv##*/}"
+	chmod 700 "$d/cache/${_gsv##*/}"
+	_svk=$SUPERVISE_CACHE
+	SUPERVISE_CACHE=$d/cache
+	rc=0
+	run "$d" 2 "" a b || rc=$?
+	SUPERVISE_CACHE=$_svk
+	[ "$rc" -eq 1 ] || { say "sv126: status $rc, want 1"; return 1; }
+	[ ! -s "$d/events" ] || { say "sv126: a check ran, so the stand-in was not the supervisor"; return 1; }
+	[ "$(status "$d" a)" = "FAILED (status 126)" ] && [ "$(status "$d" b)" = "FAILED (status 126)" ] ||
+		{ say "sv126: a supervisor's 126 is not shown as FAILED (status 126): $(tr '\n' '|' < "$d/norm")"; return 1; }
+	has "$d" "gate: checks: 2 of 2 FAILED in N s, 2 at a time: check-a.sh check-b.sh" || { say "sv126: the last line does not name both checks"; return 1; }
 }
 
 c_signal() {
@@ -1733,7 +1759,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave killgrace stop stopnoerr termign drop dropabsent intskip ttyself"
+cases="one_fail two_fail sv126 signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave killgrace stop stopnoerr termign drop dropabsent intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
@@ -1768,6 +1794,7 @@ mutant status-ignored one_fail 'wait "$_grpid" || _grst=$?' 'wait "$_grpid" || :
 mutant stop-at-failure one_fail '		gate_start "$_gpi"' '		[ "$_gnf" -ne 0 ] || gate_start "$_gpi"'
 mutant first-only two_fail '_gfailed="$_gfailed $_gfname"' '_gfailed=${_gfailed:-" $_gfname"}'
 mutant signal-ok signal '[ "$_gfs" -eq 0 ] || _gfwhy=' '[ "$_gfs" -eq 0 ] || [ "$_gfs" -gt 128 ] || _gfwhy='
+mutant sv126-ok sv126 '[ "$_gfs" -eq 0 ] || _gfwhy=' '[ "$_gfs" -eq 0 ] || [ "$_gfs" -eq 126 ] || _gfwhy='
 mutant log-unchecked log 'cat "$_gd/$_gnext.log" || _gfwhy="its log cannot be read"' 'cat "$_gd/$_gnext.log" || :'
 mutant no-log order '"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &' '"$_gsc" < /dev/null &'
 mutant print-unended order 'while [ "$_gnext" -le "$_gn" ] && [ -e "$_gd/$_gnext.end" ]; do' 'while [ "$_gnext" -le "$_gn" ]; do'
