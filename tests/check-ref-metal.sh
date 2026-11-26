@@ -1650,22 +1650,25 @@ seg 5.6 "; denoiser ${rtd:-host test}, $rtd_mutants rule mutants, $rtd_kpins ker
 rttab_fn() { # <file> <function>: the function's definition, its return type's line to the "}" in column 0
 	awk -v fn="$2" 'b { print; if (/^}/) exit } $0 ~ "^" fn "\\(" { print prev; print; b = 1 } { prev = $0 }' "$1"
 }
-rttab_tree() { # <dir> <rm_rtaoscene.c>: rttab_body.c in <dir> from rm_main.c and the scene file given
+rttab_tree() { # <dir> <rm_rtaoscene.c> [<rm_main.c>]: rttab_body.c in <dir> from rm_main.c and the scene file given
 	rm -rf "${1:?}"
 	mkdir -p "$1"
 	al=$(awk '/^RM_RTT_ViewFor\(/ { b = 1 } b && /^}/ { b = 0 } b && /^\talpha = / { print }' "$2")
 	[ -n "$al" ] && [ "$(printf '%s\n' "$al" | wc -l | tr -d ' ')" = 1 ] || return 1
 	{
-		rttab_fn "$rm_dir/rm_main.c" RM_Effect
+		rttab_fn "${3:-$rm_dir/rm_main.c}" RM_Effect
+		rttab_fn "${3:-$rm_dir/rm_main.c}" RM_PresBelow
+		rttab_fn "$rm_dir/rm_pure.c" rm_view_rect
 		rttab_fn "$2" RM_RTT_On
 		printf '%s\n' '' 'static float' 'rttab_view_alpha(void)' '{' '	float alpha;' '' "$al" '	return alpha;' '}'
 	} > "$1/rttab_body.c"
-	grep -q '^RM_Effect(' "$1/rttab_body.c" && grep -q '^RM_RTT_On(' "$1/rttab_body.c"
+	grep -q '^RM_Effect(' "$1/rttab_body.c" && grep -q '^RM_PresBelow(' "$1/rttab_body.c" &&
+		grep -q '^rm_view_rect(' "$1/rttab_body.c" && grep -q '^RM_RTT_On(' "$1/rttab_body.c"
 }
 rttab_build() { # <dir>: 0 when the test builds over the dir's rttab_body.c
 	# shellcheck disable=SC2086 # flags and fxhost are word lists
 	$cc $flags $fxhost -I"$1" -o "$1/t" tests/metal/rm_rttab_test.c "$rm_dir/rm_rtgate.c" "$rm_dir/rm_rtfx.c" \
-		"$rm_dir/rm_rttemporal.c" -lm > "${tmp:?}/cc.out" 2>&1
+		"$rm_dir/rm_rttemporal.c" "$rm_dir/rm_metalfx.c" -lm > "${tmp:?}/cc.out" 2>&1
 }
 rttab_run() { # <dir>: 0 when the test builds and passes
 	rttab_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
