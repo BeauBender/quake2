@@ -39,6 +39,7 @@
 #include "header/rm_rtwaterscene.h"
 #include "header/rm_rtfx.h"
 #include "header/rm_rtdirscene.h"
+#include "header/rm_rtmodel.h"
 
 #define RT_MAX_AMODELS 512   /* rm_model.c's MAX_MOD_KNOWN */
 #define RT_TIMES 8192        /* the frames whose GPU times the summary spreads */
@@ -493,7 +494,8 @@ RM_RT_Frame(const refdef_t *fd)
 		return;
 	}
 
-	gun = RM_Effect(r_rt_gunshadow) != 0;
+	/* TASK191 slice 3: the weapon casts no shadow while the models are traced, and no ray of its own pixels meets it */
+	gun = rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants());
 	ne = r_drawentities->value ? rm_entity_count(fd->num_entities) : 0;
 
 	for (i = 0; i < ne; i++)

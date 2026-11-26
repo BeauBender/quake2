@@ -67,6 +67,14 @@ int rm_rtm_stats_format(const rm_rtm_stats_t *s, char *buf, int len);
  */
 int RM_TracedModels(void);
 
+/*
+ * Slice 3: 1 when this frame's models are to be traced, as the scene is
+ * built (before the direct light decides the frame): r_rt_direct_models on
+ * where the direct light is wanted (RM_RTDir_Wanted). The view weapon then
+ * stays out of the ray-traced scene (rm_rtm_gunshadow).
+ */
+int RM_RTModel_Wants(void);
+
 #ifdef RM_LOCAL_H
 void RM_RTModel_Init(const rmb_caps_t *caps);
 void RM_RTModel_Shutdown(void);

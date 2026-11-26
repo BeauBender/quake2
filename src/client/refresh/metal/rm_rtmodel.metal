@@ -39,6 +39,12 @@
  * other pixel as the world's trace left it, and adds to no sum of the
  * exposure fit: its counts are its own.
  *
+ * Slice 3: the tag's flags (glow, minlight, the weapon) are applied
+ * through mtl_rtm_color. A weapon pixel (MTL_RTM_WEAPON) is drawn with its
+ * own projection and the depth hack's range, so its point is its own
+ * view's (rm_rtm_point), pulled back before the first wall the eye ray
+ * toward it meets (the weapon inside a wall, mtl_rtm_pullback).
+ *
  * =======================================================================
  */
 
@@ -68,8 +74,8 @@ enum
 /*
  * The flags of a model pixel's tag (mtl_rtm_tag_flags) in its light
  * attachment c, at material 2 only: a world face's lightmap texel is
- * never read as a tag. 0 for any other colour (nothing tags a model
- * before slice 3).
+ * never read as a tag. 0 for any other colour: a model without a flag
+ * keeps its own colour there (rm_rtm_tag_wanted).
  */
 static uint
 rm_rtm_px_flags(uint m, float4 c)
@@ -81,6 +87,102 @@ rm_rtm_px_flags(uint m, float4 c)
 	t.b = c.b;
 	t.a = c.a;
 	return (m == MTL_GB_MAT_ALIAS) ? mtl_rtm_tag_flags(t) : 0u;
+}
+
+/*
+ * Slice 3: the distance along the eye ray from eye toward weapon point w
+ * to the first wall it meets (mtl_rtm_wall: a map face that is not water
+ * or translucent; an alias model passes), within |w - eye|, at most
+ * MTL_RTDIR_LAYERS + 1 intersections; |w - eye| itself when it meets
+ * none, so mtl_rtm_pullback keeps w. The view weapon is never in the
+ * scene under the traced models (rm_rtm_gunshadow), so the ray cannot
+ * meet the weapon itself.
+ */
+static float
+rm_rtm_wall_t(float3 eye, float3 w, instance_acceleration_structure ias, device const uint *inst,
+		device const uchar *tmat, uint ntris)
+{
+	intersector<triangle_data, instancing> isect;
+	const float3 to = w - eye;
+	const float len = length(to);
+	ray r;
+
+	if (!(len > 0.0f))
+	{
+		return len;
+	}
+
+	isect.assume_geometry_type(geometry_type::triangle);
+	r = ray(eye, to / len, 0.0f, len);
+
+	for (int hop = 0; hop <= MTL_RTDIR_LAYERS; hop++)
+	{
+		intersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);
+		uint b, m = MTL_GB_MAT_WORLD;
+
+		if (hit.type == intersection_type::none)
+		{
+			return len;
+		}
+
+		b = inst[2 * hit.instance_id];
+
+		/* a map triangle outside the table (none uploaded) counts as the world's */
+		if ((b != 0xffffffffu) && (b + hit.primitive_id < ntris))
+		{
+			m = (uint)tmat[b + hit.primitive_id];
+		}
+
+		if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))
+		{
+			return hit.distance;
+		}
+
+		r.min_distance = hit.distance + 0.01f;
+
+		if (!(r.min_distance < r.max_distance))
+		{
+			return len;
+		}
+	}
+
+	return len;
+}
+
+/*
+ * Slice 3: the point a model pixel of tag flags f at stored depth d is
+ * shaded at. A model drawn with the view's projection: the world's
+ * unprojection (rm_rtdir_position). The view weapon (MTL_RTM_WEAPON): its
+ * own view's inverse (p.winv, rm_rtm_weapon_params) at the clip depth of
+ * the depth hack's 0 .. 0.3 (mtl_rtm_weapon_ndc), as rm_rtm_weapon_unproject,
+ * then the pull-back point before the first wall between the eye and it
+ * (rm_rtm_wall_t, mtl_rtm_pullback). A frame without a weapon view (p.weapon
+ * 0) or a point behind the eye shades a weapon pixel at the eye.
+ */
+static float3
+rm_rtm_point(constant rm_rtdir_view &v, constant rm_rtm_params &p, uint2 px, float d, uint f,
+		instance_acceleration_structure ias, device const uint *inst, device const uchar *tmat, uint ntris)
+{
+	if ((f & MTL_RTM_WEAPON) == 0u)
+	{
+		return rm_rtdir_position(v, px, d);
+	}
+
+	if (p.weapon == 0u)
+	{
+		return v.eye.xyz;
+	}
+
+	{
+		const float cx = (float(px.x) + 0.5f - v.vp.x) / v.vp.z * 2.0f - 1.0f;
+		const float cy = 1.0f - (float(px.y) + 0.5f - v.vp.y) / v.vp.w * 2.0f;
+		const float4 h = p.winv * float4(cx, cy, mtl_rtm_weapon_ndc(d), 1.0f);
+		const float3 w = (h.w > 0.0f) ? h.xyz / h.w : v.eye.xyz;
+		const float t = rm_rtm_wall_t(v.eye.xyz, w, ias, inst, tmat, ntris);
+		const mtl_rtm_v3_t q = mtl_rtm_pullback(mtl_rtm_v3(v.eye.x, v.eye.y, v.eye.z), mtl_rtm_v3(w.x, w.y, w.z), t);
+
+		return float3(q.x, q.y, q.z);
+	}
 }
 
 /*
@@ -145,7 +247,9 @@ rm_rtm_trace(depth2d<float, access::read> depth [[texture(0)]],
 
 	if (model)
 	{
-		const float3 pt = rm_rtdir_position(v, px, d);
+		/* the light attachment gives the tag's flags alone, never light; a weapon pixel's point is its own view's */
+		const uint f = rm_rtm_px_flags(m, gbl.read(px));
+		const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);
 		const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
 
 		/* the world's terms at the model's point and normal, from their rays alone (no texture reaches them) */
@@ -153,9 +257,6 @@ rm_rtm_trace(depth2d<float, access::read> depth [[texture(0)]],
 		const float3 open = rm_rtdir_open(v, px, pt, n, ias, inst, tmat, ntris, tile, t);
 		const float3 bounce = rm_rtdir_bounce(v, px, pt, n, ias, inst, tmat, ntris, tile, atlas, verts, idx, g, brec, t);
 		const float4 l = rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open + bounce, v.show);
-
-		/* the light attachment gives the tag's flags alone, never light */
-		const uint f = rm_rtm_px_flags(m, gbl.read(px));
 
 		light_out.write(rm_rtm_out(l.rgb, f, p, tabs), px);
 		vis_out.write(rm_rtdir_vis(v.show, t), px);

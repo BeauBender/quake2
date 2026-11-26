@@ -2593,7 +2593,11 @@ seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, $rt
 # pixels; no-normal-traced: the normal's test dropped); the light attachment gives the tag alone
 # (model-from-base: its colour added to the light); no lightmap (model-reads-lm); no fit sum
 # (model-fit-leak); the traced light in place of the shadedot (shadedot-back: a shadedot-like factor); the
-# tag decoded at material 2 only (tag-no-material). The back end binds the view with no own-light table
+# tag decoded at material 2 only (tag-no-material). Slice 3: a weapon pixel's point is its own view's at the
+# depth hack's depth, the world's unprojection called once, for the other models (weapon-world-view: the
+# view's inverse; weapon-depth-raw: the stored depth read as the clip depth; weapon-world-point: the trace
+# shades every model at the world's unprojection), pulled back before the first wall, a model no wall
+# (no-pullback: the hit distance not used; wall-models: a model read as a wall). The back end binds the view with no own-light table
 # (model-own-ray: nself left as the trace's) and exactly its seven textures (bind-extra), each mutant
 # compiled where the compiler is there.
 rtk_metal=""
@@ -2622,6 +2626,12 @@ rtk_pin() { # <file> <pin>: 0 when the file holds the pin
 		dot) [ "$(strip "$1" | grep -oF 'mtl_rtm_color(' | wc -l | tr -d ' ')" = 1 ] &&
 			strip "$1" | grep -qF 'mtl_rtm_color(mtl_rtm_v3(l.r, l.g, l.b), MTL_RTM_DOT_TRACED, f, p.glow, p.overbright);' ;;
 		tagmat) strip "$1" | grep -qF 'return (m == MTL_GB_MAT_ALIAS) ? mtl_rtm_tag_flags(t) : 0u;' ;;
+		weapon) rtk_body "$1" | grep -qF 'const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);' &&
+			[ "$(strip "$1" | grep -oF 'rm_rtdir_position(' | wc -l | tr -d ' ')" = 1 ] &&
+			strip "$1" | grep -qF 'const float4 h = p.winv * float4(cx, cy, mtl_rtm_weapon_ndc(d), 1.0f);' ;;
+		pullback) strip "$1" | grep -qF 'const float t = rm_rtm_wall_t(v.eye.xyz, w, ias, inst, tmat, ntris);' &&
+			strip "$1" | grep -qF 'mtl_rtm_v3(w.x, w.y, w.z), t);' &&
+			strip "$1" | grep -qF 'if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))' ;;
 	esac
 }
 rtk_kpins=0 rtk_kmut=0
@@ -2630,7 +2640,7 @@ if [ -n "$rtk_metal" ] && ! rtk_compile "$rtk_k"; then
 	cat "${tmp:?}/metal.out"
 	bad "rm_rtmodel.metal does not compile"
 fi
-for p in rename gate base nolm fit dot tagmat; do
+for p in rename gate base nolm fit dot tagmat weapon pullback; do
 	if ! rtk_pin "$rtk_k" "$p"; then
 		bad "rm_rtmodel.metal does not hold the model pass's $p pin"
 		continue
@@ -2643,7 +2653,9 @@ for p in rename gate base nolm fit dot tagmat; do
 		nolm) kms="model-reads-lm" ;;
 		fit) kms="model-fit-leak" ;;
 		dot) kms="shadedot-back" ;;
-		*) kms="tag-no-material" ;;
+		tagmat) kms="tag-no-material" ;;
+		weapon) kms="weapon-world-view weapon-depth-raw weapon-world-point" ;;
+		*) kms="no-pullback wall-models" ;;
 	esac
 	for m in $kms; do
 		case $m in
@@ -2656,6 +2668,11 @@ for p in rename gate base nolm fit dot tagmat; do
 			model-fit-leak) awk '{ print } /counts\[RM_RTM_C_OPEN\], c_o,/ { print "\t\t\tatomic_fetch_add_explicit(&counts[RM_RTDIR_C_FIT_N], c_m, memory_order_relaxed);" }' ;;
 			shadedot-back) sed 's/MTL_RTM_DOT_TRACED, f, p.glow/max(l.r, 0.5f), f, p.glow/' ;;
 			tag-no-material) sed 's/return (m == MTL_GB_MAT_ALIAS) ? mtl_rtm_tag_flags(t) : 0u;/return mtl_rtm_tag_flags(t);/' ;;
+			weapon-world-view) sed 's/const float4 h = p.winv \* float4(/const float4 h = v.inv * float4(/' ;;
+			weapon-depth-raw) sed 's/float4(cx, cy, mtl_rtm_weapon_ndc(d), 1.0f)/float4(cx, cy, d * 2.0f - 1.0f, 1.0f)/' ;;
+			weapon-world-point) sed 's/const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);/const float3 pt = rm_rtdir_position(v, px, d);/' ;;
+			no-pullback) sed 's/mtl_rtm_v3(w.x, w.y, w.z), t);/mtl_rtm_v3(w.x, w.y, w.z), INFINITY);/' ;;
+			wall-models) sed 's/if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))/if (mtl_rtm_wall(m, 0))/' ;;
 		esac < "$rtk_k" > "${tmp:?}/rtk-kernel.metal"
 		if cmp -s "$rtk_k" "${tmp:?}/rtk-kernel.metal"; then
 			bad "the model pass's kernel mutant ($m) changed nothing"
@@ -2669,8 +2686,8 @@ for p in rename gate base nolm fit dot tagmat; do
 		fi
 	done
 done
-[ "$rtk_kpins" = 7 ] && [ "$rtk_kmut" = 8 ] ||
-	bad "rm_rtmodel.metal holds $rtk_kpins of its 7 pins and refuses $rtk_kmut of its 8 mutants"
+[ "$rtk_kpins" = 9 ] && [ "$rtk_kmut" = 13 ] ||
+	bad "rm_rtmodel.metal holds $rtk_kpins of its 9 pins and refuses $rtk_kmut of its 13 mutants"
 # the back end: the view bound with no own-light table (model-own-ray), and exactly the kernel's seven textures
 rtk_bpins=0 rtk_bmut=0
 rtk_b=$rm_dir/rmb_rtmodel.m

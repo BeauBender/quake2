@@ -27,6 +27,7 @@
  */
 
 #include "header/local.h"
+#include "header/rm_gbufscene.h"
 #include "header/rm_rtdirscene.h"
 #include "header/rm_rtmodel.h"
 #include "header/rm_rtmodelscene.h"
@@ -57,6 +58,12 @@ RM_RTModel_Shutdown(void)
 	}
 
 	rtm_opened = rtm_active = 0;
+}
+
+int
+RM_RTModel_Wants(void)
+{
+	return rtm_device && r_rt_direct_models && (RM_Effect(r_rt_direct_models) != 0.0f) && RM_RTDir_Wanted();
 }
 
 /* the scene is the direct light's to ask for (RM_RTDir_Wanted) */
@@ -144,16 +151,19 @@ RM_RTModel_ShowAsked(void)
 	return 0;
 }
 
-/* the frame's parameters: RF_GLOW's pulse, overbright, gl1's minlight table (none: the index itself) and gamma table */
+/*
+ * the frame's parameters: RF_GLOW's pulse, overbright, gl1's minlight table (none: the index itself) and gamma
+ * table; slice 3: the view weapon's view, from the inputs R_DrawAliasModel draws it with (rm_weapon_projection),
+ * jittered as RM_GB_JitterProj jitters it
+ */
 void
 RM_RTModel_View(const rm_view_t *view)
 {
 	unsigned char t[RM_RTM_TABLES];
 	const byte *ml = R_Minlight();
 	rm_rtm_params_t p;
+	rm_rtm_weapon_t w;
 	int i;
-
-	(void)view;
 
 	if (!rtm_active)
 	{
@@ -164,6 +174,20 @@ RM_RTModel_View(const rm_view_t *view)
 	memset(&p, 0, sizeof(p));
 	p.glow = rm_rtm_glow_scale(r_newrefdef.time);
 	p.overbright = gl1_overbrightbits->value;
+
+	memset(&w, 0, sizeof(w));
+	w.fovy = r_newrefdef.fov_y;
+	w.gunfov = r_gunfov->value;
+	w.hand = gl_lefthand->value;
+	w.width = r_newrefdef.width;
+	w.height = r_newrefdef.height;
+	w.znear = gl_znear->value;
+	w.farsee = r_farsee->value != 0;
+	w.underwater = (r_newrefdef.rdflags & RDF_UNDERWATER) != 0;
+	w.time = r_newrefdef.time;
+	w.waterwarp = gl1_waterwarp->value;
+	RM_GB_Jitter(&w.jx, &w.jy);
+	rm_rtm_weapon_params(&w, view->world, &view->vp, r_newrefdef.vieworg, &p);
 
 	for (i = 0; i < 256; i++)
 	{
