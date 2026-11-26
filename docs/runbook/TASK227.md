@@ -74,7 +74,39 @@ green.
 
 ## Measured
 
-MEASURED
+Measured once each on 2026-11-26, under one hold of the host lock, on the 12-CPU build host (6
+checks at a time; load average 2 to 5). The tree was a scratch clone of this branch whose
+`origin/main` was the branch tip, with one commit on top that adds a comment to
+`src/server/sv_main.c`.
+
+**The gate on a `src/`-only change.** "Before" is `GATE_ALL=1`, which runs every check, as the gate
+did before this card.
+
+| Run | Checks | Checks' wall time |
+|---|---|---|
+| before (`GATE_ALL=1`) | 58 | 1,694 s |
+| after | 53 (`check-metalfx-report`, `check-bench`, `check-gate-parallel`, `check-bounded-run`, `check-bench-entry` left out) | 501 s |
+
+After the selection, the longest checks are `check-ios` (417 s) and `check-require-guards`
+(303 s), which a change under `src/` still runs. In the "before" run, `check-metalfx-report` took
+1,694 s and set the wall time, and `check-bench` took 956 s.
+
+In both runs, `check-no-local-identity` and `check-identity-env` failed in the clone only. A
+clone's `origin` is a local path rather than the GitHub address, so the user-name word test is
+not skipped. So the gate stopped before its builds in both runs, and the times are of the checks
+alone. The builds and `make test` add the same time to both.
+
+**The share of the mutants**, each check alone:
+
+| Check | Whole | Without its mutants | Mutants' share |
+|---|---|---|---|
+| `check-metalfx-report` | 1,700 s | 98 s (`MFX_REAL_ONLY=1`) | 94% |
+| `check-bench` | 928 s | 210 s (every test named) | 77% |
+
+So a change that selects one of these two checks still pays for its mutants. That is right while
+its targets changed. A mutant switch would only pay off for a change that selects one of them
+without touching what its mutants cover. That is a question for a later card, and these numbers
+are its input.
 
 ## Limits
 
