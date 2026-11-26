@@ -162,5 +162,5 @@ the supervisor and the command) holds only `supervise: ` lines, so no job notice
 | `no-wnowait`: the exit peek reaps | `leader-first` | no reaped line: the leader was reaped before its group was empty |
 | `no-forget`: no member is torn down (built with a table of 8) | `cap` | the last member's exit woke nothing |
 
-The mutants run in this check only. The whole check took 3 s on a development Mac. Thirty runs in a
-row of every case took 2 s, with no failure.
+The mutants run in this check only. The whole check took 3 to 4 s on a development Mac. Thirty runs
+in a row of every case, against the test build and the table of 8, took 5 s, with no failure.
