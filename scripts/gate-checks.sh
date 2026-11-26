@@ -37,23 +37,24 @@
 # GATE_PARENT is not passed on to the checks. When a check ends, what it
 # left running is ended the same way before the check is counted done.
 #
-# Every one of those stops goes through the bench core's bounded-run
-# primitive (bench/core/common.sh in this script's directory, FIX186): each
-# check is recorded when it starts (bench_spawn_id), so that its group is
-# signalled only while it is still that check's, and bench_stop_groups
-# sends the TERM, waits the grace and sends the KILL. Without the primitive
-# the run fails before any check starts, with status 2.
+# Every check runs under a process supervisor of its own (lib/supervise.c in
+# this script's directory, TASK218; TASK221): the supervisor starts it as the
+# leader of a new process group, with every signal at its default, and owns
+# its reap. When the check exits and left members behind, and when this
+# script sends the supervisor SIGTERM, the supervisor sends the group TERM
+# and CONT, KILL after gate_grace s, and exits once the group is empty. So a
+# stop that has begun ends even when this script is killed during it. A
+# group that cannot be emptied makes the supervisor exit 126, and the check
+# fails. Without the supervisor, or without bench/core/common.sh (its
+# liveness test), the run fails before any check starts, with status 2.
 set -eu
 me=gate
 # the seconds from SIGTERM to SIGKILL, so that a check's own cleanup trap
 # can finish on a loaded host
 gate_grace=10
 # A standard error that is closed (scripts/ci-checks.sh execs this as it was
-# started) becomes /dev/null before the primitive is sourced: its functions
-# copy it (bench_stop_groups and bench_watch to fd 8, bench_spawn to fd 9),
-# and a copy of a closed fd fails the redirection, so the function's body
-# would never run and no group would be stopped. One test covers both fds:
-# a copy fails or not by its source, never by the fd it goes to.
+# started) becomes /dev/null first, so that a line this script writes there
+# cannot fail under set -e before a stop.
 { :; } 8>&2 2> /dev/null || exec 2> /dev/null
 gate_core=$(dirname "$0")/bench/core/common.sh
 if [ ! -r "$gate_core" ]; then
@@ -62,6 +63,19 @@ if [ ! -r "$gate_core" ]; then
 fi
 # shellcheck source=bench/core/common.sh
 . "$gate_core"
+gate_lib=$(cd "$(dirname "$0")/lib" 2> /dev/null && pwd -P) || gate_lib=
+if [ -z "$gate_lib" ] || [ ! -r "$gate_lib/supervise.sh" ]; then
+	echo "$me: cannot read the process supervisor, lib/supervise.sh" >&2
+	exit 2
+fi
+# shellcheck source=lib/supervise.sh
+. "$gate_lib/supervise.sh"
+# the source beside this script, whatever the shell says of the sourced file
+SV_SRC_DIR=$gate_lib
+gate_sv=$(sv_path) || {
+	echo "$me: cannot build the process supervisor" >&2
+	exit 2
+}
 
 # gate_jobs: GATE_JOBS, else half the CPUs, at least 1
 gate_jobs() {
@@ -83,36 +97,37 @@ gate_in() {
 	return 1
 }
 
-# gate_start <index>: starts check <index>, its output into its own log, as
-# the leader of a process group of its own (job control, set -m, is on for
-# that one command), so that gate_cleanup can end everything it started;
-# then records it for the primitive (bench_spawn_id; gate_end records a
-# check that a signal kept from it).
-# Job control also leaves its SIGINT as it was: a check started in the
-# background without it would ignore SIGINT, and so would all it runs.
+# gate_start <index>: starts check <index> under a supervisor of its own,
+# the check's output and the supervisor's own lines into the check's log.
+# The supervisor is a background job of this script, in its process group,
+# with SIGTTOU ignored as here, so no write of the fork can stop it; the
+# check gets every signal at its default, SIGINT and SIGTTOU included. Its
+# pid is in _grun from the statement after the fork; a signal that comes in
+# between finds it as $! (gate_cleanup, by _gss and _gsb).
 gate_start() {
 	_gsc=$(cat "$_gd/$1.path")
 	_gs0=$(date +%s)
-	trap - TTOU
-	set -m
-	# The child that runs the check is in a process group of its own, with
-	# SIGTTOU at its default, before its redirections: a line the shell
-	# writes there (under load bash's "child setpgid (<pid> to <pid>):
-	# Operation not permitted", from the side of that race the parent's call
-	# already won) would stop it on a terminal set to tostop. So the
-	# shell's own standard error is /dev/null for the fork alone; the check
-	# writes into its log as before.
-	{ "$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 & } 2> /dev/null
+	gate_last
+	_gsb=$_glast
+	_gss=1
+	"$gate_sv" --grace "$gate_grace" --name "${_gsc##*/}" -- "$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &
 	_gsp=$!
-	set +m
-	trap '' TTOU # the scheduler again, once the check has started
 	_grun="$_grun $1:$_gsp:$_gs0"
+	_gss=
 	_gnr=$((_gnr + 1))
-	bench_spawn_id "$_gsp" || :
 }
 
-# gate_reap: waits until at least one running check has ended, records the
-# status and wall time of each one that has, and prints what is printable
+# gate_last: _glast, the pid of the last background job ($!), empty before
+# the first (under set -u an unset $! would end the script)
+gate_last() {
+	set +u
+	_glast=$!
+	set -u
+}
+
+# gate_reap: waits until at least one running check's supervisor has ended
+# (so the check has, and its group is empty), records the status and wall
+# time of each one that has, and prints what is printable
 gate_reap() {
 	while :; do
 		if [ -n "$_gparent" ] && ! gate_parent "$_gparent"; then
@@ -134,14 +149,7 @@ gate_reap() {
 			fi
 			_grst=0
 			wait "$_grpid" || _grst=$?
-			# what it left running in its group; then it leaves _grun
-			# before its record goes, so that a signal in between (while
-			# a later check's gate_end waits its grace) never makes
-			# gate_cleanup record and signal that pid anew, as whatever
-			# holds it by then
-			gate_end "$_grpid"
 			gate_drop "$_grp"
-			bench_spawn_forget "$_grpid"
 			printf '%s %s\n' "$_grst" "$(($(date +%s) - _grt0))" > "$_gd/$_grk_i.end"
 			_grd=$((_grd + 1))
 		done
@@ -202,26 +210,29 @@ gate_parent() {
 	return 1
 }
 
-# gate_end <group>...: ends those process groups of checks, every process
-# in them: TERM to all, up to gate_grace s for them to end, then KILL to
-# what is left, all through the primitive (bench_stop_groups, with "group":
-# a check's own pid is not waited for here). A group is there while it has
-# a member (bench_group_alive). A check that a signal kept from its record
-# in gate_start is recorded here first.
+# gate_end <supervisor>...: ends those checks and every process in their
+# groups: SIGTERM to each supervisor, which stops its group (TERM and CONT,
+# KILL after gate_grace s), then waits for each. A supervisor is this
+# script's child and not yet waited for, so its pid is no other process's.
 gate_end() {
-	for _gep; do bench_spawned "$_gep" || bench_spawn_id "$_gep" || :; done
-	bench_stop_groups "$gate_grace" group "$@" || :
+	for _gep; do kill -s TERM "$_gep" 2> /dev/null || :; done
+	for _gep; do wait "$_gep" 2> /dev/null || :; done
 }
 
 # gate_cleanup: on the way out (a signal, an error, the parent gone), ends
 # every check still running and everything it started (gate_end on each
-# check's process group); then removes the logs
+# check's supervisor, and on the one a signal kept from _grun); then removes
+# the logs
 gate_cleanup() {
 	_gcg=
 	for _gcp in $_grun; do
 		_gcr=${_gcp#*:}
 		_gcg="$_gcg ${_gcr%%:*}"
 	done
+	gate_last
+	if [ -n "${_gss:-}" ] && [ -n "$_glast" ] && [ "$_glast" != "${_gsb:-}" ]; then
+		case " $_gcg " in *" $_glast "*) ;; *) _gcg="$_gcg $_glast" ;; esac
+	fi
 	# shellcheck disable=SC2086 # a list of process groups
 	[ -z "$_gcg" ] || gate_end $_gcg
 	rm -rf "${_gd:?}"

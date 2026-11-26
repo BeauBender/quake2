@@ -40,9 +40,10 @@
 #   kgrp      SIGKILL to test.sh's process group there: test.sh's status
 #             137, and what the running check started is gone within 10 s;
 #   sigs      a check run by test.sh there gets SIGINT, SIGQUIT, SIGHUP,
-#             SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU as one started directly does (as
-#             origin/main's test.sh ran each check), SIGINT delivered
-#             (not asked when SIGINT is ignored here);
+#             SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU as one started directly
+#             with every signal at its default does, SIGINT delivered (each
+#             check's supervisor starts it so, TASK221: also when SIGINT is
+#             ignored here);
 #   ttyfork   what the shell writes between fork and exec when test.sh
 #             starts the scheduler, or the scheduler a check, reaches no
 #             terminal: on a tostop one it would stop that child (forced
@@ -174,6 +175,13 @@ mkdir "${tmp:?}/bin" "${tmp:?}/shim" "${tmp:?}/make"
 # own directory (FIX186): its mutants are written to $tmp, so it is there too
 mkdir -p "${tmp:?}/bench/core"
 cp "$top/scripts/bench/core/common.sh" "${tmp:?}/bench/core/common.sh"
+# and its process supervisor from lib/ (TASK221), built once here into the
+# tool cache, which every run then shares (a case may set HOME elsewhere)
+mkdir "${tmp:?}/lib"
+cp "$top/scripts/lib/supervise.sh" "$top/scripts/lib/supervise.c" "${tmp:?}/lib/"
+_gsv=$(. "$top/scripts/lib/supervise.sh" && sv_path) || { printf '%s\n' "$me: cannot build the process supervisor"; exit 1; }
+SUPERVISE_CACHE=$(dirname "$_gsv")
+export SUPERVISE_CACHE
 cat > "${tmp:?}/fake" << 'EOF'
 #!/bin/sh
 n=${0##*/}
@@ -767,6 +775,8 @@ gtree() {
 	cp "$SCHED" "$_gtd/tree/scripts/gate-checks.sh"
 	mkdir -p "${_gtd:?}/tree/scripts/bench/core"
 	cp "$(dirname "$SCHED")/bench/core/common.sh" "$_gtd/tree/scripts/bench/core/common.sh"
+	mkdir "${_gtd:?}/tree/scripts/lib"
+	cp "$(dirname "$SCHED")/lib/supervise.sh" "$(dirname "$SCHED")/lib/supervise.c" "$_gtd/tree/scripts/lib/"
 	chmod +x "$_gtd/tree/scripts/test.sh" "$_gtd/tree/scripts/gate-checks.sh"
 	spec "$_gtd" a "$@"
 	for _tn in $(sed -n -e 's/^gate_first="\(.*\)"$/\1/p' -e 's/^gate_serial="\(.*\)"$/\1/p' "$_gtf") check-z.sh; do
@@ -829,13 +839,13 @@ c_sigs() {
 	lwait 90 || rc=$?
 	[ "$rc" -eq 0 ] && grep -q '^make ' "$d/events" || { say "sigs: test.sh on the probe gave status $rc"; return 1; }
 	_sgt=$(grep '^sig ' "$d/events" || :)
+	# each check's supervisor starts it with every signal at its default
+	# (TASK221), so a signal ignored here (SIGINT, under the merge gate) is
+	# delivered there all the same
+	_sgw=$(printf '%s\n' "$_sgw" | sed 's/ ignored$/ delivered/')
 	[ "$_sgt" = "$_sgw" ] ||
-		{ say "sigs: a check run by test.sh got: $(printf '%s\n' "$_sgt" | tr '\n' ' ')run directly: $(printf '%s\n' "$_sgw" | tr '\n' ' ')"; return 1; }
-	if [ -n "$INT_OK" ]; then
-		printf '%s\n' "$_sgt" | grep -qx 'sig a INT delivered' || { say "sigs: SIGINT is not delivered to a check run by test.sh"; return 1; }
-	else
-		skipint "sigs' assertion that SIGINT is delivered"
-	fi
+		{ say "sigs: a check run by test.sh got: $(printf '%s\n' "$_sgt" | tr '\n' ' ')run directly, every signal at its default: $(printf '%s\n' "$_sgw" | tr '\n' ' ')"; return 1; }
+	printf '%s\n' "$_sgt" | grep -qx 'sig a INT delivered' || { say "sigs: SIGINT is not delivered to a check run by test.sh"; return 1; }
 }
 
 # tscrub: its standard input on one line (lines joined by a space), with the
@@ -1092,7 +1102,9 @@ c_ttylate() {
 #   child that becomes the scheduler is not stopped by its own trace line;
 # - the scheduler run with sh -x on one check writes no trace of the
 #   check's command (the child's line) to its own output, while it writes
-#   its other traces there (+ set -m)
+#   its other traces there (+ gate_start 1). That child is the check's
+#   supervisor, in the scheduler's process group with SIGTTOU ignored, so
+#   no write of its own can stop it (TASK221)
 # Every sh -x run here has PS4='+ ' in its own environment, so a PS4 this
 # self-test is started with changes no trace line it looks for.
 c_ttyfork() {
@@ -1103,7 +1115,7 @@ c_ttyfork() {
 	bounded 90 "$d/out" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PS4='+ ' \
 		sh -x "$SCHED" "" "" "$d/check-a.sh" || rc=$?
 	[ "$rc" -eq 0 ] && grep -qx 'a line 1' "$d/out" || { say "ttyfork: the scheduler with sh -x gave status $rc"; return 1; }
-	grep -qx '+ set -m' "$d/out" || { say "ttyfork: the scheduler with sh -x wrote no trace"; return 1; }
+	grep -qx '+ gate_start 1' "$d/out" || { say "ttyfork: the scheduler with sh -x wrote no trace"; return 1; }
 	if grep -qxF "+ $d/check-a.sh" "$d/out"; then
 		say "ttyfork: the scheduler's child wrote to its standard error before its exec (+ $d/check-a.sh)"
 		return 1
@@ -1818,7 +1830,8 @@ smut() {
 	cp "$top/scripts/test.sh" "$top/scripts/gate-checks.sh" "$_sm/scripts/"
 	mkdir -p "${_sm:?}/scripts/bench/core"
 	cp "$top/scripts/bench/core/common.sh" "$_sm/scripts/bench/core/common.sh"
-	mkdir -p "${_sm:?}/tests/lib"
+	mkdir -p "${_sm:?}/tests/lib" "${_sm:?}/scripts/lib"
+	cp "$top/scripts/lib/supervise.sh" "$top/scripts/lib/supervise.c" "$_sm/scripts/lib/"
 	cp "$top/tests/lib/proc.sh" "$_sm/tests/lib/proc.sh"
 	lit "$top/tests/check-gate-parallel.sh" "$3" "$4" "smut " > "$_sm/tests/check-gate-parallel.sh" ||
 		{ bad "mutant $1 does not apply to this self-test"; return 0; }
