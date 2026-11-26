@@ -23,9 +23,9 @@ Some rules to follow:
 * Never ever add new dependencies. We won't accept code that add new
   dependencies. If in doubt, because you really need that nice little
   library, ask.
-* Make sure that your code is compiling without warnings with at least
-  current versions of GCC and Clang. Also make sure that it's working on
-  both unixoid platforms and Windows.
+* Make sure that your code is compiling without warnings with the
+  current Xcode toolchain (Clang). Also make sure that it's working on
+  Apple platforms, the only ones this fork builds and tests.
 * Don't do unnecessary cleanups. Yes, your linter or sanity checker may
   complain. But that's your problem and not ours. Cleanups often bring
   next to no advantage, Quake II has always been a mess and it'll stay a
