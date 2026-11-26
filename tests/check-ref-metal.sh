@@ -52,7 +52,7 @@
 #     mutants, compiled with xcrun metal where it is there,
 #     tests/metal/rm_rtpdenoise_test.c, RT-primary's 5 x 5 filter of that
 #     light (common/mtl_rtpd_math.h, TASK190 slice 2), with five mutants of
-#     the header and three pins of rm_rtpdenoise.metal with four mutants,
+#     the header and five pins of rm_rtpdenoise.metal with six mutants,
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -2456,7 +2456,9 @@ done
 # The kernel, rm_rtpdenoise.metal, pinned as text: the pixel's and each neighbour's distance and material
 # from the history's key, the neighbour's count and normal reaching the weight (mutants: the material
 # compared with itself, the count not passed), the history read for the values (mutant: the trace's light
-# read in its place), and only the light written (mutant: the history written). Where the Metal compiler
+# read in its place), the neighbours bounded on all four sides (mutant: the right and bottom bounds
+# dropped), the pixel's history filtered and not the raw trace (mutant: the trace's light in its place),
+# and only the light written (mutant: the history written). Where the Metal compiler
 # is there, the kernel and every mutant must compile. The back end dispatches it in the accumulation's
 # encoder after rm_rtp_temporal, behind a texture barrier and before the histories swap; the Makefile
 # compiles and links the unit.
@@ -2469,6 +2471,8 @@ rtpd_pin() { # <file> <pin>: 0 when the file holds the pin
 			rtpd_body "$1" | grep -qF 'const uint m = kc.y;' ;;
 		hist) rtpd_body "$1" | grep -qF 'acc = mtl_rtpd_add(acc, wt, mtl_rtpd_rgba(hn));' &&
 			rtpd_body "$1" | grep -qF 'const float4 hn = hist.read(sp);' ;;
+		bounds) rtpd_body "$1" | grep -qF 'if ((sx < 0) || (sy < 0) || (sx >= (int)w) || (sy >= (int)hh))' ;;
+		result) rtpd_body "$1" | grep -qF 'mtl_rtpd_result(acc, mtl_rtpd_rgba(hc), light_in.read(px).a)' ;;
 		writes) [ "$(strip "$1" | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.write\(' | tr -d '\n')" = 'light_out.write(' ] &&
 			! strip "$1" | grep -E 'access::(read_)?write>' | grep -vqE ' light_out \[\[texture' ;;
 	esac
@@ -2481,7 +2485,7 @@ elif [ -n "$rtp_metal" ] && ! rtp_compile "$rtpd_k"; then
 	cat "${tmp:?}/metal.out"
 	bad "rm_rtpdenoise.metal does not compile"
 fi
-for p in weight hist writes; do
+for p in weight hist bounds result writes; do
 	if [ ! -f "$rtpd_k" ] || ! rtpd_pin "$rtpd_k" "$p"; then
 		bad "rm_rtpdenoise.metal does not hold the filter's $p pin"
 		continue
@@ -2490,6 +2494,8 @@ for p in weight hist writes; do
 	case $p in
 		weight) kms="samemat nocount" ;;
 		hist) kms="trace" ;;
+		bounds) kms="halfbound" ;;
+		result) kms="rawtrace" ;;
 		*) kms="histw" ;;
 	esac
 	for m in $kms; do
@@ -2497,6 +2503,8 @@ for p in weight hist writes; do
 			samemat) sed 's/nc, nn, m, kn\.y, hn\.a, nv\.a)/nc, nn, m, m, hn.a, nv.a)/' ;;
 			nocount) sed 's/nc, nn, m, kn\.y, hn\.a, nv\.a)/nc, nn, m, kn.y, 1.0f, nv.a)/' ;;
 			trace) sed 's/const float4 hn = hist\.read(sp);/const float4 hn = float4(light_in.read(sp).rgb, hist.read(sp).a);/' ;;
+			halfbound) sed 's/if ((sx < 0) || (sy < 0) || (sx >= (int)w) || (sy >= (int)hh))/if ((sx < 0) || (sy < 0))/' ;;
+			rawtrace) sed 's/mtl_rtpd_result(acc, mtl_rtpd_rgba(hc), /mtl_rtpd_result(acc, mtl_rtpd_rgba(light_in.read(px)), /' ;;
 			histw) awk '/texture\(8\)/ { sub(/access::read> hist/, "access::read_write> hist") }
 				/light_out\.write\(/ { print; print "\t\thist.write(float4(0.0f), px);"; next } { print }' ;;
 		esac < "$rtpd_k" > "${tmp:?}/rtpd-kernel.metal"
@@ -2512,8 +2520,8 @@ for p in weight hist writes; do
 		fi
 	done
 done
-[ "$rtpd_kpins" = 3 ] && [ "$rtpd_kmut" = 4 ] ||
-	bad "rm_rtpdenoise.metal holds $rtpd_kpins of its 3 pins and refuses $rtpd_kmut of its 4 mutants"
+[ "$rtpd_kpins" = 5 ] && [ "$rtpd_kmut" = 6 ] ||
+	bad "rm_rtpdenoise.metal holds $rtpd_kpins of its 5 pins and refuses $rtpd_kmut of its 6 mutants"
 # the back end: in rmb_rtdir_accumulate, the temporal dispatch, then a texture barrier, the filter's
 # pipeline and its dispatch, then the swap of the histories, in that order
 if ! awk '/^rmb_rtdir_accumulate\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$rm_dir/rmb_rtdir.m" |

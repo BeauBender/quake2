@@ -194,10 +194,14 @@ summed light is denoised, not each term) and 10 (the water blur runs under RT-pr
   `tests/metal/rm_rtptemporal_test.c` gains 4 checks for the count (red: 3 failed), then 63, 0 failed.
 - **Header mutants** (`tests/check-ref-metal.sh`), each of which must compile and fail it: green summed from
   red, the count ignored, a neighbour without a normal weighed, the count kept as the alpha, the clamp dropped.
-- **Kernel text pins** with four mutants, each compiled with `xcrun metal` where it is there: the key's
+- **Kernel text pins**, five with six mutants, each compiled with `xcrun metal` where it is there: the key's
   distance and material and the neighbour's count and normal reaching the weight (mutants: the material
   compared with itself, the count not passed), the history read for the values (mutant: the trace's light
-  read in its place), and only `t_acc` written (mutant: the history written). The back end's order (the
+  read in its place), the neighbours bounded on all four sides (mutant: the right and bottom bounds
+  dropped), the result taken from the pixel's history and not the raw trace (mutant:
+  `mtl_rtpd_rgba(light_in.read(px))` in place of `mtl_rtpd_rgba(hc)`), and only `t_acc` written (mutant: the
+  history written). The bounds and result pins were added in review; the slice 2 hold below ran before
+  them, with three pins and four mutants. The back end's order (the
   accumulation, the barrier, the filter, the swap) and the Makefile's two lines are pinned.
 - **The water's pin** is inverted: the scene must call `rmb_rtw_set_blur(RM_RTT_On());` once and name no
   presentation there (mutants: the RT-primary gate put back, the call commented out). `rm_rttemporal_test`
