@@ -46,6 +46,8 @@
 #     or a leading "-" leave out exactly the harness checks the selector
 #     does not choose, from the checks and from gate_first, on one line
 #     that names them and no path; a changed harness path leaves out none;
+#     a path a commit since the merge base changed and the lane set back
+#     (a stale origin/main) still counts;
 #     GATE_ALL=1, no origin/main, no merge base, a git error, a change for
 #     which the selector chooses no harness check, a selector that fails or
 #     prints a name it was not given, a name twice or none, and an empty or
@@ -621,6 +623,17 @@ gt_cases() {
 		printf '%s\n' "$GO" | grep -q '^test\.sh: no harness check is left out' ||
 			{ echo "case harness-path: no 'no harness check is left out' line"; cf=1; }
 		gt_clean harness-path || cf=1
+	fi
+	# a stale origin/main: main changed scripts/coverage.sh after it, and
+	# the lane holds that commit, sets the path back and changes src/; CI
+	# sees both paths, so the checks that read scripts/coverage.sh run
+	if want stale-base; then
+		mk stale-base && g "$d" checkout -q main && echo B > "$d/scripts/coverage.sh" &&
+			g "$d" commit -q -am main && g "$d" checkout -q work && g "$d" merge -q --ff-only main &&
+			echo base > "$d/scripts/coverage.sh" && echo y > "$d/src/a.c" &&
+			g "$d" commit -q -am lane || return 1
+		gt_run "$d"
+		gt_left stale-base "$d" "$(minus "$HALL" "check-bench-entry.sh check-bounded-run.sh $rg")" || cf=1
 	fi
 	# fail closed
 	if want gate-all; then
