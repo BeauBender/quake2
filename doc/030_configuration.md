@@ -71,13 +71,13 @@ just try work around them.
 
 If your computer is **fast enough** to reach at least 60fps in Portmanbeau Quake II
 (this should be the case for most machines these days, including Laptops
- with integrated GPUs; a notable exception are Raspberry PIs),
+ with integrated GPUs),
 the following settings should give you the best results:
 
 * Make sure that `busywait` is set to `1`. That's the default. Setting
   it to `0` saves some CPU time (and thus increase battery life and
-  reduce heat), but can mess up the timings, especially on Windows,
-  which can lead to tearing- and / or micro stuttering.
+  reduce heat), but can mess up the timings, which can lead to tearing-
+  and / or micro stuttering.
 * Set `cl_async` to `1` (the default) to avoid glitches especially in
   physics/movement when rendering at high framerates (>90fps).
 * `cl_maxfps` should usually be set to `-1` (the **new** default) so
