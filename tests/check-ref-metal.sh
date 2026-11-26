@@ -789,6 +789,50 @@ else
 fi
 seg 10 "; ray-tracing gate ${rtg:-host test}"
 
+# TASK190 slice 3: the menu's copy of RT-primary's scaler row (vidrules.c) against the renderer's (rm_rtgate.c),
+# one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must refuse: the renderer's row
+# dropped, the renderer's capability rule dropped, the menu's capability rule dropped
+pmbuild() {
+	# shellcheck disable=SC2086 # flags and fxhost are word lists
+	$cc $flags $fxhost -I"$rm_dir" -Isrc/client/menu -o "$3" tests/metal/rm_pres_menu_test.c "$1/rm_rtgate.c" "$rm_dir/rm_rtfx.c" "$2" -lm
+}
+pm=""
+pm_mutants=0
+if ! pmbuild "$rm_dir" src/client/menu/vidrules.c "${tmp:?}/rm_pres_menu_test" > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_pres_menu_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_pres_menu_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_pres_menu_test.c failed: the menu and the renderer disagree on RT-primary's scaler"
+else
+	pm=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_pres_menu_test: //')
+	case $pm in *", 0 failed") ;; *) bad "tests/metal/rm_pres_menu_test.c printed no result line"; pm="";; esac
+fi
+if [ -n "$pm" ]; then
+	mkdir "${tmp:?}/pmm"
+	for pmm in row rcaps mcaps; do
+		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c "${tmp:?}/pmm/"
+		case $pmm in
+			row) sed '/{ "r_metalfx", 2\.0f },/d' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			rcaps) sed 's/if ((mode == RM_PRES_RTPRIMARY) \&\& (!temporal || show))/if ((mode == RM_PRES_RTPRIMARY) \&\& show)/' \
+				"$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			mcaps) sed 's/(modemask \& VIDMFX_TEMPORAL) ? 2 : 0;/2;/' src/client/menu/vidrules.c > "${tmp:?}/pmm/vidrules.c" ;;
+		esac
+		if cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/pmm/rm_rtgate.c" && cmp -s src/client/menu/vidrules.c "${tmp:?}/pmm/vidrules.c"; then
+			bad "the menu-parity mutant ($pmm) changed nothing"
+		elif ! pmbuild "${tmp:?}/pmm" "${tmp:?}/pmm/vidrules.c" "${tmp:?}/pmm/t" > "${tmp:?}/pmm.out" 2>&1; then
+			cat "${tmp:?}/pmm.out"
+			bad "the menu-parity mutant ($pmm) does not compile"
+		elif "${tmp:?}/pmm/t" > "${tmp:?}/pmm.out" 2>&1; then
+			bad "tests/metal/rm_pres_menu_test.c passes the menu-parity mutant ($pmm)"
+		else
+			pm_mutants=$((pm_mutants + 1))
+		fi
+	done
+	[ "$pm_mutants" = 3 ] || bad "tests/metal/rm_pres_menu_test.c refuses $pm_mutants of its 3 mutants"
+fi
+seg 10.2 "; menu and renderer scaler rule ${pm:-host test}, $pm_mutants parity mutants refused"
+
 # the effect table (TASK179): tests/metal/rm_rtfx_test.c over rm_rtfx.c and rm_rtgate.c, the order every walk
 # takes, each row's switch against the gate's table, and the pipeline rule of rmb_gbuf_pipe3d. fxbuild <dir>
 # <out>: the test built over rm_rtfx.c and rm_rtgate.c of <dir> (a scratch copy finds the headers by -I)

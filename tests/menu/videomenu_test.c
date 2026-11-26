@@ -1213,8 +1213,12 @@ test_rt_screen_under_rtprimary(void)
 				"%s on the tuning screen under Ray traced: greyed %d, %s", tu_off[i], RTGreyed(tu_off[i]),
 				RTItem(tu_off[i])->statusbar);
 		}
-		CHECK(!RTGreyed("water hits") && !RTGreyed("scaler") && !RTGreyed("flat light"),
-			"a tuning row Ray traced leaves alone is greyed");
+		CHECK(!RTGreyed("water hits") && !RTGreyed("flat light"), "a tuning row Ray traced leaves alone is greyed");
+		/* TASK190 slice 3: the scaler is the mode's, the temporal one (modes 7 hold it), shown as in use */
+		CHECK(RTGreyed("scaler") && !strcmp(RTItem("scaler")->statusbar, "set by the presentation: temporal") &&
+			((menulist_s *)RTItem("scaler"))->curvalue == 2, "scaler on the tuning screen under Ray traced: greyed %d, "
+			"shows %d, %s", RTGreyed("scaler"), ((menulist_s *)RTItem("scaler"))->curvalue, RTItem("scaler")->statusbar);
+		CHECK(!RTGreyed("scale"), "scale greyed on the tuning screen under Ray traced");
 	}
 	Open("metal", "7");
 	menu = main_menu;
@@ -1243,6 +1247,49 @@ test_rt_screen_under_rtprimary(void)
 	OpenRT("1");
 	CHECK(!RTGreyed("ambient occlusion") && strcmp(RTItem("AO range")->statusbar, "set by the presentation"),
 		"stock greys AO for the presentation after Ray traced");
+}
+
+/* TASK190 slice 3: under Ray traced the main menu's scaler is the mode's: the temporal scaler where the GPU has it,
+   else off with its reason; the scale stays the user's while a scaler runs, and Apply writes no r_metalfx */
+static void
+test_metalfx_under_rtprimary(void)
+{
+	SetCv("r_presentation", "3");
+	SetCv("r_rt_available", "1");
+	SetCv("r_metalfx", "0");
+	Open("metal", "7");
+	menu = main_menu;
+	CHECK(Greyed("MetalFX scaler") && Item("MetalFX scaler")->statusbar &&
+		!strcmp(Item("MetalFX scaler")->statusbar, "set by the presentation: temporal") &&
+		((menulist_s *)Item("MetalFX scaler"))->curvalue == 2 && !Greyed("MetalFX scale"),
+		"the MetalFX items under Ray traced: scaler greyed %d shows %d (%s), scale greyed %d", Greyed("MetalFX scaler"),
+		((menulist_s *)Item("MetalFX scaler"))->curvalue, Item("MetalFX scaler")->statusbar, Greyed("MetalFX scale"));
+	{
+		const int w = Writes("r_metalfx");
+
+		Apply();
+		CHECK(Writes("r_metalfx") == w && !strcmp(Str("r_metalfx"), "0"), "Apply wrote r_metalfx under Ray traced: %s",
+			Str("r_metalfx"));
+	}
+
+	/* no temporal scaler on the GPU (modes 3: off and spatial): the row reads off, with the reason */
+	Open("metal", "3");
+	menu = main_menu;
+	CHECK(Greyed("MetalFX scaler") && Item("MetalFX scaler")->statusbar &&
+		!strcmp(Item("MetalFX scaler")->statusbar, "off: no temporal scaler on this GPU") &&
+		((menulist_s *)Item("MetalFX scaler"))->curvalue == 0 && Greyed("MetalFX scale"),
+		"the MetalFX items under Ray traced without the temporal scaler: scaler greyed %d shows %d (%s), scale greyed %d",
+		Greyed("MetalFX scaler"), ((menulist_s *)Item("MetalFX scaler"))->curvalue, Item("MetalFX scaler")->statusbar,
+		Greyed("MetalFX scale"));
+
+	/* no ray tracing: the mode is not run, and the scaler is the user's */
+	SetCv("r_rt_available", "0");
+	Open("metal", "7");
+	menu = main_menu;
+	CHECK(!Greyed("MetalFX scaler"), "the scaler greyed under Ray traced without ray tracing");
+
+	SetCv("r_presentation", "0");
+	SetCv("r_rt_available", "1");
 }
 
 /* TASK183: the ray-tracing screen under a presentation: Enhanced runs the
@@ -1764,6 +1811,7 @@ main(void)
 	test_rt_screen_under_presentation();
 	test_screens_under_retro();
 	test_rt_screen_under_rtprimary();
+	test_metalfx_under_rtprimary();
 	test_tuning_screen();
 	test_hdr_items();
 	test_colorspace_choice_is_pending();
