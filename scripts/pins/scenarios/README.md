@@ -56,6 +56,7 @@ scenario through it. The cases each of them is held to are in
 | `hdr-metalfx2` | `hdr` with `r_metalfx 2` at `r_metalfx_scale 0.5`: `MTLFXTemporalScaler` on `ref_metal`'s float16 view and frame, before the tone map; its own reference, not compared with `hdr` or `world-metalfx2`; where the device lacks the scaler `r_metalfx` reads the best supported mode below; other renderers ignore the cvars and draw it as `world` (TASK196, HD4) |
 | `rt-all-metalfx2` | `dlights` with every ray-traced effect of `ref_metal` on, each at its `rt-*` scenario's values (`r_rt_shadows`, `r_rt_ao`, `r_rt_sun`, `r_rt_water`), `r_rt_temporal 0` (explicit, so a later default cannot move this pin; the `rt-*` pins rely on the default of 0), and `r_metalfx 2` at the default `r_metalfx_scale 0`: the effects traced at the scaler's internal size and upscaled by `MTLFXTemporalScaler`; at the harness's 480 lines the default scale is the view's own size (the GPU family's default rows are 720 or 1080), so `r_metalfx_scale 0.5` is recorded from a scratch copy; recorded with `PINS_SEED`, as `dlights`; `demo1.dm2` shows no warped water, so `r_rt_water` is exercised by recording it a second time on `skywater`'s camera path (`PINS_DEMO=water.dm2`), as `rt-water`; where the device lacks the temporal scaler `r_metalfx` reads the best supported mode below; other renderers ignore the cvars and draw it as `dlights` (TASK109) |
 | `rtprimary-metalfx2` | `rtprimary-world` with `r_metalfx 2` at the default `r_metalfx_scale 0`: RT-primary traced at the scaler's internal size and upscaled by `MTLFXTemporalScaler`, `r_rt_temporal 0`; the default scale as `rt-all-metalfx2`; provisional as `rtprimary-world`; other renderers ignore the cvars and draw it as `world` (TASK109) |
+| `rtprimary-overlayfx` | `rtprimary-world` at `r_metalfx_scale 0.5` with the player's `r_metalfx 0`: the mode's overlay reads `r_metalfx` as 2, so RT-primary is traced at half the view's size and upscaled by `MTLFXTemporalScaler` with no scaler setting of the player's; at the default scale the harness's 480 lines are the view's own size and the mode runs no scaler of its own, so every other `rtprimary-*` pin is unchanged; where the device lacks the temporal scaler the overlay reads off; provisional as `rtprimary-world`; other renderers ignore the cvars and draw it as `world` (TASK190 slice 3) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the GL renderers' screen blend off (`gl_polyblend 0`, TASK82) |
@@ -190,6 +191,7 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `rt-sun` | world | `models` |
 | `rt-all-metalfx2` | world,dynamic-lights | `particles` |
 | `rtprimary-metalfx2` | world | `models` |
+| `rtprimary-overlayfx` | world | `models` |
 
 TASK55 adds `rt-shadows` (tags `world`, `dynamic-lights`; companion
 `rt-shadows-entities`) and `rt-shadows-entities` (tags `world`, `entities`,

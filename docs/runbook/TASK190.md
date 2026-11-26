@@ -260,7 +260,76 @@ Run by the orchestrator; the numbers below are its `task190s2-summary.log`'s.
 - Frames for the owner (`demo1.dm2` captures 21, 22 and 12, filtered and accumulated alone; `water.dm2`
   captures 1 and 3, the blur on and off) were set aside for the owner and not committed.
 
+# Slice 3: the MetalFX temporal scaler through RT-primary's overlay
+
+Branch `task190s3`, on main after slice 2 merged (#791). The card's defaults 2 (a development view is drawn
+unscaled under the overlay's scaler) and 5 (the scaler resets only when an effect goes from none to on, which is
+TASK109's code and is not touched here). No change to the scaler's own code (`rm_fxscene.c`, `rm_metalfx.c`,
+`rmb_metalfx.m`), which TASK109 owns.
+
+## What existed before slice 3
+
+- `pres_rtprimary` (`rm_rtgate.c`) decided `r_rt_direct`, `r_rt_shadows`, `r_rt_sun`, `r_rt_ao` and `r_rt_water`;
+  `r_metalfx` was the player's under RT-primary. `rtprimary-metalfx2` sets `r_metalfx 2` itself.
+- The scaler reads `r_metalfx` through `RM_Effect` (`rm_fxscene.c`'s `RM_FX_Read`), so an overlay row reaches it,
+  and a value the overlay supplies is read and never written back (`rm_fx_writeback`, `rm_effect_overlaid`). A
+  mode the device lacks falls to the best one below (`rm_fx_supported`): the temporal scaler to the spatial one.
+- At `r_metalfx_scale 1`, or at the default in a window no taller than the GPU's default rows (the harness's 480
+  lines), a scaler on runs at 1:1 as temporal anti-aliasing, with its jitter (TASK109's runbook).
+- The menu greyed the scaler items only under Retro (`VidRules_MetalFXOverridden`, `VidRules_TuneOverridden`).
+
+## What slice 3 adds
+
+- **The row.** `pres_rtprimary` gains `{ "r_metalfx", 2.0f }`, the temporal scaler. `rm_pres_fx` (new,
+  `rm_rtgate.c`) is the value `RM_Effect` returns for `r_metalfx`: under RT-primary it is `0` (off) on a device
+  without the temporal scaler (never the spatial one below it, the plan's section 2.3) and while
+  `r_rt_direct_show` shows a development view (default 2: the view is drawn unscaled); else the row's `2` where
+  the view's internal size is below its output, and the player's value at the output's own size. The last rule
+  is the plan's section 2.2 ("the temporal scaler where the output is above the internal size") and section 6
+  ("at `r_metalfx 0` and the internal size equal to the output, so no scaler history enters a pin"): at the
+  harness's 480 lines and the default scale the mode runs no scaler of its own, so every existing `rtprimary-*`
+  record keeps its frames, `rtprimary-metalfx2`'s 1:1 temporal anti-aliasing included. Every other mode reads
+  `rm_pres_value`'s value as before.
+- **The size.** `RM_PresBelow` (`rm_main.c`) sets, at the start of each `RI_RenderFrame`, whether the view's
+  internal size is below its output, exactly as `RM_FX_Begin` sizes it: `rm_fx_scale` of `r_metalfx_scale` (as
+  the A/B side gives it), the GPU's default rows and the temporal scaler's largest ratio, over the view's
+  rectangle (`rm_view_rect`, as `R_SetupGL`). It calls the scaler's pure functions and changes none.
+- **The capability.** `rm_main.c` reads `rmb_fx_support()` with the presentation at start-up and at
+  `vid_restart`, and prints a second line after the presentation's under RT-primary (`rm_pres_fx_format`):
+  `ref_metal: presentation: ray traced: r_metalfx reads 2 (temporal) where the internal size is below the output,
+  r_metalfx_scale the user's`, or, without the temporal scaler, `... r_metalfx reads 0 (off): no MetalFX temporal
+  scaler on this device`.
+- **The menu.** `VidRules_MetalFXDecided` (`vidrules.c`, new) is the menu's copy of the rule until TASK237 makes
+  one table: Retro `0` ("set by the presentation", as before), Ray traced where it runs `2` ("set by the
+  presentation: temporal") or `0` without the temporal scaler ("off: no temporal scaler on this GPU"), and the
+  player's at `r_metalfx_scale` 1 or above. The menu does not see the window's height, so it counts the default
+  scale as below the output. The video menu's "MetalFX scaler" item and the Tuning screen's "scaler" row are
+  greyed with that reason and show the value in use; the "MetalFX scale" item follows the value in use (live at
+  `2`, "needs a scaler" at `0`). Apply writes no `r_metalfx` while the item is greyed.
+- **No new cvar.** `doc/040_cvarlist.md`'s `r_presentation` and `r_metalfx` entries say what Ray traced reads.
+
+## Slice 3's tests
+
+- **Host:** `tests/metal/rm_rtgate_test.c` gains the row and `rm_pres_fx` for six player values (NaN among them),
+  each of the device, development-view and size inputs, and every mode, the row's `rm_effect_overlaid`, and the
+  two lines. Red before the code (`rm_pres_fx` did not exist), then 1162 checks, 0 failed.
+- **Menu and renderer:** `tests/metal/rm_pres_menu_test.c` (new) links `rm_rtgate.c`, `rm_metalfx.c` and
+  `vidrules.c` into one binary and holds `VidRules_MetalFXDecided` to `rm_pres_decide` then `rm_pres_fx` over 11
+  presentation values, ray tracing on and off, all 32 mode masks, 10 scales (0, NaN and the infinities among them)
+  and 4 player values, at an output of 2160 lines: 56329 checks, 0 failed. `tests/check-ref-metal.sh` runs it and
+  requires its five mutants refused: the renderer's row dropped, the renderer's and then the menu's capability rule
+  dropped, the renderer's and then the menu's size rule dropped (768, 1216, 1218, 192 and 193 checks failed).
+- **The menu:** `tests/menu/videomenu_test.c` expects, under Ray traced, the Tuning screen's scaler greyed showing
+  "temporal", the main menu's scaler greyed with each reason (modes 7 and 3), the scale item live with the temporal
+  scaler and greyed without it, Apply writing no `r_metalfx`, and the item the player's at scale 1 and without ray
+  tracing. The scaler's row was live under Ray traced before (red).
+- **Pins:** `scripts/pins/scenarios/rtprimary-overlayfx.cfg` (new) is `rtprimary-world` at `r_metalfx_scale 0.5`
+  with the player's `r_metalfx 0`: only the overlay's scaler runs there. Every other scenario is unchanged.
+
+## Slice 3 hold
+
+Written as the scratchpad's `hold-T190s3.sh` and run by the orchestrator; its results are not in yet.
+
 ## Left for the next slices
 
-- Slice 3: the scaler through the overlay (`r_metalfx 2` in `pres_rtprimary`).
 - Slice 4: the cost table of section 4.5, measured in the owner's quiet window.

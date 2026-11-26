@@ -1008,6 +1008,9 @@ marked `(n/a)` and skipped.
   colour (the spatial scaler in its HDR mode), and a change of `r_hdr`
   makes it anew in the new format, without its history; a GPU that will
   not make it in that format leaves the scaler off with one line.
+  The Retro and Ray traced presentations read it in place of your value
+  without writing it (`r_presentation`): Retro as `0`, Ray traced as `2`
+  while the view is scaled down, `0` on a GPU without the temporal scaler.
   Other renderers do not have it. Saved with the configuration; applies
   from the next frame.
 
@@ -1083,7 +1086,22 @@ marked `(n/a)` and skipped.
   at `r_rt_sunscale`) and one bounce of indirect light
   (`r_rt_direct_bounce`, one ray a pixel that reads the stock lightmap
   where it lands); the denoiser is later work, so the sky light and the
-  bounce are noisy (one ray a pixel each, no denoiser yet). Models, the sky,
+  bounce are noisy (one ray a pixel each, no denoiser yet). Ray traced
+  also reads `r_metalfx` as `2`, `MTLFXTemporalScaler`, while the 3D
+  view's internal size (`r_metalfx_scale`, whose value stays yours) is
+  below its own; at the view's own size (a scale of `1`, or the default
+  in a window no taller than the GPU's default rows) the mode runs no
+  scaler of its own and `r_metalfx` is yours. On a GPU without the
+  temporal scaler it reads `r_metalfx` as `0`, never as the spatial
+  scaler, and says so at start-up and at `vid_restart` (`ref_metal:
+  presentation: ray traced: r_metalfx reads 0 (off): no MetalFX temporal
+  scaler on this device`); while a development view
+  (`r_rt_direct_show`) is shown it reads `0` too, so the view is drawn
+  unscaled. The video menu's "MetalFX scaler" item and the Tuning
+  screen's "scaler" row are then greyed with the value in use
+  ("set by the presentation: temporal", or "off: no temporal scaler on
+  this GPU"); the menu counts the default scale as below the view's own
+  size. Models, the sky,
   water, particles and the 2D layer stay stock. Retro and Ray traced are greyed in
   the menu "awaiting review" until their look is accepted, and work from
   the console; the values are never renumbered. Read at start-up and at
