@@ -22,7 +22,8 @@ calls them, so no frame changes (the hold, below).
   - **The tag.** A traced model's vertex colour is replaced by a tag, which the G-buffer
     raster stores in its light attachment. The tag is a mid grey (128/255) whose alpha is
     `MTL_RTM_TAG_BASE` (160) plus the flags glow, minlight and weapon, in steps of 1/255.
-    `mtl_rtm_is_tag` and `mtl_rtm_tag_flags` read it back.
+    `mtl_rtm_is_tag` and `mtl_rtm_tag_flags` read it back. (Slice 3's review drops the
+    grey: the tag is now the alpha alone, over the stock colour.)
   - **The weapon's depth.** `mtl_rtm_weapon_depth` turns the stored depth `d` (0 .. 0.3,
     `rm_alias_depth`'s `zfar`) into the 0 .. 1 clip depth that `rm_rts_unproject` takes,
     `d / 0.3`. `mtl_rtm_weapon_ndc` is the same as GL's -1 .. 1.
@@ -321,6 +322,12 @@ presentation changes.
   minlight, the weapon). A model without a flag keeps its own colour in the light
   attachment, as in slice 2, and that reads as no flags. So the untagged models' raster
   is unchanged. `R_AliasMotion` now returns `rm_gb_alias_extra`'s result for this.
+  - Since the review, the tag is the alpha alone (`MTL_RTM_TAG_BASE` plus the flags). The
+    rgb stays the model's stock colour. So on a frame where the model pass does not write
+    a tagged pixel, the resolve shows it stock-lit, not at slice 1's mid grey.
+  - Those frames are the early returns of `rmb_rtmodel_trace` after the raster: no direct
+    view, a size mismatch, no command buffer or encoder, or the scene not bound.
+  - An opaque model's own alpha is 1, so the alpha alone still tells a tag apart.
 - **The kernel** (`rm_rtm_trace`):
   - It reads the tag first. Then `rm_rtm_point` gives the point to shade at:
     - A model drawn with the view's projection takes the world's unprojection, as in
@@ -332,6 +339,11 @@ presentation changes.
     water or translucent. Water and translucent faces pass, as they do for a shadow ray,
     and a model is no wall. With a hit, the pixel is shaded at `mtl_rtm_pullback`'s point,
     0.25 units before the wall. With none it is shaded at the weapon point.
+  - Since the review, a ray that meets no wall returns `2 * len + 1`, a finite distance
+    past the weapon. Under fast math, `len` itself may come out an ulp below the length
+    `mtl_rtm_pullback` computes. The pull-back would then fire on an unoccluded pixel.
+    An infinity is not used, because fast math may fold the compare against it.
+  - `mtl_rtm_wall` names the materials: `MTL_GB_MAT_WATER` and `MTL_GB_MAT_TRANS`.
   - A frame with no weapon view (`p.weapon` 0, when glFrustum refuses the projection)
     shades a weapon pixel at the eye.
   - The glow pulse and the minlight floor come from the tag's flags through
@@ -344,6 +356,11 @@ presentation changes.
   - `rm_rtm_gunshadow` keeps the weapon out of the ray-traced scene while the models are
     traced (`RM_RTModel_Wants`, read in `RM_RT_Frame`), whatever `r_rt_gunshadow` says.
     So no ray meets it, not even its own pixels' shadow, sky and bounce rays.
+  - Since the review, `RM_RTModel_Wants` asks `rm_rtm_wants`. It needs a device with ray
+    tracing, the model pass not refused, `r_rt_direct_models` on, and `RM_RTDir_Will`.
+  - `RM_RTDir_Will` is `RM_RTDir_Frame`'s own test without the scene. It says no under
+    `r_fullbright`, for a view without the world, and when the direct pass was refused.
+    `RM_RTDir_Frame` now traces by the same test.
   - The player's own model (`RF_VIEWERMODEL`) never reaches the refdef in the first
     person, because `CL_AddPacketEntities` adds its lights and skips it. So no instance
     is made of it.
@@ -352,13 +369,18 @@ presentation changes.
 ## Choices and where the plan differs
 
 - **Only flagged models are tagged.** The plan tags weapon and flagged pixels. Tagging
-  every traced model would put the grey tag where a later row reads the raster light
+  every traced model would change the alpha where a later row reads the raster light
   attachment (see slice 2's review notes). The untagged models read as flags 0, which is
   what the tag would say.
-- **`RM_RTModel_Wants` is decided as the scene is built,** before the direct light
-  decides the frame. On a frame where the direct light is wanted but does not trace (the
-  scene not ready), the weapon is also left out of the scene. That matters only with
-  `r_rt_gunshadow 1` under RT-primary.
+- **`RM_RTModel_Wants` is decided as the scene is built,** before the passes decide the
+  frame. Since the review it asks what this frame's passes will decide (item 2 of the
+  review was cheap, so the rule is exact, and the cvar docs were not cut back). Two
+  frames still differ:
+  - When the scene is not ready, no ray is traced at all, so leaving the weapon out
+    changes nothing.
+  - On the one frame where the direct pass or the model pass first fails to open, the
+    weapon is left out and stock-lit. From the next frame on, the refusal says no.
+  - Both matter only with `r_rt_gunshadow 1` under RT-primary.
 - **The weapon's own rays.** Its shadow, sky and bounce rays start at its point, which is
   0.25 units before the wall when pulled back. They use the world's bias, as a model
   pixel's do.
@@ -368,8 +390,9 @@ presentation changes.
 
 ## The tests, red then green
 
-- **Host.** `rm_rtmodel_test.c`: `model light 3981 checks, 0 failed, 16 of 16 mutants
-  refused` (check-ref-metal segment 7.9, run here by the segment's own lines).
+- **Host.** `rm_rtmodel_test.c`: `model light 4182 checks, 0 failed, 18 of 18 mutants
+  refused` (check-ref-metal segment 7.9, run here by the segment's own lines; before the
+  review, 3981 checks and 16 mutants).
   - New and changed cases:
     - the split's named weapon, glow and minlight cases, and the sweep against the new
       rule;
@@ -394,19 +417,32 @@ presentation changes.
   | `gunshadow-kept` | the weapon kept in the scene under the traced models | `rm_rtm_gunshadow` and the instances |
   | `wall-alias` | a model read as a wall | `mtl_rtm_wall` |
   | `weapon-flag` | the weapon flag set without a view | `rm_rtm_weapon_params`' refused case |
+  | `wants-refused` | the models wanted with the model pass refused (review) | `rm_rtm_wants` |
+  | `tag-grey` | the tag written over the stock colour as a grey (review) | the tag writer's kept rgb |
 
-- **Kernel pins.** check-ref-metal segment 7.95: `model pass 9 kernel pins with 13 kernel
-  mutants compiled and refused, 2 back-end pins with 2 mutants refused`.
+- **Kernel pins.** check-ref-metal segment 7.95: `model pass 9 kernel pins with 14 kernel
+  mutants compiled and refused, 2 back-end pins with 2 mutants refused, 2 wiring pins with
+  2 mutants refused` (before the review, 13 kernel mutants and no wiring pin).
 
   | Pin | Mutants |
   | --- | --- |
   | `weapon`: the trace's point is `rm_rtm_point`'s, the world's unprojection is called once, the weapon's inverse at `mtl_rtm_weapon_ndc` | `weapon-world-view`, `weapon-depth-raw`, `weapon-world-point` |
-  | `pullback`: the wall's distance feeds `mtl_rtm_pullback`, a model passes | `no-pullback`, `wall-models` |
+  | `pullback`: the wall's distance feeds `mtl_rtm_pullback`, a model passes, a miss returns `2 * len + 1` | `no-pullback`, `wall-models`, `miss-len` (a miss back to `len`) |
 
   Slice 2's seven pins hold unchanged. The tag is read before the point now, and there is
   still one `gbl.` read in the file.
 - **The back end.** Its two pins hold, and it binds nothing new. The parameters' static
   assert is now 80 bytes.
+- **The wiring** (since the review). The default leaves it inert (`r_rt_gunshadow` is 0),
+  so no recorded frame tells it apart, and two text pins hold it:
+
+  | Pin | Mutant |
+  | --- | --- |
+  | `gun`: `RM_RT_Frame` asks `rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants(fd))` | main's form, `r_rt_gunshadow` alone |
+  | `wants`: `RM_RTModel_Wants` asks `rm_rtm_wants` with the refusal and `RM_RTDir_Will(fd)` | `RM_RTDir_Wanted()` in its place |
+
+  The scenario `rtprimary-weapon-gunshadow` (`rtprimary-weapon` with `r_rt_gunshadow 1`)
+  holds the same rule on the GPU: its frames must equal `rtprimary-weapon`'s.
 
 ## The hold
 
@@ -433,7 +469,9 @@ builds main a9414f84 in scratch and records:
 - `rtprimary-weapon` three times (determinism), and against an `r_rt_direct_models 0`
   copy, where the weapon is stock-lit (want differ). That copy is also run against
   main's binary (want identical);
-- the `r_rt_stats 2` model line of `rtprimary-weapon`.
+- the `r_rt_stats 2` model line of `rtprimary-weapon`;
+- since the review, `rtprimary-weapon-gunshadow` against `rtprimary-weapon`, frame by
+  frame (want byte-identical).
 
 The results go here when the hold has run.
 
