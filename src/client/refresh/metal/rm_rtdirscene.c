@@ -496,6 +496,20 @@ RM_RTDir_Wanted(void)
 		rm_rt_wanted(RM_Effect(r_rt_direct), dir_device);
 }
 
+/*
+ * TASK191 slice 3: 1 when RM_RTDir_Frame traces fd once its scene is
+ * built (scene_ready), asked as the scene is built (RM_RTModel_Wants): the
+ * presentation, the switch, r_fullbright, a view with the world, and the
+ * pass not refused in this context. A pass that fails its first open says
+ * so from the next frame on.
+ */
+int
+RM_RTDir_Will(const refdef_t *fd)
+{
+	return r_rt_direct && rm_rtdir_on(RM_PresentationMode(), RM_Effect(r_rt_direct), dir_device, r_fullbright->value) &&
+		fd && !(fd->rdflags & RDF_NOWORLDMODEL) && r_worldmodel && r_worldmodel->world && !dir_refused;
+}
+
 void
 RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 {
@@ -506,8 +520,8 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 	dir_active = dir_viewed = 0;
 	rmb_rtdir_set_view(NULL, NULL);
 
-	if (r_rt_direct && rm_rtdir_on(RM_PresentationMode(), RM_Effect(r_rt_direct), dir_device, r_fullbright->value) &&
-		fd && !(fd->rdflags & RDF_NOWORLDMODEL) && r_worldmodel && r_worldmodel->world && scene_ready)
+	/* a refused pass is never opened again (dir_refused), so Will's test is the one this frame traces by */
+	if (RM_RTDir_Will(fd) && scene_ready)
 	{
 		if (!dir_opened && !dir_refused)
 		{

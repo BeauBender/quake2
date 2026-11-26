@@ -53,7 +53,7 @@ extern rm_ledger_t rmb_ledger;
 #define RMB_RTM_GROUP 8         /* the kernel's threadgroup side */
 #define RMB_RTM_COUNTS 3        /* the model pixels, their shadow rays, their sky, sun and bounce rays */
 
-_Static_assert(sizeof(rm_rtm_params_t) == 16, "the parameters are rm_rtmodel.metal's 16 bytes");
+_Static_assert(sizeof(rm_rtm_params_t) == 80, "the parameters are rm_rtmodel.metal's 80 bytes");
 
 static int rtm_open;
 static id<MTLComputePipelineState> rtm_pipe;

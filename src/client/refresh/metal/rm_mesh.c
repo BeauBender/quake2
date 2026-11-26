@@ -38,6 +38,7 @@
 
 #include "header/local.h"
 #include "header/rm_gbufscene.h"
+#include "header/rm_rtmodel.h"
 #include "common/mtl_matrix.h"
 
 /* gl1's s_lerped, and one draw's vertices and indices (the ring region's contents) */
@@ -139,15 +140,17 @@ R_DrawAliasShadow(const entity_t *e, const rm_view_t *view, long nv, long ni)
  * lerp, origin and angles lerped as this frame's (s_lerped when it has no
  * match), and each vertex's lerped light normal; then the entity's
  * motion uniforms, vm its modelview now, wproj the view weapon's
- * projection (unjittered) or NULL.
+ * projection (unjittered) or NULL. 1 when the light normals were written
+ * (rm_gb_alias_extra), which a traced model's tag needs (TASK191).
  */
-static void
+static int
 R_AliasMotion(const entity_t *cur, const entity_t *e, const dmdl_t *paliashdr, int shell, long nv,
 		const float *vm, const float *wproj)
 {
 	const rm_gb_ent_t *p = RM_GB_Prev(cur);
 	const daliasframe_t *frame = R_AliasFrame(paliashdr, e->frame), *oldframe = R_AliasFrame(paliashdr, e->oldframe);
 	long n;
+	int extra;
 
 	if (p && rm_entity_floats_ok(p->origin, p->oldorigin, p->angles, p->backlerp, 1.0f))
 	{
@@ -179,8 +182,10 @@ R_AliasMotion(const entity_t *cur, const entity_t *e, const dmdl_t *paliashdr, i
 	n = rm_gb_alias_map((const int *)((const byte *)paliashdr + paliashdr->ofs_glcmds), paliashdr->num_glcmds,
 			paliashdr->num_xyz, s_map, RM_ALIAS_MAX_VERTS);
 
-	if ((n == nv) && rm_gb_alias_extra(s_map, nv, paliashdr->num_xyz, (const float (*)[4])s_prev,
-			(const byte *)frame->verts, (const byte *)oldframe->verts, e->backlerp, s_avx))
+	extra = (n == nv) && rm_gb_alias_extra(s_map, nv, paliashdr->num_xyz, (const float (*)[4])s_prev,
+			(const byte *)frame->verts, (const byte *)oldframe->verts, e->backlerp, s_avx);
+
+	if (extra)
 	{
 		rmb_gbuf_set_alias_extra(s_avx, (unsigned)nv);
 	}
@@ -190,6 +195,7 @@ R_AliasMotion(const entity_t *cur, const entity_t *e, const dmdl_t *paliashdr, i
 	}
 
 	RM_GB_EntityMotion(cur, vm, 0, wproj);
+	return extra;
 }
 
 /*
@@ -342,9 +348,19 @@ R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, con
 
 	if (s_pass_mode != RM_ALIAS_SHADOW)
 	{
+		int extra = 0;
+		unsigned tf;
+
 		if (RM_GB_Path() != RM_GB_PATH_FORWARD)
 		{
-			R_AliasMotion(currententity, &e, paliashdr, shell, nv, mv, (e.flags & RF_WEAPONMODEL) ? wproj_u : NULL);
+			extra = R_AliasMotion(currententity, &e, paliashdr, shell, nv, mv,
+					(e.flags & RF_WEAPONMODEL) ? wproj_u : NULL);
+		}
+
+		/* TASK191 slice 3: the raster of a traced model with a flag stores its flags as its tag (rm_rtmodel.metal) */
+		if ((s_pass_mode == RM_ALIAS_MODEL) && rm_rtm_tag_wanted(e.flags, r_newrefdef.rdflags, extra, RM_TracedModels(), &tf))
+		{
+			rm_rtm_tag_verts(s_verts, nv, tf, extra);
 		}
 
 		ok = rmb_draw_alias(s_verts, (unsigned)nv, s_idx, (unsigned long)ni, &d, mvp, &view->vp);

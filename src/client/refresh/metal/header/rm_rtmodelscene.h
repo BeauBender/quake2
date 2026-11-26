@@ -34,12 +34,14 @@
 
 #include "rm_rtfx.h"
 
-/* rm_rtmodel.metal's rm_rtm_params */
+/* rm_rtmodel.metal's rm_rtm_params: a float4x4 first, so 80 bytes in Metal's layout */
 typedef struct
 {
+	float winv[16];     /* slice 3: the view weapon's GL clip coordinates to world (rm_rtm_weapon_params) */
 	float glow;         /* RF_GLOW's pulse at the frame's time (rm_rtm_glow_scale) */
 	float overbright;   /* gl1_overbrightbits as rm_alias_shade reads it, 0 for none */
-	unsigned pad0, pad1;
+	unsigned weapon;    /* 1 when winv holds the frame's weapon view; 0: a weapon pixel is shaded at the eye */
+	unsigned pad1;
 } rm_rtm_params_t;
 
 /* the minlight table then the gamma table, the kernel's tabs */
@@ -74,6 +76,16 @@ int RM_RTModel_Active(void);
 int RM_RTModel_ShowOnly(void);
 int RM_RTModel_ShowAsked(void);   /* TASK190 slice 3's row entry: 0, the view is the direct light's (RM_RTDir_ShowAsked) */
 void RM_RTModel_View(const rm_view_t *view);
+
+/*
+ * Slice 3: 1 when this frame's models are to be traced, as the scene of
+ * fd is built (before the passes decide the frame): rm_rtm_wants, with the
+ * model pass not refused, r_rt_direct_models on, and the direct light
+ * about to trace fd (RM_RTDir_Will: not under r_fullbright, not a view
+ * without the world, the direct pass not refused). The view weapon then
+ * stays out of the ray-traced scene (rm_rtm_gunshadow).
+ */
+int RM_RTModel_Wants(const refdef_t *fd);
 #endif
 
 /* ---- rmb_rtmodel.m: the Metal back end ---------------------------------------------- */

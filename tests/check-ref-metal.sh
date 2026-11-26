@@ -56,8 +56,8 @@
 #     light (common/mtl_rtpd_math.h, TASK190 slice 2), with five mutants of
 #     the header and five pins of rm_rtpdenoise.metal with six mutants,
 #     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
-#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eleven
-#     scratch mutants of the two must fail it, and all eleven must),
+#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eighteen
+#     scratch mutants of the two must fail it, and all eighteen must),
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -724,14 +724,20 @@ case $r in
 	*) cat "${tmp:?}/out"; bad "tests/metal/rm_rtmodel_test.c failed" ;;
 esac
 # the mutants, each of which must compile and fail the test: the shadedot applied twice, the minlight floor
-# skipped, the glow pulse's sign flipped, the split with the weapon traced, the split with a fullbright model
-# traced, the tag's decode dropping a bit, the weapon unprojected with the view's projection; slice 2's: the
-# weapon's depth hack read as the crosshair's, a glowing or minlight model rastered untagged, a model tagged
-# without its normals, the colour index's NaN and sign guard on the bit pattern dropped
+# skipped, the glow pulse's sign flipped, the split with a fullbright model traced, the tag's decode dropping
+# a bit, the weapon unprojected with the view's projection; slice 2's: the weapon's depth hack read as the
+# crosshair's, a model tagged without its normals, the colour index's NaN and sign guard on the bit pattern
+# dropped; slice 3's: the weapon sent forward again (weapon-forward), a glowing or minlight model sent forward
+# again (flagged-forward), a weapon without its depth hack traced (weapon-nohack), a model without a flag
+# tagged (tag-unflagged), the weapon kept in the ray-traced scene under the traced models (gunshadow-kept), a
+# model read as a wall by the pull-back ray (wall-alias), the weapon view's flag set when there is none
+# (weapon-flag); its review's: the models wanted traced with the model pass refused (wants-refused), the
+# tag written over the stock colour as a grey (tag-grey)
 rtm_mutants=0
 if [ -n "$rtm" ]; then
-	for m in shadedot-twice minlight-skipped glow-sign weapon-traced fullbright-traced tag-bit weapon-view-inv \
-		depthhack-weapon untagged-traced tag-no-normals nan-guard; do
+	for m in shadedot-twice minlight-skipped glow-sign fullbright-traced tag-bit weapon-view-inv \
+		depthhack-weapon tag-no-normals nan-guard weapon-forward flagged-forward weapon-nohack tag-unflagged \
+		gunshadow-kept wall-alias weapon-flag wants-refused tag-grey; do
 		rtm_tree "${tmp:?}/rtmm"
 		h=${tmp:?}/rtmm/src/client/refresh/metal/common/mtl_rtm_math.h
 		c=${tmp:?}/rtmm/src/client/refresh/metal/rm_rtmodel.c
@@ -741,12 +747,24 @@ if [ -n "$rtm" ]; then
 			minlight-skipped) sed 's/if (f & MTL_RTM_MINLIGHT)/if ((f \& MTL_RTM_MINLIGHT) \&\& 0)/' \
 				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 			glow-sign) sed 's/const float g = s + scale;/const float g = s - scale;/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
-			weapon-traced) sed 's/if (flags & RM_RF_WEAPONMODEL)$/if (0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
 			fullbright-traced) sed 's/return rm_rtm_stock_light(flags, rdflags) || /return (rm_rtm_stock_light(flags, rdflags) \&\& !(flags \& RM_RF_FULLBRIGHT)) || /' \
 				"$rm_dir/rm_rtmodel.c" > "$c" ;;
-			depthhack-weapon) sed 's/((flags & RM_RF_DEPTHHACK) && !(flags & RM_RF_WEAPONMODEL))/(flags \& RM_RF_DEPTHHACK)/' \
+			depthhack-weapon) sed 's/(((flags & RM_RF_DEPTHHACK) != 0) != ((flags & RM_RF_WEAPONMODEL) != 0))/(flags \& RM_RF_DEPTHHACK)/' \
 				"$rm_dir/rm_rtmodel.c" > "$c" ;;
-			untagged-traced) sed 's/&& (flags & (RM_RF_GLOW | RM_RF_MINLIGHT)))$/\&\& 0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			weapon-forward) sed 's/if ((flags & RM_RF_WEAPONMODEL) && (kind != RM_GB_KIND_ALIAS))$/if (flags \& RM_RF_WEAPONMODEL)/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			flagged-forward) sed 's/!= ((flags & RM_RF_WEAPONMODEL) != 0));$/!= ((flags \& RM_RF_WEAPONMODEL) != 0)) || (flags \& (RM_RF_GLOW | RM_RF_MINLIGHT));/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			weapon-nohack) sed 's/(((flags & RM_RF_DEPTHHACK) != 0) != ((flags & RM_RF_WEAPONMODEL) != 0))/((flags \& RM_RF_DEPTHHACK) \&\& !(flags \& RM_RF_WEAPONMODEL))/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			tag-unflagged) sed 's/ || (rm_rtm_flags(flags) == 0u))$/)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			wants-refused) sed 's/return device \&\& !refused \&\& /return device \&\& (refused >= 0) \&\& /' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			tag-grey) sed 's/v\[i\].color\[3\] = mtl_rtm_tag(c, f).a;/v[i].color[0] = v[i].color[1] = v[i].color[2] = 128 \/ 255.0f; v[i].color[3] = mtl_rtm_tag(c, f).a;/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			gunshadow-kept) sed 's/return gunshadow && !models;/return gunshadow \&\& (models >= 0);/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			weapon-flag) sed 's/p->weapon = (unsigned)rm_rtm_weapon_view(/p->weapon = 1u | (unsigned)rm_rtm_weapon_view(/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			wall-alias) sed 's/return !alias && (mat != MTL_GB_MAT_WATER)/return (alias >= 0) \&\& (mat != MTL_GB_MAT_WATER)/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
 			tag-no-normals) sed 's/if (!extra_ok)$/if (!extra_ok \&\& 0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
 			tag-bit) sed 's/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) & MTL_RTM_FLAGS;/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) \& 3u;/' \
 				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
@@ -767,7 +785,7 @@ if [ -n "$rtm" ]; then
 			rtm_mutants=$((rtm_mutants + 1))
 		fi
 	done
-	[ "$rtm_mutants" -eq 11 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 11 model-light mutants"
+	[ "$rtm_mutants" -eq 18 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 18 model-light mutants"
 fi
 # slice 2's review: under Metal the colour index's guard reads the bit pattern by as_type, which fast math
 # does not fold (the host test sees only the host's union); the index tests the pattern, not the float
@@ -785,7 +803,7 @@ if [ "$(grep -cxF '#define MTL_RTM_ABOVE(s) ((s) >= MTL_RTM_FLOOR)' "$rm_dir/com
 		"$rm_dir/common/mtl_rtm_math.h" | grep -qF '>= MTL_RTM_FLOOR'; then
 	bad "common/mtl_rtm_math.h: the minlight floor's test under Metal is not s >= 0.1f"
 fi
-seg 7.9 "; model light ${rtm:-host test}, $rtm_mutants of 11 mutants refused"
+seg 7.9 "; model light ${rtm:-host test}, $rtm_mutants of 18 mutants refused"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)
@@ -2579,7 +2597,12 @@ seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, $rt
 # pixels; no-normal-traced: the normal's test dropped); the light attachment gives the tag alone
 # (model-from-base: its colour added to the light); no lightmap (model-reads-lm); no fit sum
 # (model-fit-leak); the traced light in place of the shadedot (shadedot-back: a shadedot-like factor); the
-# tag decoded at material 2 only (tag-no-material). The back end binds the view with no own-light table
+# tag decoded at material 2 only (tag-no-material). Slice 3: a weapon pixel's point is its own view's at the
+# depth hack's depth, the world's unprojection called once, for the other models (weapon-world-view: the
+# view's inverse; weapon-depth-raw: the stored depth read as the clip depth; weapon-world-point: the trace
+# shades every model at the world's unprojection), pulled back before the first wall, a model no wall
+# (no-pullback: the hit distance not used; wall-models: a model read as a wall), a ray that meets no wall
+# past the weapon's distance, finite (miss-len: the distance itself, which fast math may put an ulp short). The back end binds the view with no own-light table
 # (model-own-ray: nself left as the trace's) and exactly its seven textures (bind-extra), each mutant
 # compiled where the compiler is there.
 rtk_metal=""
@@ -2608,6 +2631,15 @@ rtk_pin() { # <file> <pin>: 0 when the file holds the pin
 		dot) [ "$(strip "$1" | grep -oF 'mtl_rtm_color(' | wc -l | tr -d ' ')" = 1 ] &&
 			strip "$1" | grep -qF 'mtl_rtm_color(mtl_rtm_v3(l.r, l.g, l.b), MTL_RTM_DOT_TRACED, f, p.glow, p.overbright);' ;;
 		tagmat) strip "$1" | grep -qF 'return (m == MTL_GB_MAT_ALIAS) ? mtl_rtm_tag_flags(t) : 0u;' ;;
+		weapon) rtk_body "$1" | grep -qF 'const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);' &&
+			[ "$(strip "$1" | grep -oF 'rm_rtdir_position(' | wc -l | tr -d ' ')" = 1 ] &&
+			strip "$1" | grep -qF 'const float4 h = p.winv * float4(cx, cy, mtl_rtm_weapon_ndc(d), 1.0f);' ;;
+		pullback) strip "$1" | grep -qF 'const float t = rm_rtm_wall_t(v.eye.xyz, w, ias, inst, tmat, ntris);' &&
+			strip "$1" | grep -qF 'mtl_rtm_v3(w.x, w.y, w.z), t);' &&
+			strip "$1" | grep -qF 'if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))' &&
+			strip "$1" | grep -qF 'const float none = 2.0f * len + 1.0f;' &&
+			[ "$(strip "$1" | grep -cxF '			return none;')" = 2 ] && [ "$(strip "$1" | grep -cxF '	return none;')" = 1 ] &&
+			[ "$(strip "$1" | grep -cxF '		return len;')" = 1 ] ;;
 	esac
 }
 rtk_kpins=0 rtk_kmut=0
@@ -2616,7 +2648,7 @@ if [ -n "$rtk_metal" ] && ! rtk_compile "$rtk_k"; then
 	cat "${tmp:?}/metal.out"
 	bad "rm_rtmodel.metal does not compile"
 fi
-for p in rename gate base nolm fit dot tagmat; do
+for p in rename gate base nolm fit dot tagmat weapon pullback; do
 	if ! rtk_pin "$rtk_k" "$p"; then
 		bad "rm_rtmodel.metal does not hold the model pass's $p pin"
 		continue
@@ -2629,7 +2661,9 @@ for p in rename gate base nolm fit dot tagmat; do
 		nolm) kms="model-reads-lm" ;;
 		fit) kms="model-fit-leak" ;;
 		dot) kms="shadedot-back" ;;
-		*) kms="tag-no-material" ;;
+		tagmat) kms="tag-no-material" ;;
+		weapon) kms="weapon-world-view weapon-depth-raw weapon-world-point" ;;
+		*) kms="no-pullback wall-models miss-len" ;;
 	esac
 	for m in $kms; do
 		case $m in
@@ -2642,6 +2676,12 @@ for p in rename gate base nolm fit dot tagmat; do
 			model-fit-leak) awk '{ print } /counts\[RM_RTM_C_OPEN\], c_o,/ { print "\t\t\tatomic_fetch_add_explicit(&counts[RM_RTDIR_C_FIT_N], c_m, memory_order_relaxed);" }' ;;
 			shadedot-back) sed 's/MTL_RTM_DOT_TRACED, f, p.glow/max(l.r, 0.5f), f, p.glow/' ;;
 			tag-no-material) sed 's/return (m == MTL_GB_MAT_ALIAS) ? mtl_rtm_tag_flags(t) : 0u;/return mtl_rtm_tag_flags(t);/' ;;
+			weapon-world-view) sed 's/const float4 h = p.winv \* float4(/const float4 h = v.inv * float4(/' ;;
+			weapon-depth-raw) sed 's/float4(cx, cy, mtl_rtm_weapon_ndc(d), 1.0f)/float4(cx, cy, d * 2.0f - 1.0f, 1.0f)/' ;;
+			weapon-world-point) sed 's/const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);/const float3 pt = rm_rtdir_position(v, px, d);/' ;;
+			no-pullback) sed 's/mtl_rtm_v3(w.x, w.y, w.z), t);/mtl_rtm_v3(w.x, w.y, w.z), INFINITY);/' ;;
+			wall-models) sed 's/if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))/if (mtl_rtm_wall(m, 0))/' ;;
+			miss-len) sed 's/^			return none;$/			return len;/' ;;
 		esac < "$rtk_k" > "${tmp:?}/rtk-kernel.metal"
 		if cmp -s "$rtk_k" "${tmp:?}/rtk-kernel.metal"; then
 			bad "the model pass's kernel mutant ($m) changed nothing"
@@ -2655,8 +2695,8 @@ for p in rename gate base nolm fit dot tagmat; do
 		fi
 	done
 done
-[ "$rtk_kpins" = 7 ] && [ "$rtk_kmut" = 8 ] ||
-	bad "rm_rtmodel.metal holds $rtk_kpins of its 7 pins and refuses $rtk_kmut of its 8 mutants"
+[ "$rtk_kpins" = 9 ] && [ "$rtk_kmut" = 14 ] ||
+	bad "rm_rtmodel.metal holds $rtk_kpins of its 9 pins and refuses $rtk_kmut of its 14 mutants"
 # the back end: the view bound with no own-light table (model-own-ray), and exactly the kernel's seven textures
 rtk_bpins=0 rtk_bmut=0
 rtk_b=$rm_dir/rmb_rtmodel.m
@@ -2700,7 +2740,45 @@ if [ "$(grep -cF 'ref_metal/rm_rtmodel.air' Makefile)" != 2 ] || ! grep -qF 'src
 	! grep -qF 'src/client/refresh/metal/rm_rtmodelscene.o' Makefile || ! grep -qF 'src/client/refresh/metal/rm_rtmodel.o' Makefile; then
 	bad "the model pass is not linked into ref_metal.metallib or ref_metal"
 fi
-seg 7.95 "; model pass $rtk_kpins kernel pins with $rtk_kmut kernel mutants${rtk_metal:+ compiled and} refused, $rtk_bpins back-end pins with $rtk_bmut mutants refused"
+# slice 3's review: the scene's wiring, which no recorded frame of the default tells apart (r_rt_gunshadow
+# defaults to 0): the view weapon left out of the ray-traced scene while the models are traced
+# (rm_rtscene.c's rm_rtm_gunshadow; its mutant is main's form, r_rt_gunshadow alone), and the models wanted
+# traced by what this frame's passes will decide (rm_rtmodelscene.c's rm_rtm_wants with the model pass's
+# refusal and RM_RTDir_Will; its mutant: the direct light only wanted, RM_RTDir_Wanted)
+rtk_wpins=0 rtk_wmut=0
+rtk_wire() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		gun) [ "$(grep -cE '^[[:space:]]*gun = ' "$1")" = 1 ] &&
+			grep -qxF '	gun = rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants(fd));' "$1" ;;
+		wants) awk '/^RM_RTModel_Wants\(const refdef_t \*fd\)$/ { b = 1 } b && /^}/ { b = 0 } b' "$1" | tr -d '\n\t' |
+			grep -qF 'return rm_rtm_wants(rtm_device, rtm_refused, r_rt_direct_models ? RM_Effect(r_rt_direct_models) : 0.0f,RM_RTDir_Will(fd));' ;;
+	esac
+}
+for p in gun wants; do
+	case $p in
+		gun) rtk_s=$rm_dir/rm_rtscene.c ;;
+		*) rtk_s=$rm_dir/rm_rtmodelscene.c ;;
+	esac
+	if ! rtk_wire "$rtk_s" "$p"; then
+		bad "${rtk_s##*/} does not hold the model pass's $p wiring pin"
+		continue
+	fi
+	rtk_wpins=$((rtk_wpins + 1))
+	case $p in
+		gun) sed 's/^	gun = rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants(fd));$/	gun = RM_Effect(r_rt_gunshadow) != 0;/' ;;
+		*) sed 's/^		RM_RTDir_Will(fd));$/		RM_RTDir_Wanted());/' ;;
+	esac < "$rtk_s" > "${tmp:?}/rtk-scene.c"
+	if cmp -s "$rtk_s" "${tmp:?}/rtk-scene.c"; then
+		bad "the model pass's wiring mutant ($p) changed nothing"
+	elif rtk_wire "${tmp:?}/rtk-scene.c" "$p"; then
+		bad "the model pass's $p wiring pin passes its mutant"
+	else
+		rtk_wmut=$((rtk_wmut + 1))
+	fi
+done
+[ "$rtk_wpins" = 2 ] && [ "$rtk_wmut" = 2 ] ||
+	bad "the scene holds $rtk_wpins of the model pass's 2 wiring pins and refuses $rtk_wmut of their 2 mutants"
+seg 7.95 "; model pass $rtk_kpins kernel pins with $rtk_kmut kernel mutants${rtk_metal:+ compiled and} refused, $rtk_bpins back-end pins with $rtk_bmut mutants refused, $rtk_wpins wiring pins with $rtk_wmut mutants refused"
 
 # RT-primary's 5 x 5 filter of its accumulated light (TASK190 slice 2, PM8): tests/metal/rm_rtpdenoise_test.c
 # holds common/mtl_rtpd_math.h over RT7's weights (mtl_rtd_math.h): the pixels it writes, a neighbour's

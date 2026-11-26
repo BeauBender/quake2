@@ -27,13 +27,16 @@
  * carries a model's flags to the kernel through the G-buffer's light
  * attachment, the view weapon's depth and the pull-back point. Plain C99
  * that the Metal shading language compiles too; after mtl_shader_math.h
- * (MTL_SQRT).
+ * (MTL_SQRT, and mtl_gbuf_math.h's types; it includes mtl_gbuf_math.h for
+ * the material ids).
  *
  * =======================================================================
  */
 
 #ifndef MTL_RTM_MATH_H
 #define MTL_RTM_MATH_H
+
+#include "mtl_gbuf_math.h"   /* MTL_GB_MAT_*, for mtl_rtm_wall */
 
 /* the flags a tag carries (RF_GLOW, RF_MINLIGHT, RF_WEAPONMODEL) */
 #define MTL_RTM_GLOW 1u
@@ -234,27 +237,23 @@ mtl_rtm_color(mtl_rtm_v3_t l, float dot, unsigned f, float glow, float overbrigh
 }
 
 /*
- * The tag: a vertex colour the CPU writes in place of gl1's colour on a
- * traced model, which the G-buffer raster stores in its light attachment
- * (saturate(in.color), RGBA8Unorm). Its rgb is a mid grey, so a frame
- * whose kernel did not run shows grey models, not black or white ones;
- * its alpha is MTL_RTM_TAG_BASE + the flags, in units of 1/255. A
- * rastered model is opaque (rm_rtm_entity_split sends a translucent one
- * forward), so its own colour's alpha is 1 (255) and never a tag; the
- * rgb is checked too. Steps of 1/255 survive an 8-bit unorm store and a
- * 16-bit one (k/255 is k x 257/65535 exactly) and a saturate.
+ * The tag: the alpha the CPU writes in place of gl1's on a traced
+ * model's vertex colours, which the G-buffer raster stores in its light
+ * attachment (saturate(in.color), RGBA8Unorm): MTL_RTM_TAG_BASE + the
+ * flags, in units of 1/255. Its rgb is the model's own stock colour
+ * (slice 3's review), so a frame whose model pass did not write the pixel
+ * resolves it stock-lit. A rastered model is opaque (rm_rtm_entity_split
+ * sends a translucent one forward), so its own colour's alpha is 1 (255)
+ * and never a tag; every vertex of a draw carries the same alpha, so the
+ * raster's interpolation keeps it. Steps of 1/255 survive an 8-bit unorm
+ * store and a 16-bit one (k/255 is k x 257/65535 exactly) and a saturate.
  */
-#define MTL_RTM_TAG_GREY 128
 #define MTL_RTM_TAG_BASE 160
 
+/* colour c with its alpha the tag of flags f */
 static inline mtl_rgba_t
-mtl_rtm_tag(unsigned f)
+mtl_rtm_tag(mtl_rgba_t c, unsigned f)
 {
-	mtl_rgba_t c;
-
-	c.r = (float)MTL_RTM_TAG_GREY / 255.0f;
-	c.g = c.r;
-	c.b = c.r;
 	c.a = (float)(MTL_RTM_TAG_BASE + (int)(f & MTL_RTM_FLAGS)) / 255.0f;
 	return c;
 }
@@ -266,14 +265,13 @@ mtl_rtm_byte(float v)
 	return ((v >= 0.0f) && (v <= 1.0f)) ? (int)(v * 255.0f + 0.5f) : -1;
 }
 
-/* 1 when stored colour c is a tag */
+/* 1 when stored colour c is a tag: its alpha alone */
 static inline int
 mtl_rtm_is_tag(mtl_rgba_t c)
 {
 	const int a = mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE;
 
-	return (mtl_rtm_byte(c.r) == MTL_RTM_TAG_GREY) && (mtl_rtm_byte(c.g) == MTL_RTM_TAG_GREY) &&
-		(mtl_rtm_byte(c.b) == MTL_RTM_TAG_GREY) && (a >= 0) && (a <= (int)MTL_RTM_FLAGS);
+	return (a >= 0) && (a <= (int)MTL_RTM_FLAGS);
 }
 
 /* the flags of a tag (mtl_rtm_is_tag); 0 for any other colour */
@@ -318,6 +316,19 @@ mtl_rtm_weapon_ndc(float d)
  * is below 0 keeps p.
  */
 #define MTL_RTM_PULLBACK 0.25f
+
+/*
+ * Slice 3: 1 when the pull-back ray (the eye ray toward a weapon pixel)
+ * stops at a face of material mat (the map's per-triangle id,
+ * mtl_gbuf_math.h's MTL_GB_MAT_*), a wall: any map face but water and a
+ * translucent one, which it passes as a shadow ray does. An alias model
+ * (alias not 0) is no wall: it passes.
+ */
+static inline int
+mtl_rtm_wall(unsigned mat, int alias)
+{
+	return !alias && (mat != MTL_GB_MAT_WATER) && (mat != MTL_GB_MAT_TRANS);
+}
 
 static inline mtl_rtm_v3_t
 mtl_rtm_pullback(mtl_rtm_v3_t eye, mtl_rtm_v3_t p, float t)

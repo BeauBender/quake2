@@ -537,3 +537,10 @@ RM_GB_JitterProj(float *proj, float *unjit)
 
 	rm_gb_jitter(unjit, jitter[0], jitter[1], vp_render.w, vp_render.h, proj);
 }
+
+void
+RM_GB_Jitter(float *jx, float *jy)
+{
+	*jx = (path == RM_GB_PATH_FORWARD) ? 0.0f : jitter[0];
+	*jy = (path == RM_GB_PATH_FORWARD) ? 0.0f : jitter[1];
+}

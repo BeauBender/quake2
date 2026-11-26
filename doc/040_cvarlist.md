@@ -1369,9 +1369,15 @@ is.
   lights with their shadow rays, the dynamic lights, the sky, the sun and
   the bounce) under the world's exposure, in place of the stock light
   point and shading table, through the stock model colour (overbright,
-  the minlight and gamma tables). Glowing, minlight, fullbright,
-  depth-hacked and translucent models, shells and the view weapon stay
-  stock-lit. `0`: every model stock-lit, as before. With `r_rt_stats 2`
+  the minlight and gamma tables), with the glow pulse and the minlight
+  floor kept. The view weapon is drawn in the same pass, with its own
+  projection and depth range, and lit per pixel at its own point and
+  normal; where it pokes into a wall it is lit just in front of that
+  wall. It casts no shadow: while the models are lit this way it is left
+  out of the ray-traced scene whatever `r_rt_gunshadow` says. Fullbright
+  and translucent models, shells, models seen through the IR goggles and
+  the other depth-hacked models stay stock-lit. `0`: every model and the
+  view weapon stock-lit, as before. With `r_rt_stats 2`
   the model pass prints a line a frame (`ref_metal: rt models: ...`, see
   `r_rt_stats`). It does nothing
   outside the Ray traced presentation or on a device without ray
@@ -1482,8 +1488,14 @@ is.
   ray-traced scene, so that later ray-traced effects shade it and let it
   cast shadows; with `0` (the default) it is left out, since from the
   player's eye it would shadow most of the view. It is not part of the
-  scene either way when `hand` is `2` (the weapon is not drawn). Saved
-  with the configuration.
+  scene either way when `hand` is `2` (the weapon is not drawn), nor
+  under the Ray traced presentation while `r_rt_direct_models` lights the
+  models (the weapon is then lit by traced light and casts no shadow). The
+  weapon is left out only on the frames whose models are traced, so not
+  under `r_fullbright`, on a view without the world, or once the direct
+  light or the model pass failed to start, apart from the one frame on
+  which it first fails.
+  Saved with the configuration.
   Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_jitter_x**, **r_rt_jitter_y**: A development setting of the
