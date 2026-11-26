@@ -27,6 +27,9 @@
 #     scan dropped (the pid is not named).
 # (k) the self-test itself interrupted (TERM) in its escape case: no escaped
 #     helper outlives it.
+# (l) a TERM to the check's own pid alone (accepted, not fixed): the check
+#     ends, its supervised run ends at its own deadline, and nothing
+#     outlives that deadline.
 # The hanging stubs block on a fifo nobody writes, and the supervisor ends
 # them; the self-test ends any that is left.
 # Off Darwin the check runs no leaks(1); there the hanging stub must leave
@@ -390,8 +393,59 @@ elif [ "$rdrc" -ne 0 ]; then
 	fail "(k) an escaped helper outlived the interrupted self-test: pid $(tr '\n' ' ' < "${tmp:?}/k.pids")"
 fi
 
+# (l) the accepted behaviour (FIX201, docs/runbook/FIX201.md): a TERM to the
+# check's own pid, not its group, ends the check at once; the check has no
+# trap, so the supervisor and its run go on until the run's deadline, which
+# ends them, and nothing outlives it. The check runs with the write end of
+# the fifo ${tmp}/hold.l on fd 7, which the supervisor and the stub inherit.
+# The stub writes "start <s>" there, and "term <s>" when the group stop
+# reaches it; the self-test reads until end of file, which comes once every
+# holder has ended, under an alarm.
+mkdir -p "${tmp:?}/termwait"
+cat > "${tmp:?}/termwait/leaks" << EOF
+#!/bin/sh
+echo \$\$ >> "${tmp:?}/hang.pids"
+trap 'echo "term \$(date +%s)" >&7; exit 0' TERM
+read _x < "${tmp:?}/never" &
+echo \$! >> "${tmp:?}/hang.pids"
+echo "start \$(date +%s)" >&7
+wait \$!
+EOF
+chmod +x "${tmp:?}/termwait/leaks"
+mkfifo "${tmp:?}/hold.l"
+lbound=4
+env PATH="${tmp:?}/termwait:$PATH" IMGDEC_CHECK_SECONDS=8 IMGDEC_LEAKS_PROBE_SECONDS=$lbound \
+	perl -e 'alarm shift; exec @ARGV' "$secs" sh "$check" > "${tmp:?}/out" 2>&1 7> "${tmp:?}/hold.l" &
+chk=$!
+exec 8< "${tmp:?}/hold.l"
+_w=
+_start=
+read -r _w _start <&8 || :
+lrc=0
+if [ "$_w" = start ]; then
+	kill -TERM "$chk"
+fi
+{ wait "$chk"; } 2>/dev/null || lrc=$?
+rdrc=0
+perl -e 'alarm shift; print while <STDIN>; exit 0' 30 <&8 > "${tmp:?}/l.rest" 2>/dev/null || rdrc=$?
+exec 8<&-
+_term=$(sed -n 's/^term //p' "${tmp:?}/l.rest" | head -n 1)
+if [ "$_w" != start ]; then
+	cat "${tmp:?}/out"
+	fail "(l) the stub never started: the case proves nothing (status $lrc)"
+elif [ "$lrc" -ne 143 ]; then
+	cat "${tmp:?}/out"
+	fail "(l) a TERM to the check's pid did not end the check by that TERM (status $lrc)"
+elif [ "$rdrc" -ne 0 ]; then
+	fail "(l) after a TERM to the check's pid, its run outlived the run's $lbound s deadline"
+elif [ -z "$_term" ]; then
+	fail "(l) after a TERM to the check's pid, the run ended without the supervisor's stop reaching it"
+elif [ $((_term - _start)) -lt $((lbound - 2)) ]; then
+	fail "(l) the run ended $((_term - _start)) s after it started, before its $lbound s deadline: the documented behaviour changed (update docs/runbook/FIX201.md)"
+fi
+
 if [ "$fails" -ne 0 ]; then
 	echo "$me: $fails case(s) failed"
 	exit 1
 fi
-echo "$me: ok (11 cases: a hang, a stopped probe target, a stopped leak-run target, a good leaks(1), a bad probe bound, the staged hang on events, an escaped helper, three mutants of the check, the self-test interrupted in its escape case)"
+echo "$me: ok (12 cases: a hang, a stopped probe target, a stopped leak-run target, a good leaks(1), a bad probe bound, the staged hang on events, an escaped helper, three mutants of the check, the self-test interrupted in its escape case, a TERM to the check's pid ended by the run's deadline)"
