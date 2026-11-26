@@ -107,6 +107,7 @@ mutant_tree()
 	cp -R .github/workflows "$mut/t/.github/"
 	cp scripts/coverage.sh "$mut/t/scripts/"
 	: > "$mut/t/stuff/x/action.yml"
+	: > "$mut/t/scripts/ci-x.sh"
 	: > "$mut/t/.github/actions/x/action.yml"
 }
 expect_refused()
