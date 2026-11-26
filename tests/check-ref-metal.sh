@@ -2731,7 +2731,38 @@ if [ "$(grep -cF 'ref_metal/rm_rtmodel.air' Makefile)" != 2 ] || ! grep -qF 'src
 	! grep -qF 'src/client/refresh/metal/rm_rtmodelscene.o' Makefile || ! grep -qF 'src/client/refresh/metal/rm_rtmodel.o' Makefile; then
 	bad "the model pass is not linked into ref_metal.metallib or ref_metal"
 fi
-seg 7.95 "; model pass $rtk_kpins kernel pins with $rtk_kmut kernel mutants${rtk_metal:+ compiled and} refused, $rtk_bpins back-end pins with $rtk_bmut mutants refused"
+# slice 3's review: the scene's wiring (rm_rtscene.c), which no recorded frame of the default tells apart
+# (r_rt_gunshadow defaults to 0): the view weapon left out of the ray-traced scene while the models are
+# traced (rm_rtm_gunshadow), so no ray of its own pixels meets it; its mutant is main's form (gun-main:
+# r_rt_gunshadow alone)
+rtk_wpins=0 rtk_wmut=0
+rtk_s=$rm_dir/rm_rtscene.c
+rtk_wire() { # <file> <pin>: 0 when the file (rm_rtscene.c) holds the pin
+	case $2 in
+		gun) [ "$(grep -cE '^[[:space:]]*gun = ' "$1")" = 1 ] &&
+			grep -qxF '	gun = rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants());' "$1" ;;
+	esac
+}
+for p in gun; do
+	if ! rtk_wire "$rtk_s" "$p"; then
+		bad "rm_rtscene.c does not hold the model pass's $p wiring pin"
+		continue
+	fi
+	rtk_wpins=$((rtk_wpins + 1))
+	case $p in
+		*) sed 's/^	gun = rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants());$/	gun = RM_Effect(r_rt_gunshadow) != 0;/' ;;
+	esac < "$rtk_s" > "${tmp:?}/rtk-scene.c"
+	if cmp -s "$rtk_s" "${tmp:?}/rtk-scene.c"; then
+		bad "the model pass's wiring mutant ($p) changed nothing"
+	elif rtk_wire "${tmp:?}/rtk-scene.c" "$p"; then
+		bad "the model pass's $p wiring pin passes its mutant"
+	else
+		rtk_wmut=$((rtk_wmut + 1))
+	fi
+done
+[ "$rtk_wpins" = 1 ] && [ "$rtk_wmut" = 1 ] ||
+	bad "rm_rtscene.c holds $rtk_wpins of its 1 wiring pin and refuses $rtk_wmut of its 1 mutant"
+seg 7.95 "; model pass $rtk_kpins kernel pins with $rtk_kmut kernel mutants${rtk_metal:+ compiled and} refused, $rtk_bpins back-end pins with $rtk_bmut mutants refused, $rtk_wpins wiring pin with $rtk_wmut mutant refused"
 
 # RT-primary's 5 x 5 filter of its accumulated light (TASK190 slice 2, PM8): tests/metal/rm_rtpdenoise_test.c
 # holds common/mtl_rtpd_math.h over RT7's weights (mtl_rtd_math.h): the pixels it writes, a neighbour's
