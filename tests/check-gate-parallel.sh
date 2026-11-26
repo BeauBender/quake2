@@ -1848,9 +1848,13 @@ wmut sched-stderr-lost-run watchfork '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
 # left closed, so the scheduler's start fails and $! is not its pid)
 wmut watch-stderr-on-tty watchfork '{ sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 & } 2> /dev/null' 'sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 &'
 wmut stderr-closed-unguarded nostderr '{ :; } 3>&2 2> /dev/null || exec 2> /dev/null' ':'
-# (without its own group the scheduler, and every check, ignore SIGINT and
-# SIGQUIT; when this self-test already ignores both, nothing differs)
-intmut wmut no-own-group sigs 'set -m' ':'
+# (without its own group the scheduler is in test.sh's, and so is every
+# check's supervisor, its background job: a SIGKILL to that group kills
+# them all and leaves each check, in a group of its own, running. The
+# SIGINT and SIGQUIT a check gets no longer hang on it: its supervisor
+# starts it with every signal at its default, TASK221, so sigs passes with
+# this mutant and no-supervisor-sigs covers that)
+wmut no-own-group kgrp 'set -m' ':'
 wmut no-parent-pid kgrp 'GATE_PARENT=$$ scripts/gate-checks.sh' 'scripts/gate-checks.sh'
 
 # mutants of this self-test, run from a copy of the scripts it tests:

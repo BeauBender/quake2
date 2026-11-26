@@ -319,10 +319,12 @@ fi
 # to this script is acted on at once (a trap waits for a command in the
 # foreground to end): gate_stop passes it on as SIGTERM, which ends the
 # scheduler and every check it runs, waits for that, and fails the gate.
-# Job control is on for that one command, as gate-checks.sh does for each
-# check: it leads a process group of its own, and keeps SIGINT and SIGQUIT
-# as this script got them (a command started in the background without job
-# control ignores both, and so would every check). GATE_PARENT=$$ names
+# Job control is on for that one command: it leads a process group of its
+# own, with the supervisor of each check it runs, so a SIGKILL to this
+# script's group leaves them to end every check (below), and it keeps
+# SIGINT and SIGQUIT as this script got them (a command started in the
+# background without job control ignores both; each check gets every
+# signal at its default from its supervisor either way). GATE_PARENT=$$ names
 # this script to it: when this script dies, by any signal (SIGKILL too,
 # which no trap sees), the scheduler sees it within one poll and ends every
 # check, as on SIGTERM. Under the lock a SIGKILL to the caller's process
