@@ -352,6 +352,12 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TEMPLATE_DIR=$tmp/tpl
 export HOME=$tmp/home XDG_CONFIG_HOME=$tmp/home/.config
 mkdir -p "$HOME" "$GIT_TEMPLATE_DIR"
+# The scheduler runs each check under the process supervisor beside it
+# (scripts/lib/, TASK221): built once here, with the cc on PATH, into a tool
+# cache of this check's own, which every scratch repository's run shares.
+SUPERVISE_CACHE=$tmp/svcache
+export SUPERVISE_CACHE
+(. scripts/lib/supervise.sh && sv_path > /dev/null) || bad "cannot build the process supervisor"
 
 # repo <dir> <ci-checks.sh> <ci-select.sh>: a scratch repository whose HEAD
 # is a merge commit: main adds .github/x after the base, the branch pr adds
@@ -363,8 +369,9 @@ repo() {
 	cp "$2" "$d/scripts/ci-checks.sh"
 	cp "$3" "$d/scripts/ci-select.sh"
 	cp scripts/gate-checks.sh "$d/scripts/"
-	mkdir -p "$d/scripts/bench/core"
+	mkdir -p "$d/scripts/bench/core" "$d/scripts/lib"
 	cp scripts/bench/core/common.sh "$d/scripts/bench/core/"
+	cp scripts/lib/supervise.sh scripts/lib/supervise.c "$d/scripts/lib/"
 	cp tests/ci-checks.txt "$MAP" "$d/tests/"
 	for n in $CI_NAMES; do
 		printf '#!/bin/sh\nexit 0\n' > "$d/tests/$n"
