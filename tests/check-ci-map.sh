@@ -823,6 +823,7 @@ if command -v git > /dev/null 2>&1; then
 	tmut git-error-ignored git-error '	gate_why="git failed to list the changed paths"' '	:'
 	tmut none-trusted top-md '	gate_why="the selector chose no harness check"' '	:'
 	tmut stranger-trusted sel-stranger '	! gate_hsel=$(gate_list "$gate_tmp/sel" "$gate_hall"); then' '	! gate_hsel=$(cat "$gate_tmp/sel"); then'
+	tmut no-log stale-base '		git log --format= --name-only -z --no-renames --no-relative --no-ext-diff --no-color --cc "$1..HEAD" -- &&' '		: &&'
 	tmut no-untracked untracked '		git ls-files -z --others --exclude-standard --full-name' '		:'
 	tmut no-staged staged '		git diff --cached --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&' '		: &&'
 	tmut no-unstaged unstaged '		git diff --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&' '		: &&'

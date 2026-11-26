@@ -230,9 +230,15 @@ gate_list() {
 	done < "$1"
 	printf '%s' "$_gl"
 }
-# gate_paths <base>: every changed path, each ended by a NUL
+# gate_paths <base>: every changed path, each ended by a NUL: the tree's
+# difference from <base>, every path a commit since it touched (with a
+# stale origin/main the lane can hold main commits after <base>, and a path
+# one of them changed and the lane set back is in CI's list, not in the
+# tree's difference; --cc adds what a merge changed beyond its parents),
+# the index, the work tree and the untracked files
 gate_paths() {
 	git diff --no-renames --no-relative --no-ext-diff --no-color --name-only -z "$1" HEAD -- &&
+		git log --format= --name-only -z --no-renames --no-relative --no-ext-diff --no-color --cc "$1..HEAD" -- &&
 		git diff --cached --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&
 		git diff --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&
 		git ls-files -z --others --exclude-standard --full-name

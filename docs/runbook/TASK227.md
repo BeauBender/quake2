@@ -8,7 +8,9 @@ as a gate on a change to the harness.
 ## What changed
 
 - **`scripts/test.sh` collects the changed paths and selects from them.** The paths are:
-  - the commits since `git merge-base HEAD refs/remotes/origin/main`;
+  - the commits since `git merge-base HEAD refs/remotes/origin/main`: the tree's difference from
+    that base, and every path any commit since it touched (`git log --name-only --cc`), so a path
+    a main commit changed and the lane set back still counts;
   - the staged, unstaged and untracked files (`git ls-files --others --exclude-standard`).
 
   Each list is read with `-z`, so every path ends with a NUL. A path with a blank, a newline or
@@ -48,6 +50,7 @@ scheduler that records the checks and the long-check list it gets.
 | `untracked` | a new `Makefile` | all but `check-require-guards` left out |
 | `name-blank`, `name-newline`, `name-dash` | untracked `src/a b.c`; `src/x` + newline + `.github`; `src/-n` and `src/--output=.github` | all but `check-require-guards` left out |
 | `harness-path` | `tests/check-bench.sh` changed | none left out |
+| `stale-base` | `origin/main` one commit behind `main`, which changed `scripts/coverage.sh`; the lane holds that commit, sets the path back and changes `src/a.c` | `check-metalfx-report`, `check-bench`, `check-gate-parallel` left out |
 | `gate-all`, `no-origin`, `no-base`, `git-error` | `GATE_ALL=1`; no origin/main; origin/main an orphan; a git whose `ls-files` fails | every check, with the reason |
 | `top-md` | `README.md` alone | every check (the selector picks none) |
 | `sel-fails-map`, `sel-fails`, `sel-stranger`, `sel-twice`, `sel-none` | a selector that fails, prints `check-nope.sh`, a name twice, or nothing | every check |
@@ -56,15 +59,18 @@ scheduler that records the checks and the long-check list it gets.
 Each case also checks that nothing is left in `TMPDIR` and that no scratch path is printed.
 
 `src-only` was red on `main` (commit `c53e00dd`, before the change): the gate gave the scheduler
-every check and every long check.
+every check and every long check. `stale-base` was red on commit `c97ab6c1`, before the commits
+since the base were read: the gate also left out `check-bench-entry` and `check-bounded-run`, which
+CI runs.
 
-Ten mutants of `test.sh` are each refused by their own case:
+Eleven mutants of `test.sh` are each refused by their own case:
 
 - a missing merge base that runs no harness check (`no-base`);
 - `GATE_ALL` ignored (`gate-all`);
 - a git error ignored (`git-error`);
 - an empty selection trusted (`top-md`);
 - a selector's unknown name trusted (`sel-stranger`);
+- the paths of the commits since the base not read (`stale-base`);
 - the untracked, staged or unstaged files not read (`untracked`, `staged`, `unstaged`);
 - the untracked list read newline-delimited (`name-newline`);
 - `gate_first` not filtered (`src-only`: the scheduler refuses a name it is not given).
@@ -110,7 +116,10 @@ are its input.
 
 ## Limits
 
-- The gate trusts `refs/remotes/origin/main` as it is. A stale one makes the change look larger,
-  which runs more checks, not fewer. Run `git fetch` first to get the selection CI would make.
+- The gate trusts `refs/remotes/origin/main` as it is. A stale one adds the paths of the main
+  commits after it that the lane holds. The gate reads every path a commit since the merge base
+  touched, not only the tree's difference, so a main change the lane set back still counts and a
+  stale base runs more checks, not fewer (case `stale-base`). Run `git fetch` first to get the
+  selection CI would make.
 - The globs are only as wide as the reading of the checks, as in CI. `GATE_ALL=1` and CI's
   nightly run are the backstops.
