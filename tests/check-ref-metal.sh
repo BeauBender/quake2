@@ -2670,7 +2670,106 @@ for m in translucent ir side kind nearest bound lag dedupe modulate; do
 	fi
 done
 [ "$rtm_mutants" = 9 ] || bad "the model light test refused $rtm_mutants of its 9 rule mutants"
-seg 7.9 "; RT-primary models ${rtm:-host test}, $rtm_mutants rule mutants refused"
+# The probe kernel, rm_rtmodel.metal, pinned as text: every ray's mask is the map's (mutant: the
+# redefinition dropped, so the models shadow their own probes), rm_rtdir.metal is included with its two
+# entry points renamed and nothing else (mutant: a helper renamed, which would be a second copy of the
+# light model), the probe's light is the world pixel's terms under the exposure (mutants: the bounce
+# dropped, the exposure dropped), and the sky, sun and bounce are a mean of the header's sample count
+# (mutant: 8 rays divided by 16). Where the Metal compiler is there, the kernel and every mutant must
+# compile with it. Then the back end dispatches the probes in the trace's encoder after the trace, from
+# the slot RMB_FRAMES_IN_FLIGHT frames old, under a view with no own-light table; the mesh takes the
+# probe's light after the server's light value; the Makefile builds the kernel and the rules.
+rtmk_metal=""
+if [ "$(uname -s)" = Darwin ] && command -v xcrun >/dev/null 2>&1 && xcrun -f metal >/dev/null 2>&1; then
+	rtmk_metal=1
+fi
+rtmk_compile() { # <file.metal>: 0 when it compiles as the Makefile compiles rm_rtmodel.metal
+	xcrun -sdk macosx metal -c -I"$rm_dir" "$1" -o "${tmp:?}/rtm.air" > "${tmp:?}/metal.out" 2>&1
+}
+rtmk_body() { # <file>: rm_rtm_probe_trace's code, comments and literals blanked, whitespace squeezed
+	strip "$1" | awk '/^rm_rtm_probe_trace\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' | tr -s ' \t' '  '
+}
+rtmk_pin() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		mask) [ "$(grep -E '^#(undef|define) MTL_RTAO_MASK|^#include "rm_rtdir\.metal"' "$1" | tr -s ' \t' '  ' | tr '\n' '|')" = \
+			'#undef MTL_RTAO_MASK|#define MTL_RTAO_MASK MTL_RTW_MASK_MAP|#include "rm_rtdir.metal"|' ] ;;
+		rename) [ "$(strip "$1" | grep -cE '^#define rm_')" = 2 ] &&
+			strip "$1" | grep -qxF '#define rm_rtdir_trace rm_rtm_world_trace_unused' &&
+			strip "$1" | grep -qxF '#define rm_fragment_rtdir_show rm_rtm_world_show_unused' ;;
+		terms) rtmk_body "$1" | grep -qF 'const float3 raw = rm_rtdir_direct(v, p, n, styles, ias, inst, tmat, ntris, lights, dl, self, t);' &&
+			rtmk_body "$1" | grep -qF 'open += rm_rtdir_open(v, uint2(k, i), p, n,' &&
+			rtmk_body "$1" | grep -qF 'bounce += rm_rtdir_bounce(v, uint2(k, i), p, n,' &&
+			rtmk_body "$1" | grep -qF 'out[i] = rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), (open + bounce) / float(RM_RTM_SAMPLES), v.show);' ;;
+		samples) [ "$(strip "$1" | sed -n 's/^#define RM_RTM_SAMPLES \([0-9]*\)u.*/\1/p')" = \
+			"$(sed -n 's/^#define RM_RTM_SAMPLES \([0-9]*\) .*/\1/p' "$rm_dir/header/rm_rtmodel.h")" ] &&
+			rtmk_body "$1" | grep -qF 'for (uint k = 0u; k < RM_RTM_SAMPLES; k++)' ;;
+	esac
+}
+rtmk_pins=0 rtmk_mut=0
+rtmk_k=$rm_dir/rm_rtmodel.metal
+if [ -n "$rtmk_metal" ] && ! rtmk_compile "$rtmk_k"; then
+	cat "${tmp:?}/metal.out"
+	bad "rm_rtmodel.metal does not compile"
+fi
+for p in mask rename terms samples; do
+	if ! rtmk_pin "$rtmk_k" "$p"; then
+		bad "rm_rtmodel.metal does not hold the probe's $p pin"
+		continue
+	fi
+	rtmk_pins=$((rtmk_pins + 1))
+	case $p in
+		mask) kms="nomask" ;;
+		rename) kms="helper" ;;
+		terms) kms="nobounce noexposure" ;;
+		*) kms="fewer" ;;
+	esac
+	for m in $kms; do
+		case $m in
+			nomask) sed '/^#undef MTL_RTAO_MASK$/d; /^#define MTL_RTAO_MASK MTL_RTW_MASK_MAP$/d' ;;
+			helper) sed 's/^#define rm_fragment_rtdir_show rm_rtm_world_show_unused$/&\
+#define rm_rtdir_out rm_rtm_out_own/' ;;
+			nobounce) sed '/bounce += rm_rtdir_bounce(/d' ;;
+			noexposure) sed 's/rm_rtdir_out(raw, v\.exposure)/rm_rtdir_out(raw, 1.0f)/' ;;
+			fewer) sed 's/^#define RM_RTM_SAMPLES 16u/#define RM_RTM_SAMPLES 8u/' ;;
+		esac < "$rtmk_k" > "${tmp:?}/rtm-kernel.metal"
+		if cmp -s "$rtmk_k" "${tmp:?}/rtm-kernel.metal"; then
+			bad "the probe kernel mutant ($m) changed nothing"
+		elif [ -n "$rtmk_metal" ] && ! rtmk_compile "${tmp:?}/rtm-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the probe kernel mutant ($m) does not compile, so it tests nothing"
+		elif rtmk_pin "${tmp:?}/rtm-kernel.metal" "$p"; then
+			bad "the probe's $p pin passes its mutant ($m)"
+		else
+			rtmk_mut=$((rtmk_mut + 1))
+		fi
+	done
+done
+[ "$rtmk_pins" = 4 ] && [ "$rtmk_mut" = 5 ] ||
+	bad "rm_rtmodel.metal holds $rtmk_pins of its 4 pins and refuses $rtmk_mut of its 5 mutants"
+# the back end: the probes after the trace's dispatch and before its encoder ends, the slot's results read
+# only when RMB_FRAMES_IN_FLIGHT frames old, the probe's view without the own-light table
+if ! awk '/^rmb_rtdir_trace\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$rm_dir/rmb_rtdir.m" |
+	grep -oE 'setComputePipelineState:trace_pipe|dispatchThreads|rmb_rtdir_probes\(ce, fno, slot\);|endEncoding' |
+	tr '\n' ' ' | grep -qE '^setComputePipelineState:trace_pipe (endEncoding )*dispatchThreads rmb_rtdir_probes\(ce, fno, slot\); endEncoding $'; then
+	bad "rmb_rtdir.m: rmb_rtdir_trace does not dispatch the probes after the trace in its encoder"
+fi
+rtmk_be=$(awk '/^rmb_rtdir_probes\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$rm_dir/rmb_rtdir.m")
+if ! printf '%s\n' "$rtmk_be" | grep -qF 'if (rm_rtm_slot_ready(probe_traced[slot], fno))' ||
+	! printf '%s\n' "$rtmk_be" | grep -qF 'pv.nself = 0u;' ||
+	! printf '%s\n' "$rtmk_be" | grep -qF '[ce setBytes:&pv length:sizeof(pv) atIndex:0];'; then
+	bad "rmb_rtdir.m: rmb_rtdir_probes does not read only a slot RMB_FRAMES_IN_FLIGHT frames old, or traces with the own light"
+fi
+# the mesh: the server's light value is taken from R_LightPoint before the probe's light replaces it
+if ! awk '/^R_DrawAliasModel\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$rm_dir/rm_mesh.c" |
+	grep -oE 'R_LightPoint\(&e, e\.origin, point\);|r_lightlevel->value = rm_light_level\(point\);|RM_RTDir_ModelLight\(&e, currentmodel, point\);' |
+	tr '\n' ' ' | grep -qxF 'R_LightPoint(&e, e.origin, point); r_lightlevel->value = rm_light_level(point); RM_RTDir_ModelLight(&e, currentmodel, point); '; then
+	bad "rm_mesh.c: R_DrawAliasModel does not take the probe's light after R_LightPoint and the server's light value"
+fi
+if [ "$(grep -cF 'ref_metal/rm_rtmodel.air' Makefile)" != 2 ] || [ "$(grep -cF 'src/client/refresh/metal/rm_rtmodel.o' Makefile)" != 1 ] ||
+	[ "$(grep -cF '@"rm_rtm_probe_trace"' "$rm_dir/rmb_rtdir.m")" != 1 ]; then
+	bad "the probe kernel or the rules are not built into ref_metal, or the probe pipeline is not made by rmb_rtdir.m"
+fi
+seg 7.9 "; RT-primary models ${rtm:-host test}, $rtm_mutants rule mutants, $rtmk_pins kernel pins with $rtmk_mut kernel mutants refused${rtmk_metal:+ and compiled}"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"

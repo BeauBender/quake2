@@ -274,6 +274,9 @@ extern qboolean r_dlight_term;
 void R_MarkBrushLights(const model_t *currentmodel);
 /* gl1's lightspot: where the last R_LightPoint met a node (the alias shadows) */
 const float *R_LightSpot(void);
+/* TASK191: whether the last R_LightPoint met a face (1 or 0, -1 not), and that face's plane normal (NULL before any) */
+int R_LightHit(void);
+const float *R_LightPlaneNormal(void);
 void R_LightPoint(entity_t *currententity, vec3_t p, vec3_t color);
 void R_SetLightLevel(entity_t *currententity);
 const byte *R_Minlight(void);

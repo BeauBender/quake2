@@ -1074,6 +1074,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_rtdir.metal \
 		src/client/refresh/metal/rm_rtptemporal.metal \
 		src/client/refresh/metal/rm_rtpdenoise.metal \
+		src/client/refresh/metal/rm_rtmodel.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h \
 		src/client/refresh/metal/common/mtl_gbuf_math.h \
 		src/client/refresh/metal/common/mtl_rts_math.h \
@@ -1105,13 +1106,14 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtdir.metal -o $(BUILDDIR)/ref_metal/rm_rtdir.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtptemporal.metal -o $(BUILDDIR)/ref_metal/rm_rtptemporal.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtpdenoise.metal -o $(BUILDDIR)/ref_metal/rm_rtpdenoise.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtmodel.metal -o $(BUILDDIR)/ref_metal/rm_rtmodel.air
 	${Q}xcrun -sdk $(METAL_SDK) metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
 		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air \
 		$(BUILDDIR)/ref_metal/rm_rtshadow_temporal.air \
 		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtsun.air $(BUILDDIR)/ref_metal/rm_rtdenoise.air \
 		$(BUILDDIR)/ref_metal/rm_rtwdenoise.air $(BUILDDIR)/ref_metal/rm_rtwater.air \
 		$(BUILDDIR)/ref_metal/rm_rtdir.air $(BUILDDIR)/ref_metal/rm_rtptemporal.air \
-		$(BUILDDIR)/ref_metal/rm_rtpdenoise.air -o $@
+		$(BUILDDIR)/ref_metal/rm_rtpdenoise.air $(BUILDDIR)/ref_metal/rm_rtmodel.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
@@ -1507,6 +1509,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_rtsunscene.o \
 	src/client/refresh/metal/rm_rtdir.o \
 	src/client/refresh/metal/rm_rtdirscene.o \
+	src/client/refresh/metal/rm_rtmodel.o \
 	src/client/refresh/metal/rm_rtwater.o \
 	src/client/refresh/metal/rm_rtwaterscene.o \
 	src/client/refresh/metal/rm_scrap.o \

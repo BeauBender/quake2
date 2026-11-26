@@ -38,6 +38,7 @@
 
 #include "header/local.h"
 #include "header/rm_gbufscene.h"
+#include "header/rm_rtdirscene.h"
 #include "common/mtl_matrix.h"
 
 /* gl1's s_lerped, and one draw's vertices and indices (the ring region's contents) */
@@ -255,6 +256,9 @@ R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, con
 		{
 			r_lightlevel->value = rm_light_level(point);
 		}
+
+		/* TASK191: under RT-primary, the traced light below the model in the lightmap's place; the server's value stays stock */
+		RM_RTDir_ModelLight(&e, currentmodel, point);
 	}
 
 	rm_alias_shade(e.flags, r_newrefdef.rdflags, point, r_newrefdef.time, gl1_overbrightbits->value, shadelight);

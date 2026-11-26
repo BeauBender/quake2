@@ -108,6 +108,22 @@ R_LightSpot(void)
 	return lightspot;
 }
 
+/* TASK191: the last R_LightPoint's trace, 1 or 0 when it met a face (R_LightSpot is on it), -1 when not */
+static int lighthit = -1;
+
+int
+R_LightHit(void)
+{
+	return lighthit;
+}
+
+/* TASK191: the plane of the face the last R_LightPoint met, NULL before any */
+const float *
+R_LightPlaneNormal(void)
+{
+	return lightplane ? lightplane->normal : NULL;
+}
+
 /* gl1's minlight table, made at init as gl1's R_InitImages makes it (a change needs vid_restart) */
 void
 R_InitLight(void)
@@ -509,6 +525,8 @@ R_LightPoint(entity_t *currententity, vec3_t p, vec3_t color)
 	vec3_t dist;
 	float add;
 
+	lighthit = -1;
+
 	if (!r_worldmodel || !r_worldmodel->lightdata || !currententity)
 	{
 		color[0] = color[1] = color[2] = 1.0;
@@ -520,6 +538,7 @@ R_LightPoint(entity_t *currententity, vec3_t p, vec3_t color)
 	end[2] = p[2] - 2048;
 
 	r = R_RecursiveLightPoint(r_worldmodel->nodes, p, end);
+	lighthit = r;
 
 	if (r == -1)
 	{

@@ -42,6 +42,7 @@
 #include "header/rm_rt.h"
 #include "header/rm_rtdir.h"
 #include "header/rm_rtdirscene.h"
+#include "header/rm_rtmodel.h"
 #include "header/rm_rtdata.h"
 #include "header/rm_rtgate.h"
 #include "header/rm_rtao.h"
@@ -56,6 +57,7 @@ static cvar_t *r_rt_direct_sky;
 static cvar_t *r_rt_direct_seed;
 static cvar_t *r_rt_direct_bounce;  /* TASK189 slice 2 */
 static cvar_t *r_rt_direct_models;  /* TASK191: the models' probes */
+static int rtm_lit, rtm_stock;      /* TASK191: the models lit by a probe and by the lightmap since the last line */
 static cvar_t *r_rt_stats_ref;
 static unsigned long dir_count;     /* TASK189: the views traced, the sky ray's noise frame without a seed */
 
@@ -566,6 +568,21 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 				R_Printf(PRINT_ALL, "%s\n", line);
 			}
 
+			/* TASK191: the models' probes */
+			if (RM_Effect(r_rt_direct_models) != 0)
+			{
+				int probes = 0;
+
+				(void)rmb_rtdir_probe_ready(&probes);
+
+				if (rm_rtm_stats_format(st[i].frame, probes, rtm_lit, rtm_stock, line, sizeof(line)))
+				{
+					R_Printf(PRINT_ALL, "%s\n", line);
+				}
+
+				rtm_lit = rtm_stock = 0;
+			}
+
 			/* TASK190 slice 1: the accumulation's own GPU time, on a frame that accumulated */
 			if (st[i].accumulated)
 			{
@@ -580,6 +597,52 @@ RM_RTDir_Frame(const refdef_t *fd, int scene_ready)
 			}
 		}
 	}
+}
+
+/*
+ * TASK191: under RT-primary, a model's light from the direct light's
+ * probes in place of R_LightPoint's lightmap sample (point, which
+ * R_LightPoint has just set from model's origin; R_LightSpot and
+ * R_LightPlaneNormal are the face its trace met). This model's probe is
+ * asked for, traced at the next dispatch, and the result of the frames
+ * before that matches it is taken when there is one. Anywhere else, and
+ * for a model that keeps the stock light, point is left as it is.
+ */
+void
+RM_RTDir_ModelLight(const entity_t *e, const void *model, float *point)
+{
+	const rm_rtm_ready_t *ready;
+	rm_rtm_key_t k;
+	rm_rtm_probe_t p;
+	int i;
+
+	if (!e || !point || !rm_rtm_on(dir_active && dir_viewed, RM_Effect(r_rt_direct_models)) ||
+		!rm_rtm_traced(e->flags, r_newrefdef.rdflags))
+	{
+		return;
+	}
+
+	memset(&k, 0, sizeof(k));
+	k.model = model;
+	k.weapon = (e->flags & RF_WEAPONMODEL) != 0;
+	VectorCopy(e->origin, k.origin);
+
+	if (rm_rtm_probe(e->origin, R_LightSpot(), R_LightPlaneNormal(), R_LightHit(), &p))
+	{
+		(void)rmb_rtdir_probe_add(&k, &p);
+	}
+
+	ready = rmb_rtdir_probe_ready(NULL);
+	i = rm_rtm_match(ready->key, ready->n, model, k.weapon, e->origin);
+
+	if (i < 0)
+	{
+		rtm_stock++;
+		return;
+	}
+
+	rm_rtm_point(ready->light[i], r_modulate->value, point);
+	rtm_lit++;
 }
 
 int

@@ -43,5 +43,7 @@ int RM_RTDir_Active(void);
 int RM_RTDir_ShowOnly(void);
 int RM_RTDir_ShowAsked(void);   /* TASK190 slice 3: Wanted and the _show cvar on, known before Frame and View (rm_rtfx_show_asked) */
 void RM_RTDir_View(const rm_view_t *view);
+/* TASK191: a model's light from the probes in place of R_LightPoint's (rm_mesh.c, right after R_LightPoint) */
+void RM_RTDir_ModelLight(const entity_t *e, const void *model, float *point);
 
 #endif /* RM_RTDIRSCENE_H */

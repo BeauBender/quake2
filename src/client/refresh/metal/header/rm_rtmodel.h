@@ -111,4 +111,14 @@ int rm_rtm_slot_ready(unsigned long traced, unsigned long fno);
 /* r_rt_stats 2's line of the models: 0 when it does not fit */
 int rm_rtm_stats_format(unsigned long frame, int probes, int matched, int stock, char *buf, size_t len);
 
+/*
+ * The back end's (rmb_rtdir.m): a probe asked for, traced at the next
+ * direct-light dispatch (rm_rtm_add's index; -1 when the pass is closed,
+ * has no probe pipeline, or the list is full); and the results the models
+ * take, of the frame RMB_FRAMES_IN_FLIGHT before the last dispatch, with
+ * the probes that dispatch traced (traced may be NULL).
+ */
+int rmb_rtdir_probe_add(const rm_rtm_key_t *k, const rm_rtm_probe_t *p);
+const rm_rtm_ready_t *rmb_rtdir_probe_ready(int *traced);
+
 #endif

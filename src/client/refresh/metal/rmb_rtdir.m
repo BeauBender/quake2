@@ -48,6 +48,7 @@
 #include "header/rm_rt.h"
 #include "header/rm_rtdir.h"
 #include "header/rm_rtao.h"
+#include "header/rm_rtmodel.h"
 #include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
@@ -132,6 +133,27 @@ static unsigned tshow;                  /* the r_rt_direct_show of the last view
 static unsigned long slot_acc[RMB_FRAMES_IN_FLIGHT];   /* per slot: the frame that accumulated in it */
 static int slot_ttimed[RMB_FRAMES_IN_FLIGHT];
 
+/* TASK191: the models' probes (rm_rtmodel.metal), traced after the world in the trace's encoder */
+static id<MTLComputePipelineState> probe_pipe;
+static id<MTLBuffer> probe_in;          /* RMB_FRAMES_IN_FLIGHT slots of RM_RTM_MAX records of two float4s */
+static id<MTLBuffer> probe_out;         /* RMB_FRAMES_IN_FLIGHT slots of RM_RTM_MAX float4s */
+static unsigned long probe_traced[RMB_FRAMES_IN_FLIGHT];   /* the frame that traced the slot's probes, 0 for none */
+static rm_rtm_key_t probe_keys[RMB_FRAMES_IN_FLIGHT][RM_RTM_MAX];
+static int probe_n[RMB_FRAMES_IN_FLIGHT];
+static rm_rtm_frame_t probe_pend;       /* asked for since the last dispatch */
+static rm_rtm_ready_t probe_ready;      /* the results the models take */
+static int probe_last;                  /* the probes the last dispatch traced */
+
+static void
+rmb_rtdir_probes_reset(void)
+{
+	memset(probe_traced, 0, sizeof(probe_traced));
+	memset(probe_n, 0, sizeof(probe_n));
+	probe_pend.n = 0;
+	probe_ready.n = 0;
+	probe_last = 0;
+}
+
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTDIR_SET(slot, obj) \
 	do \
@@ -183,6 +205,23 @@ rmb_rtdir_open(char *err, size_t errlen)
 		RMB_RTDIR_SET(show_pipe, trace_pipe ? rmb_new_render_pipe(d, &e) : nil);
 		RMB_RTDIR_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTDIR_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
+
+		/* TASK191: the models' probes; without their pipeline or buffers every model keeps the stock light */
+		{
+			id<MTLFunction> pk = trace_pipe ? [rmb_library() newFunctionWithName:@"rm_rtm_probe_trace"] : nil;
+
+			RMB_RTDIR_SET(probe_pipe, pk ? [rmb_device newComputePipelineStateWithFunction:pk error:nil] : nil);
+			RMB_RTDIR_SET(probe_in, probe_pipe ? [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RM_RTM_MAX *
+					8 * sizeof(float) options:MTLResourceStorageModeShared] : nil);
+			RMB_RTDIR_SET(probe_out, probe_in ? [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RM_RTM_MAX *
+					4 * sizeof(float) options:MTLResourceStorageModeShared] : nil);
+
+			if (!probe_out)
+			{
+				RMB_RTDIR_SET(probe_pipe, nil);
+				RMB_RTDIR_SET(probe_in, nil);
+			}
+		}
 
 		/* TASK189: the sky ray's tile, made in code as the AO's (rm_rtao_bluenoise) */
 		{
@@ -258,6 +297,7 @@ rmb_rtdir_open(char *err, size_t errlen)
 	brec_lmtex = 0;
 	ndlights = 0;
 	view_set = traced = 0;
+	rmb_rtdir_probes_reset();
 	dir_open = 1;
 	return 1;
 }
@@ -287,8 +327,12 @@ rmb_rtdir_close(void)
 		RMB_RTDIR_SET(t_key[0], nil);
 		RMB_RTDIR_SET(t_key[1], nil);
 		RMB_RTDIR_SET(t_acc, nil);
+		RMB_RTDIR_SET(probe_pipe, nil);
+		RMB_RTDIR_SET(probe_in, nil);
+		RMB_RTDIR_SET(probe_out, nil);
 	}
 
+	rmb_rtdir_probes_reset();
 	rm_rtt_hist_reset(&thist);
 	tview_set = hist_cur = tmp_refused = dn_refused = acc_view = 0;
 	tmp_bad_w = tmp_bad_h = 0;
@@ -724,6 +768,107 @@ rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap)
 	return n;
 }
 
+int
+rmb_rtdir_probe_add(const rm_rtm_key_t *k, const rm_rtm_probe_t *p)
+{
+	return (dir_open && probe_pipe) ? rm_rtm_add(&probe_pend, k, p) : -1;
+}
+
+const rm_rtm_ready_t *
+rmb_rtdir_probe_ready(int *n)
+{
+	if (n)
+	{
+		*n = probe_last;
+	}
+
+	return &probe_ready;
+}
+
+/*
+ * TASK191: the models' probes in the trace's encoder, after its dispatch
+ * and with its bindings. First the results this slot holds become the ones
+ * the models take, when the frame RMB_FRAMES_IN_FLIGHT before traced them
+ * (that frame has completed: the frame semaphore, as for the counts), else
+ * none. Then the probes asked for since the last dispatch are written to
+ * the slot and traced, under the view with no own-light table and no
+ * development view, so a probe is a world pixel's full light.
+ */
+static void
+rmb_rtdir_probes(id<MTLComputeCommandEncoder> ce, unsigned long fno, int slot)
+{
+	rm_rtdir_view_t pv;
+	uint32_t n;
+	int i, k;
+
+	probe_ready.n = 0;
+	probe_last = 0;
+
+	if (!probe_pipe || !probe_in || !probe_out)
+	{
+		probe_pend.n = 0;
+		return;
+	}
+
+	if (rm_rtm_slot_ready(probe_traced[slot], fno))
+	{
+		const float *o = (const float *)probe_out.contents + (size_t)slot * RM_RTM_MAX * 4;
+
+		for (i = 0; (i < probe_n[slot]) && (i < RM_RTM_MAX); i++)
+		{
+			probe_ready.key[i] = probe_keys[slot][i];
+
+			for (k = 0; k < 3; k++)
+			{
+				probe_ready.light[i][k] = o[4 * i + k];
+			}
+		}
+
+		probe_ready.n = i;
+	}
+
+	probe_traced[slot] = 0;
+	probe_n[slot] = 0;
+	n = ((probe_pend.n > 0) && (probe_pend.n <= RM_RTM_MAX)) ? (uint32_t)probe_pend.n : 0u;
+	probe_pend.n = 0;
+
+	if (n == 0)
+	{
+		return;
+	}
+
+	{
+		float *in = (float *)probe_in.contents + (size_t)slot * RM_RTM_MAX * 8;
+
+		for (i = 0; i < (int)n; i++)
+		{
+			for (k = 0; k < 3; k++)
+			{
+				in[8 * i + k] = probe_pend.probe[i].spot[k];
+				in[8 * i + 4 + k] = probe_pend.probe[i].normal[k];
+			}
+
+			in[8 * i + 3] = 0;
+			in[8 * i + 7] = 0;
+			probe_keys[slot][i] = probe_pend.key[i];
+		}
+	}
+
+	pv = view;
+	pv.nself = 0u;
+	pv.show = 0u;
+	[ce setComputePipelineState:probe_pipe];
+	[ce setBytes:&pv length:sizeof(pv) atIndex:0];
+	[ce setBuffer:probe_in offset:(NSUInteger)slot * RM_RTM_MAX * 8 * sizeof(float) atIndex:17];
+	[ce setBuffer:probe_out offset:(NSUInteger)slot * RM_RTM_MAX * 4 * sizeof(float) atIndex:18];
+	[ce setBytes:&n length:sizeof(n) atIndex:19];
+	[ce dispatchThreads:MTLSizeMake(n, 1, 1)
+			threadsPerThreadgroup:MTLSizeMake(MIN((NSUInteger)n, probe_pipe.maxTotalThreadsPerThreadgroup), 1, 1)];
+	probe_traced[slot] = fno;
+	probe_n[slot] = (int)n;
+	probe_last = (int)n;
+}
+
 /*
  * The kernel on the frame's command buffer over the render-size depth,
  * normal and material attachments, the raster's light (lm, read for the
@@ -856,6 +1001,8 @@ rmb_rtdir_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		/* TASK189: the sky ray's noise */
 		[ce setBuffer:tile offset:0 atIndex:12];
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTDIR_GROUP, RMB_RTDIR_GROUP, 1)];
+		/* TASK191: the models' probes, with the trace's bindings */
+		rmb_rtdir_probes(ce, fno, slot);
 		[ce endEncoding];
 
 		slot_pending[slot] = 1;
