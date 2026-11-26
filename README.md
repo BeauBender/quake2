@@ -35,12 +35,47 @@ renderer, then ray tracing on Apple silicon.
 
 ## Build and run
 
-```sh
-make                      # client, server, game and the renderers, into release/
-make server game          # the parts that need no SDL
-release/quake2 -datadir /path/to/quake2 -portable
-scripts/test.sh           # the gate; every commit must pass it
-```
+This repository holds the engine only. It has none of Quake II's game data
+(maps, models, textures, sounds), and nothing runs without it. To play, you
+need your own licensed copy of Quake II, for example the CD release or the
+Steam or GOG.com version, and you supply its files yourself. The game data
+is id Software's copyrighted work; it is not distributed here, and it must
+never be committed to this repository.
+
+1. Build the engine:
+
+   ```sh
+   make                      # client, server, game and the renderers, into release/
+   make server game          # the parts that need no SDL
+   scripts/test.sh           # the gate; every commit must pass it
+   ```
+
+2. Set up the game data from your copy, in a directory of its own:
+   * Copy `pak0.pak` and the `video/` folder from your Quake II into a
+     `baseq2/` folder there.
+   * A full version also needs the 3.20 patch. The guide calls it required,
+     and recommends applying it by hand even to a copy sold already patched.
+   * The addons, The Reckoning and Ground Zero, need their own `pak0.pak`, in
+     `xatrix/` and `rogue/`.
+   * The soundtrack is optional and has to be extracted from the CD or copied
+     from the GOG.com release.
+
+   The exact steps and the files' MD5 checksums are in
+   [doc/020_installation.md](doc/020_installation.md), under "The Full
+   Version" and "Music Extraction". The free demo, with only the first few
+   levels, also runs; it is set up as that guide's "The Demo Version" says.
+
+3. Run the game, pointing `-datadir` at the directory that holds `baseq2/`:
+
+   ```sh
+   release/quake2 -datadir /path/to/quake2 -portable
+   ```
+
+   `-portable` keeps the configuration and the saves next to the binary.
+
+On iPhone and iPad the app holds no game data either: you copy your
+`baseq2/` files into the app's folder in the Files app (see "Game data on
+iPhone and iPad" in [doc/020_installation.md](doc/020_installation.md)).
 
 The client needs SDL3. The dedicated server and the game module
 need only the system toolchain. Only Apple platforms are built and tested by
