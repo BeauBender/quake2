@@ -87,6 +87,10 @@
 #             passing check left running (its flag-held grandchild) is gone
 #             after the run, and so are a check and its grandchild after a
 #             SIGTERM to the scheduler;
+#   termign   the scheduler started with SIGTERM ignored refuses to start:
+#             status 2 within 10 s, one line that says why, no check run
+#             (every supervisor would inherit the ignore, so no stop could
+#             end a check);
 #   intskip   interrupt, testsh and sigs, run by this self-test started
 #             with SIGINT ignored, pass: interrupt and testsh each say what
 #             they skip, and sigs says it skips nothing (its check gets
@@ -1810,6 +1814,8 @@ mutant grace-3s-stop stop 'gate_grace=10' 'gate_grace=3'
 mutant no-stop stop '	for _gep; do kill -s TERM "$_gep" 2> /dev/null || :; done' '	:'
 mutant no-stop-wait interrupt '	for _gep; do wait "$_gep" 2> /dev/null || :; done' '	:'
 mutant stderr-closed-unguarded-sched stopnoerr '{ :; } 8>&2 2> /dev/null || exec 2> /dev/null' ':'
+# the refusal of an ignored SIGTERM dropped: the run starts its checks
+mutant term-ignored-starts termign "case \$({ sh -c 'echo started; kill -s TERM \$\$; echo ignored'; } 2> /dev/null) in" 'case started in'
 mutant no-parent-check kgrp 'if [ -n "$_gparent" ] && ! gate_parent "$_gparent"; then' 'if false; then'
 intmut mutant int-passes interrupt "trap 'exit 130' INT" "trap 'exit 0' INT"
 mutant term-goes-on interrupt1 "trap 'exit 143' TERM" "trap ':' TERM"

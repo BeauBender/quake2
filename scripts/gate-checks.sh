@@ -45,8 +45,9 @@
 # and CONT, KILL after gate_grace s, and exits once the group is empty. So a
 # stop that has begun ends even when this script is killed during it. A
 # group that cannot be emptied makes the supervisor exit 126, and the check
-# fails. Without the supervisor, or without bench/core/common.sh (its
-# liveness test), the run fails before any check starts, with status 2.
+# fails. Without the supervisor, without bench/core/common.sh (its liveness
+# test), or with SIGTERM ignored when it starts (no stop could end a check),
+# the run fails before any check starts, with status 2.
 set -eu
 me=gate
 # the seconds from SIGTERM to SIGKILL, so that a check's own cleanup trap
@@ -57,6 +58,21 @@ gate_grace=10
 # cannot fail under set -e: an error before any check starts keeps its
 # status 2 (it would be 1, set -e's, from the failed write).
 { :; } 8>&2 2> /dev/null || exec 2> /dev/null
+# A SIGTERM ignored when this script starts cannot be trapped (POSIX), and
+# every supervisor would inherit it ignored and never begin a stop: a stop
+# would wait, with no bound, for each check to end by itself. So the run is
+# refused. The test is behavioural, before any TERM trap of this script: a
+# child shell, which inherits this script's disposition, sends itself TERM
+# and says whether it lived on. (The trap listing is no test: dash lists a
+# trap on a signal ignored at entry that it never runs.) Any answer but
+# "started" alone, none included (no sh), refuses the run as well.
+case $({ sh -c 'echo started; kill -s TERM $$; echo ignored'; } 2> /dev/null) in
+started) ;;
+*)
+	echo "$me: SIGTERM is ignored here (or a child shell could not show that it is not), so no stop could end a check; not starting" >&2
+	exit 2
+	;;
+esac
 gate_core=$(dirname "$0")/bench/core/common.sh
 if [ ! -r "$gate_core" ]; then
 	echo "$me: cannot read the bounded-run primitive, $gate_core" >&2
