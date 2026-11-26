@@ -282,14 +282,19 @@ TASK109's code and is not touched here). No change to the scaler's own code (`rm
 
 - **The row.** `pres_rtprimary` gains `{ "r_metalfx", 2.0f }`, the temporal scaler. `rm_pres_fx` (new,
   `rm_rtgate.c`) is the value `RM_Effect` returns for `r_metalfx`: under RT-primary it is `0` (off) on a device
-  without the temporal scaler (never the spatial one below it, the plan's section 2.3) and while
-  `r_rt_direct_show` shows a development view (default 2: the view is drawn unscaled); else the row's `2` where
+  without the temporal scaler (never the spatial one below it, the plan's section 2.3) and while a
+  development view is asked for (default 2: the view is drawn unscaled); else the row's `2` where
   the view's internal size is below its output, and the player's value at the output's own size. The last rule
   is the plan's section 2.2 ("the temporal scaler where the output is above the internal size") and section 6
   ("at `r_metalfx 0` and the internal size equal to the output, so no scaler history enters a pin"): at the
   harness's 480 lines and the default scale the mode runs no scaler of its own, so every existing `rtprimary-*`
   record keeps its frames, `rtprimary-metalfx2`'s 1:1 temporal anti-aliasing included. Every other mode reads
   `rm_pres_value`'s value as before.
+- **The development view.** `rm_main.c` reads it through the effect table, as it reads every ray-traced effect
+  (TASK179): each row gains `show_asked` (`RM_*_ShowAsked`: the effect wanted and its `_show` cvar naming a
+  view), walked by `rm_rtfx_show_asked`. Unlike `rm_rtfx_show_only` it holds before the frame's `frame` and
+  `view` entries, so the scaler, sized in `RM_GB_Begin` before them, can read it. Under RT-primary only the direct
+  light and the water are wanted, so `r_rt_direct_show` and `r_rt_water_show` are the views it sees.
 - **The size.** `RM_PresBelow` (`rm_main.c`) sets, at the start of each `RI_RenderFrame`, whether the view's
   internal size is below its output, exactly as `RM_FX_Begin` sizes it: `rm_fx_scale` of `r_metalfx_scale` (as
   the A/B side gives it), the GPU's default rows and the temporal scaler's largest ratio, over the view's
@@ -323,12 +328,57 @@ TASK109's code and is not touched here). No change to the scaler's own code (`rm
   "temporal", the main menu's scaler greyed with each reason (modes 7 and 3), the scale item live with the temporal
   scaler and greyed without it, Apply writing no `r_metalfx`, and the item the player's at scale 1 and without ray
   tracing. The scaler's row was live under Ray traced before (red).
+- **The effect table:** `tests/metal/rm_rtfx_test.c` walks `show_asked` as it walks `show_only` (every row in
+  the order up to the first that says yes): 481 checks, 0 failed. `tests/metal/rm_rttab_test.c`, over the real
+  text of `RM_Effect`, checks its `r_metalfx` under RT-primary (`2` below the output, the player's `0` at its own
+  size, `0` for an asked direct or water view and without the temporal scaler) and under stock (the player's `2`,
+  a view asked or not): 18 checks, 0 failed. With the walk replaced by `0` in `RM_Effect` it fails 2 of 18.
+  `check-ref-metal`'s effect-call section refuses its 4 call mutants and names nothing in the real files.
 - **Pins:** `scripts/pins/scenarios/rtprimary-overlayfx.cfg` (new) is `rtprimary-world` at `r_metalfx_scale 0.5`
   with the player's `r_metalfx 0`: only the overlay's scaler runs there. Every other scenario is unchanged.
 
 ## Slice 3 hold
 
-Written as the scratchpad's `hold-T190s3.sh` and run by the orchestrator; its results are not in yet.
+Run by the orchestrator at `f89121ee19fc`, on main `d580216f8033` (merged), with 0 files changed.
+
+- **Builds:** `make ref_metal`, `make` and `make test` exit 0; `make test`: `yq2test: 591 tests, 0 failed`.
+- **Checks:** `check-cvar-docs`, `check-video-menu`, `check-runbook-index`, `check-doc-links`, `check-pin-chars`
+  and `check-scenario-parsers` (`ok (5 tests, 11 mutants caught)`) pass. `check-ref-metal` failed:
+  `rm_main.c` named `rm_rtdir_show`, an effect outside the effect table, and `tests/metal/rm_rttab_test.c` did
+  not build over `RM_Effect`'s new text. The three `FAIL` lines of `rm_rtdenoise_test` in its log
+  (`171 checks, 3 failed`) are its header mutant's run (the `rtdm` tree), which must fail. Fixed after the
+  hold (the development view through the table, above); the next hold reruns the check.
+- **Stock pins:** `water.dm2` made (100 messages, the move on rendered frame 36), `f34c779dbab4` on both sides.
+  Base and branch 30 scenarios each, 0 failed: 30 of 30 stock scenarios byte-identical to the base.
+- **RT-primary's records against main's (want same), one branch run each, all identical:**
+
+  | Record | Frames | Hash |
+  |---|---|---|
+  | `rtprimary-world` | 23 | `c2d7b7d94e6c` |
+  | `rtprimary-direct` | 23 | `8975350df42b` |
+  | `rtprimary-vis` | 23 | `469ce42fec8c` |
+  | `rtprimary-noshadow` | 23 | `b3d10fafdc08` |
+  | `rtprimary-sky` | 23 | `9acbe75f592b` |
+  | `rtprimary-sun` | 23 | `6f6c37b9a084` |
+  | `rtprimary-bounce` | 23 | `e2a45f031fcc` |
+  | `rtprimary-metalfx2` | 23 | `b03c73ee59d1` |
+  | `rtprimary-denoise` | 23 | `371419d919dd` |
+  | `rtprimary-styles` | 89 | `a254ac92e157` |
+  | `rtprimary-pool` | 4 | `e73ffa9aea7d` |
+  | `rtprimary-denoise-pool` | 4 | `b5cc3f8dd8bf` |
+  | `rtprimary-dlights` | 23 | `6d01f9bb9bca` |
+  | `rtprimary-dlights-d2` | 89 | `8f8b43a1f6ee` |
+
+  RT-primary: 14 of 14 existing records byte-identical to main's.
+- **`rtprimary-overlayfx`:** three branch runs of 23 frames, `77f3485fe88f` in all three, 0 of 23 frames differ
+  between run 1 and 2 and between run 1 and 3. Main's code (the player's `r_metalfx 0`, no scaler) records
+  `c2d7b7d94e6c`: 23 of 23 frames differ from the branch's. The branch's engine line adds `ref_metal:
+  presentation: ray traced: r_metalfx reads 2 (temporal) where the internal size is below the output,
+  r_metalfx_scale the user's` after the presentation's; main's has no such line.
+- **The development view under the overlay's scaler** (`overlayfx-show`): 23 frames, `8975350df42b` on the
+  branch and on main, identical: unscaled, as main.
+- Frames for the owner (`rtprimary-overlayfx` captures 21, 22 and 12, branch and base) were set aside for the
+  owner and not committed. 0 untracked files left.
 
 ## Left for the next slices
 
