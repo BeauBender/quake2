@@ -1213,12 +1213,11 @@ c_untracked(struct run *r)
 	{
 		return fail(r, "no kill-sent: %s", r->log);
 	}
-	tick(r, 'A');
-	finish(r);
-	if (at(r, "group-empty") < 0)
+	if (ev_wait(r, "group-empty") == NULL || ev_wait(r, "reaped") == NULL)
 	{
-		return fail(r, "events: %s", r->log);
+		return fail(r, "no group-empty and reaped events: %s", r->log);
 	}
+	finish(r);
 	return want_status(r, 124);
 }
 
