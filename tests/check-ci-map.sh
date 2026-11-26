@@ -429,6 +429,123 @@ elif ! e2e_cases scripts/ci-checks.sh "$SEL" > "$tmp/e2e.out" 2>&1; then
 	fail=1
 fi
 
+# ---- (e) scripts/test.sh selects the harness checks as CI does -------------
+# Each case is a scratch repository with a copy of scripts/test.sh, the real
+# selector and map, an empty tests/check-*.sh for every name of
+# tests/ci-checks.txt, of the gate's long-check list and check-zz-local.sh
+# (a check the map does not name, as tests/ci-local-only.txt's are), a stub
+# scheduler that records what test.sh gives it, and a make that does
+# nothing; its main is its own origin/main and HEAD is the branch work.
+GFIRST=$(sed -n 's/^gate_first="\(.*\)"$/\1/p' scripts/test.sh)
+[ -n "$GFIRST" ] || bad "scripts/test.sh has no gate_first line"
+# shellcheck disable=SC2086 # the names have no blank
+GNAMES=$(printf '%s\n' $CI_NAMES $GFIRST check-zz-local.sh | sort -u | tr '\n' ' ')
+GNAMES=${GNAMES% }
+REALGIT=$(command -v git)
+mkdir -p "$tmp/gbin" "$tmp/gitbad"
+printf '#!/bin/sh\nexit 0\n' > "$tmp/gbin/make"
+# a git that fails to list the untracked files and works otherwise
+printf '#!/bin/sh\ncase " $* " in *" ls-files "*) exit 128 ;; esac\nexec "%s" "$@"\n' "$REALGIT" > "$tmp/gitbad/git"
+cat > "$tmp/gstub" << 'EOF'
+#!/bin/sh
+# records what scripts/test.sh gives the scheduler; refuses a long-check
+# word it is not given, as scripts/gate-checks.sh does
+first=$2
+shift 2
+for w in $first; do
+	case " $* " in *" tests/$w "*) ;; *) echo "stub scheduler: $w names no check" >&2; exit 2 ;; esac
+done
+{
+	printf 'first %s\n' "$first"
+	for t; do printf '%s\n' "${t#tests/}"; done
+} > "$GATE_REC"
+EOF
+chmod +x "$tmp/gbin/make" "$tmp/gitbad/git" "$tmp/gstub"
+
+# minus <list> <words>: the words of <list> that are not in <words>, in order
+minus() {
+	local n o=""
+	for n in $1; do
+		case " $2 " in *" $n "*) ;; *) o="$o $n" ;; esac
+	done
+	printf '%s' "${o# }"
+}
+
+# gt_repo <dir> <test.sh>: the scratch repository of a case
+gt_repo() {
+	local d=$1 n
+	rm -rf "${d:?}" "$d.rec" "$d.out"
+	mkdir -p "$d/scripts" "$d/tests" "$d/src"
+	cp "$2" "$d/scripts/test.sh"
+	cp "$SEL" "$d/scripts/ci-select.sh"
+	cp "$MAP" "$d/tests/ci-map.txt"
+	cp "$tmp/gstub" "$d/scripts/gate-checks.sh"
+	for n in $GNAMES; do : > "$d/tests/$n"; done
+	echo base > "$d/README.md"
+	echo base > "$d/src/a.c"
+	echo 'scratch/' > "$d/.gitignore"
+	echo base > "$d/scripts/coverage.sh"
+	g "$d" init -q -b main && g "$d" add -A && g "$d" commit -q -m base &&
+		g "$d" update-ref refs/remotes/origin/main HEAD && g "$d" checkout -q -b work
+}
+
+# gt_run <dir> [<env>...]: runs that test.sh there; GR is what the scheduler
+# was given (the checks on one line), GF its long checks, GO the output
+gt_run() {
+	local d=$1 st=0
+	shift
+	mkdir -p "$tmp/gtd"
+	(cd "$d" && env -u GATE_ALL -u BENCH_LOCK_ENTRY -u BENCH_LOCK_TOKEN PATH="$tmp/gbin:$PATH" BENCH_LOCK=0 \
+		TMPDIR="$tmp/gtd" GATE_REC="$d.rec" "$@" sh scripts/test.sh) > "$d.out" 2>&1 || st=$?
+	GO=$(cat "$d.out")
+	if [ "$st" -ne 0 ] || [ ! -f "$d.rec" ]; then
+		GR="STATUS$st" GF=""
+		return
+	fi
+	GF=$(sed -n 's/^first //p' "$d.rec")
+	GR=$(grep -v '^first ' "$d.rec" | tr '\n' ' ' | sed 's/ $//')
+}
+
+# gt_left <label> <dir> <left out>: the run left out those harness checks
+# and no other, gave the scheduler only the long checks that run, and said
+# so on one line that names each one left out and no scratch path
+gt_left() {
+	local c=0 n line
+	expect "$1" "$(minus "$GNAMES" "$3")" "$GR" || c=1
+	expect "$1:first" "$(minus "$GFIRST" "$3")" "$GF" || c=1
+	line=$(printf '%s\n' "$GO" | grep '^test\.sh: .*left out')
+	if [ "$(printf '%s\n' "$GO" | grep -c '^test\.sh: .*left out')" -ne 1 ]; then
+		echo "case $1: not one 'left out' line: $(printf '%s' "$GO" | tr '\n' ' ')"
+		c=1
+	fi
+	for n in $3; do
+		case " $line " in *" $n"[\ ,.]*) ;; *) echo "case $1: the line does not name $n: $line"; c=1 ;; esac
+	done
+	case $GO in *"$tmp"*) echo "case $1: the output holds a scratch path"; c=1 ;; esac
+	return $c
+}
+
+# gt_cases <test.sh> [<case>]: every case of (e), or the one named
+gt_cases() {
+	local t=$1 only=${2-} d=$tmp/gt cf=0
+	want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
+	# a change under src/ alone: the harness checks that read nothing
+	# there are left out
+	if want src-only; then
+		gt_repo "$d" "$t" && echo y > "$d/src/a.c" && g "$d" commit -q -am src || { echo "cannot make the repository"; return 1; }
+		gt_run "$d"
+		gt_left src-only "$d" "$(minus "$HALL" check-require-guards.sh)" || cf=1
+	fi
+	return $cf
+}
+
+if ! command -v git > /dev/null 2>&1; then
+	:
+elif ! gt_cases scripts/test.sh > "$tmp/gtcases.out" 2>&1; then
+	sed "s/^/$me: test.sh: /" "$tmp/gtcases.out"
+	fail=1
+fi
+
 # ---- the mutants -----------------------------------------------------------
 mutants=0
 # swap <file> <old line> <new line>: replaces the one line equal to <old>
