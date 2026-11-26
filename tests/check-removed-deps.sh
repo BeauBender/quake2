@@ -70,11 +70,13 @@ fi
 # so every place CI can run something from (workflows, local actions wherever
 # they live, scripts, tests, the Makefile) and a symlink's target is scanned
 # as itself; untracked files are ignored, like the rest of this check. Only
-# prose (doc/, docs/, CLAUDE.md), vendored code (third_party/) and this file
-# are left out. Deliberately loose (any case, no word bounds): an over-refusal
+# Markdown prose (*.md under doc/ and docs/, at any depth, and CLAUDE.md) and
+# this file are left out; a script, action or YAML under doc/ or docs/ is
+# scanned. third_party/ is left out whole: it is vendored and checked against
+# its manifest (scripts/check-vendored.sh). Deliberately loose (any case, no word bounds): an over-refusal
 # is fixed by rewording, a false pass is not.
 brew='brew|gmake'
-brew_excludes=':!doc :!docs :!third_party :!CLAUDE.md :!tests/check-removed-deps.sh'
+brew_excludes=':(exclude,glob)doc/**/*.md :(exclude,glob)docs/**/*.md :(exclude)third_party :(exclude)CLAUDE.md :(exclude)tests/check-removed-deps.sh'
 # brew_scan_tree DIR: DIR is the repository (tracked files) or, for a mutant,
 # a scratch tree scanned with --no-index.
 brew_scan_tree()
