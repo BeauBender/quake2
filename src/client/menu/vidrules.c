@@ -684,6 +684,46 @@ VidRules_MetalFXOverridden(const char *renderer, float presentation)
 	return RTRetroInForce(renderer, presentation);
 }
 
+/*
+ * TASK190 slice 3: a copy of rm_rtgate.c's rm_pres_fx for the menu
+ * (tests/metal/rm_pres_menu_test.c holds the two in step until TASK237).
+ * Ray traced's row is the temporal scaler where the view is scaled down;
+ * the menu does not see the window's height, so the default scale (0, or
+ * any value that is not a finite one from 1 up) counts as scaled down.
+ */
+int
+VidRules_MetalFXDecided(const char *renderer, int available, float presentation, int modemask, float scale,
+	const char **why)
+{
+	const char *w = NULL;
+	int v = -1;
+
+	if (RTRetroInForce(renderer, presentation))
+	{
+		v = 0;
+		w = "set by the presentation";
+	}
+	else if (RTPrimaryInForce(renderer, available, presentation))
+	{
+		if (!(modemask & VIDMFX_TEMPORAL))
+		{
+			v = 0;
+			w = "off: no temporal scaler on this GPU";
+		}
+		else if (!(isfinite(scale) && (scale >= 1.0f)))
+		{
+			v = 2;
+			w = "set by the presentation: temporal";
+		}
+	}
+
+	if (why)
+	{
+		*why = w;
+	}
+	return v;
+}
+
 /* TASK183: the names in the order of r_presentation's values, never renumbered */
 static const char *const pres_names[VIDPRES_COUNT + 1] = { "Stock", "Enhanced", "Retro", "Ray traced", NULL };
 

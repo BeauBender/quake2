@@ -349,6 +349,18 @@ MetalModeMask(void)
  */
 static char s_built_renderer[32];
 
+/*
+ * TASK190 slice 3: the r_metalfx the presentation reads in place of the
+ * player's (Retro off, Ray traced its temporal scaler, or off where the
+ * GPU has none), with the scaler item's reason; -1 when it is the player's.
+ */
+static int
+MetalFXDecided(const char **why)
+{
+	return VidRules_MetalFXDecided(s_built_renderer, Cvar_VariableValue("r_rt_available") != 0,
+			Cvar_VariableValue("r_presentation"), MetalModeMask(), Cvar_VariableValue("r_metalfx_scale"), why);
+}
+
 /* Greys an item with its reason, or enables it with its note. */
 static void
 SetRule(menucommon_s *item, viditem_t id, int scaler)
@@ -363,6 +375,18 @@ SetRule(menucommon_s *item, viditem_t id, int scaler)
 	{
 		rule.enabled = 0;
 		rule.text = "set by the presentation";
+	}
+
+	/* TASK190 slice 3: Ray traced decides the scaler too, and says which */
+	if (id == VIDITEM_MFX_SCALER)
+	{
+		const char *why = NULL;
+
+		if (MetalFXDecided(&why) >= 0)
+		{
+			rule.enabled = 0;
+			rule.text = why;
+		}
 	}
 
 	if (rule.enabled)
@@ -933,11 +957,10 @@ TuneMenu_Values(void)
 		}
 		else if (c->choices)
 		{
-			/* an overridden row shows the value in use: Retro reads r_metalfx as 0 */
-			const int over = VidRules_TuneOverridden(i, s_built_renderer,
-				Cvar_VariableValue("r_presentation")) && !strcmp(c->cvar, "r_metalfx");
+			/* an overridden row shows the value in use: Retro reads r_metalfx as 0, Ray traced as its scaler */
+			const int fx = !strcmp(c->cvar, "r_metalfx") ? MetalFXDecided(NULL) : -1;
 
-			l->curvalue = TuneIndex(c, over ? 0.0f : Cvar_VariableValue(c->cvar));
+			l->curvalue = TuneIndex(c, (fx >= 0) ? (float)fx : Cvar_VariableValue(c->cvar));
 		}
 	}
 }
@@ -1000,6 +1023,17 @@ TuneMenu_Rules(void)
 			RTSetRule(s_tune_items[i], HdrRule(VidRules_HdrItem(c->cvar), s_built_renderer,
 					s_tune_hdr_note, sizeof(s_tune_hdr_note)));
 			continue;
+		}
+		/* TASK190 slice 3: the scaler's row, when the presentation decides it, says what it reads */
+		if (!strcmp(c->cvar, "r_metalfx"))
+		{
+			const char *why = NULL;
+
+			if (MetalFXDecided(&why) >= 0)
+			{
+				RTSetRule(s_tune_items[i], (vidrule_t){ 0, why });
+				continue;
+			}
 		}
 		/* TASK188: a row of an effect the mode reads off (Ray traced's sun and AO) is the mode's too */
 		RTSetRule(s_tune_items[i], (VidRules_TuneOverridden(i, s_built_renderer, pres) || over) ?
@@ -2019,14 +2053,21 @@ VID_MenuInit(void)
 		s_rtw_hits_list.curvalue = VidRules_WaterHitsIndex(hits);
 
 		SetRule(&s_mfx_scaler_list.generic, VIDITEM_MFX_SCALER, s_mfx_scaler_list.curvalue);
+
+		/* a scaler the presentation decides shows the value in use, and the scale item follows it */
+		if (MetalFXDecided(NULL) >= 0)
+		{
+			s_mfx_scaler_list.curvalue = MetalFXDecided(NULL);
+			s_mfx_scaler_prev = s_mfx_scaler_list.curvalue;
+		}
 		ScaleItemUpdate(s_mfx_scaler_list.curvalue);
 		SetRule(&s_mfx_interp_list.generic, VIDITEM_MFX_INTERP, s_mfx_scaler_list.curvalue);
 		SetRule(&s_denoiser_list.generic, VIDITEM_DENOISER,
 				Cvar_VariableValue("r_rt_available") != 0);
 		SetRule(&s_rtw_hits_list.generic, VIDITEM_RTW_HITS, water);
 
-		/* A greyed list shows that it has no value here. */
-		if (s_mfx_scaler_list.generic.flags & QMF_GRAYED)
+		/* A greyed list shows that it has no value here, unless the presentation gives it one. */
+		if ((s_mfx_scaler_list.generic.flags & QMF_GRAYED) && (MetalFXDecided(NULL) < 0))
 		{
 			s_mfx_scaler_list.itemnames = na_names;
 			s_mfx_scaler_list.curvalue = 0;

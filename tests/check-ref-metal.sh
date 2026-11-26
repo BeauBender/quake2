@@ -789,12 +789,15 @@ else
 fi
 seg 10 "; ray-tracing gate ${rtg:-host test}"
 
-# TASK190 slice 3: the menu's copy of RT-primary's scaler row (vidrules.c) against the renderer's (rm_rtgate.c),
-# one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must refuse: the renderer's row
-# dropped, the renderer's capability rule dropped, the menu's capability rule dropped
+# TASK190 slice 3: the menu's copy of RT-primary's scaler row (vidrules.c) against the renderer's (rm_rtgate.c,
+# with rm_metalfx.c's view size), one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must
+# refuse: the renderer's row dropped; the renderer's, then the menu's, capability rule dropped; the renderer's,
+# then the menu's, size rule dropped
 pmbuild() {
 	# shellcheck disable=SC2086 # flags and fxhost are word lists
-	$cc $flags $fxhost -I"$rm_dir" -Isrc/client/menu -o "$3" tests/metal/rm_pres_menu_test.c "$1/rm_rtgate.c" "$rm_dir/rm_rtfx.c" "$2" -lm
+	# (vidrules.c's control tables leave their trailing fields to zero, which -Wextra names)
+	$cc $flags $fxhost -Wno-missing-field-initializers -I"$rm_dir" -Isrc/client/menu -o "$3" tests/metal/rm_pres_menu_test.c "$1/rm_rtgate.c" \
+		"$rm_dir/rm_rtfx.c" "$rm_dir/rm_metalfx.c" "$2" -lm
 }
 pm=""
 pm_mutants=0
@@ -810,13 +813,17 @@ else
 fi
 if [ -n "$pm" ]; then
 	mkdir "${tmp:?}/pmm"
-	for pmm in row rcaps mcaps; do
+	for pmm in row rcaps mcaps rsize msize; do
 		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c "${tmp:?}/pmm/"
 		case $pmm in
 			row) sed '/{ "r_metalfx", 2\.0f },/d' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
-			rcaps) sed 's/if ((mode == RM_PRES_RTPRIMARY) \&\& (!temporal || show))/if ((mode == RM_PRES_RTPRIMARY) \&\& show)/' \
-				"$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
-			mcaps) sed 's/(modemask \& VIDMFX_TEMPORAL) ? 2 : 0;/2;/' src/client/menu/vidrules.c > "${tmp:?}/pmm/vidrules.c" ;;
+			# each keeps its parameter read, so -Werror's unused-parameter does not refuse it before the test runs
+			rcaps) sed 's/(!temporal || show))/((void)temporal, show))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			mcaps) sed 's/if (!(modemask \& VIDMFX_TEMPORAL))/if (!(modemask | VIDMFX_TEMPORAL))/' src/client/menu/vidrules.c \
+				> "${tmp:?}/pmm/vidrules.c" ;;
+			rsize) sed 's/\&\& !below)/\&\& ((void)below, 0))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			msize) sed 's/else if (!(isfinite(scale) \&\& (scale >= 1.0f)))/else if (!(isfinite(scale) \&\& (scale >= 1.0f)) || 1)/' \
+				src/client/menu/vidrules.c > "${tmp:?}/pmm/vidrules.c" ;;
 		esac
 		if cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/pmm/rm_rtgate.c" && cmp -s src/client/menu/vidrules.c "${tmp:?}/pmm/vidrules.c"; then
 			bad "the menu-parity mutant ($pmm) changed nothing"
@@ -829,7 +836,7 @@ if [ -n "$pm" ]; then
 			pm_mutants=$((pm_mutants + 1))
 		fi
 	done
-	[ "$pm_mutants" = 3 ] || bad "tests/metal/rm_pres_menu_test.c refuses $pm_mutants of its 3 mutants"
+	[ "$pm_mutants" = 5 ] || bad "tests/metal/rm_pres_menu_test.c refuses $pm_mutants of its 5 mutants"
 fi
 seg 10.2 "; menu and renderer scaler rule ${pm:-host test}, $pm_mutants parity mutants refused"
 

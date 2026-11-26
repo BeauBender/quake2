@@ -1173,6 +1173,7 @@ test_rt_screen_under_rtprimary(void)
 	static const char *const live[] = { "water reflect", "water ripple", "gun shadow" };
 
 	SetCv("r_presentation", "3");
+	SetCv("r_metalfx_scale", "0.5");
 	OpenRT("1");
 	SetCv("r_rt_ao", "1");
 	SetCv("r_rt_water", "0");
@@ -1257,6 +1258,7 @@ test_metalfx_under_rtprimary(void)
 	SetCv("r_presentation", "3");
 	SetCv("r_rt_available", "1");
 	SetCv("r_metalfx", "0");
+	SetCv("r_metalfx_scale", "0.5");
 	Open("metal", "7");
 	menu = main_menu;
 	CHECK(Greyed("MetalFX scaler") && Item("MetalFX scaler")->statusbar &&
@@ -1282,7 +1284,16 @@ test_metalfx_under_rtprimary(void)
 		Greyed("MetalFX scaler"), ((menulist_s *)Item("MetalFX scaler"))->curvalue, Item("MetalFX scaler")->statusbar,
 		Greyed("MetalFX scale"));
 
+	/* at a scale of 1 the view is not scaled down: the mode runs no scaler of its own, and the item is the user's */
+	SetCv("r_metalfx_scale", "1");
+	Open("metal", "7");
+	menu = main_menu;
+	CHECK(!Greyed("MetalFX scaler") && ((menulist_s *)Item("MetalFX scaler"))->curvalue == 0,
+		"the scaler under Ray traced at scale 1: greyed %d, shows %d", Greyed("MetalFX scaler"),
+		((menulist_s *)Item("MetalFX scaler"))->curvalue);
+
 	/* no ray tracing: the mode is not run, and the scaler is the user's */
+	SetCv("r_metalfx_scale", "0.5");
 	SetCv("r_rt_available", "0");
 	Open("metal", "7");
 	menu = main_menu;
