@@ -473,7 +473,30 @@ builds main a9414f84 in scratch and records:
 - since the review, `rtprimary-weapon-gunshadow` against `rtprimary-weapon`, frame by
   frame (want byte-identical).
 
-The results go here when the hold has run.
+The hold ran at 389df5e3 against main a9414f84.
+
+- `make ref_metal`, `make` and `make test` passed, with 591 tests and 0 failed.
+- These checks passed: `check-ref-metal` (13162 checks, 0 failed), `check-video-menu`,
+  `check-pin-chars`, and `check-scenario-parsers` (5 tests, 11 mutants caught).
+- Model light: 4182 checks, 0 failed, 18 of 18 mutants refused.
+- Model pass: 9 kernel pins with 14 kernel mutants compiled and refused, 2 back-end
+  pins with 2 mutants refused, and 2 wiring pins with 2 mutants refused.
+- 30 of 30 stock scenarios were byte-identical to main.
+- 16 of 18 existing RT-primary records were byte-identical to main, `rtprimary-models-off`
+  (c5ec8f241450) among them.
+  - `rtprimary-models` changed in 14 of 23 frames: it was 6054a4952adc and is now
+    93c5ef890067.
+  - `rtprimary-models-vis` changed in 14 of 23 frames: it was fbdc8cbb6ad4 and is now
+    a5cd3e3316b9.
+  - Both change as intended, because glow and minlight models are now traced.
+- `rtprimary-weapon` (7a061e1228e1) was deterministic: across 3 runs, 0 of 23 frames
+  differed.
+- `rtprimary-weapon-gunshadow` was byte-identical to `rtprimary-weapon` (0 of 23 frames
+  differ). That shows the weapon stays out of the traced scene with `r_rt_gunshadow 1`.
+- The `r_rt_direct_models 0` copy was identical to main (37c6cdddfb31). All 23 of its
+  frames differ from `rtprimary-weapon`.
+- `r_rt_stats 2`, frame 18: 26576 model pixels, 264687 shadow rays, and 70786 sky, sun
+  and bounce rays, in 1.167 ms.
 
 ## Left to the next slices
 
