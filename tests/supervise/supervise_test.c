@@ -1248,6 +1248,50 @@ c_stderr(struct run *r)
 	return 0;
 }
 
+/* a command name with a newline: the supervisor's one line escapes it, so no other line is forged */
+static int
+c_stderr_escape(struct run *r)
+{
+	const char *opts[] = { "--name", "escape-case", NULL };
+
+	if (start(r, "exec", opts, "/nonexistent/x\nforged: line", NULL))
+	{
+		return 1;
+	}
+	finish(r);
+	if (want_status(r, 125))
+	{
+		return 1;
+	}
+	if (strchr(r->errtxt, '\n') != r->errtxt + r->errlen - 1 || strstr(r->errtxt, "x\\012forged: line") == NULL)
+	{
+		return fail(r, "want one line with the newline escaped as \\012, got: %s", r->errtxt);
+	}
+	return 0;
+}
+
+/* a second --events is refused, so no descriptor named by the first can reach the command */
+static int
+c_events_twice(struct run *r)
+{
+	const char *opts[] = { "--name", "events-case", "--events", "3", NULL };
+
+	if (start(r, "exec", opts, NULL, NULL))
+	{
+		return 1;
+	}
+	finish(r);
+	if (want_status(r, 125))
+	{
+		return 1;
+	}
+	if (at(r, "spawned") >= 0 || strstr(r->errtxt, "supervise: events-case: --events is given twice") == NULL)
+	{
+		return fail(r, "want no spawned event and a usage line, got: %s", r->errtxt);
+	}
+	return 0;
+}
+
 static const struct
 {
 	const char *name;
@@ -1271,6 +1315,8 @@ static const struct
 	{ "closed-std", c_closed_std, 0 },
 	{ "stuck", c_stuck, 1 },
 	{ "stderr", c_stderr, 0 },
+	{ "stderr-escape", c_stderr_escape, 0 },
+	{ "events-twice", c_events_twice, 0 },
 };
 
 int

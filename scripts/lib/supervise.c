@@ -36,7 +36,8 @@
  * "signal name=N", "ignored name=N", "term-sent name=N", "grace-end",
  * "kill-sent", "escaped pid=Q", "group-empty", "group-left count=K" and
  * "reaped status=S". On standard error it writes only its own lines, each
- * starting "supervise: ", and never a job notice: it exits with a status
+ * starting "supervise: " (a control byte in an argument it names is
+ * written as \ooo), and never a job notice: it exits with a status
  * and is never ended by INT, TERM or HUP. A closed standard descriptor is
  * opened on /dev/null first, for this program and the command.
  *
@@ -147,18 +148,40 @@ sv_vline(char *line, size_t size, size_t used, const char *fmt, va_list ap)
 	return (int)used + m + 1;
 }
 
-/* sv_say: one line on standard error, "supervise: <label>: ..." */
+/*
+ * sv_say: one line on standard error, "supervise: <label>: ...", with each
+ * control byte of the message written as \ooo, so an argument cannot end
+ * the line and start one that is not this program's
+ */
 static void __attribute__((format(printf, 1, 2)))
 sv_say(const char *fmt, ...)
 {
-	char line[512];
+	char msg[400], line[512];
 	va_list ap;
-	int n = snprintf(line, sizeof(line), "supervise: %s: ", sv_label);
+	size_t n, i;
 
 	va_start(ap, fmt);
-	n = sv_vline(line, sizeof(line), (size_t)n, fmt, ap);
+	if (vsnprintf(msg, sizeof(msg), fmt, ap) < 0)
+	{
+		msg[0] = '\0';
+	}
 	va_end(ap);
-	(void)sv_write_all(STDERR_FILENO, line, (size_t)n);
+	n = (size_t)snprintf(line, sizeof(line), "supervise: %s: ", sv_label);
+	for (i = 0; msg[i] != '\0' && n + 5 < sizeof(line); i++)
+	{
+		unsigned char c = (unsigned char)msg[i];
+
+		if (c < 0x20 || c == 0x7f)
+		{
+			n += (size_t)snprintf(line + n, sizeof(line) - n, "\\%03o", c);
+		}
+		else
+		{
+			line[n++] = (char)c;
+		}
+	}
+	line[n++] = '\n';
+	(void)sv_write_all(STDERR_FILENO, line, n);
 }
 
 /* sv_emit: one event line on --events; a reader that went away ends the events, not the run */
@@ -915,6 +938,10 @@ main(int argc, char **argv)
 		}
 		else if (strcmp(argv[i], "--events") == 0)
 		{
+			if (sv_events >= 0)
+			{
+				return sv_usage("--events is given twice");
+			}
 			if ((sv_events = sv_fd(argv[i + 1])) < 0)
 			{
 				return sv_usage("--events is no open descriptor above 2");

@@ -15,8 +15,10 @@ sv=$(sv_path) || exit 1
 
 - **Times.** Seconds, `N` or `N.fff`. No deadline by default (`--timeout 0` is none too), a grace of
   10 s and an after-kill wait of 2 s.
-- **`--events FD`.** An open descriptor above 2. The command does not inherit it, so the reader sees
-  end of file when the supervisor exits.
+- **`--events FD`.** An open descriptor above 2, given once (a second `--events` is a usage error,
+  125). The command does not inherit it, so the reader sees end of file when the supervisor exits.
+- **Standard error.** Only the supervisor's own lines, each starting `supervise: `. A control byte
+  in an argument it names (the command, say) is written as `\ooo`, so no argument can start a line.
 - **`--name`.** The label in the supervisor's own lines on standard error. It defaults to the
   command's base name.
 - **The tool cache.** `sv_path` builds into `$SUPERVISE_CACHE`, else `$XDG_CACHE_HOME/quake2-tools`,
@@ -145,6 +147,8 @@ the clock in each batch. A last step greps the test files and the check for a sl
 | `closed-std` | standard input, output and error closed: status 7, and the command sees all three open |
 | `stuck` | under `sandbox-exec` with `(deny signal)`, nothing can be signalled: `group-left` and 126 |
 | `stderr` | a command that cannot run: 125 and exactly one `supervise: <label>:` line |
+| `stderr-escape` | a command name with a newline that cannot run: 125 and one line, the newline written as `\012` |
+| `events-twice` | a second `--events`: 125, a usage line, and no `spawned` event |
 
 Every case also checks that the captured output (standard output and error of the caller shell,
 the supervisor and the command) holds only `supervise: ` lines, so no job notice.
