@@ -43,15 +43,6 @@ typedef mtl_rtt_view_t rm_rtt_view_t;
  */
 float rm_rtt_alpha(float v);
 
-/*
- * TASK59 slice 2b: 1 when the water reflections' 3 x 3 blur runs: while
- * r_rt_temporal is above 0 (on, RM_RTT_On) and the presentation is not
- * RT-primary (rtprimary 0). RT-primary's denoising is row PM8 of
- * docs/plans/presentation-modes.md (TASK190), so its frames stay as they
- * were without the blur.
- */
-int rm_rtt_wblur(int on, int rtprimary);
-
 /* the client's teleport distance, the scaler's cut (RM_FX_CUT_DIST, rm_metalfx.h): 256 units on an axis */
 #define RM_RTT_CUT_DIST 256.0f
 
