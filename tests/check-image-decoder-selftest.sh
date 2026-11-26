@@ -286,7 +286,7 @@ real=$check
 
 # (h) a plain kill of the run's own pid in place of the supervisor: the
 # target leaks(1) started and stopped survives, which case (b) refuses
-if mutant plainkill 's|^\t"\$sv" --timeout .*$|\t( "$@" \& _p=$!; ( sleep "$limit"; kill "$_p" 2>/dev/null ) \& wait "$_p" ) \|\| rc=$?|' h; then
+if mutant plainkill 's|^[[:space:]]*"\$sv" --timeout .*$|( "$@" \& _p=$!; ( sleep "$limit"; kill "$_p" 2>/dev/null ) \& wait "$_p" ) \|\| rc=$?|' h; then
 	check=${tmp:?}/plainkill/tests/check-image-decoder.sh
 	rm -f "${tmp:?}/stop.pids"
 	run stop
