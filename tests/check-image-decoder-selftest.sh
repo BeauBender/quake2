@@ -25,6 +25,8 @@
 #     refused by its own case: a plain kill in place of the supervisor (the
 #     stopped target survives), --events dropped (no events), the escaped
 #     scan dropped (the pid is not named).
+# (k) the self-test itself interrupted (TERM) in its escape case: no escaped
+#     helper outlives it.
 # The hanging stubs block on a fifo nobody writes, and the supervisor ends
 # them; the self-test ends any that is left.
 # Off Darwin the check runs no leaks(1); there the hanging stub must leave
@@ -58,12 +60,13 @@ cleanup()
 			end_own "$_p" imgdecode_plain
 		done < "$_f"
 	done
-	# a hang stub the check left
-	if [ -f "${tmp:?}/hang.pids" ]; then
+	# a hang stub the check left, and the helper case (k) saw
+	for _f in "${tmp:?}/hang.pids" "${tmp:?}/k.pids"; do
+		[ -f "$_f" ] || continue
 		while read -r _p; do
 			end_own "$_p" sh
-		done < "${tmp:?}/hang.pids"
-	fi
+		done < "$_f"
+	done
 	rm -rf "${tmp:?}"
 }
 trap cleanup EXIT
@@ -179,6 +182,37 @@ leakprobe) \"\$@\"; exit 0 ;;
 esac
 exec \"${tmp:?}/spawnstop\" \"${tmp:?}/late.pids\" \"\$@\""
 
+# the escape stub: its helper leaves the process group (setsid), records its
+# pid in ${tmp}/esc.pids and blocks on the fifo nobody writes. With
+# IMGDEC_SELFTEST_INTERRUPT (case (k)) the helper first opens that fifo for
+# writing, writes its pid there and keeps it open across its exec, so the
+# reader at the other end sees end of file once the helper has ended.
+cat > "${tmp:?}/escape.pl" << 'EOF'
+use POSIX qw(setsid);
+use Fcntl qw(F_SETFD);
+if (defined $ARGV[2] && length $ARGV[2]) {
+	open(H, ">", $ARGV[2]) or exit 2;
+	fcntl(H, F_SETFD, 0) or exit 2;
+	syswrite(H, "$$\n");
+}
+setsid();
+open(F, ">>", $ARGV[0]) or exit 2;
+print F "$$\n";
+close(F);
+exec "sh", "-c", "read x < $ARGV[1]";
+EOF
+stub escape "echo \$\$ >> \"${tmp:?}/hang.pids\"
+perl \"${tmp:?}/escape.pl\" \"${tmp:?}/esc.pids\" \"${tmp:?}/never\" \"${IMGDEC_SELFTEST_INTERRUPT:-}\" &
+read _x < \"${tmp:?}/never\""
+
+# the inner run of case (k): case (g) alone, then the self-test is
+# interrupted (TERM) while the escaped helper still runs
+if [ -n "${IMGDEC_SELFTEST_INTERRUPT:-}" ]; then
+	: > "${tmp:?}/ev.g"
+	run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.g"
+	kill -TERM $$
+fi
+
 # (a)
 run hang
 if [ "$rc" -eq 0 ] || ! grep -qF "$cause" "${tmp:?}/out" ||
@@ -245,9 +279,6 @@ gone "${tmp:?}/hang.pids" sh || fail "(f) the hanging stub is still there (or wa
 # supervisor reports an escape when it ends the group, at the deadline, so
 # this case ends at the probe's 2 s bound (the status is 124 there; the pid
 # must be named whatever the status).
-stub escape "echo \$\$ >> \"${tmp:?}/hang.pids\"
-perl -MPOSIX -e 'setsid(); open(F, \">>\", \$ARGV[0]); print F \"\$\$\\n\"; close(F); exec \"sh\", \"-c\", \"read x < \$ARGV[1]\"' \"${tmp:?}/esc.pids\" \"${tmp:?}/never\" &
-read _x < \"${tmp:?}/never\""
 : > "${tmp:?}/ev.g"
 run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.g"
 _esc=$(sed -n 's/^escaped pid=//p' "${tmp:?}/ev.g" | head -n 1)
@@ -323,8 +354,31 @@ if mutant noscan "s|grep -q '^escaped pid='|grep -q '^escaped-not-scanned='|" j;
 	end_esc
 fi
 
+# (k) the self-test interrupted in its own escape case: a TERM to the
+# self-test after case (g)'s run, while the escaped helper still runs, leaves
+# no helper behind. The helper holds the fifo ${tmp}/hold open; the reader
+# sees end of file only once every holder has ended, so the case waits on
+# that end, under an alarm, with no sleep and no ps poll.
+mkfifo "${tmp:?}/hold"
+perl -e '$| = 1; alarm shift; open(F, "<", shift) or exit 2; print while <F>; exit 0' \
+	"$secs" "${tmp:?}/hold" > "${tmp:?}/k.pids" &
+rdr=$!
+krc=0
+{ env IMGDEC_SELFTEST_INTERRUPT="${tmp:?}/hold" perl -e 'alarm shift; exec @ARGV' "$secs" \
+	sh tests/check-image-decoder-selftest.sh > "${tmp:?}/k.out" 2>&1; } 2>/dev/null || krc=$?
+rdrc=0
+{ wait "$rdr"; } 2>/dev/null || rdrc=$?
+if [ "$krc" -ne 143 ]; then
+	cat "${tmp:?}/k.out"
+	fail "(k) the interrupted self-test did not end by its TERM (status $krc)"
+elif [ ! -s "${tmp:?}/k.pids" ]; then
+	fail "(k) the escaped helper never opened the hold: the case proves nothing"
+elif [ "$rdrc" -ne 0 ]; then
+	fail "(k) an escaped helper outlived the interrupted self-test: pid $(tr '\n' ' ' < "${tmp:?}/k.pids")"
+fi
+
 if [ "$fails" -ne 0 ]; then
 	echo "$me: $fails case(s) failed"
 	exit 1
 fi
-echo "$me: ok (10 cases: a hang, a stopped probe target, a stopped leak-run target, a good leaks(1), a bad probe bound, the staged hang on events, an escaped helper, three mutants of the check)"
+echo "$me: ok (11 cases: a hang, a stopped probe target, a stopped leak-run target, a good leaks(1), a bad probe bound, the staged hang on events, an escaped helper, three mutants of the check, the self-test interrupted in its escape case)"
