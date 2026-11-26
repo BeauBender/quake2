@@ -12,9 +12,9 @@ details. The gama data tree is the same on all platform. The
 executable may be placed in the tree or in an own directory.
 See the [Installation Guide](020_installation.md) for details.
 
-We're using the Windows notation in this list. It's the same
-for other platforms, but executables and libraries may have
-other or no file extensions.
+We're using the macOS notation in this list: executables have no file
+extension and libraries are *.dylib* files. The static build (see the
+[Installation Guide](020_installation.md)) has no libraries.
 
 The three Addons - Three Wave Capture the Flag, The Reckoning
 and Ground Zero - are optional, the main game will run fine
@@ -26,17 +26,13 @@ level.
 # Top level directory
 # -------------------
 
-# Shared libaries (Windows only):
-/SDL3.DLL
-
 # Renderer libraries:
-/ref_gl1.dll
-/ref_gl3.dll
-/ref_soft.dll
+/ref_gl1.dylib
+/ref_gl3.dylib
+/ref_soft.dylib
 
 # The Executables:
-/quake2.exe
-/yquake2.exe
+/quake2
 
 
 # baseq2/ (Main game)
@@ -46,7 +42,7 @@ level.
 /baseq2/footsteps.pkg
 
 # Game library:
-/baseq2/game.dll
+/baseq2/game.dylib
 
 # maps.lst is used in the Multiplayer menus:
 /baseq2/maps.lst
@@ -293,7 +289,7 @@ level.
 # ----------------------------------
 
 # Game library:
-/ctf/game.dll
+/ctf/game.dylib
 
 # The *.pak files contain the game assets:
 /ctf/pak0.pak
@@ -303,7 +299,7 @@ level.
 # --------------------
 
 # Game library:
-/rogue/game.dll
+/rogue/game.dylib
 
 # The *.pak files contain the game assets:
 /rogue/pak0.pak
@@ -334,7 +330,7 @@ level.
 # -----------------------
 
 # Game library:
-/xatrix/game.dll
+/xatrix/game.dylib
 
 # The *.pak files contain the game assets:
 /xatrix/pak0.pak
