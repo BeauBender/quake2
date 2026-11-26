@@ -120,28 +120,39 @@ run()
 # would let the target run on. So the group's leader, an anchor whose parent
 # is this self-test, outlives the check until end_apart ends the whole group
 # at once: the group is never orphaned while it holds a stopped member. Its
-# status in $rc, the group (the anchor's pid) in $apart.
+# status in $rc, the group (the anchor's pid) in $apart. Nothing in this
+# self-test sends SIGHUP, so a HUP the anchor gets is the kernel's, for its
+# group orphaned, or one from outside: the anchor records it in
+# ${tmp}/apart.hup and exits.
 run_apart()
 {
 	_d=$1
 	shift
-	rm -f "${tmp:?}/apart.ctl"
+	rm -f "${tmp:?}/apart.ctl" "${tmp:?}/apart.hup"
 	mkfifo "${tmp:?}/apart.ctl"
 	env PATH="${tmp:?}/$_d:$PATH" IMGDEC_CHECK_SECONDS=8 IMGDEC_LEAKS_PROBE_SECONDS=2 "$@" \
 		perl -MPOSIX=pause -e '
 			setpgrp(0, 0) or exit 125;
 			alarm 2 * shift;
 			my $ctl = shift;
+			my $hup = shift;
 			my $c = fork;
 			defined $c or exit 125;
 			if ($c == 0) { exec @ARGV; exit 127; }
+			$SIG{HUP} = sub {
+				if (open(my $h, ">", $hup)) {
+					print $h "the anchor got SIGHUP at " . time . "\n";
+					close $h;
+				}
+				exit 129;
+			};
 			waitpid($c, 0);
 			my $st = ($? & 127) ? 128 + ($? & 127) : $? >> 8;
 			open(my $w, ">", $ctl) or exit 125;
 			print $w "$st\n";
 			close $w;
 			pause;
-		' "$secs" "${tmp:?}/apart.ctl" perl -e 'alarm shift; exec @ARGV' "$secs" sh "$check" > "${tmp:?}/out" 2>&1 &
+		' "$secs" "${tmp:?}/apart.ctl" "${tmp:?}/apart.hup" perl -e 'alarm shift; exec @ARGV' "$secs" sh "$check" > "${tmp:?}/out" 2>&1 &
 	apart=$!
 	echo "$apart" > "${tmp:?}/apart.pid"
 	rc=$(perl -e 'alarm shift; open(F, "<", shift) or exit 2; print scalar <F>' "$((secs + 10))" "${tmp:?}/apart.ctl") || rc=
