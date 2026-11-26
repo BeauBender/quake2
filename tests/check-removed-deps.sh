@@ -83,6 +83,11 @@ brew_scan()
 	printf '%s' "$out"
 }
 
+brew_scan_tree()
+{
+	(cd "$1" && brew_scan .github scripts/ci-*.sh)
+}
+
 [ -d .github/workflows ] || { echo "check-removed-deps: .github/workflows is missing: the Homebrew scan did not run"; exit 1; }
 hits=$(brew_scan .github scripts/ci-*.sh)
 if [ -n "$hits" ]; then
@@ -91,21 +96,40 @@ if [ -n "$hits" ]; then
 	fail=1
 fi
 
-# Mutants: the same scan over a copy of the workflows with one Homebrew line
-# added, to a workflow and to a local action, must refuse it.
+# Mutants: the same scan over a scratch tree with one Homebrew line added in
+# each place CI can run it from; the scan must refuse every one.
 mut=$(mktemp -d)
 trap 'rm -rf "$mut"' EXIT INT TERM
+mutant_tree()
+{
+	rm -rf "$mut/t"
+	mkdir -p "$mut/t/.github/actions/x" "$mut/t/stuff/x" "$mut/t/scripts" "$mut/t/tests"
+	cp -R .github/workflows "$mut/t/.github/"
+	cp scripts/coverage.sh "$mut/t/scripts/"
+	: > "$mut/t/stuff/x/action.yml"
+	: > "$mut/t/.github/actions/x/action.yml"
+}
+expect_refused()
+{
+	if [ -z "$(brew_scan_tree "$mut/t")" ]; then
+		echo "check-removed-deps: mutant $1 was not refused"
+		fail=1
+	fi
+}
 for m in 'brew install make' 'brew update' '/opt/homebrew/bin/brew install make' '/usr/local/bin/brew install make' 'gmake -j3'; do
-	for where in workflows/macos.yml actions/x/action.yml; do
-		rm -rf "$mut/.github"
-		mkdir -p "$mut/.github/actions/x"
-		cp -R .github/workflows "$mut/.github/"
-		printf '    - run: |\n        %s\n' "$m" >> "$mut/.github/$where"
-		if [ -z "$(brew_scan "$mut/.github")" ]; then
-			echo "check-removed-deps: mutant '$m' in $where was not refused"
-			fail=1
-		fi
+	for where in .github/workflows/macos.yml .github/actions/x/action.yml stuff/x/action.yml scripts/coverage.sh; do
+		mutant_tree
+		printf '    - run: |\n        %s\n' "$m" >> "$mut/t/$where"
+		expect_refused "'$m' in $where"
 	done
 done
+mutant_tree
+printf 'brew install make\n' >> "$mut/t/stuff/x/action.yml"
+ln -s ../../stuff/x/action.yml "$mut/t/.github/actions/x/link.yml"
+rm "$mut/t/.github/actions/x/action.yml"
+expect_refused "in a symlinked action"
+mutant_tree
+printf '    - uses: Homebrew/actions/setup-homebrew@%s\n' 0123456789012345678901234567890123456789 >> "$mut/t/.github/workflows/macos.yml"
+expect_refused "uses: Homebrew/actions"
 [ "$fail" -eq 0 ] && echo "check-removed-deps: ok"
 exit "$fail"
