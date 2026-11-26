@@ -673,7 +673,8 @@ VidRules_TuneOverridden(int i, const char *renderer, float presentation)
 	const vidrt_control_t *c = VidRules_TuneControl(i);
 
 	return c && RTRetroInForce(renderer, presentation) &&
-		(!strcmp(c->cvar, "r_metalfx") || !strcmp(c->cvar, "r_metalfx_scale") || (c->effect >= 0));
+		(!strcmp(c->cvar, "r_metalfx") || !strcmp(c->cvar, "r_metalfx_scale") || (c->effect >= 0) ||
+		(c->effect == VIDTUNE_EFFECT_ACCUM));
 }
 
 /* TASK197: whether Retro reads r_metalfx as 0, so the MetalFX scaler and scale items are not the user's to set */
@@ -681,6 +682,57 @@ int
 VidRules_MetalFXOverridden(const char *renderer, float presentation)
 {
 	return RTRetroInForce(renderer, presentation);
+}
+
+/*
+ * TASK190 slice 3: a copy of rm_rtgate.c's rm_pres_fx for the menu
+ * (tests/metal/rm_pres_menu_test.c holds the two in step until TASK237).
+ * Ray traced's row is the temporal scaler where the view is scaled down;
+ * the menu does not see the window's height, so the default scale (0, or
+ * any value that is not a finite one from 1 up) counts as scaled down.
+ * A debug view of an effect the mode runs is drawn unscaled, as the
+ * renderer's rm_rtfx_show_asked has it, so the row reads off then.
+ */
+static int DebugViewEffect(int v);
+
+int
+VidRules_MetalFXDecided(const char *renderer, int available, float presentation, int modemask, float scale,
+	int debugview, const char **why)
+{
+	const char *w = NULL;
+	int v = -1;
+
+	if (RTRetroInForce(renderer, presentation))
+	{
+		v = 0;
+		w = "set by the presentation";
+	}
+	else if (RTPrimaryInForce(renderer, available, presentation))
+	{
+		const int e = DebugViewEffect(debugview);
+
+		if (!(modemask & VIDMFX_TEMPORAL))
+		{
+			v = 0;
+			w = "off: no temporal scaler on this GPU";
+		}
+		else if ((e >= 0) && VidRules_RTEffective(e, renderer, available, presentation, 1.0f))
+		{
+			v = 0;
+			w = "off: the debug view is drawn unscaled";
+		}
+		else if (!(isfinite(scale) && (scale >= 1.0f)))
+		{
+			v = 2;
+			w = "set by the presentation: temporal";
+		}
+	}
+
+	if (why)
+	{
+		*why = w;
+	}
+	return v;
 }
 
 /* TASK183: the names in the order of r_presentation's values, never renumbered */
@@ -772,6 +824,16 @@ static const char *const tune_debug_names[] = { "none", "shadows", "sun", "AO", 
 static const char *const tune_debug_cvars[] = {
 	NULL, "r_rt_shadows_show", "r_rt_sun_show", "r_rt_ao_show", "r_rt_water_show", "r_rt_gbuffer_show"
 };
+/* the effect (rt_controls' row) each debug view shows, -1 for none: the G-buffer's is no effect's */
+static const int tune_debug_effects[] = { -1, RT_SHADOWS, RT_SUN, RT_AO, RT_WATER, -1 };
+
+_Static_assert(ARRSIZE(tune_debug_effects) == ARRSIZE(tune_debug_cvars), "a debug view without its effect");
+
+static int
+DebugViewEffect(int v)
+{
+	return ((v > 0) && (v < ARRSIZE(tune_debug_effects))) ? tune_debug_effects[v] : -1;
+}
 
 /* the cvar first in each row: tests/check-cvar-docs.sh reads it as the row's name */
 static const vidrt_control_t rt_tune[] = {
@@ -779,6 +841,9 @@ static const vidrt_control_t rt_tune[] = {
 	{ "r_rt_sun_angles", "sun azimuth", "55 45", CVAR_ARCHIVE, RT_SUN, 0.0f, 355.0f, 5.0f, "%.0f", NULL, 2, 0 },
 	{ "r_rt_ao_rays", "AO rays", "2", CVAR_ARCHIVE, RT_AO, 1.0f, 2.0f, 1.0f, NULL, tune_rays_names, 0, 0 },
 	{ "r_rt_water_hits", "water hits", "1", CVAR_ARCHIVE, RT_WATER, 0.0f, 1.0f, 1.0f, NULL, tune_hits_names, 0, 0 },
+	/* TASK59 slice 2b: RT7's accumulation (and the denoise and the reflections' blur it runs), 0 off;
+	   up to the renderer's RM_RTT_ALPHA_MAX (0.98), in steps that hold the default 0.9 */
+	{ "r_rt_temporal", "accumulate", "0.9", CVAR_ARCHIVE, VIDTUNE_EFFECT_ACCUM, 0.0f, 0.98f, 0.02f, "%.2f", NULL, 0, 0 },
 	{ "r_rt_flatlight", "flat light", "0", 0, -1, 0.0f, 1.0f, 0.05f, "%.2f", NULL, 0, 0 },
 	{ "r_metalfx", "scaler", "0", CVAR_ARCHIVE, -1, 0.0f, 3.0f, 1.0f, NULL, tune_fx_names, 0, 0 },
 	{ "r_rt_shadows_show", "debug view", "0", 0, -1, 0.0f, 5.0f, 1.0f, NULL, tune_debug_names, VIDTUNE_PART_DEBUG, 0 },
@@ -790,6 +855,9 @@ static const vidrt_control_t rt_tune[] = {
 	/* TASK203: the 3D view's size under a scaler, held in the presets and the A/B (the settings optimizer turns it) */
 	{ "r_metalfx_scale", "scale", "0", CVAR_ARCHIVE, -1, 0.0f, 1.0f, 0.05f, "%.2f", NULL, 0, 0 },
 };
+
+_Static_assert(sizeof(rt_tune) / sizeof(rt_tune[0]) <= VIDTUNE_MAX_ROWS,
+	"the tuning screen holds VIDTUNE_MAX_ROWS rows: raise it with a new row");
 
 int
 VidRules_TuneNum(void)
@@ -845,6 +913,11 @@ VidRules_TuneItem(int i, const char *renderer, int available, int effect_on)
 	if (c->effect >= 0 && !effect_on)
 	{
 		return (vidrule_t){ 0, (c->effect < ARRSIZE(turn_on)) ? turn_on[c->effect] : "turn on its effect first" };
+	}
+	if (c->effect == VIDTUNE_EFFECT_ACCUM)
+	{
+		return effect_on ? (vidrule_t){ 1, "blends the last frames' rays; 0 off; next frame" } :
+			(vidrule_t){ 0, "turn on shadows, sun, AO or water first" };
 	}
 	if (c->part == VIDTUNE_PART_DEBUG)
 	{

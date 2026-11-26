@@ -236,7 +236,7 @@ called(int line, const char *want)
 	}
 }
 
-/* a walk that asks (wanted, active, show_only): every row while none says yes, up to the first that does */
+/* a walk that asks (wanted, active, show_only, show_asked): every row while none says yes, up to the first that does */
 static void
 asks(const char *entry, int (*walk)(void))
 {
@@ -339,6 +339,7 @@ test_walks(void)
 	asks("wanted", rm_rtfx_wanted);
 	asks("active", rm_rtfx_active);
 	asks("show_only", rm_rtfx_show_only);
+	asks("show_asked", rm_rtfx_show_asked);
 
 	/* the pipeline rule over the forward walk: the water's forward decides the blended world face */
 	said("water:forward");

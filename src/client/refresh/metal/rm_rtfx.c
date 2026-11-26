@@ -64,6 +64,7 @@ typedef struct
 	void (*frame)(const refdef_t *fd, int scene_ready);
 	int (*active)(void);
 	int (*show_only)(void);
+	int (*show_asked)(void);   /* TASK190 slice 3 */
 	void (*view)(const rm_view_t *view);
 
 	/* the backend's, in rmb_*.m */
@@ -81,39 +82,39 @@ static const rm_rtfx_t rm_rtfx[RM_RTFX_COUNT] = {
 	[RM_RTFX_SHADOWS] = {
 		"shadows", "r_rt_shadows",
 		FX(RM_RTS_Init), FX(RM_RTS_Shutdown), FX(RM_RTS_Wanted), FX(RM_RTS_Frame), FX(RM_RTS_Active),
-		FX(RM_RTS_ShowOnly), FX(RM_RTS_View),
+		FX(RM_RTS_ShowOnly), FX(RM_RTS_ShowAsked), FX(RM_RTS_View),
 		NULL, FX(rmb_rts_fx_trace), FX(rmb_rts_fx_resolve), NULL, NULL, NULL, NULL, NULL
 	},
 	[RM_RTFX_AO] = {
 		"ao", "r_rt_ao",
 		FX(RM_RTAO_Init), FX(RM_RTAO_Shutdown), FX(RM_RTAO_Wanted), FX(RM_RTAO_Frame), FX(RM_RTAO_Active),
-		FX(RM_RTAO_ShowOnly), FX(RM_RTAO_View),
+		FX(RM_RTAO_ShowOnly), FX(RM_RTAO_ShowAsked), FX(RM_RTAO_View),
 		NULL, FX(rmb_rtao_fx_trace), NULL, FX(rmb_rtao_fx_show), NULL, NULL, NULL, NULL
 	},
 	[RM_RTFX_SUN] = {
 		"sun", "r_rt_sun",
 		FX(RM_RTSun_Init), FX(RM_RTSun_Shutdown), FX(RM_RTSun_Wanted), FX(RM_RTSun_Frame), FX(RM_RTSun_Active),
-		FX(RM_RTSun_ShowOnly), FX(RM_RTSun_View),
+		FX(RM_RTSun_ShowOnly), FX(RM_RTSun_ShowAsked), FX(RM_RTSun_View),
 		NULL, FX(rmb_rtsun_fx_trace), NULL, FX(rmb_rtsun_fx_show), NULL, NULL, NULL, NULL
 	},
 	[RM_RTFX_WATER] = {
 		"water", "r_rt_water",
 		FX(RM_RTW_Init), FX(RM_RTW_Shutdown), FX(RM_RTW_Wanted), FX(RM_RTW_Frame), FX(RM_RTW_Active),
-		FX(RM_RTW_ShowOnly), FX(RM_RTW_View),
+		FX(RM_RTW_ShowOnly), FX(RM_RTW_ShowAsked), FX(RM_RTW_View),
 		FX(rmb_rtw_fx_mark), NULL, NULL, NULL, FX(rmb_rtw_fx_post), FX(rmb_rtw_fx_forward), FX(rmb_rtw_fx_bind),
 		FX(rmb_rtw_view_end)
 	},
 	[RM_RTFX_DIRECT] = {
 		"direct", "r_rt_direct",
 		FX(RM_RTDir_Init), FX(RM_RTDir_Shutdown), FX(RM_RTDir_Wanted), FX(RM_RTDir_Frame), FX(RM_RTDir_Active),
-		FX(RM_RTDir_ShowOnly), FX(RM_RTDir_View),
+		FX(RM_RTDir_ShowOnly), FX(RM_RTDir_ShowAsked), FX(RM_RTDir_View),
 		NULL, FX(rmb_rtdir_fx_trace), NULL, FX(rmb_rtdir_fx_show), NULL, NULL, NULL, NULL
 	},
 	/* TASK191 slice 2: a term of the direct light, under its switch; its view is the direct light's */
 	[RM_RTFX_MODELS] = {
 		"models", "r_rt_direct",
 		FX(RM_RTModel_Init), FX(RM_RTModel_Shutdown), FX(RM_RTModel_Wanted), FX(RM_RTModel_Frame),
-		FX(RM_RTModel_Active), FX(RM_RTModel_ShowOnly), FX(RM_RTModel_View),
+		FX(RM_RTModel_Active), FX(RM_RTModel_ShowOnly), FX(RM_RTModel_ShowAsked), FX(RM_RTModel_View),
 		NULL, FX(rmb_rtmodel_fx_trace), NULL, NULL, NULL, NULL, NULL, NULL
 	},
 };
@@ -382,6 +383,22 @@ rm_rtfx_show_only(void)
 	for (k = 0; k < RM_RTFX_COUNT; k++)
 	{
 		if (ROW(k)->show_only && ROW(k)->show_only())
+		{
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+int
+rm_rtfx_show_asked(void)
+{
+	int k;
+
+	for (k = 0; k < RM_RTFX_COUNT; k++)
+	{
+		if (ROW(k)->show_asked && ROW(k)->show_asked())
 		{
 			return 1;
 		}

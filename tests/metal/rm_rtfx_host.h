@@ -88,6 +88,7 @@ rm_rtfx_host_call(const char *what)
 	RM_RTFX_HOST_FRAME(p##_Frame, name ":frame") \
 	RM_RTFX_HOST_SAY(p##_Active, name ":active") \
 	RM_RTFX_HOST_SAY(p##_ShowOnly, name ":show_only") \
+	RM_RTFX_HOST_SAY(p##_ShowAsked, name ":show_asked") \
 	RM_RTFX_HOST_VIEW(p##_View, name ":view")
 
 RM_RTFX_HOST_SCENE(RM_RTS, "shadows")

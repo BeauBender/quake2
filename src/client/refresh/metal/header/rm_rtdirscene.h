@@ -41,6 +41,7 @@ int RM_RTDir_Wanted(void);
 void RM_RTDir_Frame(const refdef_t *fd, int scene_ready);
 int RM_RTDir_Active(void);
 int RM_RTDir_ShowOnly(void);
+int RM_RTDir_ShowAsked(void);   /* TASK190 slice 3: Wanted and the _show cvar on, known before Frame and View (rm_rtfx_show_asked) */
 void RM_RTDir_View(const rm_view_t *view);
 
 #endif /* RM_RTDIRSCENE_H */

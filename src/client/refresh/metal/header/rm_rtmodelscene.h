@@ -72,6 +72,7 @@ int RM_RTModel_Wanted(void);
 void RM_RTModel_Frame(const refdef_t *fd, int scene_ready);
 int RM_RTModel_Active(void);
 int RM_RTModel_ShowOnly(void);
+int RM_RTModel_ShowAsked(void);   /* TASK190 slice 3's row entry: 0, the view is the direct light's (RM_RTDir_ShowAsked) */
 void RM_RTModel_View(const rm_view_t *view);
 #endif
 

@@ -337,6 +337,13 @@ RM_RTS_ShowOnly(void)
 	return rts_active && r_rt_shadows_show && rm_rts_show(r_rt_shadows_show->value);
 }
 
+/* TASK190 slice 3: the view is asked for, whether or not this frame traces it yet (rm_main.c sizes the scaler before Frame) */
+int
+RM_RTS_ShowAsked(void)
+{
+	return RM_RTS_Wanted() && r_rt_shadows_show && rm_rts_show(r_rt_shadows_show->value);
+}
+
 /* 1 when a brush entity of the frame is moved or turned: its surfaces are lit in its model's space */
 static unsigned
 RM_RTS_Moved(void)

@@ -35,6 +35,7 @@
 #include "header/rm_rtwaterscene.h"
 #include "header/rm_rtscene.h"
 #include "header/rm_rtaoscene.h"
+#include "header/rm_rtgate.h"
 #include "header/rm_gbufscene.h"
 
 static cvar_t *r_rt_water;
@@ -305,6 +306,13 @@ RM_RTW_ShowOnly(void)
 	return rtw_active && rtw_viewed && r_rt_water_show && rm_rtw_show(r_rt_water_show->value) && rmb_rtw_shown();
 }
 
+/* TASK190 slice 3: the view is asked for, whether or not this frame traces it yet (rm_main.c sizes the scaler before Frame) */
+int
+RM_RTW_ShowAsked(void)
+{
+	return RM_RTW_Wanted() && r_rt_water_show && rm_rtw_show(r_rt_water_show->value);
+}
+
 void
 RM_RTW_View(const rm_view_t *view)
 {
@@ -313,6 +321,15 @@ RM_RTW_View(const rm_view_t *view)
 	int w, h, ws, say;
 
 	rtw_viewed = 0;
+
+	/*
+	 * TASK59 slice 2b: the reflections' blur, with no history, while
+	 * r_rt_temporal is above 0; under RT-primary too since TASK190 slice 2
+	 * (PM8). Decided before any return below (round 2), so a view that
+	 * traces nothing still releases the blur's pipeline and output once it
+	 * is off.
+	 */
+	rmb_rtw_set_blur(RM_RTT_On());
 
 	/*
 	 * Not with r_rt_shadows_show's or r_rt_ao_show's view on (their

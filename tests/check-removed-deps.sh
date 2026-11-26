@@ -65,5 +65,101 @@ if [ -n "$hits" ]; then
 	echo "$hits" | sed 's/^/  /'
 	fail=1
 fi
+# Homebrew: the owner has not approved it anywhere, CI included, and macOS
+# needs nothing beyond Xcode's toolchain. The scan covers every tracked file,
+# so every place CI can run something from (workflows, local actions wherever
+# they live, scripts, tests, the Makefile) and a symlink's target is scanned
+# as itself; untracked files are ignored, like the rest of this check. Only
+# Markdown prose (*.md under doc/ and docs/, at any depth, and CLAUDE.md) and
+# this file are left out; a script, action or YAML under doc/ or docs/ is
+# scanned. third_party/ is left out whole: it is vendored and checked against
+# its manifest (scripts/check-vendored.sh). Deliberately loose (any case, no word bounds): an over-refusal
+# is fixed by rewording, a false pass is not.
+brew='brew|gmake'
+brew_excludes=':(exclude,glob)doc/**/*.md :(exclude,glob)docs/**/*.md :(exclude)third_party :(exclude)CLAUDE.md :(exclude)tests/check-removed-deps.sh'
+# brew_scan_tree DIR: DIR is the repository (tracked files) or, for a mutant,
+# a scratch tree scanned with --no-index.
+brew_scan_tree()
+{
+	rc=0
+	if [ "$1" = . ]; then
+		out=$(git grep -I -i -n -E "$brew" -- . $brew_excludes 2>/dev/null) || rc=$?
+	else
+		out=$(cd "$1" && git grep --no-index -I -i -n -E "$brew" -- . $brew_excludes 2>/dev/null) || rc=$?
+	fi
+	if [ "$rc" -gt 1 ]; then
+		echo "check-removed-deps: git grep failed (status $rc): the Homebrew scan did not run" >&2
+		exit 1
+	fi
+	printf '%s' "$out"
+}
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "check-removed-deps: not a git work tree: the Homebrew scan did not run"; exit 1; }
+hits=$(brew_scan_tree .)
+if [ -n "$hits" ]; then
+	echo "check-removed-deps: Homebrew (brew, gmake) in a tracked file:"
+	echo "$hits" | sed 's/^/  /'
+	fail=1
+fi
+
+# Mutants: the same scan over a scratch tree with one Homebrew line added in
+# each place CI can run it from; the scan must refuse every one.
+mut=$(mktemp -d)
+trap 'rm -rf "$mut"' EXIT INT TERM
+mutant_tree()
+{
+	rm -rf "$mut/t"
+	mkdir -p "$mut/t/.github/actions/x" "$mut/t/stuff/x" "$mut/t/scripts" "$mut/t/tests"
+	cp -R .github/workflows "$mut/t/.github/"
+	cp scripts/coverage.sh "$mut/t/scripts/"
+	: > "$mut/t/stuff/x/action.yml"
+	: > "$mut/t/scripts/ci-x.sh"
+	: > "$mut/t/.github/actions/x/action.yml"
+}
+expect_refused()
+{
+	if [ -z "$(brew_scan_tree "$mut/t")" ]; then
+		echo "check-removed-deps: mutant $1 was not refused"
+		fail=1
+	fi
+}
+for m in 'brew install make' 'brew update' '/opt/homebrew/bin/brew install make' '/usr/local/bin/brew install make' 'gmake -j3'; do
+	for where in .github/workflows/macos.yml .github/actions/x/action.yml stuff/x/action.yml scripts/coverage.sh; do
+		mutant_tree
+		printf '    - run: |\n        %s\n' "$m" >> "$mut/t/$where"
+		expect_refused "'$m' in $where"
+	done
+done
+mutant_tree
+printf 'brew install make\n' >> "$mut/t/stuff/x/action.yml"
+ln -s ../../stuff/x/action.yml "$mut/t/.github/actions/x/link.yml"
+rm "$mut/t/.github/actions/x/action.yml"
+expect_refused "in a symlinked action"
+mutant_tree
+printf '    - uses: Homebrew/actions/setup-homebrew@%s\n' 0123456789012345678901234567890123456789 >> "$mut/t/.github/workflows/macos.yml"
+expect_refused "uses: Homebrew/actions"
+mutant_tree
+mkdir -p "$mut/t/docs/x"
+printf '    - run: brew install make\n' > "$mut/t/docs/x/action.yml"
+printf '    - uses: ./docs/x\n' >> "$mut/t/.github/workflows/macos.yml"
+expect_refused "in an action under docs/"
+mutant_tree
+mkdir -p "$mut/t/docs"
+printf 'brew install make\n' > "$mut/t/docs/x.sh"
+expect_refused "in a script under docs/"
+mutant_tree
+mkdir -p "$mut/t/docs"
+printf 'brew install make\n' > "$mut/t/docs/real.yml"
+ln -s ../../../docs/real.yml "$mut/t/.github/actions/x/link.yml"
+rm "$mut/t/.github/actions/x/action.yml"
+expect_refused "in an action symlinked into docs/"
+mutant_tree
+mkdir -p "$mut/t/docs/a/b" "$mut/t/doc/c"
+printf 'brew install make\n' > "$mut/t/docs/a/b/note.md"
+printf 'brew install make\n' > "$mut/t/doc/c/note.md"
+if [ -n "$(brew_scan_tree "$mut/t")" ]; then
+	echo "check-removed-deps: a nested prose file under doc/ or docs/ was not excluded"
+	fail=1
+fi
 [ "$fail" -eq 0 ] && echo "check-removed-deps: ok"
 exit "$fail"

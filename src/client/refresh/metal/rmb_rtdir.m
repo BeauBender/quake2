@@ -30,7 +30,8 @@
  * the sky's and the sun's counts. TASK190 slice 1 (PM8) adds the light's
  * temporal accumulation, rm_rtp_temporal (rm_rtptemporal.metal), after the
  * trace in an encoder of its own with its own GPU time, its histories made
- * only while r_rt_temporal is above 0. Every object is counted in the
+ * only while r_rt_temporal is above 0; slice 2 adds its 5 x 5 filter,
+ * rm_rtp_denoise (rm_rtpdenoise.metal), in the same encoder. Every object is counted in the
  * ledger as RM_OBJ_RT.
  *
  * =======================================================================
@@ -114,6 +115,8 @@ static int view_set, traced;
  * (RGBA16Unorm, t_light's format).
  */
 static id<MTLComputePipelineState> tmp_pipe;
+static id<MTLComputePipelineState> dn_pipe;  /* slice 2: the 5 x 5 filter (rm_rtp_denoise), made with the accumulation */
+static int dn_refused;                  /* its pipeline could not be made: the light is accumulated alone */
 static id<MTLCounterSampleBuffer> tsamples;
 static id<MTLTexture> t_hist[2];
 static id<MTLTexture> t_key[2];
@@ -277,6 +280,7 @@ rmb_rtdir_close(void)
 		RMB_RTDIR_SET(counts, nil);
 		RMB_RTDIR_SET(samples, nil);
 		RMB_RTDIR_SET(tmp_pipe, nil);
+		RMB_RTDIR_SET(dn_pipe, nil);
 		RMB_RTDIR_SET(tsamples, nil);
 		RMB_RTDIR_SET(t_hist[0], nil);
 		RMB_RTDIR_SET(t_hist[1], nil);
@@ -286,7 +290,7 @@ rmb_rtdir_close(void)
 	}
 
 	rm_rtt_hist_reset(&thist);
-	tview_set = hist_cur = tmp_refused = acc_view = 0;
+	tview_set = hist_cur = tmp_refused = dn_refused = acc_view = 0;
 	tmp_bad_w = tmp_bad_h = 0;
 	tshow = 0;
 	dir_open = 0;
@@ -544,6 +548,21 @@ rmb_rtdir_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h)
 			}
 
 			RMB_RTDIR_SET(tsamples, rmb_rtdir_new_samples());
+		}
+
+		/* TASK190 slice 2: the 5 x 5 filter; without it the light is accumulated alone */
+		if (!dn_pipe && !dn_refused)
+		{
+			NSError *e = nil;
+			id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rtp_denoise"];
+
+			RMB_RTDIR_SET(dn_pipe, k ? [rmb_device newComputePipelineStateWithFunction:k error:&e] : nil);
+
+			if (!dn_pipe)
+			{
+				dn_refused = 1;
+				fprintf(stderr, "ref_metal: rt temporal: no direct-light denoise pipeline\n");
+			}
 		}
 
 		/* made again when the render size changes, the old ones released first */
@@ -910,7 +929,8 @@ rmb_rtdir_accumulate(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture>
 	tview_set = 0;
 
 	if (!dir_open || !tmp_pipe || !t_hist[0] || !t_hist[1] || !t_key[0] || !t_key[1] || !t_acc || (t_acc.width != w) ||
-		(t_acc.height != h) || !mv || (mv.width != w) || (mv.height != h) || (depth.width != w) || (depth.height != h))
+		(t_acc.height != h) || !mv || (mv.width != w) || (mv.height != h) || (depth.width != w) || (depth.height != h) ||
+		(normal.width != w) || (normal.height != h) || (material.width != w) || (material.height != h))
 	{
 		return nil;
 	}
@@ -973,6 +993,21 @@ rmb_rtdir_accumulate(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture>
 		[ce setBytes:&view length:sizeof(view) atIndex:0];
 		[ce setBytes:&tv length:sizeof(tv) atIndex:1];
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTDIR_GROUP, RMB_RTDIR_GROUP, 1)];
+
+		/*
+		 * TASK190 slice 2: the 5 x 5 filter of the history and key just
+		 * written (still at 8 and 9), t_acc written again from it on the
+		 * world pixels whose count leaves a strength; the history keeps
+		 * the accumulation alone. Same bindings, in this encoder and its
+		 * timestamp pair.
+		 */
+		if (dn_pipe)
+		{
+			[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+			[ce setComputePipelineState:dn_pipe];
+			[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTDIR_GROUP, RMB_RTDIR_GROUP, 1)];
+		}
+
 		[ce endEncoding];
 		hist_cur = 1 - hist_cur;
 		slot_acc[slot] = fno;

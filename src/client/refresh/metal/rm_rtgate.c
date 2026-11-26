@@ -164,7 +164,7 @@ rm_rtg_reset_format(const char *name, const rm_rtg_t *g, char *buf, size_t len)
  * what the picture shows. Every other name is a setting, left as it
  * is: it tunes or views an effect and does
  * nothing while the effect is off, or it chooses a raster path that every
- * Metal GPU runs. RT11's r_rt_scale, when it lands, is a setting (it reads
+ * Metal GPU runs. RT11's r_metalfx_scale, when it lands, is a setting (it reads
  * 1 there, which RT11 does).
  */
 static const char *const rtg_cvars[] = {
@@ -227,7 +227,7 @@ static const char *const rtg_cvars[] = {
 	"r_rt_sunscale",
 	/* RT7's temporal accumulation (TASK59): it blends what the effects traced and traces no ray itself;
 	   read only while an effect it accumulates runs, RT-primary's light among them (TASK190), which no
-	   presentation overlays: the user's value */
+	   presentation overlays: the user's value, or the water, whose reflections it blurs (slice 2b) */
 	"r_rt_temporal",
 	/* RT6's water reflections (TASK58): a ray each water pixel */
 	"r_rt_water",
@@ -351,6 +351,9 @@ rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t *ou
  * reflections; AO is off (the bounce, PM7, replaces it), and so are the
  * sun and the dlight shadows until PM7 and PM6's second slice make them
  * terms of the light model, so no layer adds the lightmap's light back.
+ * TASK190 slice 3 gives it the MetalFX temporal scaler (r_metalfx 2)
+ * where the internal size is below the output (the plan's section 2.2),
+ * which rm_pres_fx decides; the scale (r_metalfx_scale) stays the user's.
  */
 typedef struct
 {
@@ -390,13 +393,17 @@ static const pres_row_t pres_retro[] = {
 
 #define PRES_NRETRO ((int)(sizeof(pres_retro) / sizeof(pres_retro[0])))
 
-/* RT-primary's table (TASK188): the direct light on, the layers it replaces off, the water on */
+/*
+ * RT-primary's table (TASK188): the direct light on, the layers it replaces off, the water on;
+ * and (TASK190 slice 3) the scaler, RM_FX_TEMPORAL of header/rm_metalfx.h
+ */
 static const pres_row_t pres_rtprimary[] = {
 	{ "r_rt_direct", 1.0f },
 	{ "r_rt_shadows", 0.0f },
 	{ "r_rt_sun", 0.0f },
 	{ "r_rt_ao", 0.0f },
 	{ "r_rt_water", 1.0f },
+	{ "r_metalfx", 2.0f },
 };
 
 #define PRES_NRTPRIMARY ((int)(sizeof(pres_rtprimary) / sizeof(pres_rtprimary[0])))
@@ -497,6 +504,49 @@ rm_pres_value(int mode, const char *name, float user)
 	}
 
 	return user;
+}
+
+float
+rm_pres_fx(int mode, float user, int temporal, int show, int below)
+{
+	/* RT-primary's row is the temporal scaler: off without one, never a mode below it, and off for a development view */
+	if ((mode == RM_PRES_RTPRIMARY) && (!temporal || show))
+	{
+		return 0.0f;
+	}
+
+	/* at the output's own size no scaler of the mode's runs: the user's value (TAA at 1:1 where it asks for one) */
+	if ((mode == RM_PRES_RTPRIMARY) && !below)
+	{
+		return user;
+	}
+
+	return rm_pres_value(mode, "r_metalfx", user);
+}
+
+int
+rm_pres_fx_format(int mode, int temporal, char *buf, size_t len)
+{
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	if (mode != RM_PRES_RTPRIMARY)
+	{
+		buf[0] = '\0';
+		return 0;
+	}
+
+	if (!temporal)
+	{
+		return rtg_put(snprintf(buf, len,
+				"ref_metal: presentation: ray traced: r_metalfx reads 0 (off): no MetalFX temporal scaler on this device"),
+				buf, len);
+	}
+
+	return rtg_put(snprintf(buf, len,
+			"ref_metal: presentation: ray traced: r_metalfx reads 2 (temporal) where the internal size is below the output, r_metalfx_scale the user's"), buf, len);
 }
 
 const char *

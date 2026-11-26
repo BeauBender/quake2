@@ -281,7 +281,7 @@ test_reset(void)
 	CHECK(rm_rtt_step(&st, &k, &move) == RM_RTT_RESET_CUT);
 	rm_rtt_frame_end(&st);
 
-	/* the render size: r_rt_scale, the window */
+	/* the render size: r_metalfx_scale, the window */
 	k.w = 320;
 	k.vw = 320;
 	CHECK(rm_rtt_step(&st, &k, &move) == (RM_RTT_RESET_SIZE | RM_RTT_RESET_RECT));

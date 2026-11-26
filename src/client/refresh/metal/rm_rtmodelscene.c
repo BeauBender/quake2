@@ -137,6 +137,13 @@ RM_RTModel_ShowOnly(void)
 	return 0;
 }
 
+/* TASK190 slice 3's entry: asked for as the direct light's view is (RM_RTDir_ShowAsked), never on its own */
+int
+RM_RTModel_ShowAsked(void)
+{
+	return 0;
+}
+
 /* the frame's parameters: RF_GLOW's pulse, overbright, gl1's minlight table (none: the index itself) and gamma table */
 void
 RM_RTModel_View(const rm_view_t *view)

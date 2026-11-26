@@ -134,4 +134,14 @@ int rm_rtfx_show_only(void);
 void rm_rtfx_view(const rm_view_t *view);
 #endif
 
+/*
+ * TASK190 slice 3: 1 when any effect's development view is asked for:
+ * the effect is wanted (_Wanted) and its _show cvar names a view, each
+ * row's _ShowAsked. Unlike rm_rtfx_show_only it holds before the frame's
+ * _Frame and _View, so what is sized before them can read it: rm_main.c's
+ * r_metalfx under RT-primary, which draws a development view unscaled
+ * (rm_pres_fx). It takes no type of local.h.
+ */
+int rm_rtfx_show_asked(void);
+
 #endif /* RM_RTFX_H */

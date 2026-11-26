@@ -74,7 +74,7 @@ calls them, so no frame changes (the hold, below).
 
 ## The test, red then green
 
-`tests/metal/rm_rtmodel_test.c`, built by `tests/check-ref-metal.sh` (segment 7.8) with
+`tests/metal/rm_rtmodel_test.c`, built by `tests/check-ref-metal.sh` (segment 7.9) with
 `rm_gbuf.c`, `rm_rtshadow.c`, `rm_rt.c` and `rm_pure.c`, under ASAN and UBSAN:
 
 - colour parity over 1024 flag combinations (minlight, glow, fullbright, weapon, IR and the
@@ -114,9 +114,11 @@ and `xcrun metal -c` of a translation unit that includes `mtl_rtm_math.h` and ca
 function. The hold builds main and the branch in scratch, runs `make test` and
 `check-ref-metal`, and records:
 
-- the stock scenarios at `r_presentation 0`: 29 of 29 stock scenarios byte-identical to the base (main e76c846e) byte-identical to main;
+- the stock scenarios at `r_presentation 0`: 29 of 29 stock scenarios byte-identical to main;
 - every committed `rtprimary-*` record, with `rtprimary-world` on `demo2.dm2` and on the
-  pool demo and `rtprimary-dlights` on `demo2.dm2`: 10 of 10 RT-primary records byte-identical to main's (the 7 rtprimary-* scenarios and the styles, pool and dlights-d2 demo variants) byte-identical to main.
+  pool demo and `rtprimary-dlights` on `demo2.dm2`: 10 of 10 RT-primary records byte-identical to main (the 7 rtprimary-* scenarios and the styles, pool and dlights-d2 demo variants).
+
+Those results were taken against main e76c846e. After main was merged in at 227f87ea (main d7817081), `make ref_metal` built, and `tests/check-ref-metal.sh` passed with 13162 checks and 0 failed. The model-light segment ran 3446 checks with 0 failed, and 7 of 7 mutants were refused.
 
 ## Left to the next slices
 
@@ -204,7 +206,7 @@ model stock-lit.
   mutants refused`) adds three mutants, `depthhack-weapon`, `untagged-traced` and
   `tag-no-normals`, plus the floor test and the stats line. `rm_rtfx_test.c` covers the
   order, the walks, the shared switch, and `r_rt_direct_models` as a setting.
-- **Kernel pins.** check-ref-metal segment 7.9 holds seven pins on `rm_rtmodel.metal`, and
+- **Kernel pins.** check-ref-metal segment 7.95 holds seven pins on `rm_rtmodel.metal`, and
   each mutant compiles under `xcrun metal` and is refused:
 
   | Pin | Mutants |
@@ -250,6 +252,24 @@ records, at commit 25e2ce98:
 - the frames for the owner: `rtprimary-models` and `rtprimary-models-off` at captures 12 and
   21, and the stock `models` scenario's. They went to the owner directly and are not
   committed.
+
+## The merge of slice 1 and main
+
+Slice 1's final tip 08b6276f (with main d7817081, TASK190 slices 2 and 3) was merged into
+slice 2 at ba5e4dff. The results above were taken before it, at 25e2ce98.
+
+- **Segments.** Main's TASK190 segments are 7.7 (RT-primary temporal) and 7.8 (RT-primary
+  filter). The model light is 7.9, as slice 1 numbered it; slice 2 had named it 7.8. The
+  model pass, slice 2's own, was 7.9 and is now 7.95.
+- **The effect row.** TASK190 slice 3 gave every row a `show_asked` entry. The models row
+  takes `RM_RTModel_ShowAsked`, which returns 0: its view is the direct light's, which
+  `RM_RTDir_ShowAsked` already reports.
+- **The order.** The model pass still runs after RT-primary's accumulation and its 5 x 5
+  filter, which share the direct light's encoder. Both write world pixels only
+  (`mtl_rtp_world`), and the model pass writes the light the resolve reads and never the
+  history, so model pixels still pass through TASK190 untouched.
+- **The hold.** The merge's hold compares the stock scenarios and every RT-primary record
+  with main d7817081, and records the three `rtprimary-models` scenarios three times each.
 
 ## Review notes
 

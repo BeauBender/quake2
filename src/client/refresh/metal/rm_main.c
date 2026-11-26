@@ -155,6 +155,20 @@ static cvar_t *r_retro_gamma;
 /* TASK195: the tuning harness's B side, "" for A (the client's rt_ab writes it) */
 static cvar_t *r_rt_ab;
 
+/*
+ * TASK190 slice 3: RT-primary's scaler row (rm_pres_fx). Whether the
+ * device has the MetalFX temporal scaler and its GPU families (for the
+ * default internal size), read with the presentation at start-up and at
+ * vid_restart; whether the view being drawn has its internal size below
+ * its output, set at the start of each view (RM_PresBelow). A development
+ * view (rm_rtfx_show_asked, the effect table's) is drawn unscaled (the
+ * card's default 2).
+ */
+static int rm_pres_temporal;
+static unsigned rm_pres_families;
+static int rm_pres_below;
+static cvar_t *r_metalfx_scale_ref;
+
 int
 RM_PresentationMode(void)
 {
@@ -189,6 +203,12 @@ RM_Effect(const cvar_t *cv)
 	if (r_rt_ab && r_rt_ab->string[0] && rm_ab_value(r_rt_ab->string, cv->name, b, sizeof(b)))
 	{
 		user = (float)strtod(b, NULL);
+	}
+
+	if (!strcmp(cv->name, "r_metalfx"))
+	{
+		return rm_pres_fx(rm_presentation, user, rm_pres_temporal,
+				rm_rtfx_show_asked(), rm_pres_below);
 	}
 
 	return rm_pres_value(rm_presentation, cv->name, user);
@@ -399,6 +419,7 @@ R_Register(void)
 	r_retro_filter = ri.Cvar_Get("r_retro_filter", "0", CVAR_ARCHIVE);
 	r_retro_gamma = ri.Cvar_Get("r_retro_gamma", "0", CVAR_ARCHIVE);
 	r_rt_ab = ri.Cvar_Get("r_rt_ab", "", 0);
+	r_metalfx_scale_ref = ri.Cvar_Get("r_metalfx_scale", "0", CVAR_ARCHIVE);
 	r_rt_ab->modified = false;   /* the report line is for a flip, not for the start */
 	metal_lightmap_filter = ri.Cvar_Get("metal_lightmap_filter", "0", CVAR_ARCHIVE);
 
@@ -683,6 +704,16 @@ RI_Init(void)
 		rm_presentation = rm_pres_decide(r_presentation->value, rm_rtg.path, &why);
 		rm_pres_format(r_presentation->value, rm_presentation, why, line, sizeof(line));
 		R_Printf(PRINT_ALL, "%s\n", line);
+
+		/* TASK190 slice 3: RT-primary's scaler, the temporal one, or off where the device has none */
+		rm_pres_temporal = (rmb_fx_support() & RM_FX_HAS(RM_FX_TEMPORAL)) != 0;
+		rm_pres_families = caps.families;
+		rm_pres_below = 0;
+
+		if (rm_pres_fx_format(rm_presentation, rm_pres_temporal, line, sizeof(line)))
+		{
+			R_Printf(PRINT_ALL, "%s\n", line);
+		}
 
 		/* TASK185: no Retro view pass left from before a vid_restart (the image stays mapped); RI_RenderFrame sets it per frame */
 		rmb_gbuf_set_retro(0, 0, 0);
@@ -1096,6 +1127,33 @@ R_SetupGL(void)
 	r_view.cull = r_cull->value != 0;
 }
 
+/*
+ * TASK190 slice 3: whether this view's internal size under the temporal
+ * scaler is below its output, as RM_FX_Begin sizes it (rm_fx_scale of the
+ * view's rectangle, R_SetupGL's), before anything reads r_metalfx for it:
+ * RT-primary runs its scaler only then (rm_pres_fx). The menu's player
+ * model (RDF_NOWORLDMODEL), a second view drawn over the world in the
+ * same frame, takes the forward path and is never scaled: it keeps the
+ * world view's value, since one that changed between the two views would
+ * free and remake the scaler every frame.
+ */
+static void
+RM_PresBelow(const refdef_t *fd)
+{
+	int tw = 0, th = 0;
+	rm_viewport_t vp;
+
+	if (fd->rdflags & RDF_NOWORLDMODEL)
+	{
+		return;
+	}
+
+	rmb_target_size(&tw, &th);
+	rm_view_rect(fd->x, fd->y, fd->width, fd->height, vid.width, vid.height, th, &vp);
+	rm_pres_below = rm_fx_scale(RM_Effect(r_metalfx_scale_ref), rm_fx_default_rows(rm_pres_families), (int)vp.h,
+			rmb_fx_max_ratio(RM_FX_TEMPORAL)) < 1.0f;
+}
+
 /* from gl1_main.c: the screen blend, the 3D pass's last draw (design section 11) */
 static void
 R_PolyBlend(void)
@@ -1383,6 +1441,8 @@ RI_RenderFrame(refdef_t *fd)
 	{
 		return;
 	}
+
+	RM_PresBelow(fd);
 
 	/* the acceleration structures of the view, before the raster (design section 3, step 1; TASK53) */
 	RM_RT_Frame(fd);

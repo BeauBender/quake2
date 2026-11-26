@@ -351,6 +351,18 @@ run() {
 	forget "$_rp"
 }
 
+# The gate's scheduler runs each check under the process supervisor beside
+# it (scripts/lib/, TASK221): built once here, before any stub is on PATH,
+# so with the real cc, into a tool cache of this check's own that every
+# tree's run shares (sv_path keys the binary by the cc on PATH; the gate's
+# runs put no stub cc first, so they find it built).
+SUPERVISE_CACHE=${tmp:?}/svcache
+export SUPERVISE_CACHE
+(. "$REAL/lib/supervise.sh" && sv_path > /dev/null) || {
+	echo "$me: cannot build the process supervisor"
+	exit 1
+}
+
 # ---- The stubs. --------------------------------------------------------
 mkdir -p "${tmp:?}/mk" "${tmp:?}/cov"
 cat > "${tmp:?}/stub-bench.sh" << 'EOF'
@@ -423,6 +435,9 @@ mktree() {
 		mkdir -p "${T:?}/scripts/bench/core"
 		cp "$REAL/bench/core/common.sh" "${T:?}/scripts/bench/core/common.sh"
 	fi
+	# and its process supervisor from lib/ beside it (TASK221)
+	mkdir -p "${T:?}/scripts/lib"
+	cp "$REAL/lib/supervise.sh" "$REAL/lib/supervise.c" "${T:?}/scripts/lib/"
 	LOG=${T:?}/log
 	: > "$LOG"
 	export LOG
@@ -586,14 +601,16 @@ t_nested() {
 	cat > "${T:?}/tests/check-a.sh" << 'EOF'
 #!/bin/sh
 printf 'check token=%s entry=%s lc=%s\n' "${BENCH_LOCK_TOKEN:+set}" "${BENCH_LOCK_ENTRY-unset}" "${LC_ALL-unset}" >> "$LOG"
-# who started the scheduler (this check's parent), and who started that
-_sp=$(ps -o ppid= -p "$PPID" | tr -d ' ')
+# who started the scheduler (the parent of this check's parent, its
+# supervisor, TASK221), and who started that
+_sc=$(ps -o ppid= -p "$PPID" | tr -d ' ')
+_sp=$(ps -o ppid= -p "$_sc" | tr -d ' ')
 printf 'sched-parent=%s\n' "$(ps -o args= -p "$_sp")" >> "$LOG"
 printf 'sched-grandparent=%s\n' "$(ps -o args= -p "$(ps -o ppid= -p "$_sp" | tr -d ' ')")" >> "$LOG"
 # the children of the run under the lock beside the scheduler (pid:group),
 # and the groups of this check and of the scheduler
-printf 'kids=%s\n' "$(ps -A -o pid= -o ppid= -o pgid= | awk -v p="$_sp" -v s="$PPID" '$2 == p && $1 != s { printf "%s:%s ", $1, $3 }')" >> "$LOG"
-printf 'groups=%s:%s\n' "$(ps -o pgid= -p "$$" | tr -d ' ')" "$(ps -o pgid= -p "$PPID" | tr -d ' ')" >> "$LOG"
+printf 'kids=%s\n' "$(ps -A -o pid= -o ppid= -o pgid= | awk -v p="$_sp" -v s="$_sc" '$2 == p && $1 != s { printf "%s:%s ", $1, $3 }')" >> "$LOG"
+printf 'groups=%s:%s\n' "$(ps -o pgid= -p "$$" | tr -d ' ')" "$(ps -o pgid= -p "$_sc" | tr -d ' ')" >> "$LOG"
 sh scripts/bench/bench.sh lock status >> "$LOG"
 st=0
 /bin/bash scripts/pins.sh selftest no-such-case >> "$LOG" 2>&1 || st=$?
