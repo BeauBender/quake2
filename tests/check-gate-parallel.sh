@@ -1890,8 +1890,8 @@ wmut wiring-subset wiring 'scripts/gate-checks.sh "$gate_serial" "$gate_first" t
 wmut wiring-no-errexit wiring 'set -eu' 'set -u'
 wmut stop-not-passed testsh '		kill -s TERM "$gate_sched" 2> /dev/null || :' '		:'
 wmut stop-passes testsh "trap 'gate_stop 143' TERM" "trap 'gate_stop 0' TERM"
-# (the two re-ignores: the one in gate_start is told apart by its comment)
-mutant ttou-scheduler tty "trap '' TTOU" ':' "	trap '' TTOU #"
+# (the scheduler's one ignore of SIGTTOU, which its supervisors inherit)
+mutant ttou-scheduler tty "trap '' TTOU" ':'
 # (the shell's standard error left on the terminal for the fork of a check,
 # and of the scheduler; the scheduler's own standard error lost with it)
 wmut sched-stderr-on-tty ttyfork '{ 2>&3 3>&- GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh & } 3>&2 2> /dev/null' 'GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &'

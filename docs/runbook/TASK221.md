@@ -37,6 +37,13 @@ it (see "What remains").
   (`_gss`, `_gsb`), and `gate_cleanup` adds that pid.
 - **The supervisor's build.** `sv_path` builds the supervisor into the tool cache on first use.
   If the build fails, the run fails with status 2 before any check starts.
+- **SIGTERM ignored.** A signal ignored at entry cannot be trapped, and each supervisor would
+  inherit the ignore and never begin a stop, so a stop would wait with no bound. The scheduler
+  therefore refuses to start, with status 2 and one `gate:` line, when SIGTERM is ignored. The
+  test runs before any TERM trap: a child shell sends itself TERM and says whether it lived on.
+  The trap listing is no test. bash 3.2 as `sh` lists no trap that did not take, but dash lists
+  a trap on a signal ignored at entry that it never runs. The child-shell probe gives the right
+  answer under `/bin/sh` (bash 3.2), bash and dash, with TERM ignored, INT ignored or neither.
 
 The scheduler still sources `bench/core/common.sh`, for `bench_pid_alive` only.
 
@@ -48,12 +55,36 @@ The scheduler still sources `bench/core/common.sh`, for `bench_pid_alive` only.
   merge gate starts it. The supervisor's contract is that the command gets every signal at its
   default. The `sigs` case now compares a check run by `test.sh` with a direct start that has
   every signal at its default.
+- A supervisor's 126 (a group it cannot empty) is shown as `FAILED (status 126)`. This is the
+  new `sv126` case.
+- A scheduler started with SIGTERM ignored refuses to start (status 2). This is the new
+  `termign` case.
+
+### Limits
+
+- **The gate is now Darwin-only.** Every gate run needs the supervisor, which uses kqueue and
+  libproc and is built with `cc`. The repository builds and tests on Apple platforms only.
+- **A SIGKILL to the scheduler alone** (no TERM first, `test.sh` alive) leaves the supervisors
+  and their checks running. Nothing tells them the scheduler is gone: `supervise.c` does not
+  watch its parent. This is unchanged from main, where the checks also ran on in process groups
+  of their own. A supervisor that treated its parent's exit as a stop would close it.
+- **The `sv_safe` gap is now reachable from every gate run.** The gap is the ACL and parent-path
+  hole in the cache directory check, noted in the TASK218 review. Each run calls `sv_path`
+  against the default tool cache and runs the cached binary. That binary was a test-time tool
+  before. The gap stays inside the local, same-user threat model, and it is carried to slice 2
+  (see below).
 
 ## The check
 
 `tests/check-gate-parallel.sh` copies `scripts/lib/supervise.sh` and `supervise.c` into each
 staged tree. It builds the supervisor once up front and exports that tool cache as
 `SUPERVISE_CACHE`, so a case that sets `HOME` elsewhere (`ttymsg`) still finds it.
+
+`tests/check-ci-map.sh` and `tests/check-bench-entry.sh` also stage `gate-checks.sh` in trees of
+their own, so they copy `scripts/lib/supervise.{sh,c}` there too. Each one builds the supervisor
+once, with the real `cc`, into a `SUPERVISE_CACHE` of its own. `check-bench-entry` does this
+before any of its stubs is on `PATH`. Its `t_nested` fake check walks one parent further,
+because its parent is now its supervisor, whose parent is the scheduler.
 
 - **`killgrace` (new).** The scheduler gets SIGTERM while its one check ignores it. Once the
   check has said it got the TERM, the scheduler gets SIGKILL, and the check must still end
@@ -81,20 +112,26 @@ staged tree. It builds the supervisor once up front and exports that tool cache 
 | `no-supervisor-leave` | `leave` | the same: the deleted `gate_end` at the reap is now the supervisor's |
 | `no-supervisor-killgrace` | `killgrace` | the same: a scheduler that stops its checks itself leaves one running when it is killed |
 | `no-supervisor-sigs` | `sigs` | the same: the deleted `trap - TTOU` is now the supervisor's default dispositions |
-| `grace-unpassed` | `interrupt` | the supervisor is not given `gate_grace`: check `b` ignores SIGTERM and its sleep is now 60 s, longer than the case's 30 s bound (it was 30 s, so it ended by itself inside the bound and the mutant survived) |
+| `grace-unpassed` | `interrupt` | the supervisor gets `--grace 3600` in place of `gate_grace`: check `b` ignores SIGTERM and its sleep is now 60 s, longer than the case's 30 s bound (it was 30 s, so it ended by itself inside the bound and the mutant survived). Leaving the flag out would be an equivalent mutant, since the supervisor's own default is also 10 s |
+| `term-ignored-starts` | `termign` | the refusal of an ignored SIGTERM is dropped: the scheduler runs its check, which outlives the case's bound |
+| `sv126-ok` | `sv126` | a supervisor's 126 is taken for success |
 | `stderr-closed-unguarded-sched` | `stopnoerr` | the scheduler leaves a closed standard error closed. The stops no longer copy fd 2 (the supervisor opens a closed descriptor on `/dev/null` itself), so the case now also starts the scheduler with its standard error closed and a bad `GATE_JOBS`: status 2 and no check run. Without the guard, the write of the error line fails under `set -e` and the status is 1 |
 | `no-own-group` | `kgrp` (was `sigs`) | `test.sh` starts the scheduler without job control. The SIGINT and SIGQUIT a check gets no longer depend on that: its supervisor resets every signal, so `sigs` passes with this mutant (`no-supervisor-sigs` covers the dispositions). What the scheduler's own group still does is keep it and the supervisors, its background jobs, out of `test.sh`'s group: without it, `kgrp`'s SIGKILL to that group kills them all, and the check, in a group of its own, outlives the run. It is no longer SIGINT-only, so it also runs when SIGINT is ignored |
 | `no-stop` | `stop` | `gate_end` sends no TERM |
 | `no-stop-wait` | `interrupt` | `gate_end` does not wait for the supervisors |
 | `group-kill-dropped`, `no-kill-after-grace`, `no-kill-after-grace-stop`, `no-cont` | `interrupt`, `stop` | `cmutant` builds a supervisor from a changed `supervise.c` into a cache of its own: the signal goes to the leader alone, the KILL is signal 0, the CONT is dropped |
 
-The mutants `no-process-group`, `no-end-at-exit`, `ttou-to-checks`, `ttou-after-start`,
-`start-stderr-on-tty` and `drop-emptied` named lines that are gone.
+The mutants `no-process-group`, `no-end-at-exit`, `ttou-to-checks`, `ttou-after-start` and
+`start-stderr-on-tty` named lines that are gone. `drop-emptied` went for the reason in the
+`drop` bullet above: its line is still there, but the reap waits no grace any more, so no
+signal can arrive in one. `ttou-scheduler` now names the one `trap '' TTOU` left, with no
+prefix to tell it from a second one.
 
 ## Review notes carried from TASK218
 
 - `sv_safe`'s ACL and symbolic link gap in the cache directory check: `scripts/lib/supervise.sh`
-  is not changed in this slice. It is left for the slice that adds `sv_run`.
+  is not changed in this slice. It is carried to slice 2, which adds `sv_run`. Since this slice,
+  every gate run reaches it (see "Limits").
 - `sv_count`'s relisting is unbounded and ignores the deadline: this is in `supervise.c`, which
   is outside this card's files.
 - The invariants job has no `timeout-minutes`: this is in `.github/workflows/`, which is outside
