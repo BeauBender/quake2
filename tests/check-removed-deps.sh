@@ -65,5 +65,47 @@ if [ -n "$hits" ]; then
 	echo "$hits" | sed 's/^/  /'
 	fail=1
 fi
+# Homebrew: the owner has not approved it anywhere, CI included, and macOS
+# needs nothing beyond Xcode's toolchain. No workflow, local action or CI
+# script runs brew (a run: line or block, /opt/homebrew/bin/brew,
+# /usr/local/bin/brew, a Homebrew action) or Homebrew's gmake; the build
+# calls Xcode's make. Deliberately loose (any case, no word bounds): an
+# over-refusal is fixed by rewording, a false pass is not.
+brew='brew|gmake'
+brew_scan()
+{
+	rc=0
+	out=$(grep -rIiE "$brew" "$@" 2>/dev/null) || rc=$?
+	if [ "$rc" -gt 1 ]; then
+		echo "check-removed-deps: grep failed (status $rc): the Homebrew scan did not run" >&2
+		exit 1
+	fi
+	printf '%s' "$out"
+}
+
+[ -d .github/workflows ] || { echo "check-removed-deps: .github/workflows is missing: the Homebrew scan did not run"; exit 1; }
+hits=$(brew_scan .github scripts/ci-*.sh)
+if [ -n "$hits" ]; then
+	echo "check-removed-deps: Homebrew (brew, gmake) in CI:"
+	echo "$hits" | sed 's/^/  /'
+	fail=1
+fi
+
+# Mutants: the same scan over a copy of the workflows with one Homebrew line
+# added, to a workflow and to a local action, must refuse it.
+mut=$(mktemp -d)
+trap 'rm -rf "$mut"' EXIT INT TERM
+for m in 'brew install make' 'brew update' '/opt/homebrew/bin/brew install make' '/usr/local/bin/brew install make' 'gmake -j3'; do
+	for where in workflows/macos.yml actions/x/action.yml; do
+		rm -rf "$mut/.github"
+		mkdir -p "$mut/.github/actions/x"
+		cp -R .github/workflows "$mut/.github/"
+		printf '    - run: |\n        %s\n' "$m" >> "$mut/.github/$where"
+		if [ -z "$(brew_scan "$mut/.github")" ]; then
+			echo "check-removed-deps: mutant '$m' in $where was not refused"
+			fail=1
+		fi
+	done
+done
 [ "$fail" -eq 0 ] && echo "check-removed-deps: ok"
 exit "$fail"
