@@ -224,7 +224,8 @@ static const char *const rtg_cvars[] = {
 	"r_rt_sunfloor",
 	"r_rt_sunscale",
 	/* RT7's temporal accumulation (TASK59): it blends what the effects traced and traces no ray itself;
-	   read only while an effect it accumulates runs, or the water, whose reflections it blurs (slice 2b) */
+	   read only while an effect it accumulates runs, RT-primary's light among them (TASK190), which no
+	   presentation overlays: the user's value, or the water, whose reflections it blurs (slice 2b) */
 	"r_rt_temporal",
 	/* RT6's water reflections (TASK58): a ray each water pixel */
 	"r_rt_water",

@@ -44,6 +44,7 @@
 #include "rmb.h"
 #include "rm_rtfx.h"
 #include "rm_rtlights.h"
+#include "rm_rttemporal.h"
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_rts_math.h"
 #include "../common/mtl_rtdir_math.h"
@@ -398,6 +399,8 @@ typedef struct
 	unsigned long bounce_hits;  /* the ones that read a lightmap at their hit */
 	float exposure;             /* the exposure the frame used */
 	double ms;                  /* the pass's GPU time; below 0 when not measured */
+	int accumulated;            /* TASK190 slice 1: the frame's light was accumulated (rm_rtp_temporal ran) */
+	double tms;                 /* the accumulation's GPU time, its own encoder's; below 0 when not measured or not run */
 } rm_rtdir_stats_t;
 
 /*
@@ -583,6 +586,17 @@ int rmb_rtdir_prepare(unsigned long w, unsigned long h);
 
 /* the view and the style table (3 x RM_RTL_STYLES floats) the next G-buffer view traces with; NULL turns it off */
 void rmb_rtdir_set_view(const rm_rtdir_view_t *v, const float *styles);
+
+/*
+ * TASK190 slice 1 (PM8): the next traced view accumulates its light with t
+ * (copied), at the render size w x h, through rm_rtp_temporal after the
+ * trace; its pipeline and the histories (two of the light with its count,
+ * RGBA16Float, two of the key, RG32Uint), and the light the resolve then
+ * reads (RGBA16Unorm), are made at the first such view, a failure latched.
+ * NULL, or t's alpha 0, releases them and accumulates nothing: the trace's
+ * light is the resolve's, bit for bit. 1 when the view accumulates.
+ */
+int rmb_rtdir_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h);
 
 /* the stats of the frames whose pass completed since the last call, at most cap, in slot order; their number */
 int rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap);
