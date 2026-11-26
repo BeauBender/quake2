@@ -501,7 +501,7 @@ INCLUDE ?= -I/usr/local/include
 else ifeq ($(YQ2_OSTYPE),Windows)
 INCLUDE ?= -I/usr/include
 else ifeq ($(YQ2_OSTYPE),Darwin)
-# Nothing from /usr/local or Homebrew: SDL3 is vendored.
+# Nothing from /usr/local or a package manager: SDL3 is vendored.
 INCLUDE ?=
 endif
 
@@ -519,7 +519,7 @@ LDFLAGS ?= -L/usr/local/lib
 else ifeq ($(YQ2_OSTYPE),Windows)
 LDFLAGS ?= -L/usr/lib
 else ifeq ($(YQ2_OSTYPE),Darwin)
-# Nothing from /usr/local or Homebrew: SDL3 is vendored.
+# Nothing from /usr/local or a package manager: SDL3 is vendored.
 LDFLAGS ?=
 endif
 
