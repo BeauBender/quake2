@@ -296,6 +296,13 @@ if [ -n "$gate_skip" ]; then
 		gate_skip=
 	fi
 fi
+# gate_serial and gate_first keep only the checks that run: the scheduler
+# refuses a name it is not given
+gate_keep=
+for gate_t in $gate_serial; do
+	case " $gate_skip " in *" $gate_t "*) ;; *) gate_keep="$gate_keep${gate_keep:+ }$gate_t" ;; esac
+done
+gate_serial=$gate_keep
 gate_keep=
 for gate_t in $gate_first; do
 	case " $gate_skip " in *" $gate_t "*) ;; *) gate_keep="$gate_keep${gate_keep:+ }$gate_t" ;; esac

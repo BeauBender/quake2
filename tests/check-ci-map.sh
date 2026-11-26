@@ -49,7 +49,8 @@
 #     harness path leaves out none; a path a commit since the merge base
 #     changed and the lane set back (a stale origin/main) still counts;
 #     neither a GLOBIGNORE from the environment nor the gate's own (under
-#     SHELLOPTS=allexport) reaches the scheduler's environment;
+#     SHELLOPTS=allexport) reaches the scheduler's environment; a serial
+#     check left out is left out of gate_serial;
 #     GATE_ALL=1, no origin/main, no merge base, a git error, a change for
 #     which the selector chooses no harness check, a selector that fails or
 #     prints a name it was not given, a name twice or none, and an empty or
@@ -462,14 +463,16 @@ printf '#!/bin/sh\nexit 0\n' > "$tmp/gbin/make"
 printf '#!/bin/sh\ncase " $* " in *" ls-files "*) exit 128 ;; esac\nexec "%s" "$@"\n' "$REALGIT" > "$tmp/gitbad/git"
 cat > "$tmp/gstub" << 'EOF'
 #!/bin/sh
-# records what scripts/test.sh gives the scheduler; refuses a long-check
-# word it is not given, as scripts/gate-checks.sh does
+# records what scripts/test.sh gives the scheduler; refuses a serial or
+# long-check word it is not given, as scripts/gate-checks.sh does
+serial=$1
 first=$2
 shift 2
-for w in $first; do
+for w in $serial $first; do
 	case " $* " in *" tests/$w "*) ;; *) echo "stub scheduler: $w names no check" >&2; exit 2 ;; esac
 done
 {
+	printf 'serial %s\n' "$serial"
 	printf 'first %s\n' "$first"
 	printf 'globignore %s\n' "${GLOBIGNORE-(unset)}"
 	for t; do printf '%s\n' "${t#tests/}"; done
@@ -505,7 +508,8 @@ gt_repo() {
 }
 
 # gt_run <dir> [<env>...]: runs that test.sh there; GR is what the scheduler
-# was given (the checks on one line), GF its long checks, GI the
+# was given (the checks on one line), GF its long checks, GS its serial
+# checks, GI the
 # GLOBIGNORE of its environment, GO the output
 gt_run() {
 	local d=$1 st=0
@@ -515,12 +519,13 @@ gt_run() {
 		TMPDIR="$tmp/gtd" GATE_REC="$d.rec" "$@" sh scripts/test.sh) > "$d.out" 2>&1 || st=$?
 	GO=$(cat "$d.out")
 	if [ "$st" -ne 0 ] || [ ! -f "$d.rec" ]; then
-		GR="STATUS$st" GF="" GI=""
+		GR="STATUS$st" GF="" GS="" GI=""
 		return
 	fi
 	GF=$(sed -n 's/^first //p' "$d.rec")
 	GI=$(sed -n 's/^globignore //p' "$d.rec")
-	GR=$(grep -v -e '^first ' -e '^globignore ' "$d.rec" | tr '\n' ' ' | sed 's/ $//')
+	GS=$(sed -n 's/^serial //p' "$d.rec")
+	GR=$(grep -v -e '^first ' -e '^serial ' -e '^globignore ' "$d.rec" | tr '\n' ' ' | sed 's/ $//')
 }
 
 # gt_left <label> <dir> <left out>: the run left out those harness checks
@@ -658,6 +663,15 @@ gt_cases() {
 		gt_run "$d" SHELLOPTS=allexport
 		gt_left allexport "$d" "$(minus "$HALL" $rg)" || cf=1
 		expect allexport:env "(unset)" "$GI" || cf=1
+	fi
+	# a serial check that is left out is left out of gate_serial too (the
+	# gate's list is empty today: the case sets one in its copy)
+	if want serial-filtered; then
+		sed 's/^gate_serial=""$/gate_serial="check-bench.sh check-pins.sh"/' "$t" > "$tmp/test-serial.sh" &&
+			gt_repo "$d" "$tmp/test-serial.sh" && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d"
+		gt_left serial-filtered "$d" "$(minus "$HALL" $rg)" || cf=1
+		expect serial-filtered:serial check-pins.sh "$GS" || cf=1
 	fi
 	# fail closed
 	if want gate-all; then
@@ -854,6 +868,7 @@ if command -v git > /dev/null 2>&1; then
 	tmut newline-delimited name-newline '		git ls-files -z --others --exclude-standard --full-name' '		git ls-files --others --exclude-standard --full-name | tr "\n" "\0"'
 	tmut first-unfiltered src-only 'gate_first=$gate_keep' ':'
 	tmut env-globignore-kept env-globignore 'unset GLOBIGNORE' ':'
+	tmut serial-unfiltered serial-filtered 'gate_serial=$gate_keep' ':'
 	tmut allexport-kept allexport '	set +a' '	:'
 fi
 
