@@ -1,0 +1,147 @@
+# The groups of the invariants job (TASK211): scripts/ci-checks.sh runs, in
+# each job of the matrix in .github/workflows/macos.yml, the checks of
+# tests/ci-checks.txt that scripts/ci-select.sh chooses from this map.
+# tests/check-ci-map.sh holds the rules; scripts/ci-select.sh has the
+# grammar. One entry a line:
+#   fast <check>            runs in every fast job
+#   ios <check>             runs in every ios job
+#   harness <check> <glob>  runs in a pull request's harness job when a
+#                           changed path matches <glob>; a harness check
+#                           has one line per glob
+#   all <glob>              a changed path that matches runs every harness
+#                           check (the map itself, tests/ci-checks.txt,
+#                           tests/ci-local-only.txt, scripts/ci-checks.sh,
+#                           scripts/ci-select.sh and .github/ always do)
+#   product <glob>          a path no harness check reads
+# A changed path that matches no harness, all or product glob runs every
+# harness check. A glob is a case pattern over the whole path: "*" matches
+# "/" too, and letter case is ignored. Every check of tests/ci-checks.txt
+# is in one group; a check no line names runs in the fast job.
+#
+# The globs of a harness check are what can change its result: the files it
+# reads or runs, found by reading the check. Keep them wide: a missing glob
+# lets a pull request skip a check its change breaks, and only the nightly
+# run of every check would show it.
+
+ios check-ios.sh
+
+# Measured in run 45683223193 (2026-11-25, 2 at a time on a hosted runner):
+# check-metalfx-report 2,352 s, check-bench 1,388 s, check-require-guards
+# 584 s, check-bounded-run 555 s, check-gate-parallel 517 s,
+# check-bench-entry 169 s.
+
+# The harness self-tests' own files and the harness they all run on.
+all tests/check-metalfx-report.sh
+all tests/check-bench.sh
+all tests/check-bounded-run.sh
+all tests/check-gate-parallel.sh
+all tests/check-require-guards.sh
+all tests/check-bench-entry.sh
+all scripts/bench/*
+all scripts/gate-checks.sh
+all scripts/test.sh
+
+# scripts/metalfx-report/ and scripts/pins.sh with its scenarios, the
+# bounded-run helper, the bench core it copies, and the .gitignore rule for
+# its scratch scenarios
+harness check-metalfx-report.sh scripts/metalfx-report.sh
+harness check-metalfx-report.sh scripts/metalfx-report/*
+harness check-metalfx-report.sh scripts/pins.sh
+harness check-metalfx-report.sh scripts/pins/*
+harness check-metalfx-report.sh scripts/lib/*
+harness check-metalfx-report.sh scripts/bench/*
+harness check-metalfx-report.sh tests/metalfx-report-helper.py
+harness check-metalfx-report.sh .gitignore
+# scripts/bench/ in a throwaway repository
+harness check-bench.sh scripts/bench/*
+# a lint over every file under scripts/
+harness check-bounded-run.sh scripts/*
+# the scheduler, scripts/test.sh that runs it on tests/check-*.sh, and the
+# bounded-run primitive it sources
+harness check-gate-parallel.sh scripts/gate-checks.sh
+harness check-gate-parallel.sh scripts/test.sh
+harness check-gate-parallel.sh scripts/bench/*
+harness check-gate-parallel.sh tests/check-*.sh
+# the entry points that take the host lock, and the lock
+harness check-bench-entry.sh scripts/test.sh
+harness check-bench-entry.sh scripts/coverage.sh
+harness check-bench-entry.sh scripts/coverage-floor
+harness check-bench-entry.sh scripts/pins.sh
+harness check-bench-entry.sh scripts/pins/*
+harness check-bench-entry.sh scripts/gate-checks.sh
+harness check-bench-entry.sh scripts/bench/*
+# the real checks, run with their skips forced in a tree of links to every
+# top-level entry: what those checks read before and after a skip (the
+# Makefile and src/ for check-metal-shim, its design document in docs/,
+# the workflow and scripts/test.sh for the variables)
+harness check-require-guards.sh tests/*
+harness check-require-guards.sh scripts/*
+harness check-require-guards.sh src/*
+harness check-require-guards.sh Makefile
+harness check-require-guards.sh third_party/*
+harness check-require-guards.sh stuff/*
+harness check-require-guards.sh doc/*
+harness check-require-guards.sh docs/*
+
+# Read by no harness check (each found by reading the six checks).
+product README.md
+product CLAUDE.md
+product AGENTS.md
+product CHANGELOG
+product LICENSE
+product .claude/*
+product .githooks/*
+product .devcontainer/*
+product .editorconfig
+product .shellcheckrc
+
+# The fast group: every other check of tests/ci-checks.txt.
+fast check-autorelease-pool.sh
+fast check-bench-quake2.sh
+fast check-bsp-loader.sh
+fast check-card-acceptance.sh
+fast check-card-close-labels.sh
+fast check-ci-map.sh
+fast check-checkout-current.sh
+fast check-ci-parity.sh
+fast check-codeql-changes.sh
+fast check-compat-names.sh
+fast check-cvar-docs-selftest.sh
+fast check-cvar-docs.sh
+fast check-doc-links.sh
+fast check-evidence.sh
+fast check-image-decoder-selftest.sh
+fast check-image-decoder.sh
+fast check-keyboard-sites.sh
+fast check-input-gate.sh
+fast check-ios-screen.sh
+fast check-memory-rules.sh
+fast check-metal-shim.sh
+fast check-mode-size.sh
+fast check-no-tracked-memory.sh
+fast check-pin-chars.sh
+fast check-pins-latch.sh
+fast check-pins.sh
+fast check-pre-commit-hook.sh
+fast check-pre-push-hook.sh
+fast check-ref-metal.sh
+fast check-refrecord.sh
+fast check-removed-deps.sh
+fast check-rt-variations.sh
+fast check-runbook-dedupe.sh
+fast check-runbook-index.sh
+fast check-safe-names.sh
+fast check-savegame-tables.sh
+fast check-scenario-parsers.sh
+fast check-static-modules.sh
+fast check-stop-invariants.sh
+fast check-title-fit.sh
+fast check-tvos.sh
+fast check-unit-sanitizers.sh
+fast check-upscale-metalfx.sh
+fast check-upscale-report.sh
+fast check-upscale-vt.sh
+fast check-vendored.sh
+fast check-video-menu.sh
+fast check-visionos.sh
+fast check-workflow-pins.sh
