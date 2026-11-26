@@ -24,7 +24,9 @@
 # (h) (i) (j) the mutants, each the check with one guard taken out and
 #     refused by its own case: a plain kill in place of the supervisor (the
 #     stopped target survives), --events dropped (no events), the escaped
-#     scan dropped (the pid is not named).
+#     scan dropped (the pid is not named). (h) is inconclusive, not failed,
+#     where the kernel's SIGHUP for an orphaned group ended its target (the
+#     group's anchor saw that HUP); CHECK_IMAGE_DECODER_REQUIRE=1 fails it.
 # (k) the self-test itself interrupted (TERM) in its escape case: no escaped
 #     helper outlives it.
 # (l) a TERM to the check's own pid alone (accepted, not fixed): the check
@@ -404,7 +406,17 @@ if mutant plainkill 's|^[[:space:]]*"\$sv" --timeout .*$|( "$@" \& _p=$!; ( slee
 		cat "${tmp:?}/out"
 		fail "(h) the mutant never started its target: the case proves nothing (status $rc)"
 	elif gone "${tmp:?}/stop.pids" leakprobe; then
-		fail "(h) a plain kill in place of the supervisor was not refused: the probe's stopped target is gone"
+		# the target gone with a HUP at the anchor: the run's group was
+		# orphaned (as on the CI runner, FIX201), and the kernel's HUP
+		# ended the target, not the check. Inconclusive there, unless
+		# CHECK_IMAGE_DECODER_REQUIRE=1 asks for every case proved.
+		if [ -f "${tmp:?}/apart.hup" ] && [ "${CHECK_IMAGE_DECODER_REQUIRE:-0}" != 1 ]; then
+			echo "$me: (h) inconclusive here: the mutant's process group was orphaned and the kernel's SIGHUP ended its target; the case is proved where groups are not orphaned"
+		elif [ -f "${tmp:?}/apart.hup" ]; then
+			fail "(h) inconclusive and CHECK_IMAGE_DECODER_REQUIRE=1: the mutant's process group was orphaned and the kernel's SIGHUP ended its target"
+		else
+			fail "(h) a plain kill in place of the supervisor was not refused: the probe's stopped target is gone"
+		fi
 	fi
 	# the mutant leaves its targets stopped, and a process group that
 	# holds a stopped member gets SIGHUP and SIGCONT from the kernel when
