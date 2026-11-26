@@ -38,7 +38,7 @@
 #include "mtl_shader_math.h"   /* mtl_gbuf_math.h's types */
 #include "mtl_gbuf_math.h"
 
-/* a reason of mtl_rtp_reject beside RT7's (MTL_RTT_REJ_*): the history's light is not a finite value in [0, 1] */
+/* a reason of mtl_rtp_reject beside RT7's (MTL_RTT_REJ_*): the history's light is not a finite value in [0, 1], or its count is past MTL_RTT_COUNT_MAX */
 #define MTL_RTP_REJ_BAD 64
 
 /* one pixel's light, or a history's light with its count in a */
@@ -98,7 +98,8 @@ mtl_rtp_reject(unsigned reset, int ok, float dist, float hdist, float move, unsi
 {
 	unsigned r = mtl_rtt_reject(reset, ok, dist, hdist, move, mat, hmat, 0u, 0u, h.a);
 
-	if (ok && !(mtl_rtp_light_ok(h.r) && mtl_rtp_light_ok(h.g) && mtl_rtp_light_ok(h.b)))
+	/* TASK190 slice 2: a count past MTL_RTT_COUNT_MAX, infinite included, is a bad history too (no NaN blend) */
+	if (ok && !(mtl_rtp_light_ok(h.r) && mtl_rtp_light_ok(h.g) && mtl_rtp_light_ok(h.b) && (h.a <= MTL_RTT_COUNT_MAX)))
 	{
 		r |= MTL_RTP_REJ_BAD;
 	}
