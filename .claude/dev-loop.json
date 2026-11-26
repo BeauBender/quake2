@@ -17,5 +17,11 @@
   },
   "worktree": { "required": true },
   "memory": { "shared": false },
-  "vsm": { "durable": false }
+  "vsm": { "durable": false },
+  "probes": {
+    "stillActionable": [
+      "${CLAUDE_PLUGIN_ROOT}/scripts/cadence-due.sh all",
+      "${CLAUDE_PLUGIN_ROOT}/scripts/reflect-due.sh check >/dev/null 2>&1 && echo 'due: reflect -- run /dev-loop:reflect, then reflect-due.sh record'"
+    ]
+  }
 }
