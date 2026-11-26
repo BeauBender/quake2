@@ -2438,7 +2438,7 @@ for m in mix count nonormal alpha clamp; do
 		mix) sed 's/a\.g = mtl_rtd_add(a\.g, w, h\.g);/a.g = mtl_rtd_add(a.g, w, h.r);/' ;;
 		count) sed 's/return world \&\& (mtl_rtd_strength(n) > 0\.0f);/return world \&\& (n == n);/' ;;
 		nonormal) sed 's/if (!(nn_a > 0\.5f))/if (!(nn_a > 0.5f) \&\& 0)/' ;;
-		alpha) sed 's/r\.a = a;/r.a = h.a;/' ;;
+		alpha) sed 's/r\.a = a;/r.a = h.a + 0.0f * a;/' ;;
 		clamp) sed 's/r\.r = mtl_rtp_clamp(mtl_rtd_result(s\.r, h\.r, h\.a));/r.r = mtl_rtd_result(s.r, h.r, h.a);/' ;;
 	esac < "$rtpd_h" > "$h"
 	if cmp -s "$rtpd_h" "$h"; then
