@@ -737,14 +737,16 @@ signalled() {
 
 # interrupt: SIGINT to the scheduler with two checks running, a and b, c
 # and d waiting. b ignores SIGTERM: only the SIGKILL after the grace ends
-# it. a's SIGTERM trap takes 5 s: the grace (10 s) lets it finish. SIGTERM
-# in its place when SIGINT is ignored here: the rest still holds.
+# it, as its sleep (60 s) outlasts the run's 30 s bound, so a grace that
+# never ends (one not passed to the supervisor) fails the case. a's SIGTERM
+# trap takes 5 s: the grace (10 s) lets it finish. SIGTERM in its place
+# when SIGINT is ignored here: the rest still holds.
 c_interrupt() {
 	_ii=INT:130
 	[ -n "$INT_OK" ] || { skipint "interrupt's SIGINT (SIGTERM is sent in its place)"; _ii=TERM:143; }
 	d=$(newcase)
 	spec "$d" a 1 0 0 holdtrap 30
-	spec "$d" b 1 0 0 holdterm 30
+	spec "$d" b 1 0 0 holdterm 60
 	spec "$d" c 1 0 0
 	spec "$d" d 1 0 0
 	launch "$d" env GATE_JOBS=2 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
