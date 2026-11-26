@@ -15,25 +15,25 @@
 # (d) a stub that behaves: the check passes;
 # (e) IMGDEC_LEAKS_PROBE_SECONDS that is not a whole number, or is 0, is
 #     refused;
-# (f) the check's reap function, called directly: it signals nothing when
-#     the PID it is given is not the caller's child (a PID the caller has
-#     reaped and the system has reused), and of a stopped run's children it
-#     kills only those of the named program; only the probe's four result lines on
-#     its stdout are judged, so a shell's "Killed: 9" job notice on its stderr
-#     never fails it; a reap that also kills the other child, and one that
-#     spares the named child, still fail it;
-# (g) ps(1) that fails, first on PATH with a hanging stub: the bound still
-#     ends the run, and the check fails at its probe with the cause and a
-#     line saying ps(1) gave no answer; ps(1) that answers for one PID but
-#     cannot list processes, with the stop stub: the same, with a line
-#     saying a stopped target may be left;
-# (h) a TERM to the check while the stop stub holds the probe's target
-#     stopped (the gate stopping the check): the check ends the run and the
-#     target, as its bound would, and the check's watchdog is gone and no
-#     job-status line reaches its output (FIX150); the same with a failing
-#     ps(1): the reap line from the trap reaches the check's output.
-# The hanging stubs of (a) and (g) end by themselves after 120 s, and the
-# self-test ends any that is left.
+# (f) the staged case (FIX201): a hanging stub is bounded by the supervisor
+#     (scripts/lib/supervise.sh) and leaves nothing behind, checked on the
+#     supervisor's events (IMGDEC_SELFTEST_EVENTS): deadline, group-empty and
+#     reaped, and no escaped;
+# (g) a stub whose two helpers leave the process group: the check fails and names
+#     every escaped pid from the events.
+# (h) (i) (j) the mutants, each the check with one guard taken out and
+#     refused by its own case: a plain kill in place of the supervisor (the
+#     stopped target survives), --events dropped (no events), the escaped
+#     scan dropped (the pid is not named). (h) is inconclusive, not failed,
+#     where the kernel's SIGHUP for an orphaned group ended its target (the
+#     group's anchor saw that HUP); CHECK_IMAGE_DECODER_REQUIRE=1 fails it.
+# (k) the self-test itself interrupted (TERM) in its escape case: no escaped
+#     helper outlives it.
+# (l) a TERM to the check's own pid alone (accepted, not fixed): the check
+#     ends, its supervised run ends at its own deadline, and nothing
+#     outlives that deadline.
+# The hanging stubs block on a fifo nobody writes, and the supervisor ends
+# them; the self-test ends any that is left.
 # Off Darwin the check runs no leaks(1); there the hanging stub must leave
 # the check passing.
 set -eu
@@ -57,23 +57,26 @@ cleanup()
 			end_own "$_p" "$_n"
 		done < "${tmp:?}/pids"
 	fi
+	# the group run_apart made, if the self-test ends before end_apart
+	if [ -f "${tmp:?}/apart.pid" ]; then
+		read -r _p < "${tmp:?}/apart.pid" || _p=
+		_c=$(ps -o comm= -p "${_p:-0}" 2>/dev/null || :)
+		case ${_c##*/} in
+			perl*) kill -KILL -- "-$_p" 2>/dev/null || : ;;
+		esac
+	fi
 	# a target a stub stopped, whichever program it was (a red run leaves one)
-	for _f in "${tmp:?}/stop.pids" "${tmp:?}/late.pids" "${tmp:?}/nolist.pids" "${tmp:?}/term.pids" "${tmp:?}/termps.pids"; do
+	for _f in "${tmp:?}/stop.pids" "${tmp:?}/late.pids"; do
 		[ -f "$_f" ] || continue
 		while read -r _p; do
 			end_own "$_p" leakprobe
 			end_own "$_p" imgdecode_plain
 		done < "$_f"
 	done
-	# the stub leaks(1) of case (h), if the check left it
-	for _f in "${tmp:?}/term.run" "${tmp:?}/termps.run"; do
-		[ -f "$_f" ] || continue
-		while read -r _p; do
-			end_own "$_p" spawnstop
-		done < "$_f"
-	done
-	# a watchdog the check left (case h), and a hang stub still looping
-	for _f in "${tmp:?}/term.dog" "${tmp:?}/termps.dog" "${tmp:?}/hang.pids"; do
+	# a hang stub the check left, an escaped helper (it left the group, so
+	# no group signal reaches it, and it blocks on a fifo the rm below takes
+	# away), and the helper case (k) saw
+	for _f in "${tmp:?}/hang.pids" "${tmp:?}/esc.pids" "${tmp:?}/k.pids"; do
 		[ -f "$_f" ] || continue
 		while read -r _p; do
 			end_own "$_p" sh
@@ -111,6 +114,65 @@ run()
 		perl -e 'alarm shift; exec @ARGV' "$secs" sh "$check" > "${tmp:?}/out" 2>&1 || rc=$?
 }
 
+# run_apart <stub> [VAR=value...]: run, for a run that leaves a target
+# stopped (case (h)), with the check in a process group of its own. A
+# process group that holds a stopped member gets SIGHUP and SIGCONT from the
+# kernel when it becomes orphaned (POSIX): in this self-test's own group that
+# HUP would end the self-test, and in an orphaned group of the run's the CONT
+# would let the target run on. So the group's leader, an anchor whose parent
+# is this self-test, outlives the check until end_apart ends the whole group
+# at once: the group is never orphaned while it holds a stopped member. Its
+# status in $rc, the group (the anchor's pid) in $apart. Nothing in this
+# self-test sends SIGHUP, so a HUP the anchor gets is the kernel's, for its
+# group orphaned, or one from outside: the anchor records it in
+# ${tmp}/apart.hup and exits.
+run_apart()
+{
+	_d=$1
+	shift
+	rm -f "${tmp:?}/apart.ctl" "${tmp:?}/apart.hup"
+	mkfifo "${tmp:?}/apart.ctl"
+	env PATH="${tmp:?}/$_d:$PATH" IMGDEC_CHECK_SECONDS=8 IMGDEC_LEAKS_PROBE_SECONDS=2 "$@" \
+		perl -MPOSIX=pause -e '
+			setpgrp(0, 0) or exit 125;
+			alarm 2 * shift;
+			my $ctl = shift;
+			my $hup = shift;
+			my $c = fork;
+			defined $c or exit 125;
+			if ($c == 0) { exec @ARGV; exit 127; }
+			$SIG{HUP} = sub {
+				if (open(my $h, ">", $hup)) {
+					print $h "the anchor got SIGHUP at " . time . "\n";
+					close $h;
+				}
+				exit 129;
+			};
+			waitpid($c, 0);
+			my $st = ($? & 127) ? 128 + ($? & 127) : $? >> 8;
+			open(my $w, ">", $ctl) or exit 125;
+			print $w "$st\n";
+			close $w;
+			pause;
+		' "$secs" "${tmp:?}/apart.ctl" "${tmp:?}/apart.hup" perl -e 'alarm shift; exec @ARGV' "$secs" sh "$check" > "${tmp:?}/out" 2>&1 &
+	apart=$!
+	echo "$apart" > "${tmp:?}/apart.pid"
+	rc=$(perl -e 'alarm shift; open(F, "<", shift) or exit 2; print scalar <F>' "$((secs + 10))" "${tmp:?}/apart.ctl") || rc=
+	[ -n "$rc" ] || rc=125
+}
+
+# end_apart: ends the group run_apart made, every process in it at once
+# (the anchor, and any target the run left stopped), and reaps the anchor
+end_apart()
+{
+	_c=$(ps -o comm= -p "$apart" 2>/dev/null || :)
+	case ${_c##*/} in
+		perl*) kill -KILL -- "-$apart" 2>/dev/null || : ;;
+	esac
+	{ wait "$apart"; } 2>/dev/null || :
+	rm -f "${tmp:?}/apart.pid"
+}
+
 # gone <pidfile> <name>: every PID the stub recorded no longer runs <name>
 gone()
 {
@@ -127,11 +189,11 @@ gone()
 
 cause='leaks(1) could not inspect a process within 2 s'
 
-# a stub that hangs for at most 120 s (FIX150) and records its PID in
+# a stub that hangs on a fifo nobody writes and records its PID in
 # ${tmp}/hang.pids, which cleanup reads
+mkfifo "${tmp:?}/never"
 hangbody="echo \$\$ >> \"${tmp:?}/hang.pids\"
-_n=0
-while [ \"\$_n\" -lt 120 ]; do sleep 1; _n=\$((_n + 1)); done"
+read _x < \"${tmp:?}/never\""
 stub hang "$hangbody"
 stub good 'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift
@@ -174,7 +236,7 @@ main(int argc, char **argv)
 		pause();
 }
 EOF
-printf '#include <unistd.h>\nint main(void){sleep(120);return 0;}\n' > "${tmp:?}/decoy.c"
+printf '#include <unistd.h>\nint main(void){pause();return 0;}\n' > "${tmp:?}/decoy.c"
 mkdir -p "${tmp:?}/decoy"
 cc=${CC:-cc}
 if ! $cc -o "${tmp:?}/spawnstop" "${tmp:?}/spawnstop.c" ||
@@ -193,6 +255,38 @@ case \${1##*/} in
 leakprobe) \"\$@\"; exit 0 ;;
 esac
 exec \"${tmp:?}/spawnstop\" \"${tmp:?}/late.pids\" \"\$@\""
+
+# the escape stub: its helper leaves the process group (setsid), records its
+# pid in ${tmp}/esc.pids and blocks on the fifo nobody writes. With
+# IMGDEC_SELFTEST_INTERRUPT (case (k)) the helper first opens that fifo for
+# writing, writes its pid there and keeps it open across its exec, so the
+# reader at the other end sees end of file once the helper has ended.
+cat > "${tmp:?}/escape.pl" << 'EOF'
+use POSIX qw(setsid);
+use Fcntl qw(F_SETFD);
+if (defined $ARGV[2] && length $ARGV[2]) {
+	open(H, ">", $ARGV[2]) or exit 2;
+	fcntl(H, F_SETFD, 0) or exit 2;
+	syswrite(H, "$$\n");
+}
+setsid();
+open(F, ">>", $ARGV[0]) or exit 2;
+print F "$$\n";
+close(F);
+exec "sh", "-c", "read x < $ARGV[1]";
+EOF
+stub escape "echo \$\$ >> \"${tmp:?}/hang.pids\"
+perl \"${tmp:?}/escape.pl\" \"${tmp:?}/esc.pids\" \"${tmp:?}/never\" \"${IMGDEC_SELFTEST_INTERRUPT:-}\" &
+perl \"${tmp:?}/escape.pl\" \"${tmp:?}/esc.pids\" \"${tmp:?}/never\" \"${IMGDEC_SELFTEST_INTERRUPT:-}\" &
+read _x < \"${tmp:?}/never\""
+
+# the inner run of case (k): case (g) alone, then the self-test is
+# interrupted (TERM) while the escaped helper still runs
+if [ -n "${IMGDEC_SELFTEST_INTERRUPT:-}" ]; then
+	: > "${tmp:?}/ev.g"
+	run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.g"
+	kill -TERM $$
+fi
 
 # (a)
 run hang
@@ -241,189 +335,218 @@ for v in abc 0; do
 	fi
 done
 
-# (f) the reap function alone, as the check defines it
-sed -n '/^reap()$/,/^}$/p' "$check" > "${tmp:?}/reap.sh"
-if ! grep -q '^reap()$' "${tmp:?}/reap.sh"; then
-	fail "(f) $check defines no reap function"
-else
-	cat > "${tmp:?}/reap-probe.sh" << 'EOF'
-set -eu
-. "$1"
-bin=$2
-out=$3
-# a PID that is not this shell's child: an orphan, as a reaped and reused PID would be
-sh -c '"$1" & echo $! > "$2"' sh "$bin/decoy/imgdecode_plain" "${out:?}/orphan.pid"
-orphan=$(cat "${out:?}/orphan.pid")
-reap "$orphan" imgdecode_plain
-# a SIGKILLed process answers kill -0 until it is collected: settle, then
-# ask ps(1) for its state
-sleep 1
-s=$(ps -o stat= -p "$orphan" 2>/dev/null || :)
-[ -n "$s" ] && [ "${s%"${s#?}"}" != Z ] && echo "orphan: alive" || echo "orphan: killed"
-kill -KILL "$orphan" 2>/dev/null || :
-# a run that is this shell's child, with two children: the named program and another
-sh -c '"$1" & "$2" & wait' sh "$bin/decoy/imgdecode_plain" "$bin/decoy/other" &
-run=$!
-n=0
-while [ "$(ps -A -o ppid= | awk -v p="$run" '$1 == p' | wc -l)" -lt 2 ] && [ "$n" -lt 50 ]; do
-	sleep 0.1
-	n=$((n + 1))
-done
-named=$(ps -A -o pid= -o ppid= -o comm= | awk -v p="$run" '$2 == p && $3 ~ /\/imgdecode_plain$/ { print $1 }')
-other=$(ps -A -o pid= -o ppid= -o comm= | awk -v p="$run" '$2 == p && $3 ~ /\/other$/ { print $1 }')
-reap "$run" imgdecode_plain
-wait "$run" 2>/dev/null || :
-sleep 0.2
-kill -0 "$run" 2>/dev/null && echo "run: alive" || echo "run: killed"
-# a child that was never found is its own line, never "killed"
-if [ -z "$named" ]; then
-	echo "named child: not found"
-elif ps -o stat= -p "$named" > /dev/null 2>&1 && [ "$(ps -o stat= -p "$named" | cut -c1)" != Z ]; then
-	echo "named child: alive"
-else
-	echo "named child: killed"
-fi
-if [ -z "$other" ]; then
-	echo "other child: not found"
-elif kill -0 "$other" 2>/dev/null; then
-	echo "other child: alive"
-else
-	echo "other child: killed"
-fi
-[ -z "${FORCE_NOTICE:-}" ] || echo "$0: line 26: 33351 Killed: 9               sh -c" >&2
-# end what this probe started, whichever reap ran, and only while the PID
-# is still the decoy or the other program (by its program name)
-for _p in "$named" "$other"; do
-	[ -n "$_p" ] || continue
-	_c=$(ps -o comm= -p "$_p" 2>/dev/null || :)
-	case ${_c##*/} in
-	imgdecode_plain | other) kill -KILL "$_p" 2>/dev/null || : ;;
-	esac
-done
-EOF
-	# reapcase <name> <reap file> <force notice: 1 or empty>: runs the probe on
-	# the reap file. Only the probe's stdout, its four result lines, is judged;
-	# its stderr (a shell's own job notice, "Killed: 9", may land there when
-	# the run it killed is not yet collected) is kept apart and shown on a
-	# failure. Returns 0 when the four lines are the expected ones.
-	reapcase()
-	{
-		FORCE_NOTICE=$3 perl -e 'alarm 30; exec @ARGV' sh "${tmp:?}/reap-probe.sh" "$2" "${tmp:?}" "${tmp:?}" > "${tmp:?}/$1.out" 2> "${tmp:?}/$1.err" || :
-		if [ "$(cat "${tmp:?}/$1.out")" != "orphan: alive
-run: killed
-named child: killed
-other child: alive" ]; then
-			cat "${tmp:?}/$1.out" "${tmp:?}/$1.err"
-			return 1
-		fi
-		return 0
-	}
-	reapcase reap "${tmp:?}/reap.sh" "" || fail "(f) reap signalled a process that is not the run's, or missed the run's named child"
-	# a shell's job notice on the probe's stderr does not fail the case
-	reapcase reapnote "${tmp:?}/reap.sh" 1 || fail "(f) a Killed: 9 job notice on the probe's stderr failed the case"
-	# mutants: a reap that kills the other child too, and one that spares the named child
-	sed 's/"${_comm##\*\/}" = "\$2"/-n "$_comm"/' "${tmp:?}/reap.sh" > "${tmp:?}/reap-kill-other.sh"
-	sed 's/"${_comm##\*\/}" = "\$2"/"${_comm##*\/}" = "$2.none"/' "${tmp:?}/reap.sh" > "${tmp:?}/reap-spare-named.sh"
-	if cmp -s "${tmp:?}/reap.sh" "${tmp:?}/reap-kill-other.sh" || cmp -s "${tmp:?}/reap.sh" "${tmp:?}/reap-spare-named.sh"; then
-		fail "(f) a reap mutant did not apply: the child test in reap has changed"
-	else
-		reapcase reapmut1 "${tmp:?}/reap-kill-other.sh" "" > /dev/null && fail "(f) a reap that also kills the other child passed"
-		reapcase reapmut2 "${tmp:?}/reap-spare-named.sh" "" > /dev/null && fail "(f) a reap that spares the named child passed"
-	fi
-	# the probe ends what it started, whichever reap ran: nothing under
-	# decoy/ may still run (a zombie is gone); allow a short settle
-	_n=0
-	while [ "$_n" -lt 20 ]; do
-		_left=$(ps -A -o stat= -o comm= | awk -v d="${tmp:?}/decoy/" 'substr($1, 1, 1) != "Z" && index($0, d) { print }')
-		[ -z "$_left" ] && break
-		sleep 0.1
-		_n=$((_n + 1))
-	done
-	[ -z "$_left" ] || fail "(f) the probe left a process of decoy/ running: $_left"
-fi
-
-# (g) ps(1) that gives no answer: the bound still ends the run
-stub psfail "$hangbody"
-printf '#!/bin/sh\nexit 1\n' > "${tmp:?}/psfail/ps"
-chmod +x "${tmp:?}/psfail/ps"
-secs=40
-run psfail
-if [ "$rc" -eq 0 ] || [ "$rc" -eq 142 ] || ! grep -qF "$cause" "${tmp:?}/out" ||
-	! grep -qF 'ps(1) gave no answer' "${tmp:?}/out"; then
+# (f) the staged case: a hanging stub, bounded and left nothing behind
+: > "${tmp:?}/ev.f"
+run hang IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.f"
+if [ "$rc" -eq 0 ] || ! grep -qF "$cause" "${tmp:?}/out"; then
 	cat "${tmp:?}/out"
-	fail "(g) ps(1) failing: the check did not fail within its probe bound with the cause and the ps(1) line (status $rc)"
+	fail "(f) a hanging leaks(1): the check did not fail at its probe with the cause (status $rc)"
 fi
-# ps(1) that answers for one PID but cannot list processes, with the stop stub
-stub nolist "while [ \"\$#\" -gt 0 ] && [ \"\$1\" != -- ]; do shift; done
-shift
-exec \"${tmp:?}/spawnstop\" \"${tmp:?}/nolist.pids\" \"\$@\""
-printf '#!/bin/sh\ncase " $* " in *" -A "*) exit 1 ;; esac\nexec /bin/ps "$@"\n' > "${tmp:?}/nolist/ps"
-chmod +x "${tmp:?}/nolist/ps"
-run nolist
-secs=120
-if [ "$rc" -eq 0 ] || [ "$rc" -eq 142 ] || ! grep -qF "$cause" "${tmp:?}/out" ||
-	! grep -qF 'ps(1) could not list processes' "${tmp:?}/out" ||
-	! grep -qF 'a stopped leakprobe may be left' "${tmp:?}/out"; then
-	cat "${tmp:?}/out"
-	fail "(g) ps(1) unable to list processes: the check did not fail within its probe bound with the cause and the ps(1) line (status $rc)"
+for _e in '^deadline$' '^group-empty$' '^reaped status='; do
+	grep -q "$_e" "${tmp:?}/ev.f" || fail "(f) the supervisor's events lack $_e"
+done
+if grep -q '^escaped ' "${tmp:?}/ev.f"; then
+	fail "(f) the supervisor's events name an escaped process"
 fi
-# the target this case leaves stopped, as its line says: ended here
-if [ -f "${tmp:?}/nolist.pids" ]; then
-	while read -r _p; do
-		end_own "$_p" leakprobe
-	done < "${tmp:?}/nolist.pids"
-fi
+gone "${tmp:?}/hang.pids" sh || fail "(f) the hanging stub is still there (or was never started)"
 
-# (h) a TERM to the check while leaks(1) holds the probe's target stopped.
-# termcase <name> <path prefix> <target>: the stub leaks(1) <name> records its
-# PID in ${tmp}/<name>.run and its target's in <name>.pids; the check records
-# its watchdog's PID in <name>.dog (IMGDEC_SELFTEST_DOGFILE). The TERM comes
-# once the target is stopped. The check's output is ${tmp}/<name>.out. The
-# stopped target is expected gone when <target> is 1 (with a failing ps(1)
-# reap kills the run only, and says so).
-termcase()
+# (g) a stub whose helper leaves the process group: the check names it. The
+# supervisor reports an escape when it ends the group, at the deadline, so
+# this case ends at the probe's 2 s bound (the status is 124 there; the pid
+# must be named whatever the status).
+: > "${tmp:?}/ev.g"
+run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.g"
+_esc=$(sed -n 's/^escaped pid=//p' "${tmp:?}/ev.g" | tr '\n' ' ' | sed 's/ $//')
+if [ "$(grep -c '^escaped pid=' "${tmp:?}/ev.g")" -lt 2 ]; then
+	cat "${tmp:?}/out" "${tmp:?}/ev.g"
+	fail "(g) the supervisor did not report both escaped helpers: the case proves nothing (status $rc)"
+elif [ "$rc" -eq 0 ] || ! grep -qF "escaped pid $_esc" "${tmp:?}/out"; then
+	cat "${tmp:?}/out" "${tmp:?}/ev.g"
+	fail "(g) two helpers that left the group: the check did not fail naming every escaped pid (status $rc)"
+fi
+end_esc()
 {
-	stub "$1" "echo \$\$ >> \"${tmp:?}/$1.run\"
-while [ \"\$#\" -gt 0 ] && [ \"\$1\" != -- ]; do shift; done
-shift
-exec \"${tmp:?}/spawnstop\" \"${tmp:?}/$1.pids\" \"\$@\""
-	env PATH="${tmp:?}/$1:$2$PATH" IMGDEC_CHECK_SECONDS=8 IMGDEC_LEAKS_PROBE_SECONDS=60 \
-		IMGDEC_SELFTEST_DOGFILE="${tmp:?}/$1.dog" \
-		perl -e 'alarm 120; exec @ARGV' sh "$check" > "${tmp:?}/$1.out" 2>&1 &
-	chk=$!
-	n=0
-	while [ ! -s "${tmp:?}/$1.pids" ] && [ "$n" -lt 600 ]; do
-		sleep 0.1
-		n=$((n + 1))
-	done
-	kill -TERM "$chk" 2>/dev/null || :
-	rc=0
-	wait "$chk" || rc=$?
-	sleep 1
-	if [ "$rc" -ne 143 ]; then
-		cat "${tmp:?}/$1.out"
-		fail "(h) a TERM to the check ($1): it did not end with status 143 (status $rc)"
+	if [ -f "${tmp:?}/esc.pids" ]; then
+		while read -r _p; do
+			end_own "$_p" sh
+		done < "${tmp:?}/esc.pids"
+		rm -f "${tmp:?}/esc.pids"
 	fi
-	if [ "$3" = 1 ]; then
-		gone "${tmp:?}/$1.pids" leakprobe || fail "(h) a TERM to the check ($1): the probe's stopped target is still there (or was never started)"
-		gone "${tmp:?}/$1.run" spawnstop || fail "(h) a TERM to the check ($1): the probe's leaks(1) is still there (or was never started)"
-	fi
-	gone "${tmp:?}/$1.dog" sh || fail "(h) a TERM to the check ($1): the check's watchdog is still there (or was never started)"
 }
-termcase term "" 1
-if grep -qF 'Terminated' "${tmp:?}/term.out"; then
-	cat "${tmp:?}/term.out"
-	fail "(h) a TERM to the check: a job status line ('Terminated') reached the output"
+end_esc
+
+# (h) (i) (j) the mutants: the check with one guard taken out, each refused
+# by its own case. A mutant is a copy of the check in a tree that links
+# the real src, scripts and tests/image.
+# mutant <name> <sed script>: ${tmp}/<name>/tests/check-image-decoder.sh
+mutant()
+{
+	mkdir -p "${tmp:?}/$1/tests"
+	ln -s "$PWD/src" "${tmp:?}/$1/src"
+	ln -s "$PWD/scripts" "${tmp:?}/$1/scripts"
+	ln -s "$PWD/tests/image" "${tmp:?}/$1/tests/image"
+	sed "$2" "$check" > "${tmp:?}/$1/tests/check-image-decoder.sh"
+	if cmp -s "$check" "${tmp:?}/$1/tests/check-image-decoder.sh"; then
+		fail "($3) the mutation did not change the check"
+		return 1
+	fi
+}
+real=$check
+
+# (h) a plain kill of the run's own pid in place of the supervisor: the
+# target leaks(1) started and stopped survives, which case (b) refuses
+if mutant plainkill 's|^[[:space:]]*"\$sv" --timeout .*$|( "$@" \& _p=$!; ( sleep "$limit"; kill "$_p" 2>/dev/null ) \& wait "$_p" ) \|\| rc=$?|' h; then
+	check=${tmp:?}/plainkill/tests/check-image-decoder.sh
+	rm -f "${tmp:?}/stop.pids"
+	run_apart stop
+	check=$real
+	# the positive control: a mutant that never reached its probe would
+	# leave no stop.pids, which gone reads as "not gone"
+	if [ ! -s "${tmp:?}/stop.pids" ]; then
+		cat "${tmp:?}/out"
+		fail "(h) the mutant never started its target: the case proves nothing (status $rc)"
+	elif gone "${tmp:?}/stop.pids" leakprobe; then
+		# the target gone with a HUP at the anchor: the run's group was
+		# orphaned (as on the CI runner, FIX201), and the kernel's HUP
+		# ended the target, not the check. Inconclusive there, unless
+		# CHECK_IMAGE_DECODER_REQUIRE=1 asks for every case proved.
+		if [ -f "${tmp:?}/apart.hup" ] && [ "${CHECK_IMAGE_DECODER_REQUIRE:-0}" != 1 ]; then
+			echo "$me: (h) inconclusive here: the mutant's process group was orphaned and the kernel's SIGHUP ended its target; the case is proved where groups are not orphaned"
+		elif [ -f "${tmp:?}/apart.hup" ]; then
+			fail "(h) inconclusive and CHECK_IMAGE_DECODER_REQUIRE=1: the mutant's process group was orphaned and the kernel's SIGHUP ended its target"
+		else
+			fail "(h) a plain kill in place of the supervisor was not refused: the probe's stopped target is gone"
+		fi
+	fi
+	# the mutant leaves its targets stopped, and a process group that
+	# holds a stopped member gets SIGHUP and SIGCONT from the kernel when
+	# it becomes orphaned (POSIX): in the self-test's own group that HUP
+	# ends the self-test (status 129 in CI, FIX201). So no stopped target
+	# may be in the self-test's own group.
+	_own=$(ps -o pgid= -p $$ | tr -d ' ')
+	while read -r _p; do
+		_g=$(ps -o pgid= -p "$_p" 2>/dev/null | tr -d ' ')
+		if [ -n "$_g" ] && [ "$_g" = "$_own" ]; then
+			fail "(h) the mutant's stopped target (pid $_p) is in the self-test's own process group"
+		fi
+	done < "${tmp:?}/stop.pids"
+	end_apart
+	while read -r _p; do
+		_c=$(ps -o comm= -p "$_p" 2>/dev/null || :)
+		case ${_c##*/} in
+			leakprobe | imgdecode_plain) fail "(h) the mutant's stopped target (pid $_p) outlived the end of its group" ;;
+		esac
+	done < "${tmp:?}/stop.pids"
 fi
-# the same with a failing ps(1): the trap's reap line reaches the check's output
-termcase termps "${tmp:?}/psfail:" 0
-if ! grep -qF 'ps(1) gave no answer' "${tmp:?}/termps.out"; then
-	cat "${tmp:?}/termps.out"
-	fail "(h) a TERM to the check with a failing ps(1): the trap's reap line did not reach the output"
+
+# (i) --events dropped: the escaped helper is not named, which case (g) refuses
+if mutant noevents 's| --events 9||' i; then
+	check=${tmp:?}/noevents/tests/check-image-decoder.sh
+	: > "${tmp:?}/ev.i"
+	run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.i"
+	check=$real
+	# the positive control: the escape stub ran and its helper started (end_esc
+	# removed (g)'s esc.pids), so the empty events are the mutant's, not a
+	# mutant that never reached its probe
+	if [ ! -s "${tmp:?}/esc.pids" ]; then
+		cat "${tmp:?}/out"
+		fail "(i) the mutant never started the escape stub: the case proves nothing (status $rc)"
+	elif [ -s "${tmp:?}/ev.i" ] || grep -qF 'escaped pid ' "${tmp:?}/out"; then
+		fail "(i) --events dropped was not refused: the supervisor's events or the escaped pid still show"
+	fi
+	end_esc
+fi
+
+# (j) the escaped scan dropped: the events are there, the pid is not named
+if mutant noscan "s|grep -q '^escaped pid='|grep -q '^escaped-not-scanned='|" j; then
+	check=${tmp:?}/noscan/tests/check-image-decoder.sh
+	: > "${tmp:?}/ev.j"
+	run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.j"
+	check=$real
+	if ! grep -q '^escaped pid=' "${tmp:?}/ev.j"; then
+		fail "(j) the escape was not reported by the supervisor: the case proves nothing"
+	elif grep -qF 'escaped pid ' "${tmp:?}/out"; then
+		fail "(j) the escaped scan dropped was not refused: the pid is still named"
+	fi
+	end_esc
+fi
+
+# (k) the self-test interrupted in its own escape case: a TERM to the
+# self-test after case (g)'s run, while the escaped helper still runs, leaves
+# no helper behind. The helper holds the fifo ${tmp}/hold open; the reader
+# sees end of file only once every holder has ended, so the case waits on
+# that end, under an alarm, with no sleep and no ps poll.
+mkfifo "${tmp:?}/hold"
+perl -e '$| = 1; alarm shift; open(F, "<", shift) or exit 2; print while <F>; exit 0' \
+	"$secs" "${tmp:?}/hold" > "${tmp:?}/k.pids" &
+rdr=$!
+krc=0
+{ env IMGDEC_SELFTEST_INTERRUPT="${tmp:?}/hold" perl -e 'alarm shift; exec @ARGV' "$secs" \
+	sh tests/check-image-decoder-selftest.sh > "${tmp:?}/k.out" 2>&1; } 2>/dev/null || krc=$?
+rdrc=0
+{ wait "$rdr"; } 2>/dev/null || rdrc=$?
+if [ "$krc" -ne 143 ]; then
+	cat "${tmp:?}/k.out"
+	fail "(k) the interrupted self-test did not end by its TERM (status $krc)"
+elif [ ! -s "${tmp:?}/k.pids" ]; then
+	fail "(k) the escaped helper never opened the hold: the case proves nothing"
+elif [ "$rdrc" -ne 0 ]; then
+	fail "(k) an escaped helper outlived the interrupted self-test: pid $(tr '\n' ' ' < "${tmp:?}/k.pids")"
+fi
+
+# (l) the accepted behaviour (FIX201, docs/runbook/FIX201.md): a TERM to the
+# check's own pid, not its group, ends the check at once; the check has no
+# trap, so the supervisor and its run go on until the run's deadline, which
+# ends them, and nothing outlives it. The check runs with the write end of
+# the fifo ${tmp}/hold.l on fd 7, which the supervisor and the stub inherit.
+# The stub writes "start <s>" there, and "term <s>" when the group stop
+# reaches it; the self-test reads until end of file, which comes once every
+# holder has ended, under an alarm.
+mkdir -p "${tmp:?}/termwait"
+cat > "${tmp:?}/termwait/leaks" << EOF
+#!/bin/sh
+echo \$\$ >> "${tmp:?}/hang.pids"
+trap 'echo "term \$(date +%s)" >&7; exit 0' TERM
+read _x < "${tmp:?}/never" &
+echo \$! >> "${tmp:?}/hang.pids"
+echo "start \$(date +%s)" >&7
+wait \$!
+EOF
+chmod +x "${tmp:?}/termwait/leaks"
+mkfifo "${tmp:?}/hold.l"
+lbound=4
+env PATH="${tmp:?}/termwait:$PATH" IMGDEC_CHECK_SECONDS=8 IMGDEC_LEAKS_PROBE_SECONDS=$lbound \
+	perl -e 'alarm shift; exec @ARGV' "$secs" sh "$check" > "${tmp:?}/out" 2>&1 7> "${tmp:?}/hold.l" &
+chk=$!
+exec 8< "${tmp:?}/hold.l"
+_w=
+_start=
+read -r _w _start <&8 || :
+lrc=0
+if [ "$_w" = start ]; then
+	kill -TERM "$chk"
+fi
+{ wait "$chk"; } 2>/dev/null || lrc=$?
+rdrc=0
+perl -e 'alarm shift; print while <STDIN>; exit 0' 30 <&8 > "${tmp:?}/l.rest" 2>/dev/null || rdrc=$?
+exec 8<&-
+_term=$(sed -n 's/^term //p' "${tmp:?}/l.rest" | head -n 1)
+if [ "$_w" != start ]; then
+	cat "${tmp:?}/out"
+	fail "(l) the stub never started: the case proves nothing (status $lrc)"
+elif [ "$lrc" -ne 143 ]; then
+	cat "${tmp:?}/out"
+	fail "(l) a TERM to the check's pid did not end the check by that TERM (status $lrc)"
+elif [ "$rdrc" -ne 0 ]; then
+	fail "(l) after a TERM to the check's pid, its run outlived the run's $lbound s deadline"
+elif [ -z "$_term" ]; then
+	fail "(l) after a TERM to the check's pid, the run ended without the supervisor's stop reaching it"
+elif [ $((_term - _start)) -lt $((lbound - 2)) ]; then
+	fail "(l) the run ended $((_term - _start)) s after it started, before its $lbound s deadline: the documented behaviour changed (update docs/runbook/FIX201.md)"
 fi
 
 if [ "$fails" -ne 0 ]; then
 	echo "$me: $fails case(s) failed"
 	exit 1
 fi
-echo "$me: ok (8 cases: a hang, a stopped probe target, a stopped leak-run target, a good leaks(1), a bad probe bound, reap, a failing ps(1), a TERM)"
+echo "$me: ok (12 cases: a hang, a stopped probe target, a stopped leak-run target, a good leaks(1), a bad probe bound, the staged hang on events, an escaped helper, three mutants of the check, the self-test interrupted in its escape case, a TERM to the check's pid ended by the run's deadline)"
