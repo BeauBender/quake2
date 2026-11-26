@@ -21,6 +21,10 @@
 #     reaped, and no escaped;
 # (g) a stub whose helper leaves the process group: the check fails and names
 #     the escaped pid from the events.
+# (h) (i) (j) the mutants, each the check with one guard taken out and
+#     refused by its own case: a plain kill in place of the supervisor (the
+#     stopped target survives), --events dropped (no events), the escaped
+#     scan dropped (the pid is not named).
 # The hanging stubs block on a fifo nobody writes, and the supervisor ends
 # them; the self-test ends any that is left.
 # Off Darwin the check runs no leaks(1); there the hanging stub must leave
@@ -251,14 +255,76 @@ if [ "$rc" -eq 0 ] || [ -z "$_esc" ] || ! grep -qF "escaped pid $_esc" "${tmp:?}
 	cat "${tmp:?}/out" "${tmp:?}/ev.g"
 	fail "(g) a helper that left the group: the check did not fail naming its pid (status $rc)"
 fi
-if [ -f "${tmp:?}/esc.pids" ]; then
-	while read -r _p; do
-		end_own "$_p" sh
-	done < "${tmp:?}/esc.pids"
+end_esc()
+{
+	if [ -f "${tmp:?}/esc.pids" ]; then
+		while read -r _p; do
+			end_own "$_p" sh
+		done < "${tmp:?}/esc.pids"
+		rm -f "${tmp:?}/esc.pids"
+	fi
+}
+end_esc
+
+# (h) (i) (j) the mutants: the check with one guard taken out, each refused
+# by its own case. A mutant is a copy of the check in a tree that links
+# the real src, scripts and tests/image.
+# mutant <name> <sed script>: ${tmp}/<name>/tests/check-image-decoder.sh
+mutant()
+{
+	mkdir -p "${tmp:?}/$1/tests"
+	ln -s "$PWD/src" "${tmp:?}/$1/src"
+	ln -s "$PWD/scripts" "${tmp:?}/$1/scripts"
+	ln -s "$PWD/tests/image" "${tmp:?}/$1/tests/image"
+	sed "$2" "$check" > "${tmp:?}/$1/tests/check-image-decoder.sh"
+	if cmp -s "$check" "${tmp:?}/$1/tests/check-image-decoder.sh"; then
+		fail "($3) the mutation did not change the check"
+		return 1
+	fi
+}
+real=$check
+
+# (h) a plain kill of the run's own pid in place of the supervisor: the
+# target leaks(1) started and stopped survives, which case (b) refuses
+if mutant plainkill 's|^\t"\$sv" --timeout .*$|\t( "$@" \& _p=$!; ( sleep "$limit"; kill "$_p" 2>/dev/null ) \& wait "$_p" ) \|\| rc=$?|' h; then
+	check=${tmp:?}/plainkill/tests/check-image-decoder.sh
+	rm -f "${tmp:?}/stop.pids"
+	run stop
+	check=$real
+	if gone "${tmp:?}/stop.pids" leakprobe; then
+		fail "(h) a plain kill in place of the supervisor was not refused: the probe's stopped target is gone"
+	fi
+	end_own "$(cat "${tmp:?}/stop.pids" 2>/dev/null | head -n 1)" leakprobe
+fi
+
+# (i) --events dropped: the escaped helper is not named, which case (g) refuses
+if mutant noevents 's| --events 9||' i; then
+	check=${tmp:?}/noevents/tests/check-image-decoder.sh
+	: > "${tmp:?}/ev.i"
+	run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.i"
+	check=$real
+	if [ -s "${tmp:?}/ev.i" ] || grep -qF 'escaped pid ' "${tmp:?}/out"; then
+		fail "(i) --events dropped was not refused: the supervisor's events or the escaped pid still show"
+	fi
+	end_esc
+fi
+
+# (j) the escaped scan dropped: the events are there, the pid is not named
+if mutant noscan "s|grep -q '^escaped pid='|grep -q '^escaped-not-scanned='|" j; then
+	check=${tmp:?}/noscan/tests/check-image-decoder.sh
+	: > "${tmp:?}/ev.j"
+	run escape IMGDEC_SELFTEST_EVENTS="${tmp:?}/ev.j"
+	check=$real
+	if ! grep -q '^escaped pid=' "${tmp:?}/ev.j"; then
+		fail "(j) the escape was not reported by the supervisor: the case proves nothing"
+	elif grep -qF 'escaped pid ' "${tmp:?}/out"; then
+		fail "(j) the escaped scan dropped was not refused: the pid is still named"
+	fi
+	end_esc
 fi
 
 if [ "$fails" -ne 0 ]; then
 	echo "$me: $fails case(s) failed"
 	exit 1
 fi
-echo "$me: ok (7 cases: a hang, a stopped probe target, a stopped leak-run target, a good leaks(1), a bad probe bound, the staged hang on events, an escaped helper)"
+echo "$me: ok (10 cases: a hang, a stopped probe target, a stopped leak-run target, a good leaks(1), a bad probe bound, the staged hang on events, an escaped helper, three mutants of the check)"
