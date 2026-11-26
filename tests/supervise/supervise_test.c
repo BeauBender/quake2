@@ -109,7 +109,8 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 	const char *argv[32];
 	const char *script = "exec \"$@\"";
 	/* the forms that set up a signal state a shell might change run the supervisor with no shell */
-	int chldign = strcmp(form, "chldign") == 0, direct = chldign;
+	int chldign = strcmp(form, "chldign") == 0, pendterm = strcmp(form, "pendterm") == 0;
+	int direct = chldign || pendterm;
 
 	memset(r, 0, sizeof(*r));
 	r->ev = r->clk = r->hel = r->err = -1;
@@ -187,6 +188,16 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 		if (chldign)
 		{
 			signal(SIGCHLD, SIG_IGN);
+		}
+		if (pendterm)
+		{
+			sigset_t t;
+
+			/* a TERM blocked and pending when the supervisor starts */
+			sigemptyset(&t);
+			sigaddset(&t, SIGTERM);
+			sigprocmask(SIG_BLOCK, &t, NULL);
+			kill(getpid(), SIGTERM);
 		}
 		execv(direct ? sv_bin : shell, (char *const *)argv);
 		_exit(121);
@@ -836,6 +847,36 @@ c_signal_hup(struct run *r)
 	return c_signal(r, SIGHUP, "HUP");
 }
 
+/*
+ * a TERM pending at entry, before the supervisor watches for it: it is
+ * forwarded. The leader may get it before its hello, so only the events
+ * and the status are read.
+ */
+static int
+c_pending_term(struct run *r)
+{
+	if (start(r, "pendterm", NULL, NULL, NULL))
+	{
+		return 1;
+	}
+	if (ev_wait(r, "spawned") == NULL)
+	{
+		return fail(r, "no spawned event");
+	}
+	/* the probe, or the end of the events when the forwarded TERM has already ended the run */
+	(void)probe(r);
+	if (at(r, "signal name=TERM") < 0 || at(r, "term-sent name=TERM") < 0)
+	{
+		return fail(r, "a TERM pending at entry was not forwarded (events: %s)", r->log);
+	}
+	finish(r);
+	if (at(r, "group-empty") < 0 || at(r, "reaped status=143") < 0)
+	{
+		return fail(r, "events: %s", r->log);
+	}
+	return want_status(r, 128 + SIGTERM);
+}
+
 /* the merge gate's launch: SIGINT ignored at entry, the supervisor a background job of the caller */
 static int
 c_int_ignored(struct run *r)
@@ -1221,6 +1262,7 @@ static const struct
 	{ "signal-int", c_signal_int, 0 },
 	{ "signal-term", c_signal_term, 0 },
 	{ "signal-hup", c_signal_hup, 0 },
+	{ "pending-term", c_pending_term, 1 },
 	{ "int-ignored", c_int_ignored, 0 },
 	{ "leader-first", c_leader_first, 0 },
 	{ "escaped", c_escaped, 1 },

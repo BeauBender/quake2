@@ -48,7 +48,9 @@ The events are one line each:
   - `EVFILT_PROC` with `NOTE_EXIT` and `NOTE_FORK` on the leader and on each process of the tree
     it can see. A fork lists the parent's children with `proc_listchildpids`.
   - `EVFILT_TIMER` for the deadline, the grace and the after-kill wait.
-  - `EVFILT_SIGNAL` for INT, TERM and HUP, which `sigprocmask` blocks.
+  - `EVFILT_SIGNAL` for INT, TERM and HUP. The filters are set before `sigprocmask` blocks the
+    three, and `sigpending` is read once after the block, so a signal that came between the two,
+    or was already pending at entry, is still forwarded.
 - **Reap.** At the leader's `NOTE_EXIT`, `waitid(P_PID, leader, WEXITED | WNOWAIT)` reads its status
   and leaves it a zombie. The group is counted with `proc_listpgrppids`: a listed member counts
   while no exit has been read for it and `proc_pidinfo` finds it in the group, or, when it is
@@ -125,6 +127,7 @@ the clock in each batch. A last step greps the test files and the check for a sl
 | `deadline` | 124; TERM reaches the leader, a child and a grandchild; nothing of the group is left |
 | `term-ignored` | a member that ignores TERM is dead once `kill-sent` is read (it cannot answer a ping) |
 | `signal-int`, `signal-term`, `signal-hup` | 130, 143 and 129; the signal reaches the leader, and the group empties |
+| `pending-term` | the supervisor is run with no shell and a TERM already pending and blocked: the TERM is forwarded (`signal name=TERM`, `term-sent name=TERM`) and the status is 143 |
 | `int-ignored` | `(trap '' INT; exec ...) & wait`: INT is named as ignored, the command has INT at its default, and the deadline (the TERM without the clock) still stops it |
 | `leader-first` | the leader exits with 5 while a member lives: the member gets TERM, `group-empty` comes before `reaped`, and the member is dead when `reaped` is read |
 | `escaped` | a `setsid` member is named before `group-empty`, gets no signal, and still answers |

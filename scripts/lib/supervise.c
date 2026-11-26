@@ -768,6 +768,22 @@ sv_hold(void)
 }
 #endif
 
+/* sv_signal: INT, TERM or HUP to this program; the first one, while the command runs, starts a stop */
+static void
+sv_signal(int sig)
+{
+	if (sv_ignored[sig])
+	{
+		sv_emit("ignored name=%s", sv_signame(sig));
+		return;
+	}
+	sv_emit("signal name=%s", sv_signame(sig));
+	if (sv_phase == PH_RUN && !sv_exited && sv_why == 0)
+	{
+		sv_why = 128 + sig;
+	}
+}
+
 /* sv_batch: one batch of events, the leader's and members' first, the clock's last */
 static void
 sv_batch(const struct kevent *evs, int n)
@@ -815,18 +831,7 @@ sv_batch(const struct kevent *evs, int n)
 			}
 			else if (pass == 1 && e->filter == EVFILT_SIGNAL)
 			{
-				int sig = (int)e->ident;
-
-				if (sv_ignored[sig])
-				{
-					sv_emit("ignored name=%s", sv_signame(sig));
-					continue;
-				}
-				sv_emit("signal name=%s", sv_signame(sig));
-				if (sv_phase == PH_RUN && !sv_exited && sv_why == 0)
-				{
-					sv_why = 128 + sig;
-				}
+				sv_signal((int)e->ident);
 			}
 			else if (pass == 2 && e->filter == EVFILT_TIMER)
 			{
@@ -866,7 +871,7 @@ main(int argc, char **argv)
 {
 	posix_spawnattr_t attr;
 	posix_spawn_file_actions_t fa;
-	sigset_t block, none, dfl;
+	sigset_t block, none, dfl, pend;
 	struct sigaction sa;
 	struct kevent ev;
 	const char *base;
@@ -954,7 +959,11 @@ main(int argc, char **argv)
 		}
 	}
 
-	/* the stop signals: their disposition at entry, then blocked and read from the kqueue */
+	/*
+	 * the stop signals: their disposition at entry; then watched on the
+	 * kqueue, then blocked, and one look at what was already pending, so no
+	 * signal falls between the block and the watch
+	 */
 	sigemptyset(&block);
 	sigaddset(&block, SIGINT);
 	sigaddset(&block, SIGTERM);
@@ -965,11 +974,6 @@ main(int argc, char **argv)
 		{
 			sv_ignored[sv_watch[i]] = 1;
 		}
-	}
-	if (sigprocmask(SIG_BLOCK, &block, NULL) < 0)
-	{
-		sv_say("cannot block the stop signals: %s", strerror(errno));
-		return 125;
 	}
 	/*
 	 * SIGCHLD at its default, with no SA_NOCLDWAIT: whatever the caller left,
@@ -997,6 +1001,11 @@ main(int argc, char **argv)
 			sv_say("cannot watch %s: %s", sv_signame(sv_watch[i]), strerror(errno));
 			return 125;
 		}
+	}
+	if (sigprocmask(SIG_BLOCK, &block, NULL) < 0 || sigpending(&pend) < 0)
+	{
+		sv_say("cannot block the stop signals: %s", strerror(errno));
+		return 125;
 	}
 #ifdef SUPERVISE_TEST
 	if (getenv("SUPERVISE_TEST_CLOCK_FD") != NULL)
@@ -1074,6 +1083,14 @@ main(int argc, char **argv)
 		sv_arm(T_DEADLINE);
 	}
 	sv_emit("spawned pid=%d pgid=%d", (int)sv_leader, (int)sv_leader);
+	/* a stop signal pending at entry was never posted to the kqueue */
+	for (i = 0; i < (int)(sizeof(sv_watch) / sizeof(sv_watch[0])); i++)
+	{
+		if (sigismember(&pend, sv_watch[i]) == 1)
+		{
+			sv_signal(sv_watch[i]);
+		}
+	}
 
 	for (;;)
 	{
