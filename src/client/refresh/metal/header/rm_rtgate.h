@@ -178,6 +178,28 @@ int rm_pres_decide(float requested, int path, int *why);
  */
 float rm_pres_value(int mode, const char *name, float user);
 
+/*
+ * TASK190 slice 3: the r_metalfx the renderer reads under mode, user
+ * being the cvar's value (after the A/B side): rm_pres_value's, except
+ * under RT-primary. There it reads 0 (off) on a device without the
+ * temporal scaler (temporal 0) and while a development view is shown
+ * (show not 0), which is drawn unscaled; else the row's 2, the temporal
+ * scaler, where the view's internal size is below its output (below not
+ * 0: rm_fx_scale under 1), and user at the output's own size, so the mode
+ * runs no scaler of its own there (the plan's sections 2.2 and 6). The
+ * menu's copy of this rule is VidRules_MetalFXDecided
+ * (tests/metal/rm_pres_menu_test.c holds the two in step).
+ */
+float rm_pres_fx(int mode, float user, int temporal, int show, int below);
+
+/*
+ * TASK190 slice 3: RT-primary's scaler line, printed after rm_pres_format's
+ * at start-up and at vid_restart: the temporal scaler it reads, or off with
+ * the reason where the device has none. 0, with buf empty, for any other
+ * mode or a line that does not fit.
+ */
+int rm_pres_fx_format(int mode, int temporal, char *buf, size_t len);
+
 /* the mode's name in the menu and the report lines; "" for none */
 const char *rm_pres_name(int mode);
 
