@@ -55,6 +55,7 @@ static cvar_t *r_rt_direct_show;
 static cvar_t *r_rt_direct_sky;
 static cvar_t *r_rt_direct_seed;
 static cvar_t *r_rt_direct_bounce;  /* TASK189 slice 2 */
+static cvar_t *r_rt_direct_models;  /* TASK191: the models' probes */
 static cvar_t *r_rt_stats_ref;
 static unsigned long dir_count;     /* TASK189: the views traced, the sky ray's noise frame without a seed */
 
@@ -87,6 +88,7 @@ RM_RTDir_Init(const rmb_caps_t *caps)
 	r_rt_direct_sky = ri.Cvar_Get("r_rt_direct_sky", "1", CVAR_ARCHIVE);
 	r_rt_direct_seed = ri.Cvar_Get("r_rt_direct_seed", "0", 0);
 	r_rt_direct_bounce = ri.Cvar_Get("r_rt_direct_bounce", "1", CVAR_ARCHIVE);
+	r_rt_direct_models = ri.Cvar_Get("r_rt_direct_models", "1", CVAR_ARCHIVE);   /* TASK191 */
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	dir_count = 0;
 	dir_device = caps->raytracing != 0;

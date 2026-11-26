@@ -1362,6 +1362,29 @@ is.
   is drawn at the same exposure. A value above `0` is a fixed exposure,
   at most `64`. Saved with the configuration.
 
+* **r_rt_direct_models**: Whether the Metal renderer lights alias models
+  and the view weapon by traced light under RT-primary (`r_presentation
+  3`, TASK191). The stock renderer lights a model by the lightmap of the
+  face below it (`R_LightPoint`); under RT-primary, with this on, that
+  sample is replaced by the light RT-primary gives a world pixel at the
+  same point and normal: the map's lights with their shadow rays, the
+  dynamic lights, the sky light, the sun and the bounce, under the
+  world's exposure, the sky, sun and bounce averaged over 16 rays. The
+  rest of the stock model lighting (the shading directions, the minlight
+  floor, the glow pulse, `gl1_overbrightbits`, the gamma table) is
+  unchanged. One probe is traced a model (at most 64 a frame); no model
+  shadows a probe, but the world and its doors and platforms do. The
+  result is read back once the GPU has finished its frame, so a model
+  takes the light of four frames before; a model that has just come into
+  view keeps the stock light for those frames. Translucent, fullbright and
+  shell models, a model drawn red under the IR goggles and a depth-hacked
+  model other than the view weapon keep the stock light. The light value
+  sent to the server is the stock one. With `r_rt_stats 2` a line a frame
+  reports the probes traced, the models lit by a probe and the models
+  still lit by the lightmap (`ref_metal: rt models:`). Read only while the
+  direct light runs. `1` (the default); `0` keeps the stock model light
+  under RT-primary. Saved with the configuration.
+
 * **r_rt_direct_seed**: The noise frame of the Metal renderer's sky
   light ray and bounce ray under RT-primary (`r_rt_direct_sky`,
   `r_rt_direct_bounce`), with the rule of

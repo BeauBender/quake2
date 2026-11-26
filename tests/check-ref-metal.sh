@@ -55,6 +55,8 @@
 #     tests/metal/rm_rtpdenoise_test.c, RT-primary's 5 x 5 filter of that
 #     light (common/mtl_rtpd_math.h, TASK190 slice 2), with five mutants of
 #     the header and five pins of rm_rtpdenoise.metal with six mutants,
+#     tests/metal/rm_rtmodel_test.c, RT-primary's light on models (rm_rtmodel.c,
+#     TASK191), with nine mutants of the rules it must fail,
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -2611,6 +2613,64 @@ if [ "$(grep -cF 'ref_metal/rm_rtpdenoise.air' Makefile)" != 2 ] ||
 	bad "the RT-primary filter is not linked into ref_metal.metallib or its pipeline is not made by rmb_rtdir.m"
 fi
 seg 7.8 "; RT-primary filter ${rtpd:-host test}, $rtpd_mutants rule mutants, $rtpd_kpins kernel pins with $rtpd_kmut kernel mutants refused${rtp_metal:+ and compiled}"
+
+# RT-primary on models (TASK191, PM9): tests/metal/rm_rtmodel_test.c holds rm_rtmodel.c's rules (which
+# models take a probe, the probe made from R_LightPoint's trace, the frame's list, the match of a model
+# to a result, the light in R_LightPoint's units, the slot a frame reads); then the same test against
+# mutants of rm_rtmodel.c, each of which must compile and fail it: a translucent model traced, the IR
+# goggles' red model traced, the normal not turned toward the model, the weapon matched to a monster's
+# probe, the first result in range taken for the nearest, no distance bound, the slot of the frame
+# before read, the same model probed twice, the light without r_modulate.
+rtm=""
+rtm_tree() { # <dir>: a copy of the rules (their header is the tree's, through -I)
+	rm -rf "${1:?}"
+	mkdir -p "$1"
+	cp "$rm_dir/rm_rtmodel.c" "$1/"
+}
+rtm_build() { # <tree>: 0 when the test builds with the tree's rules
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags -I"$rm_dir" -o "$1/t" tests/metal/rm_rtmodel_test.c "$1/rm_rtmodel.c" -lm > "${tmp:?}/cc.out" 2>&1
+}
+rtm_run() { # <tree>: 0 when the tree's test builds and passes
+	rtm_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
+}
+rtm_tree "${tmp:?}/rtm"
+if ! rtm_run "${tmp:?}/rtm"; then
+	cat "${tmp:?}/cc.out" "${tmp:?}/out"
+	bad "tests/metal/rm_rtmodel_test.c fails on the real files"
+else
+	rtm=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtmodel_test: //')
+	case $rtm in *", 0 failed") ;; *) bad "tests/metal/rm_rtmodel_test.c printed no result line"; rtm="";; esac
+fi
+rtm_mutants=0
+rtm_c=$rm_dir/rm_rtmodel.c
+for m in translucent ir side kind nearest bound lag dedupe modulate; do
+	rtm_tree "${tmp:?}/rtmm"
+	c=${tmp:?}/rtmm/rm_rtmodel.c
+	case $m in
+		translucent) sed 's/RM_RF_SHELLS | RM_RF_FULLBRIGHT | RM_RF_TRANSLUCENT/RM_RF_SHELLS | RM_RF_FULLBRIGHT/' ;;
+		ir) sed 's/(rdflags \& RM_RDF_IRGOGGLES) \&\& (flags \& RM_RF_IR_VISIBLE)/0 \&\& rdflags/' ;;
+		side) sed 's/((side < 0) ? -normal\[k\] : normal\[k\])/(normal[k] + 0 * side)/' ;;
+		kind) sed 's/((keys\[i\]\.weapon != 0) != (weapon != 0))/((keys[i].weapon != 0) \&\& (weapon < 0))/' ;;
+		nearest) sed 's/((at < 0) || (d2 < best))/((at < 0) || (best < 0))/' ;;
+		bound) sed 's/(d2 <= max2) \&\& /(max2 > 0) \&\& /' ;;
+		lag) sed 's/(fno - traced == RMB_FRAMES_IN_FLIGHT)/(fno - traced == RMB_FRAMES_IN_FLIGHT - 1)/' ;;
+		dedupe) sed 's/if (rtm_same_key(&f->key\[i\], k))/if (!k->model \&\& rtm_same_key(\&f->key[i], k))/' ;;
+		modulate) sed 's/? l \* modulate : 0\.0f;/? l : 0.0f;/' ;;
+	esac < "$rtm_c" > "$c"
+	if cmp -s "$rtm_c" "$c"; then
+		bad "the model light mutant ($m) changed nothing"
+	elif ! rtm_build "${tmp:?}/rtmm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the model light mutant ($m) does not compile, so it tests nothing"
+	elif rtm_run "${tmp:?}/rtmm"; then
+		bad "tests/metal/rm_rtmodel_test.c passes the model light mutant ($m)"
+	else
+		rtm_mutants=$((rtm_mutants + 1))
+	fi
+done
+[ "$rtm_mutants" = 9 ] || bad "the model light test refused $rtm_mutants of its 9 rule mutants"
+seg 7.9 "; RT-primary models ${rtm:-host test}, $rtm_mutants rule mutants refused"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"

@@ -189,6 +189,8 @@ static const char *const rtg_cvars[] = {
 	   and the sky light's scale (TASK189): read only while the direct light runs */
 	"r_rt_direct_bounce",
 	"r_rt_direct_exposure",
+	/* TASK191's models lit by the direct light's probes: a setting of the direct light, read only while it runs */
+	"r_rt_direct_models",
 	"r_rt_direct_seed",
 	"r_rt_direct_show",
 	"r_rt_direct_sky",
