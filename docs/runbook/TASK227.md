@@ -45,9 +45,9 @@ scheduler that records the checks and the long-check list it gets.
 | Case | Change | Want |
 |---|---|---|
 | `src-only` | a commit under `src/` | every harness check but `check-require-guards` left out |
-| `staged` | `.gitignore`, staged | all but `check-metalfx-report` left out |
-| `unstaged` | `scripts/coverage.sh`, not staged | `check-metalfx-report`, `check-bench`, `check-gate-parallel` left out |
-| `untracked` | a new `Makefile` | all but `check-require-guards` left out |
+| `staged` | a commit under `src/`, and `.gitignore` staged | all but `check-metalfx-report` and `check-require-guards` left out |
+| `unstaged` | a commit under `src/`, and `scripts/coverage.sh` not staged | `check-metalfx-report`, `check-bench`, `check-gate-parallel` left out |
+| `untracked` | a commit under `src/`, and a new `scripts/coverage-floor` | `check-metalfx-report`, `check-bench`, `check-gate-parallel` left out |
 | `name-blank`, `name-newline`, `name-dash` | untracked `src/a b.c`; `src/x` + newline + `.github`; `src/-n` and `src/--output=.github` | all but `check-require-guards` left out |
 | `harness-path` | `tests/check-bench.sh` changed | none left out |
 | `stale-base` | `origin/main` one commit behind `main`, which changed `scripts/coverage.sh`; the lane holds that commit, sets the path back and changes `src/a.c` | `check-metalfx-report`, `check-bench`, `check-gate-parallel` left out |
@@ -71,7 +71,9 @@ Eleven mutants of `test.sh` are each refused by their own case:
 - an empty selection trusted (`top-md`);
 - a selector's unknown name trusted (`sel-stranger`);
 - the paths of the commits since the base not read (`stale-base`);
-- the untracked, staged or unstaged files not read (`untracked`, `staged`, `unstaged`);
+- the untracked, staged or unstaged files not read (`untracked`, `staged`, `unstaged`). Each of
+  these cases also commits a `src/` change, so the mutant is refused because a check that its
+  one source selects is left out, not because the change is empty;
 - the untracked list read newline-delimited (`name-newline`);
 - `gate_first` not filtered (`src-only`: the scheduler refuses a name it is not given).
 

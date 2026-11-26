@@ -42,12 +42,12 @@
 #     pass, with the long checks named first.
 # (e) scripts/test.sh (TASK227), in scratch repositories with a stub
 #     scheduler: a change under src/ alone, a staged, an unstaged and an
-#     untracked change alone, and untracked names with a blank, a newline
-#     or a leading "-" leave out exactly the harness checks the selector
-#     does not choose, from the checks and from gate_first, on one line
-#     that names them and no path; a changed harness path leaves out none;
-#     a path a commit since the merge base changed and the lane set back
-#     (a stale origin/main) still counts;
+#     untracked change each with a committed src/ change, and untracked
+#     names with a blank, a newline or a leading "-" leave out exactly
+#     the harness checks the selector does not choose, from the checks and
+#     from gate_first, on one line that names them and no path; a changed
+#     harness path leaves out none; a path a commit since the merge base
+#     changed and the lane set back (a stale origin/main) still counts;
 #     GATE_ALL=1, no origin/main, no merge base, a git error, a change for
 #     which the selector chooses no harness check, a selector that fails or
 #     prints a name it was not given, a name twice or none, and an empty or
@@ -574,25 +574,29 @@ gt_cases() {
 		gt_run "$d"
 		gt_left src-only "$d" "$(minus "$HALL" $rg)" || cf=1
 	fi
-	# each of the other three sources alone: a staged change (.gitignore,
-	# read by check-metalfx-report only), an unstaged one
-	# (scripts/coverage.sh: check-bench-entry, and scripts/* of
-	# check-bounded-run and check-require-guards) and an untracked file
-	# (Makefile: check-require-guards)
+	# each of the other three sources with a committed src/ change (which
+	# selects check-require-guards alone), so that a source not read leaves
+	# out a check it selects: a staged change (.gitignore, read by
+	# check-metalfx-report only), an unstaged one (scripts/coverage.sh:
+	# check-bench-entry, and scripts/* of check-bounded-run) and an
+	# untracked file (scripts/coverage-floor: the same two)
 	if want staged; then
-		mk staged && echo y >> "$d/.gitignore" && g "$d" add .gitignore || return 1
+		mk staged && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			echo y >> "$d/.gitignore" && g "$d" add .gitignore || return 1
 		gt_run "$d"
-		gt_left staged "$d" "$(minus "$HALL" check-metalfx-report.sh)" || cf=1
+		gt_left staged "$d" "$(minus "$HALL" "check-metalfx-report.sh $rg")" || cf=1
 	fi
 	if want unstaged; then
-		mk unstaged && echo y >> "$d/scripts/coverage.sh" || return 1
+		mk unstaged && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			echo y >> "$d/scripts/coverage.sh" || return 1
 		gt_run "$d"
 		gt_left unstaged "$d" "$(minus "$HALL" "check-bench-entry.sh check-bounded-run.sh $rg")" || cf=1
 	fi
 	if want untracked; then
-		mk untracked && echo y > "$d/Makefile" || return 1
+		mk untracked && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			echo y > "$d/scripts/coverage-floor" || return 1
 		gt_run "$d"
-		gt_left untracked "$d" "$(minus "$HALL" $rg)" || cf=1
+		gt_left untracked "$d" "$(minus "$HALL" "check-bench-entry.sh check-bounded-run.sh $rg")" || cf=1
 	fi
 	# one untracked name each: a blank, a newline (whose second line, split
 	# off, would be a .github/ path that runs every check), a leading "-"
