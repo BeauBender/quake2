@@ -42,7 +42,6 @@
 #include "header/rm_gbufscene.h"
 #include "header/rm_fxscene.h"
 #include "header/rm_rtgate.h"
-#include "header/rm_rtdir.h"
 #include "common/mtl_matrix.h"
 #include "common/mtl_rate.h"
 #include "common/mtl_retro_math.h"
@@ -159,14 +158,13 @@ static cvar_t *r_rt_ab;
  * device has the MetalFX temporal scaler and its GPU families (for the
  * default internal size), read with the presentation at start-up and at
  * vid_restart; whether the view being drawn has its internal size below
- * its output, set at the start of each view (RM_PresBelow); and
- * r_rt_direct_show, whose development view is drawn unscaled (the card's
- * default 2).
+ * its output, set at the start of each view (RM_PresBelow). A development
+ * view (rm_rtfx_show_asked, the effect table's) is drawn unscaled (the
+ * card's default 2).
  */
 static int rm_pres_temporal;
 static unsigned rm_pres_families;
 static int rm_pres_below;
-static cvar_t *r_rt_direct_show_ref;
 static cvar_t *r_metalfx_scale_ref;
 
 int
@@ -208,7 +206,7 @@ RM_Effect(const cvar_t *cv)
 	if (!strcmp(cv->name, "r_metalfx"))
 	{
 		return rm_pres_fx(rm_presentation, user, rm_pres_temporal,
-				r_rt_direct_show_ref && rm_rtdir_show(r_rt_direct_show_ref->value), rm_pres_below);
+				rm_rtfx_show_asked(), rm_pres_below);
 	}
 
 	return rm_pres_value(rm_presentation, cv->name, user);
@@ -419,7 +417,6 @@ R_Register(void)
 	r_retro_filter = ri.Cvar_Get("r_retro_filter", "0", CVAR_ARCHIVE);
 	r_retro_gamma = ri.Cvar_Get("r_retro_gamma", "0", CVAR_ARCHIVE);
 	r_rt_ab = ri.Cvar_Get("r_rt_ab", "", 0);
-	r_rt_direct_show_ref = ri.Cvar_Get("r_rt_direct_show", "0", 0);
 	r_metalfx_scale_ref = ri.Cvar_Get("r_metalfx_scale", "0", CVAR_ARCHIVE);
 	r_rt_ab->modified = false;   /* the report line is for a flip, not for the start */
 	metal_lightmap_filter = ri.Cvar_Get("metal_lightmap_filter", "0", CVAR_ARCHIVE);

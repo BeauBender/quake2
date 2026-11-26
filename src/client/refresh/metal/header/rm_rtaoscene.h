@@ -41,6 +41,7 @@ int RM_RTAO_Wanted(void);
 void RM_RTAO_Frame(const refdef_t *fd, int scene_ready);
 int RM_RTAO_Active(void);
 int RM_RTAO_ShowOnly(void);
+int RM_RTAO_ShowAsked(void);   /* TASK190 slice 3: Wanted and the _show cvar on, known before Frame and View (rm_rtfx_show_asked) */
 void RM_RTAO_View(const rm_view_t *view);
 
 /*

@@ -593,6 +593,13 @@ RM_RTDir_ShowOnly(void)
 	return dir_active && dir_viewed && r_rt_direct_show && rm_rtdir_show(r_rt_direct_show->value);
 }
 
+/* TASK190 slice 3: the view is asked for, whether or not this frame traces it yet (rm_main.c sizes the scaler before Frame) */
+int
+RM_RTDir_ShowAsked(void)
+{
+	return RM_RTDir_Wanted() && r_rt_direct_show && rm_rtdir_show(r_rt_direct_show->value);
+}
+
 void
 RM_RTDir_View(const rm_view_t *view)
 {

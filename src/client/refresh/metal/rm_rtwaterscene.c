@@ -306,6 +306,13 @@ RM_RTW_ShowOnly(void)
 	return rtw_active && rtw_viewed && r_rt_water_show && rm_rtw_show(r_rt_water_show->value) && rmb_rtw_shown();
 }
 
+/* TASK190 slice 3: the view is asked for, whether or not this frame traces it yet (rm_main.c sizes the scaler before Frame) */
+int
+RM_RTW_ShowAsked(void)
+{
+	return RM_RTW_Wanted() && r_rt_water_show && rm_rtw_show(r_rt_water_show->value);
+}
+
 void
 RM_RTW_View(const rm_view_t *view)
 {
