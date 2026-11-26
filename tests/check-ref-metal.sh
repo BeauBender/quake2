@@ -37,7 +37,9 @@
 #     tests/metal/rm_rttab_test.c, r_rt_temporal through the A/B layer
 #     (slice 2b): the real text of RM_Effect, RM_RTT_On and RM_RTT_ViewFor's
 #     alpha over the real rm_ab_value and rm_rtt_alpha, with mutants that
-#     read r_rt_temporal->value directly,
+#     read r_rt_temporal->value directly, and RM_PresBelow's view size
+#     (TASK190 slice 3) with a mutant that drops its early return for the
+#     menu's player model,
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
@@ -1647,6 +1649,8 @@ seg 5.6 "; denoiser ${rtd:-host test}, $rtd_mutants rule mutants, $rtd_kpins ker
 # (rm_main.c), RM_RTT_On and the alpha line, copied into its rttab_body.c, over the real rm_ab_value and
 # rm_rtt_alpha: a B side holding 0 turns the accumulation off, one holding 0.9 with A at 0 turns it on.
 # Mutants: either site restored to the direct read of r_rt_temporal->value; each must build and fail it.
+# TASK190 slice 3 adds RM_PresBelow (rm_main.c) and rm_view_rect (rm_pure.c) to rttab_body.c, over the real
+# rm_fx_scale (rm_metalfx.c), and a third mutant: RM_PresBelow without its early return for RDF_NOWORLDMODEL.
 rttab_fn() { # <file> <function>: the function's definition, its return type's line to the "}" in column 0
 	awk -v fn="$2" 'b { print; if (/^}/) exit } $0 ~ "^" fn "\\(" { print prev; print; b = 1 } { prev = $0 }' "$1"
 }
@@ -1699,6 +1703,23 @@ else
 			rttab_mut=$((rttab_mut + 1))
 		fi
 	done
+	# TASK190 slice 3, I1: RM_PresBelow without its early return for the menu's player model (RDF_NOWORLDMODEL),
+	# which then reads r_metalfx 0 between two world views reading 2; it must build and fail the two-view case
+	sed '/^RM_PresBelow(/,/^}/s/if (fd->rdflags & RDF_NOWORLDMODEL)/if (0)/' "$rm_dir/rm_main.c" > "${tmp:?}/rttab-main.c"
+	if cmp -s "$rm_dir/rm_main.c" "${tmp:?}/rttab-main.c"; then
+		bad "the two-view mutant of RM_PresBelow changed nothing"
+	elif ! rttab_tree "${tmp:?}/rttabm" "$aos" "${tmp:?}/rttab-main.c" || ! rttab_build "${tmp:?}/rttabm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the two-view mutant of RM_PresBelow does not build, so it tests nothing"
+	elif rttab_run "${tmp:?}/rttabm"; then
+		bad "tests/metal/rm_rttab_test.c passes the two-view mutant of RM_PresBelow"
+	elif ! grep -q '^FAIL .*model_view' "${tmp:?}/out"; then
+		cat "${tmp:?}/out"
+		bad "tests/metal/rm_rttab_test.c refuses the two-view mutant of RM_PresBelow, but not on the two-view case"
+	else
+		rttab_mut=$((rttab_mut + 1))
+	fi
+	[ "$rttab_mut" = 3 ] || bad "tests/metal/rm_rttab_test.c refuses $rttab_mut of its 3 mutants"
 fi
 seg 5.65 "; temporal through A/B ${rttab:-host test}, $rttab_mut mutants refused"
 
