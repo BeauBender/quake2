@@ -143,9 +143,73 @@ hashes are the same as in the first hold (`2f6e7791f25d` for the world and `6629
 - A non-finite history count is not rejected. It is unreachable today because fresh histories always reset
   first; slice 2 hardens it.
 
+# Slice 2: the 5x5 filter on RT-primary's light, and the water blur under RT-primary
+
+Branch `task190s2`, on main after slice 1 and TASK59's slices 2 and 2b merged. The card's defaults 3 (the
+summed light is denoised, not each term) and 10 (the water blur runs under RT-primary).
+
+## What existed before slice 2
+
+- `rm_rtp_temporal` wrote `t_acc` (the accumulated light) and the history and key for the next view, and
+  nothing filtered them: a history that had just started again (a reset, a disocclusion) showed its one
+  sample's noise.
+- RT7's denoiser (`rm_rtdenoise.metal`, `common/mtl_rtd_math.h`) filtered only the AO and the sun, both off
+  under RT-primary.
+- The water scene gated the reflections' blur by `rm_rtt_wblur(RM_RTT_On(), RM_PresentationMode() ==
+  RM_PRES_RTPRIMARY)`, so under RT-primary the water was the trace's alone, and the menu's "accumulate" row was
+  "set by the presentation" there.
+
+## What slice 2 adds
+
+- **The rule.** `common/mtl_rtpd_math.h` (new) includes `mtl_rtp_math.h` and `mtl_rtd_math.h` unchanged and
+  copies none of their weights: `mtl_rtpd_weight` is `mtl_rtd_weight` (the binomial tap, the depth and normal
+  guides, the material, a neighbour with a sample) and 0 for a neighbour whose normal was not written;
+  `mtl_rtpd_add` sums each of red, green and blue with `mtl_rtd_add`; `mtl_rtpd_result` moves each channel
+  toward its own mean by `mtl_rtd_strength` of the pixel's count (full at 1 sample, none from 16), clamps it
+  to [0, 1] and keeps the trace's alpha; `mtl_rtpd_on` is the pixels it writes, world pixels whose count
+  leaves a strength.
+- **The kernel.** `rm_rtp_denoise`, in `rm_rtpdenoise.metal`, a unit of its own linked after
+  `rm_rtptemporal.metal`, which is not edited. It reads the history and key `rm_rtp_temporal` has just
+  written (the pixel's and each neighbour's distance from the eye and material from the key, the light and
+  count from the history), the G-buffer's depth, normal and material and the trace's alpha, and writes only
+  `t_acc`, on the pixels it filters. The history keeps the accumulation alone, as RT7's.
+- **The dispatch.** In `rmb_rtdir_accumulate`, in the accumulation's encoder after its dispatch, behind a
+  texture barrier, with the same bindings, before the histories swap. The `r_rt_stats 2` line
+  `rt direct temporal` times both. The pipeline is made with the accumulation's and released when the pass
+  closes; one that cannot be made is latched (`ref_metal: rt temporal: no direct-light denoise pipeline`) and
+  the light is then accumulated alone. It allocates nothing.
+- **The count.** `mtl_rtp_reject` also rejects a history whose count is past `MTL_RTT_COUNT_MAX`, infinite
+  included (`MTL_RTP_REJ_BAD`), so no count can make the blend a NaN (slice 1's note).
+- **The water.** `rm_rtt_wblur` is removed and the scene calls `rmb_rtw_set_blur(RM_RTT_On())`: the blur
+  runs with `r_rt_temporal` above 0 under every presentation. Stock, Enhanced and Retro read it as before
+  (Retro reads `r_rt_water` as 0). The menu's "accumulate" row is live under RT-primary.
+- **No new cvar.** `doc/040_cvarlist.md`'s `r_rt_temporal` and `r_rt_stats` entries are updated.
+
+## Slice 2's tests
+
+- **Host:** `tests/metal/rm_rtpdenoise_test.c` (new), 35 checks: the pixels it writes, the weight, each
+  channel with its own neighbours, the strength at 1 and 8.5 samples, a settled history left as it is, values
+  that are not finite, the clamp, and a 9 x 7 image filtered as the kernel does, across a material edge and a
+  depth edge. Red before the header (it did not exist), then 35 checks, 0 failed.
+  `tests/metal/rm_rtptemporal_test.c` gains 4 checks for the count (red: 3 failed), then 63, 0 failed.
+- **Header mutants** (`tests/check-ref-metal.sh`), each of which must compile and fail it: green summed from
+  red, the count ignored, a neighbour without a normal weighed, the count kept as the alpha, the clamp dropped.
+- **Kernel text pins** with four mutants, each compiled with `xcrun metal` where it is there: the key's
+  distance and material and the neighbour's count and normal reaching the weight (mutants: the material
+  compared with itself, the count not passed), the history read for the values (mutant: the trace's light
+  read in its place), and only `t_acc` written (mutant: the history written). The back end's order (the
+  accumulation, the barrier, the filter, the swap) and the Makefile's two lines are pinned.
+- **The water's pin** is inverted: the scene must call `rmb_rtw_set_blur(RM_RTT_On());` once and name no
+  presentation there (mutants: the RT-primary gate put back, the call commented out). `rm_rttemporal_test`
+  loses its four `rm_rtt_wblur` checks; the temporal rule's mutants drop `wblur`.
+- **Menu:** `tests/menu/videomenu_test.c` expects the row live under RT-primary with the user's water and sun
+  off (red with the old exclusion).
+- **Pins:** `scripts/pins/scenarios/rtprimary-denoise.cfg` (new) is `rtprimary-world` at `r_rt_temporal 0.9`,
+  recorded at `demo1.dm2` and with `PINS_DEMO=water.dm2`. Every other scenario is unchanged: the stock ones
+  draw nothing this slice changes, and every other `rtprimary-*` sets `r_rt_temporal 0`, so neither the
+  accumulation, the filter nor the water's blur runs there.
+
 ## Left for the next slices
 
-- Slice 2: the 5x5 filter on the irradiance (`rm_rtp_denoise`, after TASK59's slice 2), scaled by the count,
-  and the water blur under RT-primary (after TASK59's slice 2b).
 - Slice 3: the scaler through the overlay (`r_metalfx 2` in `pres_rtprimary`).
 - Slice 4: the cost table of section 4.5, measured in the owner's quiet window.
