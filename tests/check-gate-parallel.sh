@@ -1811,7 +1811,7 @@ mutant no-supervisor-sigs sigs '"$gate_sv" --grace "$gate_grace" --name "${_gsc#
 mutant grace-unpassed interrupt '--grace "$gate_grace"' '--grace 3600'
 mutant grace-3s interrupt 'gate_grace=10' 'gate_grace=3'
 mutant grace-3s-stop stop 'gate_grace=10' 'gate_grace=3'
-mutant no-stop stop '	for _gep; do kill -s TERM "$_gep" 2> /dev/null || :; done' '	:'
+mutant no-stop stop '		kill -s TERM "$_gep" 2> /dev/null || :' '		:'
 mutant no-stop-wait interrupt '	for _gep; do wait "$_gep" 2> /dev/null || :; done' '	:'
 mutant stderr-closed-unguarded-sched stopnoerr '{ :; } 8>&2 2> /dev/null || exec 2> /dev/null' ':'
 # the refusal of an ignored SIGTERM dropped: the run starts its checks

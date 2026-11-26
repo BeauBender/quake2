@@ -229,10 +229,20 @@ gate_parent() {
 
 # gate_end <supervisor>...: ends those checks and every process in their
 # groups: SIGTERM to each supervisor, which stops its group (TERM and CONT,
-# KILL after gate_grace s), then waits for each. A supervisor is this
-# script's child and not yet waited for, so its pid is no other process's.
+# KILL after gate_grace s), then waits for each. The shell reaps a
+# background job as soon as it exits, before any wait: a supervisor that
+# ended after the reap's last poll still has its entry, but its pid is back
+# with the system, free for another process. So a supervisor that
+# bench_pid_alive says is gone gets no TERM. That leaves the time between
+# that test and the kill, not up to a whole poll (0.2 s), for the pid to be
+# given to another process; the system hands pids out in turn, so that
+# needs the pids to wrap around within that time. The wait stays: it gives
+# a reaped job's status, or fails at once for a pid that is no job.
 gate_end() {
-	for _gep; do kill -s TERM "$_gep" 2> /dev/null || :; done
+	for _gep; do
+		bench_pid_alive "$_gep" || continue
+		kill -s TERM "$_gep" 2> /dev/null || :
+	done
 	for _gep; do wait "$_gep" 2> /dev/null || :; done
 }
 

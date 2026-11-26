@@ -24,10 +24,17 @@ it (see "What remains").
   `gate_grace` (10 s). So the reap no longer calls `gate_end`, and waits no grace of its own.
   A group that cannot be emptied makes the supervisor exit 126, and the check is reported as
   failed (it was ignored before).
-- **The stop.** `gate_end` sends SIGTERM to each running supervisor and waits for each. A
-  supervisor is the scheduler's child and is not waited for until then, so its pid belongs to no
-  other process. A signal that arrives between the fork and the pid's entry in `_grun` finds the
-  pid as `$!`: `gate_start` marks the window (`_gss`, `_gsb`), and `gate_cleanup` adds that pid.
+- **The stop.** `gate_end` sends SIGTERM to each running supervisor and waits for each. The
+  shell reaps a background job as soon as it exits, before any `wait`, so the pid of a
+  supervisor that ended after the reap's last poll is already back with the system while its
+  entry is still in `_grun`. `gate_end` therefore sends no TERM to a supervisor that
+  `bench_pid_alive` says is gone. That narrows the window in which the pid could be given to
+  another process from up to one poll (0.2 s) to the time between that test and the `kill`.
+  This was chosen over dropping finished entries before the stop because dropping them needs the
+  same liveness test, only earlier and further from the `kill`. The `wait` stays: it gives a
+  reaped job's status, or fails at once for a pid that is no job. A signal that arrives between
+  the fork and the pid's entry in `_grun` finds the pid as `$!`: `gate_start` marks the window
+  (`_gss`, `_gsb`), and `gate_cleanup` adds that pid.
 - **The supervisor's build.** `sv_path` builds the supervisor into the tool cache on first use.
   If the build fails, the run fails with status 2 before any check starts.
 
