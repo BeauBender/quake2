@@ -256,7 +256,7 @@ records, at commit 25e2ce98:
 ## The merge of slice 1 and main
 
 Slice 1's final tip 08b6276f (with main d7817081, TASK190 slices 2 and 3) was merged into
-slice 2 at ba5e4dff. The results above were taken before it, at 25e2ce98.
+slice 2 at b49fb42. The results above were taken before it, at 25e2ce98.
 
 - **Segments.** Main's TASK190 segments are 7.7 (RT-primary temporal) and 7.8 (RT-primary
   filter). The model light is 7.9, as slice 1 numbered it; slice 2 had named it 7.8. The
@@ -265,9 +265,11 @@ slice 2 at ba5e4dff. The results above were taken before it, at 25e2ce98.
   takes `RM_RTModel_ShowAsked`, which returns 0: its view is the direct light's, which
   `RM_RTDir_ShowAsked` already reports.
 - **The order.** The model pass still runs after RT-primary's accumulation and its 5 x 5
-  filter, which share the direct light's encoder. Both write world pixels only
-  (`mtl_rtp_world`), and the model pass writes the light the resolve reads and never the
-  history, so model pixels still pass through TASK190 untouched.
+  filter, which share the direct light's encoder. Only the filter writes world pixels
+  only (`mtl_rtp_world`). The accumulation passes every other pixel through with a zero
+  history. The model pass writes the light the resolve reads and never the history, so
+  model pixels still pass through TASK190 untouched. (Slice 3 fixes this wording: it said
+  that both write world pixels only, and named the merge as ba5e4dff.)
 - **The hold.** The merge's hold compares the stock scenarios and every RT-primary record
   with main d7817081, and records the three `rtprimary-models` scenarios three times each.
 
@@ -295,3 +297,147 @@ slice 2 at ba5e4dff. The results above were taken before it, at 25e2ce98.
 - **`rtprimary-models-vis`** shows model pixels in gl1's model colour (overbright, the
   minlight and gamma tables) and world pixels in the linear term, so the two are not
   directly comparable; `doc/100_renderpins.md` and the scenarios README say so.
+
+# Slice 3: the view weapon, and the glow and minlight models
+
+Slice 3 rasters the view weapon under RT-primary and lights it per pixel by traced light,
+and traces the glowing and minlight models with their glow pulse and minlight floor.
+`r_rt_direct_models 0` keeps every model and the weapon stock-lit, as before, and no other
+presentation changes.
+
+## What slice 3 adds
+
+- **The split** (`rm_rtm_entity_split`). Under the traced models:
+  - The view weapon is rastered when it is an alias model with its depth hack. It has no
+    shadow, since `rm_shadow_drawn` leaves the weapon out, as gl1 does. A weapon brush
+    model goes forward.
+  - A weapon without `RF_DEPTHHACK` stays stock-lit (`rm_rtm_stock_model`). Its depth is
+    not the 0 .. 0.3 that the kernel unprojects. The client's weapon always has the flag
+    (`CL_AddViewWeapon`).
+  - Glowing and minlight models are rastered. Fullbright, IR-goggle, translucent and shell
+    models, and the crosshair model, stay stock-lit, as before.
+- **The tag** (`rm_rtm_tag_wanted`, called in `R_DrawAliasModel`). The raster writes the
+  tag only for a traced model with its normals written that carries a flag (glow,
+  minlight, the weapon). A model without a flag keeps its own colour in the light
+  attachment, as in slice 2, and that reads as no flags. So the untagged models' raster
+  is unchanged. `R_AliasMotion` now returns `rm_gb_alias_extra`'s result for this.
+- **The kernel** (`rm_rtm_trace`):
+  - It reads the tag first. Then `rm_rtm_point` gives the point to shade at:
+    - A model drawn with the view's projection takes the world's unprojection, as in
+      slice 2.
+    - A weapon pixel takes the weapon's own inverse (`p.winv`) at
+      `mtl_rtm_weapon_ndc(d)`, the arithmetic of `rm_rtm_weapon_unproject`.
+  - The pull-back ray goes from the eye toward the weapon point, up to its distance
+    (`rm_rtm_wall_t`). It stops at the first wall (`mtl_rtm_wall`): a map face that is not
+    water or translucent. Water and translucent faces pass, as they do for a shadow ray,
+    and a model is no wall. With a hit, the pixel is shaded at `mtl_rtm_pullback`'s point,
+    0.25 units before the wall. With none it is shaded at the weapon point.
+  - A frame with no weapon view (`p.weapon` 0, when glFrustum refuses the projection)
+    shades a weapon pixel at the eye.
+  - The glow pulse and the minlight floor come from the tag's flags through
+    `mtl_rtm_color`, as slice 2 already wrote it.
+- **The parameters.** `rm_rtm_params_t` is now 80 bytes: a `float4x4` first, then the
+  glow, overbright and the weapon flag. `rm_rtm_weapon_params` fills it each frame in
+  `RM_RTModel_View` from `R_DrawAliasModel`'s inputs, jittered by the new
+  `RM_GB_Jitter`, which is `RM_GB_JitterProj`'s jitter.
+- **No shadow from the weapon or the player's own model.**
+  - `rm_rtm_gunshadow` keeps the weapon out of the ray-traced scene while the models are
+    traced (`RM_RTModel_Wants`, read in `RM_RT_Frame`), whatever `r_rt_gunshadow` says.
+    So no ray meets it, not even its own pixels' shadow, sky and bounce rays.
+  - The player's own model (`RF_VIEWERMODEL`) never reaches the refdef in the first
+    person, because `CL_AddPacketEntities` adds its lights and skips it. So no instance
+    is made of it.
+  - With `r_rt_direct_models 0`, `r_rt_gunshadow` is as before.
+
+## Choices and where the plan differs
+
+- **Only flagged models are tagged.** The plan tags weapon and flagged pixels. Tagging
+  every traced model would put the grey tag where a later row reads the raster light
+  attachment (see slice 2's review notes). The untagged models read as flags 0, which is
+  what the tag would say.
+- **`RM_RTModel_Wants` is decided as the scene is built,** before the direct light
+  decides the frame. On a frame where the direct light is wanted but does not trace (the
+  scene not ready), the weapon is also left out of the scene. That matters only with
+  `r_rt_gunshadow 1` under RT-primary.
+- **The weapon's own rays.** Its shadow, sky and bounce rays start at its point, which is
+  0.25 units before the wall when pulled back. They use the world's bias, as a model
+  pixel's do.
+- **No GPU test.** The kernel is held by text pins and `xcrun metal` compiles, as in
+  slice 2. The arithmetic of the weapon point is held by the host test against the
+  weapon's round trip.
+
+## The tests, red then green
+
+- **Host.** `rm_rtmodel_test.c`: `model light 3981 checks, 0 failed, 16 of 16 mutants
+  refused` (check-ref-metal segment 7.9, run here by the segment's own lines).
+  - New and changed cases:
+    - the split's named weapon, glow and minlight cases, and the sweep against the new
+      rule;
+    - `rm_rtm_traced`;
+    - `rm_rtm_tag_wanted` over every flag combination;
+    - `rm_rtm_gunshadow`, through `rm_rt_instances`;
+    - `mtl_rtm_wall`;
+    - the parameters' layout;
+    - `rm_rtm_weapon_params` against the weapon view, and the kernel's arithmetic
+      against the weapon round trip.
+  - Two of slice 1's and slice 2's mutants lost their lines, so they were rewritten as
+    `weapon-forward` and `flagged-forward`, and `depthhack-weapon` now edits the new
+    stock-model line. Five mutants are new (`weapon-nohack` to `weapon-flag`):
+
+  | Mutant | Change | Refused by |
+  | --- | --- | --- |
+  | `weapon-forward` | the weapon forward again for any kind | the split's weapon cases and sweep |
+  | `flagged-forward` | a glowing or minlight model stock-lit again | the split's glow and minlight cases, `rm_rtm_traced` |
+  | `depthhack-weapon` | the weapon's depth hack read as the crosshair's | the split's weapon cases |
+  | `weapon-nohack` | a weapon without its depth hack traced | the split's case and sweep |
+  | `tag-unflagged` | a model without a flag tagged | `rm_rtm_tag_wanted` |
+  | `gunshadow-kept` | the weapon kept in the scene under the traced models | `rm_rtm_gunshadow` and the instances |
+  | `wall-alias` | a model read as a wall | `mtl_rtm_wall` |
+  | `weapon-flag` | the weapon flag set without a view | `rm_rtm_weapon_params`' refused case |
+
+- **Kernel pins.** check-ref-metal segment 7.95: `model pass 9 kernel pins with 13 kernel
+  mutants compiled and refused, 2 back-end pins with 2 mutants refused`.
+
+  | Pin | Mutants |
+  | --- | --- |
+  | `weapon`: the trace's point is `rm_rtm_point`'s, the world's unprojection is called once, the weapon's inverse at `mtl_rtm_weapon_ndc` | `weapon-world-view`, `weapon-depth-raw`, `weapon-world-point` |
+  | `pullback`: the wall's distance feeds `mtl_rtm_pullback`, a model passes | `no-pullback`, `wall-models` |
+
+  Slice 2's seven pins hold unchanged. The tag is read before the point now, and there is
+  still one `gbl.` read in the file.
+- **The back end.** Its two pins hold, and it binds nothing new. The parameters' static
+  assert is now 80 bytes.
+
+## The hold
+
+The checks that need no lock:
+
+- the host test with its mutants (segment 7.9) and the kernel and back-end pins
+  (segment 7.95), each run by the segment's own lines;
+- `xcrun metal -c` of `rm_rtmodel.metal`;
+- `cc -fsyntax-only` of the changed C and Objective-C files;
+- check-cvar-docs, check-doc-links, check-runbook-index, check-scenario-parsers and
+  check-pin-chars.
+
+No new cvar is added. `doc/040_cvarlist.md` says what `r_rt_direct_models` and
+`r_rt_gunshadow` now do. The hold script (run by the orchestrator, under the lock)
+builds main a9414f84 in scratch and records:
+
+- `make ref_metal`, `make` and `make test`;
+- check-ref-metal, check-video-menu, check-pin-chars and check-scenario-parsers;
+- the 30 stock scenarios against main, byte for byte;
+- every existing RT-primary record against main, `rtprimary-models`, `-off` and `-vis`
+  among them. They set `cl_gun 0`. `rtprimary-models` and `-vis` can change only where a
+  glowing or minlight model is in view, since those are now traced; the hold lists the
+  frames that change;
+- `rtprimary-weapon` three times (determinism), and against an `r_rt_direct_models 0`
+  copy, where the weapon is stock-lit (want differ). That copy is also run against
+  main's binary (want identical);
+- the `r_rt_stats 2` model line of `rtprimary-weapon`.
+
+The results go here when the hold has run.
+
+## Left to the next slices
+
+- Slice 4: model pixels, the weapon's among them, join TASK190's accumulation.
+- Slice 5: timing, in the owner's quiet window.
