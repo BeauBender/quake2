@@ -1129,13 +1129,22 @@ R_SetupGL(void)
  * TASK190 slice 3: whether this view's internal size under the temporal
  * scaler is below its output, as RM_FX_Begin sizes it (rm_fx_scale of the
  * view's rectangle, R_SetupGL's), before anything reads r_metalfx for it:
- * RT-primary runs its scaler only then (rm_pres_fx).
+ * RT-primary runs its scaler only then (rm_pres_fx). The menu's player
+ * model (RDF_NOWORLDMODEL), a second view drawn over the world in the
+ * same frame, takes the forward path and is never scaled: it keeps the
+ * world view's value, since one that changed between the two views would
+ * free and remake the scaler every frame.
  */
 static void
 RM_PresBelow(const refdef_t *fd)
 {
 	int tw = 0, th = 0;
 	rm_viewport_t vp;
+
+	if (fd->rdflags & RDF_NOWORLDMODEL)
+	{
+		return;
+	}
 
 	rmb_target_size(&tw, &th);
 	rm_view_rect(fd->x, fd->y, fd->width, fd->height, vid.width, vid.height, th, &vp);
