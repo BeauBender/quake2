@@ -44,6 +44,7 @@
 #include "rmb.h"
 #include "rm_rtfx.h"
 #include "rm_rtlights.h"
+#include "rm_rttemporal.h"
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_rts_math.h"
 #include "../common/mtl_rtdir_math.h"
@@ -79,17 +80,19 @@ int rm_rtdir_on(int pres, float direct, int device_rt, float fullbright);
  * term alone, each with its ray (TASK189). Only the picture adds the
  * sky's and the sun's terms: views 1 to 4 trace neither ray, so 1 is the
  * direct term alone and 3 differs from it by its shadows only
- * (mtl_rtsky_traces). v clamped to 0 to
- * RM_RTDIR_SHOW_MAX before it is cut to an int; 0 for a value that is not
- * finite.
+ * (mtl_rtsky_traces). 7 is the bounce's term alone (TASK189 slice 2),
+ * which only the picture adds besides (mtl_rtsky_bounces). v clamped to 0
+ * to RM_RTDIR_SHOW_MAX before it is cut to an int; 0 for a value that is
+ * not finite.
  */
-#define RM_RTDIR_SHOW_MAX 6
+#define RM_RTDIR_SHOW_MAX 7
 #define RM_RTDIR_SHOW_DIRECT 1
 #define RM_RTDIR_SHOW_VIS 2
 #define RM_RTDIR_SHOW_NOSHADOW 3
 #define RM_RTDIR_SHOW_DLIGHTS 4
 #define RM_RTDIR_SHOW_SKY ((int)MTL_RTSKY_SHOW_SKY)
 #define RM_RTDIR_SHOW_SUN ((int)MTL_RTSKY_SHOW_SUN)
+#define RM_RTDIR_SHOW_BOUNCE ((int)MTL_RTSKY_SHOW_BOUNCE)
 int rm_rtdir_show(float v);
 
 /* a dynamic light as the kernel reads it (rm_rtdir.metal's rm_rtdir_dlight, 32 bytes; TASK188 slice 3b) */
@@ -308,7 +311,7 @@ float rm_rtdir_fit(unsigned long lm_sum, unsigned long raw_sum, unsigned long sa
  */
 float rm_rtdir_exposure(float cvar, float fit, int *fixed);
 
-/* the view of the kernel (rm_rtdir.metal's rm_rtdir_view, 176 bytes) */
+/* the view of the kernel (rm_rtdir.metal's rm_rtdir_view, 192 bytes) */
 typedef struct
 {
 	float inv[16];      /* GL clip coordinates to world, as rm_rts_view */
@@ -321,10 +324,11 @@ typedef struct
 	unsigned ndlights;  /* the frame's dynamic lights (the back end's, rmb_rtdir_set_dlights), 0 from rm_rtdir_view */
 	unsigned nself;     /* the per-triangle table's entries (the back end's, rmb_rtdir_set_self), 0 from rm_rtdir_view */
 	unsigned frame;     /* TASK189: the sky ray's noise frame (rm_rtao_frame of r_rt_direct_seed), 0 from rm_rtdir_view */
-	unsigned pad;
+	unsigned nbrec;     /* slice 2: the bounce records' entries (the back end's, rmb_rtdir_set_bounce), 0 from rm_rtdir_view */
 	float sun_dir[4];   /* TASK189: the unit direction toward the sun, 0; 0 from rm_rtdir_view */
 	float sun[4];       /* TASK189: sky_color x r_rt_sunscale a channel, 0; 0 from rm_rtdir_view (no sun ray) */
 	float sky[4];       /* TASK189: the sky's mean colour x r_rt_direct_sky a channel, 0; 0 from rm_rtdir_view (no sky ray) */
+	float bounce[4];    /* slice 2: r_rt_direct_bounce (rm_rtdir_bounce_scale), 0, 0, 0; 0 from rm_rtdir_view (no bounce ray) */
 } rm_rtdir_view_t;
 
 /*
@@ -351,6 +355,29 @@ float rm_rtdir_sky_scale(float v);
 void rm_rtdir_view_open(rm_rtdir_view_t *v, const float *sky, float sky_scale, const float *sun_dir, const float *sun,
 		unsigned frame);
 
+/* TASK189 slice 2: the bounce's scale (rm_rtdir_bounce_scale of r_rt_direct_bounce) into a view made by rm_rtdir_view */
+void rm_rtdir_view_bounce(rm_rtdir_view_t *v, float scale);
+
+/* TASK189 slice 2: r_rt_direct_bounce as the pass takes it: 0 to MTL_RTSKY_BOUNCE_MAX, 0 for a value that is not finite */
+float rm_rtdir_bounce_scale(float v);
+
+/*
+ * Slice 2: the per-triangle bounce records of the world's index buffer
+ * (mtl_rtsky_brec_pack), ntris of them into out, as rm_rtdir_self_table
+ * walks the records (surface record s covers its num_indices / 3
+ * triangles from first_index / 3). Record s's face has albedo albedo[s]
+ * (0 to 1 a channel, its texture's mean; a value not finite or below 0
+ * reads 0, above 1 reads 1) and its lightmap slice lm_slice, unless its
+ * texture is the sky, warped or translucent (RM_TEX_SKY, RM_TEX_WARP,
+ * RM_TEX_TRANS33, RM_TEX_TRANS66: the stock draw gives them no lightmap)
+ * or the slice is outside 0 to MTL_RTSKY_NOLM - 1: then MTL_RTSKY_NOLM.
+ * A triangle of no record, or of a record outside the buffer, is 0 with
+ * slice MTL_RTSKY_NOLM. Returns the triangles given a lightmap, or -1 for
+ * no table (out NULL or ntris 0).
+ */
+long rm_rtdir_bounce_table(const rm_surfrec_t *recs, long nrecs, const float (*albedo)[3], unsigned *out,
+		unsigned long ntris);
+
 /* One frame's direct-light pass, for the r_rt_stats 2 line (counted on the GPU, read once the frame completed). */
 typedef struct
 {
@@ -368,8 +395,12 @@ typedef struct
 	unsigned long sky_hits;     /* the ones that reached the sky */
 	unsigned long sun_rays;     /* the sun rays traced (one a world pixel facing the sun at most, MTL_RTSKY_SUN_RAYS) */
 	unsigned long sun_lit;      /* the ones that reached the sky toward the sun */
+	unsigned long bounce_rays;  /* slice 2: the bounce rays traced (one a world pixel at most, MTL_RTSKY_BOUNCE_RAYS) */
+	unsigned long bounce_hits;  /* the ones that read a lightmap at their hit */
 	float exposure;             /* the exposure the frame used */
 	double ms;                  /* the pass's GPU time; below 0 when not measured */
+	int accumulated;            /* TASK190 slice 1: the frame's light was accumulated (rm_rtp_temporal ran) */
+	double tms;                 /* the accumulation's GPU time, its own encoder's; below 0 when not measured or not run */
 } rm_rtdir_stats_t;
 
 /*
@@ -540,6 +571,13 @@ int rmb_rtdir_set_lights(const rm_rtdir_light_t *l, long n);
 /* TASK188 slice 3b: the map's per-triangle table (rm_rtdir_self_table); 1, or 0 when it cannot be made (n 0 keeps none) */
 int rmb_rtdir_set_self(const unsigned *t, unsigned long n);
 
+/*
+ * TASK189 slice 2: the map's bounce records (rm_rtdir_bounce_table) and
+ * its lightmap array's texture id (rm_world_t.lmtex, 0 for none); 1, or 0
+ * when it cannot be made (n 0 keeps none: the kernel then reads none)
+ */
+int rmb_rtdir_set_bounce(const unsigned *t, unsigned long n, int lmtex);
+
 /* TASK188 slice 3b: the frame's dynamic lights (rm_rtdir_dlights), at most MTL_RTDIR_MAX_DLIGHTS; before rmb_rtdir_set_view */
 void rmb_rtdir_set_dlights(const rm_rtdir_dlight_t *d, int n);
 
@@ -548,6 +586,17 @@ int rmb_rtdir_prepare(unsigned long w, unsigned long h);
 
 /* the view and the style table (3 x RM_RTL_STYLES floats) the next G-buffer view traces with; NULL turns it off */
 void rmb_rtdir_set_view(const rm_rtdir_view_t *v, const float *styles);
+
+/*
+ * TASK190 slice 1 (PM8): the next traced view accumulates its light with t
+ * (copied), at the render size w x h, through rm_rtp_temporal after the
+ * trace; its pipeline and the histories (two of the light with its count,
+ * RGBA16Float, two of the key, RG32Uint), and the light the resolve then
+ * reads (RGBA16Unorm), are made at the first such view, a failure latched.
+ * NULL, or t's alpha 0, releases them and accumulates nothing: the trace's
+ * light is the resolve's, bit for bit. 1 when the view accumulates.
+ */
+int rmb_rtdir_temporal(const rm_rtt_view_t *t, unsigned long w, unsigned long h);
 
 /* the stats of the frames whose pass completed since the last call, at most cap, in slot order; their number */
 int rmb_rtdir_stats(rm_rtdir_stats_t *s, int cap);

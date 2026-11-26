@@ -38,6 +38,7 @@
 #include "header/rm_fxscene.h"
 #include "header/rm_rtgate.h"
 #include "header/rm_rtaoscene.h"
+#include "header/rm_rtfx.h"
 
 /* a metal_stats line every this many scaled views, and on each that resets */
 #define RM_FX_STATS_EVERY 60
@@ -46,6 +47,7 @@ static cvar_t *r_metalfx;
 static cvar_t *r_metalfx_scale;
 static cvar_t *r_metalfx_interp;
 static cvar_t *r_metalfx_modes;
+static cvar_t *r_rt_stats_ref;  /* TASK109: the reset line of both histories */
 
 static unsigned fx_has;         /* RM_FX_HAS bits of the device */
 static unsigned fx_families;
@@ -80,6 +82,7 @@ RM_FX_Init(const rmb_caps_t *caps)
 	r_metalfx_scale = ri.Cvar_Get("r_metalfx_scale", "0", CVAR_ARCHIVE);
 	r_metalfx_interp = ri.Cvar_Get("r_metalfx_interp", "0", CVAR_ARCHIVE);
 	r_metalfx_modes = ri.Cvar_Get("r_metalfx_modes", "1", 0);
+	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 
 	fx_has = rmb_fx_support();
 	fx_families = caps->families;
@@ -235,7 +238,8 @@ RM_FX_Begin(const rm_viewport_t *out, const float *vieworg, int *rw, int *rh, rm
 	}
 
 	VectorCopy(vieworg, org);
-	reset = rm_fx_step(&fx_state, fx_mode, &s, org, RM_FX_CUT_DIST, &jitter[0], &jitter[1]);
+	/* TASK109: an effect turned on under the scaler resets it (RM_FX_RESET_EFFECT) */
+	reset = rm_fx_step(&fx_state, fx_mode, &s, org, rm_rtfx_active(), RM_FX_CUT_DIST, &jitter[0], &jitter[1]);
 
 	if (!rmb_fx_prepare(fx_mode, &s, jitter[0], jitter[1], reset != 0))
 	{
@@ -257,8 +261,16 @@ void
 RM_FX_End(void)
 {
 	char line[256];
+	/* TASK109: taken on every view, so RT7's reasons never reach a later one */
+	const unsigned rtt = RM_RTT_TakeReasons();
 
 	RM_FX_Notes();   /* the seam may have refused the view's targets */
+
+	/* r_rt_stats 1: a scaled world view that resets either history names both sets of reasons */
+	if (rm_fx_reset_says(fx_view, r_rt_stats_ref ? r_rt_stats_ref->value : 0.0f, fx_view ? fx_resets : 0, rtt))
+	{
+		RM_FX_Say(rm_fx_reset_line_format(fx_resets, rtt, line, sizeof(line)), line);
+	}
 
 	if (!fx_view)
 	{

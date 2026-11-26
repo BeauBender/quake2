@@ -94,7 +94,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   a relatively high CPU usage. If set to `0` Quake II lays itself to
   sleep and tells the operating system to send a wakeup signal when it's
   time for the next frame. The latter is more CPU friendly but can be
-  rather inaccurate, especially on Windows. Use with care.
+  rather inaccurate. Use with care.
 
 * **sv_optimize_sp_loadtime** / **sv_optimize_mp_loadtime**: These cvars
   enable/disable optimizations that speed up level load times (or more
@@ -258,8 +258,8 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   both `coop` and `deathmatch` are forced to `0` and `maxclients` is
   forced to `1`. This can be used to run a dedicated server with an old
   single player mod, where the source code isn't available, inside a
-  Windows 98 or XP VM and connect over network from a non Windows
-  system.
+  virtual machine running an old operating system and connect over
+  network from another system.
 
 * **coop_pickup_weapons**: In coop a weapon can be picked up only once.
   For example, if the player already has the shotgun they cannot pickup
@@ -316,20 +316,20 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   By default this is set to `0`, this keeps the original machine gun 
   recoil in single player. When set to `1` the recoil is disabled in
   single player, the same way as in multiplayer.  
-  This cvar only works if the game.dll implements this behaviour.
+  This cvar only works if the game library implements this behaviour.
 
 * **g_quick_weap**: If set to `1`, both *weapprev* and *weapnext*
   commands will "count" how many times they have been called, making
   possible to skip weapons by quickly tapping one of these keys.
-  By default this cvar is set to `1`, and will only work if the
-  game.dll implements this behaviour.
+  By default this cvar is set to `1`, and will only work if
+  the game library implements this behaviour.
 
 * **g_swap_speed**: Sets the speed of the "changing weapon" animation.
   Default is `1`. If set to `2`, it will be double the speed, `3` is
   the triple... up until the max of `8`, since there are at least 2
   frames of animation that will be played compulsorily, on every weapon.
   Cheat-protected, has to be a positive integer. As with the last one,
-  will only work if the game.dll implements this behaviour.
+  will only work if the game library implements this behaviour.
 
 * **g_disruptor (Ground Zero only)**: This boolean cvar controls the
   availability of the Disruptor weapon to players. The Disruptor is
@@ -591,8 +591,8 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   When set to `0` the client leaves the decision if the window should
   be scaled to the underlying compositor. Scaling applied by the
   compositor may introduce blur and sluggishness.  
-  High dpi awareness is supported under Wayland and on Apple platforms
-  (macOS, iOS, iPadOS, tvOS and visionOS). On a Retina display of
+  High dpi awareness is supported on Apple platforms (macOS, iOS,
+  iPadOS, tvOS and visionOS). On a Retina display of
   scaling factor 2 a 640x480 window draws 1280x960 pixels and the
   default 2D scale is 2, so menus, console and HUD keep their size on
   the screen; with `0` it draws 640x480 pixels, which the system
@@ -994,8 +994,13 @@ marked `(n/a)` and skipped.
   drawn without the world, a change of the mode, of `r_metalfx_scale` or
   of the view's rectangle (the screen size, the window's size), and when the
   view moves more than 256 units at once (a teleport or a camera cut,
-  the distance the client itself does not smooth); a change of `fov` and
-  the player-setup menu's model do not drop it. With a scaled view the
+  the distance the client itself does not smooth), and when a ray-traced
+  effect becomes active (its `r_rt_*` switch is on and the effect can run) after a scaled
+  view with none; a
+  change of `fov`, the player-setup menu's model, an effect kept on and
+  an effect turned off do not drop it. `metal_stats` and `r_rt_stats`
+  name these reasons as `first`, `mode`, `size`, `rect`, `cut` and
+  `effect`. With a scaled view the
   limit of a smooth particle point (256 pixels) is in the smaller view's
   pixels, so a particle above 256 pixels of the window is drawn smaller
   than without a scaler; this needs `gl1_particle_max_size` above 256.
@@ -1003,6 +1008,9 @@ marked `(n/a)` and skipped.
   colour (the spatial scaler in its HDR mode), and a change of `r_hdr`
   makes it anew in the new format, without its history; a GPU that will
   not make it in that format leaves the scaler off with one line.
+  The Retro and Ray traced presentations read it in place of your value
+  without writing it (`r_presentation`): Retro as `0`, Ray traced as `2`
+  while the view is scaled down, `0` on a GPU without the temporal scaler.
   Other renderers do not have it. Saved with the configuration; applies
   from the next frame.
 
@@ -1070,14 +1078,38 @@ marked `(n/a)` and skipped.
   map's own light entities (`r_rt_direct`), one shadow ray a light,
   scaled by one exposure (`r_rt_direct_exposure`). It reads
   `r_rt_direct` and `r_rt_water` as `1` and `r_rt_shadows`, `r_rt_sun`
-  and `r_rt_ao` as `0` (the AO pass does not run: the bounce, a later
-  slice, takes its place). Beside the map's lights it adds the sky light
+  and `r_rt_ao` as `0` (the AO pass does not run: the bounce takes its
+  place). Beside the map's lights it adds the sky light
   (`r_rt_direct_sky`, one ray a pixel that returns the sky's colour where
   it reaches a sky face) and the sun (one ray a pixel toward
   `r_rt_sun_angles` or the map's line of `scripts/rt/sun-angles.txt`,
-  at `r_rt_sunscale`); the bounce and the denoiser are later work, so a
-  part of a map lit by its light faces alone is darker than in stock,
-  and the sky light is noisy (one ray a pixel, no denoiser yet). Models, the sky,
+  at `r_rt_sunscale`) and one bounce of indirect light
+  (`r_rt_direct_bounce`, one ray a pixel that reads the stock lightmap
+  where it lands); the denoiser is later work, so the sky light and the
+  bounce are noisy (one ray a pixel each, no denoiser yet). Ray traced
+  also reads `r_metalfx` as `2`, `MTLFXTemporalScaler`, while the 3D
+  view's internal size (`r_metalfx_scale`, whose value stays yours) is
+  below its own; at the view's own size (a scale of `1`, or the default
+  in a 3D view no taller than the GPU's default rows: a small window, or
+  `viewsize` below `100` shrinking the view to those rows or fewer) the
+  mode runs no scaler of its own and `r_metalfx` is yours. The player
+  model of the menu's player setup, drawn over the world, keeps the
+  world view's value. On a GPU without the
+  temporal scaler it reads `r_metalfx` as `0`, never as the spatial
+  scaler, and says so at start-up and at `vid_restart` (`ref_metal:
+  presentation: ray traced: r_metalfx reads 0 (off): no MetalFX temporal
+  scaler on this device`); while a development view of an effect it
+  runs (`r_rt_direct_show` or `r_rt_water_show`) is asked for it reads
+  `0` too, so the view is drawn unscaled. The video menu's "MetalFX
+  scaler" item and the Tuning screen's "scaler" row are then greyed with
+  the value in use ("set by the presentation: temporal", "off: no
+  temporal scaler on this GPU", or, with the Tuning screen's water debug
+  view chosen, "off: the debug view is drawn unscaled"). The menu does
+  not see the 3D view's height and counts the default scale as below
+  it, so in a small window or at a `viewsize` that shrinks the view to
+  the default rows or fewer it says "temporal" while `r_metalfx` is
+  yours; nor does it see `r_rt_direct_show`, which has no menu row.
+  Models, the sky,
   water, particles and the 2D layer stay stock. Retro and Ray traced are greyed in
   the menu "awaiting review" until their look is accepted, and work from
   the console; the values are never renumbered. Read at start-up and at
@@ -1282,6 +1314,30 @@ is.
   one sun ray).
   Default `0`; not saved with the configuration.
 
+* **r_rt_direct_bounce**: The scale of the Metal renderer's one bounce
+  of indirect light under RT-primary (`r_presentation 3`, TASK189):
+  each lightmapped world pixel traces one ray, cosine-weighted about its
+  normal, to the nearest face (passing up to four water or translucent
+  faces, as the shadow rays do). Where it meets a lightmapped world face,
+  the pixel takes that face's stock lightmap at the hit (the one the
+  stock renderer draws it with, its lightstyles applied) times the
+  mean colour of the face's texture, times this value. No second shadow
+  ray is traced: the lightmap already holds the map compiler's light at
+  the hit. A ray that reaches the sky adds nothing (the sky light,
+  `r_rt_direct_sky`, counts that light), and neither does one that meets
+  a model or nothing. It is added after the exposure, in the units of
+  the light the resolve reads, as the sky light is. The pixel's own
+  lightmap is never read. A face the stock renderer has not drawn this
+  frame keeps the lightmap it was last drawn with, so a switched light
+  outside the view can still show in the bounce. The lightmap is read
+  bilinearly, like the water's and the stock default
+  `metal_lightmap_filter 0`; with the bicubic option on it reads slightly
+  differently from the stock draw. `1` (the default); `0`
+  traces no bounce ray; at most `4`; a negative value or one that is not
+  a finite number counts as `0`. The ray's noise moves each frame unless
+  `r_rt_direct_seed` fixes it. Read each frame. Saved with the
+  configuration.
+
 * **r_rt_direct_exposure**: The exposure of the Metal renderer's direct
   light (`r_rt_direct`). `0` (the default) takes the map's fit, made once
   a map, on its first frame under RT-primary, and kept while that map
@@ -1307,7 +1363,8 @@ is.
   at most `64`. Saved with the configuration.
 
 * **r_rt_direct_seed**: The noise frame of the Metal renderer's sky
-  light ray under RT-primary (`r_rt_direct_sky`), with the rule of
+  light ray and bounce ray under RT-primary (`r_rt_direct_sky`,
+  `r_rt_direct_bounce`), with the rule of
   `r_rt_ao_seed`: `1` or more fixes the noise at that frame (cut to an
   integer, at most `65535`), the same on every frame, so recorded frames
   are repeatable; `0` (the default), a negative value or one that is not
@@ -1325,17 +1382,24 @@ is.
   lights' term alone (the muzzle flashes, explosions and other lights of
   the frame, each with its shadow ray), on white walls; `5` the sky
   light's term alone (`r_rt_direct_sky`, with its ray), on white walls;
-  `6` the sun's term alone (with its ray), on white walls. Only the
-  picture (`0`) adds the sky's and the sun's terms to the direct term:
-  views `1` to `4` trace neither the sky's nor the sun's ray, so `1` is
-  the direct term alone and `3` differs from it by its shadows only, and
-  `5` and `6` each trace only their own. Views `5` and `6` still trace
+  `6` the sun's term alone (with its ray), on white walls; `7` the
+  bounce's term alone (`r_rt_direct_bounce`, with its ray), on white
+  walls. Only the picture (`0`) adds the sky's, the sun's and the
+  bounce's terms to the direct term: views `1` to `4` trace none of their
+  rays, so `1` is the direct term alone and `3` differs from it by its
+  shadows only, and `5`, `6` and `7` each trace only their own. Views `5` and `6` still trace
   the map's and the dynamic lights' shadow rays, and count them on the
-  `r_rt_stats 2` line, though they show none of that light. Every view of the map's lights is at the map's
-  exposure (`r_rt_direct_exposure`); the sky's and the sun's terms are
-  added after it, as RT4's sun is. The `r_rt_stats 2` line's sums under
+  `r_rt_stats 2` line, though they show none of that light, and so does
+  view `7`. Every view of the map's lights is at the map's
+  exposure (`r_rt_direct_exposure`); the sky's, the sun's and the
+  bounce's terms are added after it, as RT4's sun is. The `r_rt_stats 2` line's sums under
   views `3` and `4` are of the term shown. Pixels that are not
-  lightmapped world are black. Not saved with the configuration.
+  lightmapped world are black. When `r_rt_temporal` is above `0` the
+  views show the accumulated term, except view `2` (the visibility),
+  which stays the trace's own; changing `r_rt_direct_show` starts the
+  history again. Ray traced (`r_presentation 3`) reads `r_metalfx` as
+  `0` while a view is asked for, so it is drawn unscaled. Not saved with
+  the configuration.
 
 * **r_rt_direct_sky**: The scale of the Metal renderer's sky light under
   RT-primary (`r_presentation 3`, TASK189): each lightmapped world pixel
@@ -1492,7 +1556,19 @@ is.
   (the list of its pixels, the trace) and the time from the first's start
   to the last's end, the pass's time being their sum (the water's marks
   are a draw of the G-buffer raster, timed with it, so there are no
-  raster figures). Nothing
+  raster figures); and under the Ray traced presentation with
+  `r_rt_temporal` above `0` a line for its accumulation and its 5 x 5
+  filter, timed together,
+  `ref_metal: rt direct temporal: frame N: X ms` (`- ms` when no time was
+  measured). At `1` and above, with a MetalFX scaler on
+  (`r_metalfx`), a 3D view that drops the scaler's history or that of
+  `r_rt_temporal` (the history RT-primary's accumulation shares with the
+  other effects) prints one line naming both sets of reasons,
+  `ref_metal: r_rt_stats: reset: scaler <reasons>, temporal <reasons>`:
+  the scaler's as `r_metalfx` lists them, the temporal history's as
+  `first` (a map load, a `vid_restart`, a frame that accumulated no view),
+  `size`, `rect` and `cut`, and `none` for a history that is kept; with no
+  scaler it prints nothing. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
@@ -1563,9 +1639,10 @@ is.
 * **r_rt_temporal**: The Metal renderer's temporal accumulation of the
   ray-traced effects (RT7): the weight of a pixel's history in the
   exponential blend with the frame's own value, so that the effects are
-  steady at low ray counts. `0` (the default) turns it off: no history is
-  made, written or read, and every frame is the same as without it. A
-  value above `0` blends; one above `0.98` counts as `0.98`, and a
+  steady at low ray counts, `0.9` by default. `0` turns it off: no
+  history is made, written or read, no denoiser runs, and every frame is
+  the same as without it. A value above `0` blends; one above `0.98`
+  counts as `0.98`, and a
   negative one or one that is not a finite number as `0`. A young history
   is the plain mean of its samples. The history is read where the
   G-buffer's motion vectors say the point was, and dropped where that is
@@ -1579,12 +1656,57 @@ is.
   also starts again after a frame whose pass it skipped. It accumulates
   `r_rt_shadows` (each light's visibility, before the light is added),
   `r_rt_sun` and `r_rt_ao`, each with its own history and one reset for
-  the three. `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show`
-  show the frame's own trace, before the accumulation. The design's
-  default of `0.9` is set once the denoiser lands and the look is
-  judged. Saved with the configuration; applies from the next frame.
-  Not on the Ray tracing screens yet: it joins the tuning screen, the
-  presets and the settings optimizer with its default.
+  the three. While it is above `0`, the accumulated AO and sun are also
+  denoised before the resolve: a 5 x 5 blur guided by the distance from
+  the eye and the normal, full on a pixel with one sample in its history
+  and fading to none at 16, so a history that has just started again is
+  smoothed and a settled one is left sharp; the history keeps the
+  accumulation alone. Under the Ray traced presentation
+  (`r_presentation 3`) it also accumulates that presentation's light
+  (TASK190): the direct light, the sky light, the sun and the bounce,
+  summed and before the albedo, with a history of its own, made only under
+  that presentation and one reset shared with the others; the same
+  rejections apply but the dynamic-light set's, since that light sums every
+  light. That light is then denoised by the same 5 x 5 filter, the sum
+  rather than each term, each of red, green and blue with its own
+  neighbours, by the same guides and the same strength by the sample
+  count (TASK190 slice 2); the history keeps the accumulation alone. The
+  presentation does not set `r_rt_temporal`: the value is the
+  user's, and at `0` the presentation's frames are the same as without it.
+  `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the
+  frame's own trace, before the accumulation; `r_rt_direct_show`'s
+  terms are shown accumulated, as the picture reads them, except view 2,
+  its history starting again when `r_rt_direct_show` changes. The default
+  moved from `0` to the design's `0.9` (TASK59 slice 2) once the denoiser
+  landed: until then `0` kept every frame as before while the
+  accumulation was built; the committed `rt-*` pin scenarios set it to
+  `0` so that their frames stay those of the passes alone. While it is
+  above `0`, the water reflections of `r_rt_water`, which have no history
+  (the warp moves every frame), get a 3 x 3 blur guided by the distance
+  from the eye, over the neighbours that hold a reflection on the same
+  water (TASK59 slice 2b); at `0` they are the trace's alone, as before.
+  The blur runs under RT-primary (`r_presentation 3`) too, which turns
+  the water on (TASK190 slice 2). The AO's and the sun's denoiser do not
+  run there, since RT-primary reads `r_rt_ao` and `r_rt_sun` as `0`.
+  The accumulation's memory, per pixel of the render size, is 112 bytes
+  for the three effects (the AO 32, the sun 32, the shadows 48), made
+  only for an effect that is on: at 1920 x 1080 that is 232,243,200 bytes
+  with all three on, at 3840 x 2160 928,972,800 (about 0.9 GB); the
+  reflections' blur adds 4 bytes a pixel while the water is on. A failed
+  allocation is logged once and the frames are then the trace's alone;
+  for the reflections' blur, once per render size, since a new size tries
+  it again.
+  Saved with the configuration; applies from the next frame. The Ray
+  tracing menu's tuning screen has it as "accumulate" (0 to 0.98, the
+  renderer's own maximum, in steps of 0.02): live when shadows, sun, AO
+  or water runs, so also under RT-primary, whose water is on and whose
+  light it accumulates; greyed "turn on
+  shadows, sun, AO or water first" while none of them runs, and "set by
+  the presentation" under Retro; the
+  presets and the A/B hold it. The tuning screen has no rule by device
+  class: the row and its default are the same on every device (whether a
+  default may differ by device class is decision 0014's open question).
+  The settings optimizer does not search it.
 
 * **r_rt_water**: When set to `1`, the Metal renderer gives water a
   ray-traced reflection, one bounce: from each pixel of water (the
@@ -1693,7 +1815,10 @@ is.
   and translucent surfaces are left out of these views. `0` (the
   default) shows the picture; a value above `2` counts as `2`, one that
   is not a finite number as `0`, and a fraction is cut to the whole
-  number below it. Cheat-protected: reset to `0` in multiplayer. Applies
+  number below it. Ray traced (`r_presentation 3`) reads `r_metalfx` as
+  `0` while a view is asked for, so it is drawn unscaled; it goes by the
+  value alone, so the scaler stays off on a map without water too, where
+  no view is drawn. Cheat-protected: reset to `0` in multiplayer. Applies
   from the next frame.
 
 

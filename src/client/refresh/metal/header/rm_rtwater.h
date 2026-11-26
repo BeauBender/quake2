@@ -269,6 +269,14 @@ int rmb_rtw_prepare(unsigned long w, unsigned long h, int ws);
 /* the view the next G-buffer view traces with (copied); NULL turns the pass off for that view */
 void rmb_rtw_set_view(const rm_rtw_view_t *v);
 
+/*
+ * TASK59 slice 2b: 1 when the next view's reflection gets the 3 x 3
+ * depth-guided blur after its trace (rm_rtwdenoise.metal; r_rt_temporal
+ * above 0, under every presentation since TASK190 slice 2); 0 releases
+ * the blur's pipeline and output.
+ */
+void rmb_rtw_set_blur(int on);
+
 /* the stats of the frames whose pass completed since the last call, at most cap; their number */
 int rmb_rtw_stats(rm_rtw_stats_t *s, int cap);
 

@@ -38,6 +38,9 @@
  *   The counts and the exposure fit's sums. TASK189 (PM7 slice 1) adds
  *   the sky light and the sun (rm_rtdir_open: one cosine-weighted sky ray
  *   and one sun ray a pixel, RT2's rule at a face), after the exposure;
+ *   slice 2 the bounce (rm_rtdir_bounce: one cosine-weighted closest-hit
+ *   ray a pixel, the stock lightmap read at its hit times the hit's
+ *   albedo), after the exposure too;
  * - rm_fragment_rtdir_show, r_rt_direct_show's views over the resolve.
  *
  * =======================================================================
@@ -70,11 +73,24 @@ struct rm_rtdir_view
 	uint ndlights;
 	uint nself;
 	uint frame;
-	uint pad0;
+	uint nbrec;
 	float4 sun_dir;
 	float4 sun;
 	float4 sky;
+	float4 bounce;
 };
+
+/* the map's buffers (rmb_rt_bind_geometry, rm_rtwater.metal's rm_rtw_geom): vertices, triangles, the stride in float4s */
+struct rm_rtdir_geom
+{
+	uint nverts;
+	uint ntris;
+	uint stride4;
+	uint world;
+};
+
+/* TASK189 slice 2: the bounce's lightmap read, as the stock draw samples it (rm_rtwater.metal's rm_rtw_csmp) */
+constexpr sampler rm_rtdir_lmsmp(filter::linear, address::clamp_to_edge);
 
 /* rm_rtdir.h's rm_rtdir_light_t */
 struct rm_rtdir_light
@@ -186,8 +202,10 @@ rm_rtdir_seen(ray r, instance_acceleration_structure ias, device const uint *ins
 #define RM_RTDIR_C_SKY_HITS 12
 #define RM_RTDIR_C_SUN_RAYS 13
 #define RM_RTDIR_C_SUN_LIT 14
+#define RM_RTDIR_C_BOUNCE_RAYS 15
+#define RM_RTDIR_C_BOUNCE_HITS 16
 
-/* a pixel's counts: the lights in range and facing, the shadow rays, the ones that reached their light, the cap; the sky's and the sun's rays and hits (TASK189) */
+/* a pixel's counts: the lights in range and facing, the shadow rays, the ones that reached their light, the cap; the sky's and the sun's rays and hits (TASK189); the bounce's rays and shaded hits (slice 2) */
 struct rm_rtdir_tally
 {
 	uint inrange;
@@ -198,6 +216,8 @@ struct rm_rtdir_tally
 	uint sky_hits;
 	uint sun_rays;
 	uint sun_lit;
+	uint bounce_rays;
+	uint bounce_hits;
 };
 
 /*
@@ -512,7 +532,143 @@ rm_rtdir_open(constant rm_rtdir_view &v, uint2 px, float3 p, float3 n, instance_
 	return sum;
 }
 
-/* TASK189: a traced world pixel's light (rm_rtdir_out's) with the sky light and the sun added, the two alone under views 5 and 6 */
+/*
+ * TASK189 slice 2: the lightmap coordinates of a map triangle at a hit,
+ * its vertices' (the second float4's zw, rm_rtwater.metal's
+ * rm_rtw_tri_uv) by the hit's barycentrics. 0 when the triangle or a
+ * vertex is outside the buffers.
+ */
+static bool
+rm_rtdir_tri_lm(device const float4 *verts, device const uint *idx, constant rm_rtdir_geom &g, uint tri, float2 bc,
+		thread float2 &st)
+{
+	uint i0, i1, i2;
+	float4 a0, a1, a2;
+
+	if ((tri >= g.ntris) || (g.stride4 < 2))
+	{
+		return false;
+	}
+
+	i0 = idx[3 * tri];
+	i1 = idx[3 * tri + 1];
+	i2 = idx[3 * tri + 2];
+
+	if ((i0 >= g.nverts) || (i1 >= g.nverts) || (i2 >= g.nverts))
+	{
+		return false;
+	}
+
+	a0 = verts[i0 * g.stride4 + 1];
+	a1 = verts[i1 * g.stride4 + 1];
+	a2 = verts[i2 * g.stride4 + 1];
+	st = float2(mtl_rtsky_bary(a0.z, a1.z, a2.z, bc.x, bc.y), mtl_rtsky_bary(a0.w, a1.w, a2.w, bc.x, bc.y));
+	return true;
+}
+
+/*
+ * TASK189 slice 2, the one bounce of indirect light at the world point p
+ * of unit normal n (pixel px), in the light attachment's units (added
+ * after the exposure, as the sky's and the sun's terms): one
+ * cosine-weighted closest-hit ray (mtl_rtsky_dir, on the blue-noise
+ * tile's third and fourth numbers at px moved on by v.frame, the AO's
+ * second ray's), its faces by mtl_rtsky_bounce_at: water and translucent
+ * faces passed, a lightmapped world face shaded with the stock lightmap at
+ * the hit (the array the stock draw samples, which R_RegenAllLightmaps
+ * keeps with the frame's lightstyles), times that face's albedo (its
+ * record's, brec) and v.bounce.x; the sky, a model and nothing met give 0.
+ * Only where the view and the scale want it (mtl_rtsky_bounces). No shadow
+ * ray: the lightmap holds qrad3's light at the hit. The pixel's own
+ * lightmap never enters: atlas is read at the hit's coordinates alone.
+ */
+static float3
+rm_rtdir_bounce(constant rm_rtdir_view &v, uint2 px, float3 p, float3 n, instance_acceleration_structure ias,
+		device const uint *inst, device const uchar *tmat, uint ntris, device const ushort *tile,
+		texture2d_array<float> atlas, device const float4 *verts, device const uint *idx, constant rm_rtdir_geom &g,
+		device const uint *brec, thread rm_rtdir_tally &t)
+{
+	intersector<triangle_data, instancing> isect;
+	float3 o, dir;
+	ray r;
+
+	if (!mtl_rtsky_bounces(v.show, v.bounce.x))
+	{
+		return float3(0.0f);
+	}
+
+	o = p + n * mtl_rtao_bias(distance(p, v.eye.xyz), v.bias_k);
+
+	{
+		const float u = mtl_rtao_noise(tile[mtl_rtao_tile_index(px.x, px.y, 2u)], v.frame, 2u);
+		const float w = mtl_rtao_noise(tile[mtl_rtao_tile_index(px.x, px.y, 3u)], v.frame, 3u);
+		const mtl_rtao_v3_t d = mtl_rtsky_dir(mtl_rtao_v3(n.x, n.y, n.z), u, w);
+
+		dir = float3(d.x, d.y, d.z);
+	}
+
+	isect.assume_geometry_type(geometry_type::triangle);
+	r = ray(o, dir, 0.0f, MTL_RTSUN_RANGE);
+	t.bounce_rays++;
+
+	for (int face = 0; face <= MTL_RTDIR_LAYERS; face++)
+	{
+		intersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);
+		uint b, tri = 0xffffffffu, m = 0xffu, at, rec, slice;
+		float2 st;
+		float3 l;
+
+		if (hit.type == intersection_type::none)
+		{
+			return float3(0.0f);
+		}
+
+		b = inst[2 * hit.instance_id];
+
+		if (b != 0xffffffffu)
+		{
+			tri = b + hit.primitive_id;
+			m = (tri < ntris) ? (uint)tmat[tri] : (uint)MTL_GB_MAT_WORLD;
+		}
+
+		at = mtl_rtsky_bounce_at(m, face);
+
+		if (at == MTL_RTSKY_BOUNCE_PASS)
+		{
+			r.min_distance = hit.distance + 0.01f;
+
+			if (!(r.min_distance < r.max_distance))
+			{
+				return float3(0.0f);
+			}
+
+			continue;
+		}
+
+		if ((at != MTL_RTSKY_BOUNCE_SHADE) || (tri >= v.nbrec))
+		{
+			return float3(0.0f);
+		}
+
+		rec = brec[tri];
+		slice = mtl_rtsky_brec_slice(rec);
+
+		if ((slice == MTL_RTSKY_NOLM) || (slice >= atlas.get_array_size()) ||
+			!rm_rtdir_tri_lm(verts, idx, g, tri, hit.triangle_barycentric_coord, st))
+		{
+			return float3(0.0f);
+		}
+
+		l = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;
+		t.bounce_hits++;
+		return float3(mtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 0u), l.r, v.bounce.x),
+				mtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 1u), l.g, v.bounce.x),
+				mtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 2u), l.b, v.bounce.x));
+	}
+
+	return float3(0.0f);
+}
+
+/* TASK189: a traced world pixel's light (rm_rtdir_out's) with the sky light and the sun added, the two alone under views 5 and 6 (slice 2: and the bounce, alone under view 7) */
 static float4
 rm_rtdir_out_open(float4 c, float3 open, uint show)
 {
@@ -595,13 +751,18 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 		constant rm_rtdir_dlight *dl [[buffer(10)]],
 		device const uint *self [[buffer(11)]],
 		device const ushort *tile [[buffer(12)]],
+		texture2d_array<float> atlas [[texture(7)]],
+		device const float4 *verts [[buffer(13)]],
+		device const uint *idx [[buffer(14)]],
+		constant rm_rtdir_geom &g [[buffer(15)]],
+		device const uint *brec [[buffer(16)]],
 		uint2 px [[thread_position_in_grid]])
 {
 	const bool inside = (px.x < light_out.get_width()) && (px.y < light_out.get_height());
 	uint m = MTL_GB_MAT_NONE, world = 0u;
 	float d = 1.0f;
 	float4 nn = float4(0.0f);
-	rm_rtdir_tally t = { 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
+	rm_rtdir_tally t = { 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
 
 	if (inside)
 	{
@@ -623,6 +784,10 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 	const float3 open = world ? rm_rtdir_open(v, px, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f), ias,
 			inst, tmat, ntris, tile, t) : float3(0.0f);
 
+	/* slice 2: the bounce, the stock lightmap read at its hit alone (never at the pixel) */
+	const float3 bounce = world ? rm_rtdir_bounce(v, px, rm_rtdir_position(v, px, d), normalize(nn.xyz * 2.0f - 1.0f),
+			ias, inst, tmat, ntris, tile, atlas, verts, idx, g, brec, t) : float3(0.0f);
+
 	/* the fit's sample: the lightmap enters the frame's sums, never a pixel's light */
 	const uint sampled = (world && rm_rtdir_fit_at(px)) ? 1u : 0u;
 	const uint2 fit = sampled ? rm_rtdir_fit_sample(lm, px, raw) : uint2(0u);
@@ -632,7 +797,7 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 		/* a traced world pixel takes the traced light; any other pixel its light as it was, bit for bit */
 		if (world)
 		{
-			light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show), px);
+			light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open + bounce, v.show), px);
 			vis_out.write(rm_rtdir_vis(v.show, t), px);
 		}
 		else
@@ -647,7 +812,7 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 		const uint c_w = simd_sum(world), c_i = simd_sum(t.inrange), c_r = simd_sum(t.rays), c_l = simd_sum(t.lit);
 		const uint c_fl = simd_sum(fit.x), c_fr = simd_sum(fit.y), c_fn = simd_sum(sampled), c_c = simd_sum(t.capped);
 		const uint c_sr = simd_sum(t.sky_rays), c_sh = simd_sum(t.sky_hits), c_ur = simd_sum(t.sun_rays);
-		const uint c_ul = simd_sum(t.sun_lit);
+		const uint c_ul = simd_sum(t.sun_lit), c_br = simd_sum(t.bounce_rays), c_bh = simd_sum(t.bounce_hits);
 
 		if (simd_is_first())
 		{
@@ -663,6 +828,8 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_SKY_HITS], c_sh, memory_order_relaxed);
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_SUN_RAYS], c_ur, memory_order_relaxed);
 			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_SUN_LIT], c_ul, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_BOUNCE_RAYS], c_br, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTDIR_C_BOUNCE_HITS], c_bh, memory_order_relaxed);
 		}
 	}
 }
@@ -671,7 +838,8 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
  * r_rt_direct_show over the resolved view: 1, 3 and 4, the direct term
  * alone (the light the resolve reads, on white albedo; 4 the dynamic
  * lights' term only; TASK189's 5 and 6 the sky light's and the sun's
- * terms alone, the kernel writing them by themselves); 2, the shadow
+ * terms alone, the kernel writing them by themselves; slice 2's 7 the
+ * bounce alone); 2, the shadow
  * visibility (grey, the share of the lights in range whose ray reached
  * them; dark blue where no light is in range); black on every pixel that
  * is not a traced world pixel.

@@ -538,6 +538,93 @@ test_pres_overlay(void)
 	CHECK(rm_pres_value(-1, "r_rt_ao", 0.0f) == 0.0f);
 }
 
+/*
+ * TASK190 slice 3: RT-primary's overlay row r_metalfx 2, the temporal
+ * scaler, whatever the user's value; its scale and frame generation stay
+ * the user's. rm_pres_fx is the value the renderer reads: the row where
+ * the device has the temporal scaler, no development view is shown and
+ * the internal size is below the output; 0 (off) without the scaler or
+ * with a view; the user's at the output's own size (so RT-primary's pins,
+ * at 480 lines and the default scale, run no scaler of the mode's); under
+ * every other mode rm_pres_value's.
+ */
+static int
+same(float a, float b)
+{
+	return (a == b) || ((a != a) && (b != b));
+}
+
+static void
+test_pres_rtprimary_fx(void)
+{
+	const float users[] = { 0.0f, 1.0f, 2.0f, 3.0f, -1.0f, NAN };
+	int j, below;
+
+	for (j = 0; j < (int)(sizeof(users) / sizeof(users[0])); j++)
+	{
+		const float u = users[j];
+
+		CHECK(rm_pres_value(RM_PRES_RTPRIMARY, "r_metalfx", u) == 2.0f);
+		CHECK(rm_pres_fx(RM_PRES_RTPRIMARY, u, 1, 0, 1) == 2.0f);
+		/* at the output's own size the mode runs no scaler: the user's, TAA at 1:1 where it asks for one */
+		CHECK(same(rm_pres_fx(RM_PRES_RTPRIMARY, u, 1, 0, 0), u));
+
+		for (below = 0; below <= 1; below++)
+		{
+			/* no temporal scaler on the device, or a development view: off, never the spatial one below */
+			CHECK(rm_pres_fx(RM_PRES_RTPRIMARY, u, 0, 0, below) == 0.0f);
+			CHECK(rm_pres_fx(RM_PRES_RTPRIMARY, u, 1, 1, below) == 0.0f);
+			CHECK(rm_pres_fx(RM_PRES_RTPRIMARY, u, 0, 3, below) == 0.0f);
+			/* Retro reads 0; stock and Enhanced the user's, with or without the scaler, a view or the size */
+			CHECK(rm_pres_fx(RM_PRES_RETRO, u, 1, 0, below) == 0.0f);
+			CHECK(rm_pres_fx(RM_PRES_RETRO, u, 0, 1, below) == 0.0f);
+			CHECK(same(rm_pres_fx(RM_PRES_STOCK, u, 1, 0, below), u));
+			CHECK(same(rm_pres_fx(RM_PRES_STOCK, u, 0, 1, below), u));
+			CHECK(same(rm_pres_fx(RM_PRES_ENHANCED, u, 0, 0, below), u));
+			CHECK(same(rm_pres_fx(RM_PRES_ENHANCED, u, 1, 1, below), u));
+		}
+
+		CHECK(rm_pres_value(RM_PRES_RTPRIMARY, "r_metalfx_scale", 0.5f) == 0.5f);
+		CHECK(rm_pres_value(RM_PRES_RTPRIMARY, "r_metalfx_interp", 1.0f) == 1.0f);
+	}
+
+	/* the row is the presentation's, so the user's r_metalfx is never written back */
+	CHECK(rm_effect_overlaid(RM_PRES_RTPRIMARY, "", "r_metalfx"));
+	CHECK(rm_effect_overlaid(RM_PRES_RTPRIMARY, NULL, "r_metalfx"));
+	CHECK(!rm_effect_overlaid(RM_PRES_RTPRIMARY, "", "r_metalfx_scale"));
+	CHECK(!rm_effect_overlaid(RM_PRES_ENHANCED, "", "r_metalfx"));
+	CHECK(!rm_effect_overlaid(RM_PRES_STOCK, "", "r_metalfx"));
+}
+
+static int
+fx_is(int mode, int temporal, const char *want)
+{
+	char buf[256];
+
+	return rm_pres_fx_format(mode, temporal, buf, sizeof(buf)) && !strcmp(buf, want);
+}
+
+/* TASK190 slice 3: RT-primary's scaler line, with its reason where the row reads off; no line for another mode */
+static void
+test_pres_fx_format(void)
+{
+	char buf[256], small[16];
+
+	CHECK(fx_is(RM_PRES_RTPRIMARY, 1,
+			"ref_metal: presentation: ray traced: r_metalfx reads 2 (temporal) where the internal size is below the output, r_metalfx_scale the user's"));
+	CHECK(fx_is(RM_PRES_RTPRIMARY, 0,
+			"ref_metal: presentation: ray traced: r_metalfx reads 0 (off): no MetalFX temporal scaler on this device"));
+
+	for (int m = RM_PRES_STOCK; m < RM_PRES_RTPRIMARY; m++)
+	{
+		strcpy(buf, "x");
+		CHECK(!rm_pres_fx_format(m, 1, buf, sizeof(buf)) && buf[0] == '\0');
+	}
+
+	CHECK(!rm_pres_fx_format(RM_PRES_RTPRIMARY, 1, small, sizeof(small)) && small[0] == '\0');
+	CHECK(!rm_pres_fx_format(RM_PRES_RTPRIMARY, 1, small, 0));
+}
+
 static int
 pres_is(float requested, int mode, int why, const char *want)
 {
@@ -711,7 +798,9 @@ main(int argc, char **argv)
 
 	test_pres_decide();
 	test_pres_overlay();
+	test_pres_rtprimary_fx();
 	test_pres_format();
+	test_pres_fx_format();
 	test_ab_overlay();
 	test_effect_overlaid();
 	test_retro_math();

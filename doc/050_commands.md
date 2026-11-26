@@ -228,6 +228,22 @@ original clients (Vanilla Quake II) commands are still in place.
   Options menu's "upscale textures" page runs it. See "Textures
   upscaled on your own machine" in `030_configuration.md`.
 
+* **vid_restart**: Restarts the renderer. The restart runs at the
+  client's next check for video changes, not at once: it stops all
+  sounds, shuts the loaded renderer down and loads the one `vid_renderer`
+  names, so a change to `vid_renderer` takes effect here; in a game, the
+  map's models and images are then registered with it again. If that renderer cannot be
+  loaded, the next one in the order `gl3`, `metal` (macOS only), `gl1`,
+  `soft` is tried and written to `vid_renderer`; when none loads, the
+  game stops with "No usable renderer found!". Every cvar a renderer
+  reads only at its start takes a change at this command, among them
+  `vid_gamma` under the OpenGL 1.4 and Metal renderers and
+  `r_presentation`; `doc/040_cvarlist.md` says which other cvars need
+  it. The Video menu's "apply" runs it when a changed setting needs it
+  (the renderer, the mode, fullscreen, vsync, anisotropic filtering,
+  MSAA or the presentation), and so does "apply (restart)" on the ray
+  tracing screen's "tuning..." page.
+
 * **viewpos**: Show player position.
 
 * **vstr**: Inserts the current value of a variable as command text.

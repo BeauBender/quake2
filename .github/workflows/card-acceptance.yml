@@ -1,0 +1,46 @@
+name: Card acceptance
+run-name: card-acceptance
+# A card closed as completed keeps that state only when every acceptance
+# criterion in its body has a verdict: met (ticked), "moved to #N" or
+# "dropped: <reason>". Otherwise the card is reopened as state:review with
+# a comment naming the criteria, and the run fails. This holds whichever
+# way the card was closed: a merged pull request, the loop's ship path, gh
+# issue close, or the web UI (docs/decisions/0015-acceptance-verdicts.md).
+# The rules and the gh calls are in scripts/card-acceptance.sh, which
+# tests/check-card-acceptance.sh checks, with this file.
+on:
+  issues:
+    types: [closed]
+permissions: {}
+concurrency:
+  # The group of .github/workflows/card-close-labels.yml for the same
+  # issue, so the two runs never interleave: whichever runs second sees the
+  # other's result (that workflow edits only an issue that is closed).
+  group: Card close labels-${{ github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  acceptance:
+    name: Acceptance verdicts
+    # Only a close by the owner, as in card-close-labels.yml.
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Check the verdicts
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        # Only the number and the close reason come from the event; the body
+        # and labels are read with gh api into files by the script.
+        N: ${{ github.event.issue.number }}
+        REASON: ${{ github.event.issue.state_reason }}
+      shell: sh
+      run: |
+        scripts/card-acceptance.sh closed "$N" "$REASON"

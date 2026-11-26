@@ -22,7 +22,10 @@
 #   prints a line that is not "<cvar> <value>";
 # - shared: a cvar name added to the shared reader's refusals (a canary) is
 #   not refused by every reader, as when one keeps a private copy of the
-#   rules.
+#   rules;
+# - argcount: the record of a scenario of the tree, seeded with the trace on,
+#   would start the engine with more arguments than MAX_NUM_ARGVS in
+#   src/common/argproc.c, which the engine refuses at once.
 # Then it runs its mutants, each a change to a copy that the test named
 # must catch.
 #
@@ -280,10 +283,56 @@ t_shared() {
 	return $bad
 }
 
+# t_argcount <tree>: the record of each scenario of the tree fits the
+# engine's command line. COM_InitArgv (src/common/argproc.c) stops the engine
+# with "argc > MAX_NUM_ARGVS" when argc, the binary included, is above
+# MAX_NUM_ARGVS; the record passes three words for each set line on top of its
+# own. Each scenario is counted as a seeded dry run with the trace on, the
+# most the driver adds (pins_record and pins_seed), from the words of the
+# command line the dry run prints (no word of it holds a space: a scenario
+# value cannot, and the scratch paths here hold none)
+t_argcount() {
+	bad=0
+	_lim=$(sed -n 's/^#define MAX_NUM_ARGVS \([0-9][0-9]*\).*/\1/p' "$here/src/common/argproc.c")
+	case $_lim in
+	'' | *[!0-9]*)
+		fail "cannot read MAX_NUM_ARGVS from src/common/argproc.c"
+		return 1
+		;;
+	esac
+	_a=$tmp/argc
+	rm -rf "${_a:?}"
+	mkdir -p "$_a/gd/baseq2"
+	printf '#!/bin/sh\nexit 0\n' > "$_a/eng"
+	chmod +x "$_a/eng"
+	_k=0 _worst=0 _wname=
+	for _f in "$1"/scripts/pins/scenarios/*.cfg; do
+		[ -f "$_f" ] || continue
+		_k=$((_k + 1))
+		_s=$(basename "$_f" .cfg)
+		_d=demo1.dm2
+		[ "$_s" != cinematic ] || _d=idlog.cin
+		if ! PINS_BIN="$_a/eng" PINS_STORE="$_a/store" PINS_BASEDIR="$_a/gd" PINS_DEMO=$_d PINS_SEED=1 PINS_DRYRUN=1 \
+			/bin/bash "$1/scripts/pins.sh" record gl1 "$_s" > "$_a/line" 2> "$_a/err"; then
+			fail "the dry run of $_s failed: $(head -n 1 "$_a/err")"
+			continue
+		fi
+		_n=$(awk '{ n += NF } END { print n + 0 }' "$_a/line")
+		[ "$_n" -le "$_lim" ] || fail "$_s.cfg: the record's command line has $_n words, MAX_NUM_ARGVS is $_lim (the engine stops with 'argc > MAX_NUM_ARGVS')"
+		if [ "$_n" -gt "$_worst" ]; then
+			_worst=$_n
+			_wname=$_s
+		fi
+	done
+	[ "$_k" -ge 20 ] || fail "the tree holds $_k scenarios"
+	echo "$me: argc: the most is $_worst of $_lim ($_wname), headroom $((_lim - _worst))"
+	return $bad
+}
+
 # ---- the tree ----------------------------------------------------------
 tree "$tmp/real"
 failed=
-for _test in t_refuse t_accept t_closed t_shared; do
+for _test in t_refuse t_accept t_closed t_shared t_argcount; do
 	if "$_test" "$tmp/real"; then
 		echo "$me: ok   $_test"
 	else
@@ -341,8 +390,13 @@ mutant mfx-private-copy metalfx-report/mfx.py 'reader = os.path.join(ROOT, "scri
 	'reader = os.path.join(HERE, "pins-copy.sh")' t_shared metalfx-report/pins-copy.sh
 mutant record-private-rules pins.sh 'sets=$(scenario_sets "$scen_dir/$scenario.cfg" "$scenario.cfg") || exit 1' \
 	'sets=$(sed -n "s/^set //p" "$scen_dir/$scenario.cfg")' t_refuse
+# rt-all-metalfx2 with the ten lines that restate a default put back, as it was committed first: 141 words
+mutant argc-restated-defaults pins/scenarios/rt-all-metalfx2.cfg 'set r_rt_temporal 0' "$(printf '%s\n' \
+	'set r_rt_shadows_show 0' 'set r_rt_ao_range 128' 'set r_rt_ao_min 0.4' 'set r_rt_ao_show 0' \
+	'set r_rt_sunscale 0.35' 'set r_rt_sunfloor 0.5' 'set r_rt_sun_show 0' 'set r_rt_water_normal 0.08' \
+	'set r_rt_water_reflect 0.5' 'set r_rt_water_show 0' 'set r_rt_temporal 0')" t_argcount
 [ "$mfail" -eq 0 ] || {
 	echo "$me: a mutant survived or did not apply"
 	exit 1
 }
-echo "$me: ok (4 tests, $nmut mutants caught)"
+echo "$me: ok (5 tests, $nmut mutants caught)"

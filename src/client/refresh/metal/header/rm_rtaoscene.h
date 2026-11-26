@@ -41,6 +41,7 @@ int RM_RTAO_Wanted(void);
 void RM_RTAO_Frame(const refdef_t *fd, int scene_ready);
 int RM_RTAO_Active(void);
 int RM_RTAO_ShowOnly(void);
+int RM_RTAO_ShowAsked(void);   /* TASK190 slice 3: Wanted and the _show cvar on, known before Frame and View (rm_rtfx_show_asked) */
 void RM_RTAO_View(const rm_view_t *view);
 
 /*
@@ -60,6 +61,17 @@ void RM_RTT_EndFrame(void);
  * for every effect after it; NULL while r_rt_temporal is 0.
  */
 void RM_RTT_BeginView(void);
+
+/* TASK59 slice 2b: 1 while r_rt_temporal is above 0 (rm_rtt_alpha), read alone: the history's state is not stepped */
+int RM_RTT_On(void);
 const rm_rtt_view_t *RM_RTT_ViewFor(const rm_view_t *view);
+
+/*
+ * TASK109: the reasons (RM_RTT_RESET_*) of the last step taken since the
+ * last call, then 0 until the next step: RM_FX_End reads them once a view,
+ * for the r_rt_stats reset line, so a view that steps nothing (the MOTION
+ * path, r_rt_temporal 0) reports none.
+ */
+unsigned RM_RTT_TakeReasons(void);
 
 #endif /* RM_RTAOSCENE_H */

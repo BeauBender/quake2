@@ -49,7 +49,7 @@ float rm_rtt_alpha(float v);
 /* the reasons (rm_rtt_step) a view resets the history; RM_RTT_RESET_ALL all of them */
 #define RM_RTT_RESET_FIRST 1    /* no last view: the first, a map load, a vid_restart, a frame without an accumulated view
                                    (every effect off, r_rt_temporal 0, a cinematic, the console with no map) */
-#define RM_RTT_RESET_SIZE 2     /* the render size: r_rt_scale's (RT11), r_rt_gbuffer_scale's, the window's */
+#define RM_RTT_RESET_SIZE 2     /* the render size: r_metalfx_scale's (RT11), r_rt_gbuffer_scale's, the window's */
 #define RM_RTT_RESET_RECT 4     /* the view's rectangle at the render size: viewsize */
 #define RM_RTT_RESET_CUT 8      /* the eye moved further than RM_RTT_CUT_DIST on an axis: a camera cut, a teleport */
 #define RM_RTT_RESET_ALL 15

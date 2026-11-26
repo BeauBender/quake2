@@ -18,7 +18,9 @@
         "do_not_enforce_on_create": false,
         "required_status_checks": [
           { "context": "build_macos_aarch64 (macos)", "integration_id": 15368 },
-          { "context": "invariants_macos", "integration_id": 15368 }
+          { "context": "invariants_macos (fast)", "integration_id": 15368 },
+          { "context": "invariants_macos (harness)", "integration_id": 15368 },
+          { "context": "invariants_macos (ios)", "integration_id": 15368 }
         ]
       }
     }

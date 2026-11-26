@@ -56,18 +56,30 @@ static unsigned long ao_count;  /* the views traced, the noise's frame without a
 /*
  * RT7 (TASK59): r_rt_temporal and the one reset state of the shadows',
  * the sun's and the AO's histories (slice 1b), so that a reset or a cut
- * resets the three in the same view.
+ * resets the three in the same view. It is a tuning row, so it is read
+ * through RM_Effect, the A/B harness's B side included (slice 2b).
  */
 static cvar_t *r_rt_temporal;
 static rm_rtt_state_t rtt_state;
 static int rtt_stepped;         /* this world view's step is taken: every effect gets rtt_view */
 static int rtt_on;              /* r_rt_temporal was above 0 at it */
 static rm_rtt_view_t rtt_view;
+static unsigned rtt_said;       /* TASK109: the last step's reasons, until RM_RTT_TakeReasons */
 
 void
 RM_RTT_Reset(void)
 {
 	rm_rtt_state_reset(&rtt_state);
+	rtt_said = 0;
+}
+
+unsigned
+RM_RTT_TakeReasons(void)
+{
+	const unsigned r = rtt_said;
+
+	rtt_said = 0;
+	return r;
 }
 
 void
@@ -80,6 +92,12 @@ void
 RM_RTT_BeginView(void)
 {
 	rtt_stepped = 0;
+}
+
+int
+RM_RTT_On(void)
+{
+	return rm_rtt_alpha(r_rt_temporal ? RM_Effect(r_rt_temporal) : 0.0f) > 0.0f;
 }
 
 const rm_rtt_view_t *
@@ -96,7 +114,7 @@ RM_RTT_ViewFor(const rm_view_t *view)
 	}
 
 	rtt_stepped = 1;
-	alpha = rm_rtt_alpha(r_rt_temporal ? r_rt_temporal->value : 0.0f);
+	alpha = rm_rtt_alpha(r_rt_temporal ? RM_Effect(r_rt_temporal) : 0.0f);
 	rtt_on = alpha > 0.0f;
 
 	/* off: the state forgotten, so the next view with it on resets; the effects release their histories */
@@ -115,6 +133,7 @@ RM_RTT_ViewFor(const rm_view_t *view)
 	k.vh = (int)view->vp.h;
 	VectorCopy(r_newrefdef.vieworg, k.org);
 	reasons = rm_rtt_step(&rtt_state, &k, &move);
+	rtt_said = reasons;
 	rtt_view = rm_rtt_view(alpha, reasons, move);
 	rtt_view.seq = rtt_state.seq;
 	return &rtt_view;
@@ -131,7 +150,7 @@ RM_RTAO_Init(const rmb_caps_t *caps)
 	r_rt_ao_scale = ri.Cvar_Get("r_rt_ao_scale", "0.5", CVAR_ARCHIVE);
 	r_rt_ao_rays = ri.Cvar_Get("r_rt_ao_rays", "2", CVAR_ARCHIVE);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
-	r_rt_temporal = ri.Cvar_Get("r_rt_temporal", "0", CVAR_ARCHIVE);
+	r_rt_temporal = ri.Cvar_Get("r_rt_temporal", "0.9", CVAR_ARCHIVE);
 	rm_rtt_state_reset(&rtt_state);
 	ao_device = caps->raytracing != 0;
 	ao_opened = ao_refused = ao_active = ao_viewed = 0;
@@ -229,6 +248,13 @@ int
 RM_RTAO_ShowOnly(void)
 {
 	return ao_active && ao_viewed && r_rt_ao_show && rm_rtao_show(r_rt_ao_show->value);
+}
+
+/* TASK190 slice 3: the view is asked for, whether or not this frame traces it yet (rm_main.c sizes the scaler before Frame) */
+int
+RM_RTAO_ShowAsked(void)
+{
+	return RM_RTAO_Wanted() && r_rt_ao_show && rm_rtao_show(r_rt_ao_show->value);
 }
 
 void

@@ -166,6 +166,7 @@ typedef struct
 	int mode;
 	rm_fx_size_t size;
 	float org[3];
+	int rt;                 /* TASK109: a ray-traced effect was on (rm_fx_step sets it; rm_fx_keep leaves it) */
 } rm_fx_last_t;
 
 #define RM_FX_RESET_FIRST 1     /* no last view: the first, a map, a vid_restart, a frame that drew no world view */
@@ -173,7 +174,8 @@ typedef struct
 #define RM_FX_RESET_SIZE 4      /* the input or output size: the scale, the rectangle's size, the window */
 #define RM_FX_RESET_RECT 8      /* the rectangle's place (viewsize) */
 #define RM_FX_RESET_CUT 16      /* the view moved further than cut: a camera cut, a teleport */
-#define RM_FX_RESET_ALL 31
+#define RM_FX_RESET_EFFECT 32   /* TASK109: a ray-traced effect on, the last scaled view had none */
+#define RM_FX_RESET_ALL 63
 
 /*
  * The client's own teleport distance: CL_CalcViewValues (cl_entities.c)
@@ -187,6 +189,15 @@ typedef struct
  * more than cut on any axis; a cut or an org that is not finite cuts.
  */
 unsigned rm_fx_reset(const rm_fx_last_t *last, int mode, const rm_fx_size_t *s, const float *org, float cut);
+
+/*
+ * TASK109: RM_FX_RESET_EFFECT when a view with a ray-traced effect on
+ * (rt) follows a last view with none, else 0: an effect kept on or
+ * turned off resets nothing, and with no last view the reset is FIRST's.
+ * With every effect off nothing writes RT7's history, and the scaler's
+ * holds frames without the effect.
+ */
+unsigned rm_fx_reset_effect(const rm_fx_last_t *last, int rt);
 
 /* this view becomes last */
 void rm_fx_keep(rm_fx_last_t *last, int mode, const rm_fx_size_t *s, const float *org);
@@ -206,14 +217,15 @@ typedef struct
 void rm_fx_state_reset(rm_fx_state_t *st);
 
 /*
- * One scaled world view of mode at sizes s from org: its reset reasons
- * against the last view (rm_fx_reset, cut), the jitter index started again
- * on a reset, this view's jitter (rm_fx_jitter at that index) into jx and
- * jy, the index advanced, the view kept as the last and the frame marked
- * as having drawn one. The reasons, 0 when the history is kept.
+ * One scaled world view of mode at sizes s from org, with a ray-traced
+ * effect on or not (rt): its reset reasons against the last view
+ * (rm_fx_reset, cut, and rm_fx_reset_effect), the jitter index started
+ * again on a reset, this view's jitter (rm_fx_jitter at that index) into
+ * jx and jy, the index advanced, the view kept as the last and the frame
+ * marked as having drawn one. The reasons, 0 when the history is kept.
  */
-unsigned rm_fx_step(rm_fx_state_t *st, int mode, const rm_fx_size_t *s, const float *org, float cut, float *jx,
-		float *jy);
+unsigned rm_fx_step(rm_fx_state_t *st, int mode, const rm_fx_size_t *s, const float *org, int rt, float cut,
+		float *jx, float *jy);
 
 /* the frame ended: one that drew no scaled view forgets the last, so the next view resets (FIRST) */
 void rm_fx_frame_end(rm_fx_state_t *st);
@@ -265,6 +277,23 @@ int rm_fx_fallback_format(const char *what, int asked, int got, const char *why,
  * scaler pass's GPU time (ms, below 0 not measured yet). 1 when it fits.
  */
 int rm_fx_stats_format(int mode, const rm_fx_size_t *s, unsigned resets, double gpu_ms, char *buf, size_t len);
+
+/*
+ * TASK109: the r_rt_stats reset line is printed for a view: a scaled world
+ * view (scaled), r_rt_stats (stats) finite and 1 or above, and either
+ * history reset (the scaler's RM_FX_RESET_* reasons or RT7's
+ * RM_RTT_RESET_*).
+ */
+int rm_fx_reset_says(int scaled, float stats, unsigned scaler, unsigned temporal);
+
+/*
+ * The r_rt_stats reset line (without a newline): "ref_metal: r_rt_stats:
+ * reset: scaler <names>, temporal <names>", the scaler's reasons (first
+ * mode size rect cut effect) and RT7's (RM_RTT_RESET_*: first size rect
+ * cut), "none" for a set with no known reason. 1 when it fits; 0, with
+ * buf empty, when it does not or neither set has a reason.
+ */
+int rm_fx_reset_line_format(unsigned scaler, unsigned temporal, char *buf, size_t len);
 
 /*
  * The line of what the device supports (without a newline): each
