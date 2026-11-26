@@ -1213,6 +1213,19 @@ c_untracked(struct run *r)
 	{
 		return fail(r, "no kill-sent: %s", r->log);
 	}
+	/*
+	 * nothing wakes a supervisor for a member it never watched, so the
+	 * after-kill clock is ticked, but only when the killed child is no
+	 * longer a zombie the count would still see (spun on, not slept on)
+	 */
+	for (i = 0; i < 100000000 && kill(c->pid, 0) == 0; i++)
+	{
+	}
+	if (kill(c->pid, 0) == 0)
+	{
+		return fail(r, "the child %d was never reaped", (int)c->pid);
+	}
+	tick(r, 'A');
 	if (ev_wait(r, "group-empty") == NULL || ev_wait(r, "reaped") == NULL)
 	{
 		return fail(r, "no group-empty and reaped events: %s", r->log);
