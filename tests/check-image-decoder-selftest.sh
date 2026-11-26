@@ -60,8 +60,10 @@ cleanup()
 			end_own "$_p" imgdecode_plain
 		done < "$_f"
 	done
-	# a hang stub the check left, and the helper case (k) saw
-	for _f in "${tmp:?}/hang.pids" "${tmp:?}/k.pids"; do
+	# a hang stub the check left, an escaped helper (it left the group, so
+	# no group signal reaches it, and it blocks on a fifo the rm below takes
+	# away), and the helper case (k) saw
+	for _f in "${tmp:?}/hang.pids" "${tmp:?}/esc.pids" "${tmp:?}/k.pids"; do
 		[ -f "$_f" ] || continue
 		while read -r _p; do
 			end_own "$_p" sh
