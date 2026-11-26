@@ -1,13 +1,10 @@
 # Installation
 
 This guide shows how to install Portmanbeau Quake II from scratch, for
-several platforms and for both the full and the demo version. Only Apple
-platforms are built and tested by this fork.
-
-Only Apple platforms are built and tested by this fork. The instructions for
-Windows, Linux and the BSDs below are kept as they were and those platforms
-are unmaintained: nothing tests them or runs them. Linux, BSD and Windows are
-compiled nowhere in CI; CodeQL analyses the code as built on macOS.
+both the full and the demo version. Only Apple platforms are built and
+tested by this fork: macOS, iOS, iPadOS, tvOS and visionOS. It publishes no
+binary packages, so the game is built from source (see below). The game
+data is the same on every platform.
 
 
 ## The Full Version
@@ -37,8 +34,7 @@ game. Without the patch the game will not work correctly!
    checksum is `490557d4a90ff346a175d865a2bade87`:
    https://deponie.yamagi.org/quake2/idstuff/q2-3.20-x86-full-ctf.exe
 2. Extract the patch into an empty directory. The patch comes as a
-   self-extracting ZIP file. On Windows it can be extracted by double
-   clicking on it, on other systems an archiver or the *unzip* command
+   self-extracting ZIP file. On a Mac an archiver or the *unzip* command
    can be used.
 
 Now remove the following files from the extracted patch. They're the
@@ -113,27 +109,14 @@ may be supported in the future.
 	* *rogue/music* for Ground Zero.
 
 
-#### Using a Shell Script
-
-An easy way to extract the music on unixoid platforms (BSD, Linux and
-MacOS) is to use *stuff/cdripper.sh*, a simple shellscript. It needs
-*cdparanoia* and *oggenc* (from the *vorbis-tools* package) installed.
-Use the package manager (apt, dnf, homebrew, pacman, pkg, ...) to
-install them.  Just execute the script and copy the resulting *music/*
-directory to:
-  * *baseq2/* for Quake II.
-  * *xatrix/* for The Reckoning.
-  * *rogue/* for Ground Zero.
-
-
 #### The GOG.com Release
 
 The Quake II distributed by GOG.com contains the soundtrack, it just
 needs to be copied into the game data directory. The target directory is
 just *music/*, next to *baseq2/*. **Not** inside *baseq2/*.
 
-Unixoid systems are case sensitive. On them the files should be named
-*TrackXX.ogg* with a capital T. Otherwise the game won't find them.
+On a case sensitive volume, and on an iPhone or iPad, the files should be
+named *TrackXX.ogg* with a capital T. Otherwise the game won't find them.
 
 
 ### Alternate Startup Configuration
@@ -191,8 +174,6 @@ loose files, or repack them as a `.pak` archive and copy that instead.
 This fork does not load `.pkz`, `.pk3` or other ZIP based archives;
 only `.pak` archives and loose files are read.
 
-The footstep sounds are included with the Yamagi Quake II Windows release.
-
 
 ## The Demo Version
 
@@ -207,8 +188,7 @@ no soundtrack.
    checksum is `4d1cd4618e80a38db59304132ea0856c`:
    https://deponie.yamagi.org/quake2/idstuff/q2-314-demo-x86.exe
 2. Extract the downloaded file. It's a self-extract ZIP archive.
-   On Windows it can be extracted by double clicking on it, on
-   other system an archiver or the *unzip* command can be used.
+   An archiver or the *unzip* command can be used.
 3. Create a new directory and a subdirectory *baseq2/* in it.
 4. Copy the *pak0.pak* and the *players/* subdirectory from the
    extracted archive into the newly created *baseq2/* subdirectory.
@@ -220,109 +200,63 @@ The MD5 checksums of the pakfiles are:
 * *baseq2/pak0.pak*: `27d77240466ec4f3253256832b54db8a`
 
 
-## Download and Extract the Executables
+## Executables
 
-How the Portmanbeau Quake II executables are installed depends on the
-platform:
+This fork publishes no binary packages. Compile it from source, see
+below. The build writes everything to the *release/* directory (*debug/*
+with `DEBUG=1`); the executable finds its renderer libraries and its
+game library next to itself, in the same directory, so copy everything from
+*release/* into one directory, for example the game data directory created
+above.
 
-- This fork publishes no binary packages. Compile it from source, see
-  below.
-- Most Linux distributions and BSD systems provide Yamagi Quake II
-  packages, which are not this fork. Theses packages may be outdated.
+**Please note:** The addons need their own game library, *game.dylib* in
+their own subdirectory (*xatrix/*, *rogue/*, *ctf/*). If you want to compile
+from source, have a look at the README files supplied with the addons.
 
-**Please note:** The addons needs their own game library. The libraries
-are included with the Yamagi Quake II Windows release. Linux distributions
-often package them in a distinced package. If you want to compile from
-source, have a look at the README files supplied with the addons.
+The game data is searched for, in this order, in:
 
-
-### Windows
-
-1. Get a Windows build of Portmanbeau Quake II. This fork publishes no
-   binary releases yet; build it from source (see below).
-2. Extract it into the gamedata directory created above. *quake2.exe*
-   must be placed next to the *baseq2/* subdirectory.
-
-On Windows the Portmanbeau Quake II installation is fully portable, the
-installation directory can be moved the installation directory wherever
-and whenever it's necessary. To update Portmanbeau Quake II just overwrite
-the old files with the new ones.
-
-There're two executables:
-
-* *yquake2.exe*: This is main executable and should be preferred.
-* *quake.exe*: This is just a wrapper to stay compatible with existing
-  setups. For technical reasons *quake.exe* may not start in foreground,
-  but in background!
-
-If Windows Defender is activated, that's the default on Windows 8 and
-Windows 10, it may complain that Portmanbeau Quake II is untrusted and should
-not be started. That's because Yamagi Quake II ships unsigned binaries, and so would any
-build of this fork. You can
-force Windows to start it anyways.
-
-
-### Binary Package from Linux distributions or BSD systems
-
-Most Linux distributions and BSD systems provide Yamagi Quake II
-packages, which are not this fork. Please refer to the documentation of the distribution or
-system. The gamedata is searched at:
-
-- A global directory specified by the package.
+- The user's home directory (see the [Index File](010_index.md)); not with
+  `-portable`.
 - The same directory as the quake2 executable.
 - A directory given with the *-datadir /path/to/quake2_installation/*
   commandline argument.
-- In *$HOME/.yq2*
+- A systemwide directory, if the build set one (`WITH_SYSTEMWIDE`, see the
+  [Packaging Guide](070_packaging.md)).
 
-If you're a package maintainer, please look at our packaging guide at
-the [Packaging Guide](070_packaging.md).
+Mods given with the `game` cvar are searched before *baseq2/*.
 
 
 ## Compiling from source
 
-To compile Portmanbeau Quake II from source the following dependencies
-(including development headers) are needed:
-
-* A GCC compatible compiler like *gcc*, *clang* or *MinGW-w64*.
-* A LibGL implementation with system headers.
-* SDL 3.0. On MacOS it is not needed: SDL 3 is built from the source
-  in *third_party/SDL3/* as part of the client build.
-
-
-### Prerequisites on Unixoid Platforms
-
-The build dependencies can be installed with:
-
-* On Arch Linux based distributions: `pacman -S base-devel mesa
-  sdl3`
-* On Debian based distributions: `apt install build-essential
-  libgl1-mesa-dev libsdl3-dev`
-* On FreeBSD: `pkg install gmake libGL sdl3`
-* On NetBSD: `pkgin install gmake sdl3`
-* On OpenBSD: `pkg_add gmake sdl3`
-* On Solaris/Illumos: `pkg install sdl3`
-* On Haiku: `pkgman libsdl3_devel`
-* On MacOS only the Xcode command line tools are needed (they provide
-  *clang* and *make*). SDL 3 is built from the copy in
-  *third_party/SDL3/*, so neither Homebrew nor a system SDL is used.
-
-Other distributions or platforms often have package named similar to the
-Debian or FreeBSD packages.
-
-
-### Compiling with GCC, Clang or MinGW
+The build is GNU Make with the toolchain that comes with Xcode (or the Xcode
+command line tools): *clang* and *make*. Nothing else is needed: no
+package manager and no *pkgconf*. SDL 3 is built from the source in
+*third_party/SDL3/* as part of the client build and linked statically; see
+*docs/DEPENDENCIES.md* for what the build links. The Metal shaders of
+`ref_metal` are compiled with `xcrun metal`, a separate Xcode component;
+`METAL_SHADERS=no` skips that step.
 
 Clone the source from https://github.com/BeauBender/quake2.git, change
-into the *quake2/* source directory and type *make* (Linux, MacOS, Haiku and Windows)
-or *gmake* (FreeBSD, NetBSD, OpenBSD). Note on Solaris systems, *make*
- or *gmake* can be used, the latter provides in addition parallel build.
-After the build finished, copy everything from the *release/* directory
-to the Portmanbeau Quake II installation directory.
+into the *quake2/* source directory and type *make*. This builds the client,
+the dedicated server, the game library and the *ref_gl1*, *ref_gl3* and
+*ref_soft* renderers into *release/*. The Metal renderer is not part of
+that: `make ref_metal` builds *release/ref_metal.dylib* and
+*release/ref_metal.metallib*, and the `vid_renderer` cvar selects it
+(`vid_renderer metal`). A subset can be built by naming the targets, for
+example `make client game ref_soft`; `make config` prints what the build
+resolved. Run it against your game data with:
+
+```
+release/quake2 +set basedir /path/to/quake2 -portable
+```
+
+`-portable` keeps the configuration and the savegames next to the binary
+instead of in the user's home directory.
 
 For the addons download or clone their source, change into the source
-directory and type *make* (Linux, MacOS, Windows) or *gmake* (FreeBSD,
-NetBSD, OpenBSD). After the compilation finishes the *release/game.so*
-is copied to the corresponding directory in the Quake II installation.
+directory and type *make*. After the compilation finishes the
+*release/game.dylib* is copied to the corresponding directory in the
+Quake II installation.
 
 
 ### Compiling one executable with the modules linked in (MacOS)
