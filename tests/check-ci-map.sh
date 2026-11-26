@@ -40,7 +40,17 @@
 #     given runs every check of tests/ci-checks.txt. Then two runs through
 #     scripts/gate-checks.sh on stub checks (a push, and the pull request)
 #     pass, with the long checks named first.
-# Then each mutant below must be refused by (a) to (d).
+# (e) scripts/test.sh (TASK227), in scratch repositories with a stub
+#     scheduler: a change under src/ alone, a staged, an unstaged and an
+#     untracked change alone, and untracked names with a blank, a newline
+#     or a leading "-" leave out exactly the harness checks the selector
+#     does not choose, from the checks and from gate_first, on one line
+#     that names them and no path; a changed harness path leaves out none;
+#     GATE_ALL=1, no origin/main, no merge base, a git error, a change for
+#     which the selector chooses no harness check, a selector that fails or
+#     prints a name it was not given, a name twice or none, and an empty or
+#     missing map run every check, on one line that says why.
+# Then each mutant below must be refused by (a) to (e).
 #
 # Needs bash, awk, git and ruby (its yaml).
 # Usage: tests/check-ci-map.sh
