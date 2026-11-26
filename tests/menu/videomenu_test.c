@@ -1274,6 +1274,24 @@ test_metalfx_under_rtprimary(void)
 			Str("r_metalfx"));
 	}
 
+	/* round 2 (N2): the water's debug view, which the mode draws unscaled, turns its scaler off; AO's is not drawn */
+	SetCv("r_rt_water_show", "1");
+	Open("metal", "7");
+	menu = main_menu;
+	CHECK(Greyed("MetalFX scaler") && Item("MetalFX scaler")->statusbar &&
+		!strcmp(Item("MetalFX scaler")->statusbar, "off: the debug view is drawn unscaled") &&
+		((menulist_s *)Item("MetalFX scaler"))->curvalue == 0,
+		"the scaler under Ray traced with the water's debug view: greyed %d shows %d (%s)", Greyed("MetalFX scaler"),
+		((menulist_s *)Item("MetalFX scaler"))->curvalue, Item("MetalFX scaler")->statusbar);
+	SetCv("r_rt_water_show", "0");
+	SetCv("r_rt_ao_show", "1");
+	Open("metal", "7");
+	menu = main_menu;
+	CHECK(Greyed("MetalFX scaler") && ((menulist_s *)Item("MetalFX scaler"))->curvalue == 2,
+		"the scaler under Ray traced with AO's debug view: greyed %d shows %d", Greyed("MetalFX scaler"),
+		((menulist_s *)Item("MetalFX scaler"))->curvalue);
+	SetCv("r_rt_ao_show", "0");
+
 	/* no temporal scaler on the GPU (modes 3: off and spatial): the row reads off, with the reason */
 	Open("metal", "3");
 	menu = main_menu;

@@ -794,7 +794,7 @@ seg 10 "; ray-tracing gate ${rtg:-host test}"
 # TASK190 slice 3: the menu's copy of RT-primary's scaler row (vidrules.c) against the renderer's (rm_rtgate.c,
 # with rm_metalfx.c's view size), one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must
 # refuse: the renderer's row dropped; the renderer's, then the menu's, capability rule dropped; the renderer's,
-# then the menu's, size rule dropped
+# then the menu's, size rule dropped; the menu's debug-view rule dropped (round 2, N2)
 pmbuild() {
 	# shellcheck disable=SC2086 # flags and fxhost are word lists
 	# (vidrules.c's control tables leave their trailing fields to zero, which -Wextra names)
@@ -815,7 +815,7 @@ else
 fi
 if [ -n "$pm" ]; then
 	mkdir "${tmp:?}/pmm"
-	for pmm in row rcaps mcaps rsize msize; do
+	for pmm in row rcaps mcaps rsize msize mshow; do
 		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c "${tmp:?}/pmm/"
 		case $pmm in
 			row) sed '/{ "r_metalfx", 2\.0f },/d' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
@@ -825,6 +825,8 @@ if [ -n "$pm" ]; then
 				> "${tmp:?}/pmm/vidrules.c" ;;
 			rsize) sed 's/\&\& !below)/\&\& ((void)below, 0))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
 			msize) sed 's/else if (!(isfinite(scale) \&\& (scale >= 1.0f)))/else if (!(isfinite(scale) \&\& (scale >= 1.0f)) || 1)/' \
+				src/client/menu/vidrules.c > "${tmp:?}/pmm/vidrules.c" ;;
+			mshow) sed 's/else if ((e >= 0) \&\& VidRules_RTEffective/else if ((e >= 0) \&\& 0 \&\& VidRules_RTEffective/' \
 				src/client/menu/vidrules.c > "${tmp:?}/pmm/vidrules.c" ;;
 		esac
 		if cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/pmm/rm_rtgate.c" && cmp -s src/client/menu/vidrules.c "${tmp:?}/pmm/vidrules.c"; then
@@ -838,7 +840,7 @@ if [ -n "$pm" ]; then
 			pm_mutants=$((pm_mutants + 1))
 		fi
 	done
-	[ "$pm_mutants" = 5 ] || bad "tests/metal/rm_pres_menu_test.c refuses $pm_mutants of its 5 mutants"
+	[ "$pm_mutants" = 6 ] || bad "tests/metal/rm_pres_menu_test.c refuses $pm_mutants of its 6 mutants"
 fi
 seg 10.2 "; menu and renderer scaler rule ${pm:-host test}, $pm_mutants parity mutants refused"
 

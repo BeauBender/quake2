@@ -690,15 +690,17 @@ VidRules_MetalFXOverridden(const char *renderer, float presentation)
  * Ray traced's row is the temporal scaler where the view is scaled down;
  * the menu does not see the window's height, so the default scale (0, or
  * any value that is not a finite one from 1 up) counts as scaled down.
+ * A debug view of an effect the mode runs is drawn unscaled, as the
+ * renderer's rm_rtfx_show_asked has it, so the row reads off then.
  */
+static int DebugViewEffect(int v);
+
 int
 VidRules_MetalFXDecided(const char *renderer, int available, float presentation, int modemask, float scale,
 	int debugview, const char **why)
 {
 	const char *w = NULL;
 	int v = -1;
-
-	(void)debugview;
 
 	if (RTRetroInForce(renderer, presentation))
 	{
@@ -707,10 +709,17 @@ VidRules_MetalFXDecided(const char *renderer, int available, float presentation,
 	}
 	else if (RTPrimaryInForce(renderer, available, presentation))
 	{
+		const int e = DebugViewEffect(debugview);
+
 		if (!(modemask & VIDMFX_TEMPORAL))
 		{
 			v = 0;
 			w = "off: no temporal scaler on this GPU";
+		}
+		else if ((e >= 0) && VidRules_RTEffective(e, renderer, available, presentation, 1.0f))
+		{
+			v = 0;
+			w = "off: the debug view is drawn unscaled";
 		}
 		else if (!(isfinite(scale) && (scale >= 1.0f)))
 		{
@@ -815,6 +824,16 @@ static const char *const tune_debug_names[] = { "none", "shadows", "sun", "AO", 
 static const char *const tune_debug_cvars[] = {
 	NULL, "r_rt_shadows_show", "r_rt_sun_show", "r_rt_ao_show", "r_rt_water_show", "r_rt_gbuffer_show"
 };
+/* the effect (rt_controls' row) each debug view shows, -1 for none: the G-buffer's is no effect's */
+static const int tune_debug_effects[] = { -1, RT_SHADOWS, RT_SUN, RT_AO, RT_WATER, -1 };
+
+_Static_assert(ARRSIZE(tune_debug_effects) == ARRSIZE(tune_debug_cvars), "a debug view without its effect");
+
+static int
+DebugViewEffect(int v)
+{
+	return ((v > 0) && (v < ARRSIZE(tune_debug_effects))) ? tune_debug_effects[v] : -1;
+}
 
 /* the cvar first in each row: tests/check-cvar-docs.sh reads it as the row's name */
 static const vidrt_control_t rt_tune[] = {
