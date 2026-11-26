@@ -32,6 +32,9 @@ set -eu
 # MAKEFLAGS=-i or -n from the environment would turn a failing or empty run
 # into success; the command-line overrides below are kept.
 unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
+# GLOBIGNORE from the environment would drop checks from the glob below;
+# only the selection of the harness checks sets it (TASK227)
+unset GLOBIGNORE
 
 cd "$(dirname "$0")/.."
 
@@ -187,6 +190,113 @@ gate_serial=""
 # gate-parallel about 180 s (its own self-test, 2026-11-16), identity-env
 # 46 s, ref-metal 35 s; every other check 23 s or less.
 gate_first="check-metalfx-report.sh check-gate-parallel.sh check-pins.sh check-bench.sh check-identity-env.sh check-ref-metal.sh"
+
+# The harness checks a change cannot affect are left out (TASK227), as a
+# pull request's CI leaves them out (TASK211, docs/runbook/TASK211.md). The
+# changed paths are the commits since the merge base of HEAD and
+# refs/remotes/origin/main, and the staged, unstaged and untracked files,
+# each read NUL-delimited; scripts/ci-select.sh chooses the harness checks
+# from them with tests/ci-map.txt. Only a harness check is ever left out,
+# and one that is chosen runs whole. Every check runs, with one line that
+# says why, on GATE_ALL=1, with no selector or an empty or unreadable map,
+# no origin/main, no merge base, a git that fails, and a selector that
+# fails, prints a name it was not given or one twice, or chooses none. The
+# checks left out are taken from the scheduler's glob below by GLOBIGNORE
+# (its line stays as it is) and from gate_first, since the scheduler
+# refuses a name it is not given; a shell that ignores GLOBIGNORE runs
+# every check. Paths are never printed, only check names.
+gate_why=
+gate_skip=
+gate_tmp=
+gate_hall=
+gate_hsel=
+gate_names=
+gate_odd=
+for gate_t in tests/check-*.sh; do
+	case ${gate_t#tests/} in *[!A-Za-z0-9._-]*) gate_odd=1 ;; esac
+	if [ -f "$gate_t" ]; then
+		gate_names="$gate_names${gate_names:+ }${gate_t#tests/}"
+	fi
+done
+# gate_list <file> <names>: the lines of <file> on one line, when each is
+# one of <names> and none is there twice; fails otherwise
+gate_list() {
+	_gl=
+	while IFS= read -r _gn || [ -n "$_gn" ]; do
+		case $_gn in '' | *[!A-Za-z0-9._-]*) return 1 ;; esac
+		case " $2 " in *" $_gn "*) ;; *) return 1 ;; esac
+		case " $_gl " in *" $_gn "*) return 1 ;; esac
+		_gl="$_gl${_gl:+ }$_gn"
+	done < "$1"
+	printf '%s' "$_gl"
+}
+# gate_paths <base>: every changed path, each ended by a NUL
+gate_paths() {
+	git diff --no-renames --no-relative --no-ext-diff --no-color --name-only -z "$1" HEAD -- &&
+		git diff --cached --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&
+		git diff --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&
+		git ls-files -z --others --exclude-standard --full-name
+}
+# (the names go to the selector unquoted: each holds no blank and no glob
+# character, or every check runs)
+# shellcheck disable=SC2086
+if [ "${GATE_ALL:-}" = 1 ]; then
+	gate_why="GATE_ALL=1"
+elif [ ! -f scripts/ci-select.sh ] || [ ! -f tests/ci-map.txt ] || [ ! -r tests/ci-map.txt ] || [ ! -s tests/ci-map.txt ]; then
+	gate_why="no selector, or an empty or unreadable map (scripts/ci-select.sh, tests/ci-map.txt)"
+elif [ -z "$gate_names" ] || [ -n "$gate_odd" ]; then
+	gate_why="no check, or a check name the selection does not take"
+elif ! gate_tmp=$(mktemp -d "${TMPDIR:-/tmp}/gate-select.XXXXXX" 2> /dev/null); then
+	gate_tmp=
+	gate_why="no scratch directory"
+elif ! bash scripts/ci-select.sh tests/ci-map.txt harness - $gate_names > "$gate_tmp/all" 2> /dev/null ||
+	! gate_hall=$(gate_list "$gate_tmp/all" "$gate_names"); then
+	gate_why="the selector failed on the map, or printed a name it was not given"
+elif ! git rev-parse -q --verify 'refs/remotes/origin/main^{commit}' > /dev/null 2>&1; then
+	gate_why="no origin/main (refs/remotes/origin/main)"
+elif ! gate_base=$(git merge-base HEAD refs/remotes/origin/main 2> /dev/null) || [ -z "$gate_base" ]; then
+	gate_why="no merge base of HEAD and origin/main"
+elif ! gate_paths "$gate_base" > "$gate_tmp/changed" 2> /dev/null; then
+	gate_why="git failed to list the changed paths"
+elif ! bash scripts/ci-select.sh tests/ci-map.txt harness "$gate_tmp/changed" $gate_names > "$gate_tmp/sel" 2> /dev/null ||
+	! gate_hsel=$(gate_list "$gate_tmp/sel" "$gate_hall"); then
+	gate_why="the selector failed on the changed paths, or printed a name it was not given"
+elif [ -z "$gate_hsel" ]; then
+	gate_why="the selector chose no harness check"
+fi
+if [ -n "$gate_tmp" ]; then
+	rm -rf "$gate_tmp"
+fi
+if [ -z "$gate_why" ]; then
+	for gate_t in $gate_hall; do
+		case " $gate_hsel " in *" $gate_t "*) ;; *) gate_skip="$gate_skip${gate_skip:+ }$gate_t" ;; esac
+	done
+fi
+if [ -n "$gate_skip" ]; then
+	GLOBIGNORE=
+	for gate_t in $gate_skip; do
+		GLOBIGNORE="$GLOBIGNORE${GLOBIGNORE:+:}tests/$gate_t"
+	done
+	for gate_t in tests/check-*.sh; do
+		case " $gate_skip " in *" ${gate_t#tests/} "*) gate_why="this shell ignores GLOBIGNORE" ;; esac
+	done
+	if [ -n "$gate_why" ]; then
+		unset GLOBIGNORE
+		gate_skip=
+	fi
+fi
+gate_keep=
+for gate_t in $gate_first; do
+	case " $gate_skip " in *" $gate_t "*) ;; *) gate_keep="$gate_keep${gate_keep:+ }$gate_t" ;; esac
+done
+gate_first=$gate_keep
+if [ -n "$gate_why" ]; then
+	echo "test.sh: every check runs: $gate_why" >&2
+elif [ -n "$gate_skip" ]; then
+	echo "test.sh: harness checks left out, as CI leaves them out: no path changed since the merge base with origin/main is one they read (tests/ci-map.txt; GATE_ALL=1 runs them): $gate_skip" >&2
+else
+	echo "test.sh: no harness check is left out: the change reaches every one" >&2
+fi
 # The scheduler runs in the background so that a SIGHUP, SIGINT or SIGTERM
 # to this script is acted on at once (a trap waits for a command in the
 # foreground to end): gate_stop passes it on as SIGTERM, which ends the
