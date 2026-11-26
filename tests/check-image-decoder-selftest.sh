@@ -237,7 +237,10 @@ if grep -q '^escaped ' "${tmp:?}/ev.f"; then
 fi
 gone "${tmp:?}/hang.pids" sh || fail "(f) the hanging stub is still there (or was never started)"
 
-# (g) a stub whose helper leaves the process group: the check names it
+# (g) a stub whose helper leaves the process group: the check names it. The
+# supervisor reports an escape when it ends the group, at the deadline, so
+# this case ends at the probe's 2 s bound (the status is 124 there; the pid
+# must be named whatever the status).
 stub escape "echo \$\$ >> \"${tmp:?}/hang.pids\"
 perl -MPOSIX -e 'setsid(); open(F, \">>\", \$ARGV[0]); print F \"\$\$\\n\"; close(F); exec \"sh\", \"-c\", \"read x < \$ARGV[1]\"' \"${tmp:?}/esc.pids\" \"${tmp:?}/never\" &
 read _x < \"${tmp:?}/never\""
