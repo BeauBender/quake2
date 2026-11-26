@@ -522,20 +522,154 @@ gt_left() {
 		case " $line " in *" $n"[\ ,.]*) ;; *) echo "case $1: the line does not name $n: $line"; c=1 ;; esac
 	done
 	case $GO in *"$tmp"*) echo "case $1: the output holds a scratch path"; c=1 ;; esac
+	gt_clean "$1" || c=1
 	return $c
+}
+
+# gt_all <label> <dir> <reason>: the run ran every check, gave the scheduler
+# every long check, and said why on one line, with no scratch path
+gt_all() {
+	local c=0
+	expect "$1" "$GNAMES" "$GR" || c=1
+	expect "$1:first" "$GFIRST" "$GF" || c=1
+	if [ "$(printf '%s\n' "$GO" | grep -c "^test\\.sh: every check runs: .*$3")" -ne 1 ]; then
+		echo "case $1: not one 'every check runs: ...$3' line: $(printf '%s' "$GO" | tr '\n' ' ')"
+		c=1
+	fi
+	case $GO in *"$tmp"*) echo "case $1: the output holds a scratch path"; c=1 ;; esac
+	gt_clean "$1" || c=1
+	return $c
+}
+
+# gt_clean <label>: the run left nothing in its TMPDIR
+gt_clean() {
+	if [ -n "$(ls -A "$tmp/gtd")" ]; then
+		echo "case $1: test.sh left its scratch directory"
+		rm -rf "${tmp:?}/gtd"
+		return 1
+	fi
 }
 
 # gt_cases <test.sh> [<case>]: every case of (e), or the one named
 gt_cases() {
-	local t=$1 only=${2-} d=$tmp/gt cf=0
+	local t=$1 only=${2-} d=$tmp/gt cf=0 rg=check-require-guards.sh
 	want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
+	mk() { gt_repo "$d" "$t" || { echo "case $1: cannot make the repository"; return 1; }; }
 	# a change under src/ alone: the harness checks that read nothing
 	# there are left out
 	if want src-only; then
-		gt_repo "$d" "$t" && echo y > "$d/src/a.c" && g "$d" commit -q -am src || { echo "cannot make the repository"; return 1; }
+		mk src-only && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
 		gt_run "$d"
-		gt_left src-only "$d" "$(minus "$HALL" check-require-guards.sh)" || cf=1
+		gt_left src-only "$d" "$(minus "$HALL" $rg)" || cf=1
 	fi
+	# each of the other three sources alone: a staged change (.gitignore,
+	# read by check-metalfx-report only), an unstaged one
+	# (scripts/coverage.sh: check-bench-entry, and scripts/* of
+	# check-bounded-run and check-require-guards) and an untracked file
+	# (Makefile: check-require-guards)
+	if want staged; then
+		mk staged && echo y >> "$d/.gitignore" && g "$d" add .gitignore || return 1
+		gt_run "$d"
+		gt_left staged "$d" "$(minus "$HALL" check-metalfx-report.sh)" || cf=1
+	fi
+	if want unstaged; then
+		mk unstaged && echo y >> "$d/scripts/coverage.sh" || return 1
+		gt_run "$d"
+		gt_left unstaged "$d" "$(minus "$HALL" "check-bench-entry.sh check-bounded-run.sh $rg")" || cf=1
+	fi
+	if want untracked; then
+		mk untracked && echo y > "$d/Makefile" || return 1
+		gt_run "$d"
+		gt_left untracked "$d" "$(minus "$HALL" $rg)" || cf=1
+	fi
+	# one untracked name each: a blank, a newline (whose second line, split
+	# off, would be a .github/ path that runs every check), a leading "-"
+	if want name-blank; then
+		mk name-blank && echo y > "$d/src/a b.c" || return 1
+		gt_run "$d"
+		gt_left name-blank "$d" "$(minus "$HALL" $rg)" || cf=1
+	fi
+	if want name-newline; then
+		mk name-newline && echo y > "$d/src/x
+.github" || return 1
+		gt_run "$d"
+		gt_left name-newline "$d" "$(minus "$HALL" $rg)" || cf=1
+	fi
+	if want name-dash; then
+		mk name-dash && echo y > "$d/src/-n" && echo y > "$d/src/--output=.github" || return 1
+		gt_run "$d"
+		gt_left name-dash "$d" "$(minus "$HALL" $rg)" || cf=1
+	fi
+	# a harness path changed: every check
+	if want harness-path; then
+		mk harness-path && echo y > "$d/src/a.c" && echo '# y' >> "$d/tests/check-bench.sh" &&
+			g "$d" commit -q -am harness || return 1
+		gt_run "$d"
+		# (the selector chooses every harness check: none is left out)
+		expect harness-path "$GNAMES" "$GR" || cf=1
+		expect harness-path:first "$GFIRST" "$GF" || cf=1
+		printf '%s\n' "$GO" | grep -q '^test\.sh: no harness check is left out' ||
+			{ echo "case harness-path: no 'no harness check is left out' line"; cf=1; }
+		gt_clean harness-path || cf=1
+	fi
+	# fail closed
+	if want gate-all; then
+		mk gate-all && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d" GATE_ALL=1
+		gt_all gate-all "$d" "GATE_ALL=1" || cf=1
+	fi
+	if want no-origin; then
+		mk no-origin && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			g "$d" update-ref -d refs/remotes/origin/main || return 1
+		gt_run "$d"
+		gt_all no-origin "$d" "no origin/main" || cf=1
+	fi
+	if want no-base; then
+		# origin/main an orphan: HEAD and it share no commit
+		mk no-base && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			g "$d" update-ref refs/remotes/origin/main "$(printf 'orphan\n' | g "$d" commit-tree "$(g "$d" mktree < /dev/null)")" || return 1
+		gt_run "$d"
+		gt_all no-base "$d" "no merge base" || cf=1
+	fi
+	if want git-error; then
+		mk git-error && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d" PATH="$tmp/gitbad:$tmp/gbin:$PATH"
+		gt_all git-error "$d" "git failed" || cf=1
+	fi
+	if want top-md; then
+		# the selector chooses no harness check: every check, as a selector
+		# that prints nothing never means none
+		mk top-md && echo y > "$d/README.md" && g "$d" commit -q -am md || return 1
+		gt_run "$d"
+		gt_all top-md "$d" "chose no harness check" || cf=1
+	fi
+	# a selector that fails on the map, and one that on the changed paths
+	# fails, prints a name it was not given, a name twice, or none
+	local s
+	for s in fails-map fails stranger twice none; do
+		want "sel-$s" || continue
+		mk "sel-$s" && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		mv "$d/scripts/ci-select.sh" "$d/scripts/ci-select-real.sh"
+		{
+			printf '#!/bin/bash\n'
+			[ "$s" = fails-map ] || printf '[ "$3" != - ] || exec bash "${0%%/*}/ci-select-real.sh" "$@"\n'
+			case $s in
+				fails*) printf 'exit 2\n' ;;
+				stranger) printf 'echo check-nope.sh\n' ;;
+				twice) printf 'echo check-bench.sh\necho check-bench.sh\n' ;;
+				none) printf 'exit 0\n' ;;
+			esac
+		} > "$d/scripts/ci-select.sh"
+		gt_run "$d"
+		gt_all "sel-$s" "$d" "the selector" || cf=1
+	done
+	for s in empty missing; do
+		want "map-$s" || continue
+		mk "map-$s" && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		if [ "$s" = empty ]; then : > "$d/tests/ci-map.txt"; else rm "$d/tests/ci-map.txt"; fi
+		gt_run "$d"
+		gt_all "map-$s" "$d" "map" || cf=1
+	done
 	return $cf
 }
 
@@ -638,6 +772,40 @@ mut .github/workflows/macos.yml '        CI_CHECKS_GROUP: ${{ matrix.group }}' '
 refused group-env static "CI_CHECKS_GROUP is not"
 mut .github/workflows/macos.yml '      fail-fast: false # a failing group stops no other' '      fail-fast: true'
 refused fail-fast static "fail-fast is not false"
+
+# scripts/test.sh (e): tmut <name> <case> <old line> <new line>: the gate
+# with that one line swapped must fail the case
+tmut() {
+	local o st=0
+	mutants=$((mutants + 1))
+	cp scripts/test.sh "$tmp/test-mut.sh"
+	if ! swap "$tmp/test-mut.sh" "$3" "$4"; then
+		bad "mutant $1: no single line '$3' in scripts/test.sh"
+		return
+	fi
+	o=$(gt_cases "$tmp/test-mut.sh" "$2" 2>&1) || st=1
+	if [ "$st" -eq 0 ]; then
+		bad "mutant $1 passed"
+	else
+		case $o in
+			*"case $2"*) ;;
+			*) bad "mutant $1 refused, but not by case $2: $(printf '%s' "$o" | head -n 3 | tr '\n' ' ')" ;;
+		esac
+	fi
+}
+if command -v git > /dev/null 2>&1; then
+	# fail open: a missing merge base runs no harness check
+	tmut no-base-open no-base '	gate_why="no merge base of HEAD and origin/main"' '	gate_skip=$gate_hall'
+	tmut gate-all-ignored gate-all 'if [ "${GATE_ALL:-}" = 1 ]; then' 'if false; then'
+	tmut git-error-ignored git-error '	gate_why="git failed to list the changed paths"' '	:'
+	tmut none-trusted top-md '	gate_why="the selector chose no harness check"' '	:'
+	tmut stranger-trusted sel-stranger '	! gate_hsel=$(gate_list "$gate_tmp/sel" "$gate_hall"); then' '	! gate_hsel=$(cat "$gate_tmp/sel"); then'
+	tmut no-untracked untracked '		git ls-files -z --others --exclude-standard --full-name' '		:'
+	tmut no-staged staged '		git diff --cached --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&' '		: &&'
+	tmut no-unstaged unstaged '		git diff --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&' '		: &&'
+	tmut newline-delimited name-newline '		git ls-files -z --others --exclude-standard --full-name' '		git ls-files --others --exclude-standard --full-name | tr "\n" "\0"'
+	tmut first-unfiltered src-only 'gate_first=$gate_keep' ':'
+fi
 
 if [ "$fail" -ne 0 ]; then
 	echo "$me: FAILED"
