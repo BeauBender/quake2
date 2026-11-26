@@ -135,6 +135,7 @@ fast check-savegame-tables.sh
 fast check-scenario-parsers.sh
 fast check-static-modules.sh
 fast check-stop-invariants.sh
+fast check-supervise.sh
 fast check-title-fit.sh
 fast check-tvos.sh
 fast check-unit-sanitizers.sh
