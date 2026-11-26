@@ -48,6 +48,8 @@
 #     from gate_first, on one line that names them and no path; a changed
 #     harness path leaves out none; a path a commit since the merge base
 #     changed and the lane set back (a stale origin/main) still counts;
+#     neither a GLOBIGNORE from the environment nor the gate's own (under
+#     SHELLOPTS=allexport) reaches the scheduler's environment;
 #     GATE_ALL=1, no origin/main, no merge base, a git error, a change for
 #     which the selector chooses no harness check, a selector that fails or
 #     prints a name it was not given, a name twice or none, and an empty or
@@ -469,6 +471,7 @@ for w in $first; do
 done
 {
 	printf 'first %s\n' "$first"
+	printf 'globignore %s\n' "${GLOBIGNORE-(unset)}"
 	for t; do printf '%s\n' "${t#tests/}"; done
 } > "$GATE_REC"
 EOF
@@ -502,7 +505,8 @@ gt_repo() {
 }
 
 # gt_run <dir> [<env>...]: runs that test.sh there; GR is what the scheduler
-# was given (the checks on one line), GF its long checks, GO the output
+# was given (the checks on one line), GF its long checks, GI the
+# GLOBIGNORE of its environment, GO the output
 gt_run() {
 	local d=$1 st=0
 	shift
@@ -511,11 +515,12 @@ gt_run() {
 		TMPDIR="$tmp/gtd" GATE_REC="$d.rec" "$@" sh scripts/test.sh) > "$d.out" 2>&1 || st=$?
 	GO=$(cat "$d.out")
 	if [ "$st" -ne 0 ] || [ ! -f "$d.rec" ]; then
-		GR="STATUS$st" GF=""
+		GR="STATUS$st" GF="" GI=""
 		return
 	fi
 	GF=$(sed -n 's/^first //p' "$d.rec")
-	GR=$(grep -v '^first ' "$d.rec" | tr '\n' ' ' | sed 's/ $//')
+	GI=$(sed -n 's/^globignore //p' "$d.rec")
+	GR=$(grep -v -e '^first ' -e '^globignore ' "$d.rec" | tr '\n' ' ' | sed 's/ $//')
 }
 
 # gt_left <label> <dir> <left out>: the run left out those harness checks
@@ -638,6 +643,21 @@ gt_cases() {
 			g "$d" commit -q -am lane || return 1
 		gt_run "$d"
 		gt_left stale-base "$d" "$(minus "$HALL" "check-bench-entry.sh check-bounded-run.sh $rg")" || cf=1
+	fi
+	# GLOBIGNORE: one from the environment is dropped (this host's bash 3.2
+	# does not filter a glob by it, but would pass it on to the scheduler),
+	# and the gate's own is not exported, even under allexport
+	if want env-globignore; then
+		mk env-globignore && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d" GLOBIGNORE=tests/check-pins.sh:tests/check-require-guards.sh
+		gt_left env-globignore "$d" "$(minus "$HALL" $rg)" || cf=1
+		expect env-globignore:env "(unset)" "$GI" || cf=1
+	fi
+	if want allexport; then
+		mk allexport && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d" SHELLOPTS=allexport
+		gt_left allexport "$d" "$(minus "$HALL" $rg)" || cf=1
+		expect allexport:env "(unset)" "$GI" || cf=1
 	fi
 	# fail closed
 	if want gate-all; then
@@ -833,6 +853,8 @@ if command -v git > /dev/null 2>&1; then
 	tmut no-unstaged unstaged '		git diff --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&' '		: &&'
 	tmut newline-delimited name-newline '		git ls-files -z --others --exclude-standard --full-name' '		git ls-files --others --exclude-standard --full-name | tr "\n" "\0"'
 	tmut first-unfiltered src-only 'gate_first=$gate_keep' ':'
+	tmut env-globignore-kept env-globignore 'unset GLOBIGNORE' ':'
+	tmut allexport-kept allexport '	set +a' '	:'
 fi
 
 if [ "$fail" -ne 0 ]; then

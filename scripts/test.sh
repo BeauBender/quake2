@@ -32,8 +32,10 @@ set -eu
 # MAKEFLAGS=-i or -n from the environment would turn a failing or empty run
 # into success; the command-line overrides below are kept.
 unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
-# GLOBIGNORE from the environment would drop checks from the glob below;
-# only the selection of the harness checks sets it (TASK227)
+# GLOBIGNORE from the environment would drop checks from the glob below,
+# and would reach the scheduler and every check; only the selection of the
+# harness checks sets it (TASK227)
+# (this host's /bin/sh, bash 3.2, imports it but does not filter globs by it)
 unset GLOBIGNORE
 
 cd "$(dirname "$0")/.."
@@ -279,6 +281,9 @@ if [ -z "$gate_why" ]; then
 	done
 fi
 if [ -n "$gate_skip" ]; then
+	# not exported (allexport from SHELLOPTS in the environment would): the
+	# scheduler's glob needs it, the scheduler and the checks must not see it
+	set +a
 	GLOBIGNORE=
 	for gate_t in $gate_skip; do
 		GLOBIGNORE="$GLOBIGNORE${GLOBIGNORE:+:}tests/$gate_t"
