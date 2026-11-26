@@ -162,7 +162,6 @@ rm_rtm_wants(int device, int refused, float models, int direct)
 int
 rm_rtm_tag_verts(rm_avert_t *v, long n, unsigned f, int extra_ok)
 {
-	const mtl_rgba_t c = mtl_rtm_tag(f);
 	long i;
 
 	/* a model without its normals is not traced: its own colour stays, never a tag */
@@ -171,12 +170,16 @@ rm_rtm_tag_verts(rm_avert_t *v, long n, unsigned f, int extra_ok)
 		return 0;
 	}
 
+	/* the alpha alone: the rgb stays the stock colour, which the resolve reads where the model pass did not run */
 	for (i = 0; i < n; i++)
 	{
-		v[i].color[0] = c.r;
-		v[i].color[1] = c.g;
-		v[i].color[2] = c.b;
-		v[i].color[3] = c.a;
+		mtl_rgba_t c;
+
+		c.r = v[i].color[0];
+		c.g = v[i].color[1];
+		c.b = v[i].color[2];
+		c.a = v[i].color[3];
+		v[i].color[3] = mtl_rtm_tag(c, f).a;
 	}
 
 	return 1;

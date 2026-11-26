@@ -129,8 +129,9 @@ int rm_rtm_gunshadow(int gunshadow, int models);
 int rm_rtm_wants(int device, int refused, float models, int direct);
 
 /*
- * Overwrites the colour of the n vertices v (rm_alias_emit's) with the
- * tag of flags f (mtl_rtm_tag) and returns 1, only when extra_ok (the
+ * Overwrites the alpha of the n vertices v (rm_alias_emit's) with the
+ * tag of flags f (mtl_rtm_tag), their rgb kept as the stock colour, and
+ * returns 1, only when extra_ok (the
  * model's normals were written, rm_gb_alias_extra); else leaves them and
  * returns 0, since a model without its normals is not traced.
  */

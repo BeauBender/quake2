@@ -518,19 +518,33 @@ stored(mtl_rgba_t c, int bits)
 	return c;
 }
 
+/*
+ * The tag (slice 3's review): the alpha alone carries the flags, the rgb is the model's own stock colour, so
+ * a frame whose model pass did not write a tagged pixel resolves it stock-lit, never at a grey
+ */
 static void
 test_tag(void)
 {
+	static const float rgb[][3] = { { 0, 0, 0 }, { 1, 1, 1 }, { 0.5f, 0.25f, 0.75f }, { 128 / 255.0f, 128 / 255.0f, 128 / 255.0f },
+		{ 0.1f, 0.9f, 0.3f } };
 	rm_avert_t v[3];
 	unsigned f;
 	int bits, i, bad = 0, j;
+	size_t k;
 
 	for (f = 0; f <= MTL_RTM_FLAGS; f++)
+	for (k = 0; k < sizeof(rgb) / sizeof(rgb[0]); k++)
 	{
-		const mtl_rgba_t c = mtl_rtm_tag(f);
+		mtl_rgba_t o, c;
 
+		o.r = rgb[k][0];
+		o.g = rgb[k][1];
+		o.b = rgb[k][2];
+		o.a = 1.0f;
+		c = mtl_rtm_tag(o, f);
 		CHECK(mtl_rtm_is_tag(c) && mtl_rtm_tag_flags(c) == f);
 		CHECK(c.a < 1.0f);      /* never the alpha of an opaque model's colour */
+		CHECK(c.r == o.r && c.g == o.g && c.b == o.b);   /* the stock colour kept */
 
 		for (bits = 8; bits <= 16; bits += 8)
 		{
@@ -555,36 +569,42 @@ test_tag(void)
 		bad += mtl_rtm_is_tag(c) || mtl_rtm_is_tag(stored(c, 16)) || mtl_rtm_is_tag(stored(c, 8));
 		c.r = c.g = c.b = i / 255.0f + 0.0013f;
 		bad += mtl_rtm_is_tag(stored(c, 16));
+		c.a = 1.0f - 0.0013f;
+		bad += mtl_rtm_is_tag(stored(c, 16)) || mtl_rtm_is_tag(stored(c, 8));
 	}
 
 	CHECK(bad == 0);
 
-	/* the grey with an alpha outside the tag's codes, a NaN, a channel past 1 */
+	/* an alpha outside the tag's codes, a NaN, an alpha past 1 */
 	{
-		mtl_rgba_t c = mtl_rtm_tag(0);
+		mtl_rgba_t o, c;
 
+		o.r = o.g = o.b = 0.5f;
+		o.a = 1.0f;
+		c = mtl_rtm_tag(o, 0);
 		c.a = (MTL_RTM_TAG_BASE - 1) / 255.0f;
 		CHECK(!mtl_rtm_is_tag(c));
 		c.a = (MTL_RTM_TAG_BASE + MTL_RTM_FLAGS + 1) / 255.0f;
 		CHECK(!mtl_rtm_is_tag(c));
-		c = mtl_rtm_tag(5);
-		c.g = NAN;
+		c = mtl_rtm_tag(o, 5);
+		c.a = NAN;
 		CHECK(!mtl_rtm_is_tag(c) && mtl_rtm_tag_flags(c) == 0);
-		c = mtl_rtm_tag(5);
-		c.r = (MTL_RTM_TAG_GREY + 1) / 255.0f;
-		CHECK(!mtl_rtm_is_tag(c));
-		c = mtl_rtm_tag(3);
+		c = mtl_rtm_tag(o, 3);
 		c.a = 1.5f;
 		CHECK(!mtl_rtm_is_tag(c));
 	}
 
-	/* the tag writer: the colours alone */
+	/* the tag writer: the alpha alone */
 	memset(v, 0, sizeof(v));
 
 	for (i = 0; i < 3; i++)
 	{
 		v[i].pos[0] = (float)i;
 		v[i].uv[1] = 0.5f;
+		v[i].color[0] = 0.25f + 0.125f * (float)i;
+		v[i].color[1] = 0.5f;
+		v[i].color[2] = 0.75f - 0.25f * (float)i;
+		v[i].color[3] = 1.0f;
 	}
 
 	/* slice 2: a model without its normals is never tagged */
@@ -592,7 +612,8 @@ test_tag(void)
 
 	for (i = 0; i < 3; i++)
 	{
-		CHECK(v[i].color[0] == 0.0f && v[i].color[1] == 0.0f && v[i].color[2] == 0.0f && v[i].color[3] == 0.0f);
+		CHECK(v[i].color[0] == 0.25f + 0.125f * (float)i && v[i].color[1] == 0.5f &&
+			v[i].color[2] == 0.75f - 0.25f * (float)i && v[i].color[3] == 1.0f);
 	}
 
 	CHECK(rm_rtm_tag_verts(v, 2, MTL_RTM_GLOW | MTL_RTM_WEAPON, 1) == 1);
@@ -606,10 +627,12 @@ test_tag(void)
 		c.b = v[i].color[2];
 		c.a = v[i].color[3];
 		CHECK(mtl_rtm_tag_flags(stored(c, 8)) == (MTL_RTM_GLOW | MTL_RTM_WEAPON));
+		/* slice 3's review: the stock colour stays, which the resolve reads where the model pass did not run */
+		CHECK(c.r == 0.25f + 0.125f * (float)i && c.g == 0.5f && c.b == 0.75f - 0.25f * (float)i);
 		CHECK(v[i].pos[0] == (float)i && v[i].uv[1] == 0.5f);
 	}
 
-	CHECK(v[2].color[3] == 0 && v[2].color[0] == 0);
+	CHECK(v[2].color[3] == 1.0f && v[2].color[0] == 0.5f);
 }
 
 /* gl1's world matrix (R_SetupGL) of a view at org with angles a, on the shim's matrices */

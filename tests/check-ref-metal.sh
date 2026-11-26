@@ -56,8 +56,8 @@
 #     light (common/mtl_rtpd_math.h, TASK190 slice 2), with five mutants of
 #     the header and five pins of rm_rtpdenoise.metal with six mutants,
 #     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
-#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; seventeen
-#     scratch mutants of the two must fail it, and all seventeen must),
+#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eighteen
+#     scratch mutants of the two must fail it, and all eighteen must),
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -731,12 +731,13 @@ esac
 # again (flagged-forward), a weapon without its depth hack traced (weapon-nohack), a model without a flag
 # tagged (tag-unflagged), the weapon kept in the ray-traced scene under the traced models (gunshadow-kept), a
 # model read as a wall by the pull-back ray (wall-alias), the weapon view's flag set when there is none
-# (weapon-flag); its review's: the models wanted traced with the model pass refused (wants-refused)
+# (weapon-flag); its review's: the models wanted traced with the model pass refused (wants-refused), the
+# tag written over the stock colour as a grey (tag-grey)
 rtm_mutants=0
 if [ -n "$rtm" ]; then
 	for m in shadedot-twice minlight-skipped glow-sign fullbright-traced tag-bit weapon-view-inv \
 		depthhack-weapon tag-no-normals nan-guard weapon-forward flagged-forward weapon-nohack tag-unflagged \
-		gunshadow-kept wall-alias weapon-flag wants-refused; do
+		gunshadow-kept wall-alias weapon-flag wants-refused tag-grey; do
 		rtm_tree "${tmp:?}/rtmm"
 		h=${tmp:?}/rtmm/src/client/refresh/metal/common/mtl_rtm_math.h
 		c=${tmp:?}/rtmm/src/client/refresh/metal/rm_rtmodel.c
@@ -758,6 +759,8 @@ if [ -n "$rtm" ]; then
 				"$rm_dir/rm_rtmodel.c" > "$c" ;;
 			tag-unflagged) sed 's/ || (rm_rtm_flags(flags) == 0u))$/)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
 			wants-refused) sed 's/return device \&\& !refused \&\& /return device \&\& (refused >= 0) \&\& /' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			tag-grey) sed 's/v\[i\].color\[3\] = mtl_rtm_tag(c, f).a;/v[i].color[0] = v[i].color[1] = v[i].color[2] = 128 \/ 255.0f; v[i].color[3] = mtl_rtm_tag(c, f).a;/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
 			gunshadow-kept) sed 's/return gunshadow && !models;/return gunshadow \&\& (models >= 0);/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
 			weapon-flag) sed 's/p->weapon = (unsigned)rm_rtm_weapon_view(/p->weapon = 1u | (unsigned)rm_rtm_weapon_view(/' \
 				"$rm_dir/rm_rtmodel.c" > "$c" ;;
@@ -782,7 +785,7 @@ if [ -n "$rtm" ]; then
 			rtm_mutants=$((rtm_mutants + 1))
 		fi
 	done
-	[ "$rtm_mutants" -eq 17 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 17 model-light mutants"
+	[ "$rtm_mutants" -eq 18 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 18 model-light mutants"
 fi
 # slice 2's review: under Metal the colour index's guard reads the bit pattern by as_type, which fast math
 # does not fold (the host test sees only the host's union); the index tests the pattern, not the float
@@ -800,7 +803,7 @@ if [ "$(grep -cxF '#define MTL_RTM_ABOVE(s) ((s) >= MTL_RTM_FLOOR)' "$rm_dir/com
 		"$rm_dir/common/mtl_rtm_math.h" | grep -qF '>= MTL_RTM_FLOOR'; then
 	bad "common/mtl_rtm_math.h: the minlight floor's test under Metal is not s >= 0.1f"
 fi
-seg 7.9 "; model light ${rtm:-host test}, $rtm_mutants of 17 mutants refused"
+seg 7.9 "; model light ${rtm:-host test}, $rtm_mutants of 18 mutants refused"
 
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)
