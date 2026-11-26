@@ -41,14 +41,14 @@
 # line naming that cause, instead of the leak run waiting out its bound
 # (FIX149).
 #
-# Every run has a wall bound of IMGDEC_CHECK_SECONDS (default 300). A
-# watchdog ends the run it started once the bound has passed and the
-# check fails with "<run> outlived its <n> s bound". Under leaks(1) the
-# watchdog also ends the program leaks(1) started, which a killed
-# leaks(1) leaves behind stopped (reap, below), and the test ends itself
-# at the bound (--bound) if it is not stopped. A TERM or INT to the check
-# ends the run in progress the same way. tests/check-image-decoder-selftest.sh
-# runs this check against stub leaks(1).
+# Every run has a wall bound of IMGDEC_CHECK_SECONDS (default 300), kept
+# by the process supervisor (scripts/lib/supervise.sh): at the bound it ends
+# the run's whole group, so the program leaks(1) started and holds stopped
+# goes too, and the check fails with "<run> outlived its <n> s bound". The
+# test ends itself at the bound (--bound) if it is not stopped. A process
+# the supervisor sees leave the group fails the check and is named
+# ("escaped pid"). tests/check-image-decoder-selftest.sh runs this check
+# against stub leaks(1).
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -75,123 +75,41 @@ whole IMGDEC_CHECK_SECONDS "$bound"
 probe=${IMGDEC_LEAKS_PROBE_SECONDS:-20}
 whole IMGDEC_LEAKS_PROBE_SECONDS "$probe"
 
-# reap <pid> <name>: ends the run <pid> and those of its children that run
-# the program <name> (its basename; - for none), and nothing else. <pid>
-# is always this shell's own $! (the run), which this shell, blocked in
-# wait for it, collects only when it ends. The run could end and be
-# collected between the check that it runs and its signal, but that
-# window is a few instructions long, and macOS hands out PIDs in
-# sequence up to 99999 before it wraps, so the PID is not reused in
-# practice. <pid> is left alone when ps(1) names a parent other than
-# this shell ($$, also in a subshell). When ps(1) gives no answer it is
-# killed all the same, so the bound always ends the run, but its children
-# are not looked for and a line on stderr says a stopped <name> may be
-# left. Otherwise it is stopped first: a stopped process collects no
-# child, and a child that has exited stays a zombie of it, so each
-# child's PID stays that child's until <pid> itself is killed, last. If
-# ps(1) cannot list the processes, <pid> is still killed, with the same
-# line. A child is killed with SIGKILL, which ends a stopped or suspended
-# process too.
-reap()
-{
-	_pp=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
-	if [ -n "$_pp" ] && [ "$_pp" != "$$" ]; then
-		return 0
-	fi
-	if [ -z "$_pp" ]; then
-		kill -KILL "$1" 2>/dev/null || :
-		[ "$2" = - ] || echo "check-image-decoder: ps(1) gave no answer, so the run was killed without looking for its $2: a stopped $2 may be left" >&2
-		return 0
-	fi
-	kill -STOP "$1" 2>/dev/null || return 0
-	if [ "$2" != - ]; then
-		if _ps=$(ps -A -o pid= -o ppid= -o comm= 2>/dev/null) && [ -n "$_ps" ]; then
-			printf '%s\n' "$_ps" | while read -r _pid _ppid _comm; do
-				if [ "$_ppid" = "$1" ] && [ "${_comm##*/}" = "$2" ]; then
-					kill -KILL "$_pid" 2>/dev/null || :
-				fi
-			done
-		else
-			echo "check-image-decoder: ps(1) could not list processes, so the run was killed without looking for its $2: a stopped $2 may be left" >&2
-		fi
-	fi
-	kill -KILL "$1" 2>/dev/null || :
-}
-
-# A TERM or INT to this check (the gate stopping it) ends the run in
-# progress and its watchdog as the bound would, so a target leaks(1)
-# holds stopped is not left behind. (A signal ignored when the check
-# starts, as the merge gate ignores INT, stays ignored.) The trap runs
-# inside the redirections of the bounded call it interrupts, so what reap
-# says goes to the check's own stderr, kept as descriptor 3.
-exec 3>&2
-run=
-dog=
-name=-
-stopped()
-{
-	trap - TERM INT
-	if [ -n "$dog" ]; then
-		kill "$dog" 2>/dev/null || :
-		wait "$dog" 2>/dev/null || :
-	fi
-	if [ -n "$run" ]; then
-		reap "$run" "$name" 2>&3
-	fi
-	exit "$1"
-}
-trap 'stopped 143' TERM
-trap 'stopped 130' INT
-
-# bounded <seconds> <name> <command...>: runs the command under a
-# watchdog and returns its status. Once <seconds> have passed, the
-# watchdog writes the bound to ${tmp}/expired and reaps the command's PID
-# and its children named <name> (- for none), and nothing else. The
-# watchdog sleeps in one-second steps, so when it is killed early no
-# sleep outlives it.
+# bounded <seconds> <command...>: runs the command in the foreground under
+# the process supervisor (scripts/lib/supervise.sh, TASK218) with a deadline
+# and returns its status. The supervisor ends the command's whole group at
+# the deadline (TERM, then KILL after 2 s), so a target leaks(1) leaves
+# stopped goes with it. Its status 124 (the deadline) is written to
+# ${tmp}/expired; 126 (a group it could not empty) fails the check; a
+# process it saw leave the group (an "escaped" event) fails the check and
+# is named. The events go to ${tmp}/events, and are appended to
+# $IMGDEC_SELFTEST_EVENTS when the self-test sets it.
+. scripts/lib/supervise.sh
+sv=$(sv_path) || { echo "check-image-decoder: no process supervisor"; exit 1; }
 bounded()
 {
 	limit=$1
-	name=$2
-	shift 2
-	"$@" 3>&- &
-	run=$!
-	(
-		n=0
-		while [ "$n" -lt "$limit" ]; do
-			sleep 1
-			n=$((n + 1))
-		done
-		if kill -0 "$run" 2>/dev/null; then
-			echo "$limit" > "${tmp:?}/expired"
-			reap "$run" "$name" 2> "${tmp:?}/reap.err"
-		fi
-	) < /dev/null > /dev/null 2>&1 3>&- &
-	dog=$!
-	# the self-test's hook (FIX150): where to record the watchdog's PID
-	[ -z "${IMGDEC_SELFTEST_DOGFILE:-}" ] || echo "$dog" >> "$IMGDEC_SELFTEST_DOGFILE"
+	shift
 	rc=0
-	wait "$run" || rc=$?
-	run=
-	kill "$dog" 2>/dev/null || :
-	wait "$dog" 2>/dev/null || :
-	dog=
+	"$sv" --timeout "$limit" --grace 2 --name image-decoder --events 9 -- "$@" 9> "${tmp:?}/events" || rc=$?
+	[ -z "${IMGDEC_SELFTEST_EVENTS:-}" ] || cat "${tmp:?}/events" >> "$IMGDEC_SELFTEST_EVENTS"
+	if grep -q '^escaped pid=' "${tmp:?}/events"; then
+		echo "check-image-decoder: a process left the run's group: escaped pid $(sed -n 's/^escaped pid=//p' "${tmp:?}/events" | head -n 1)"
+		exit 1
+	fi
+	if [ "$rc" -eq 124 ]; then
+		echo "$limit" > "${tmp:?}/expired"
+	elif [ "$rc" -eq 126 ]; then
+		echo "check-image-decoder: the run's group could not be emptied after its $limit s bound"
+		exit 1
+	fi
 	return "$rc"
 }
 
-# reaped: prints what reap had to say when the watchdog ended a run
-reaped()
-{
-	if [ -s "${tmp:?}/reap.err" ]; then
-		cat "${tmp:?}/reap.err"
-	fi
-}
-
-# expired <run>: fails the check when the watchdog killed the run
+# expired <run>: fails the check when the supervisor stopped the run at its bound
 expired()
 {
 	if [ -e "${tmp:?}/expired" ]; then
-		reaped
 		echo "check-image-decoder: $1 outlived its $(cat "${tmp:?}/expired") s bound and was killed"
 		exit 1
 	fi
@@ -231,7 +149,7 @@ if ! $cc $sflags -o "${tmp:?}/skyorder_test" tests/image/skyorder_test.c > "${tm
 	exit 1
 fi
 status=0
-bounded "$bound" - "${tmp:?}/skyorder_test" || status=$?
+bounded "$bound" "${tmp:?}/skyorder_test" || status=$?
 expired "the sky order test"
 if [ "$status" -ne 0 ]; then
 	echo "check-image-decoder: the sky order test failed"
@@ -249,7 +167,7 @@ if ! $cc $sflags -Wno-sign-compare -DYQ2OSTYPE=\"test\" -DYQ2ARCH=\"test\" -I. \
 	exit 1
 fi
 status=0
-bounded "$bound" - "${tmp:?}/skyload_test" || status=$?
+bounded "$bound" "${tmp:?}/skyload_test" || status=$?
 expired "the sky load test"
 if [ "$status" -ne 0 ]; then
 	echo "check-image-decoder: the sky load test failed"
@@ -257,7 +175,7 @@ if [ "$status" -ne 0 ]; then
 fi
 
 status=0
-bounded "$bound" - "${tmp:?}/imgdecode_test" || status=$?
+bounded "$bound" "${tmp:?}/imgdecode_test" || status=$?
 expired "the host test"
 if [ "$status" -ne 0 ]; then
 	echo "check-image-decoder: the host test failed"
@@ -279,7 +197,7 @@ if [ "$(uname -s)" = Darwin ]; then
 		exit 1
 	fi
 	status=0
-	bounded "$bound" - "${tmp:?}/imgdecode_old" > "${tmp:?}/old.out" 2>&1 || status=$?
+	bounded "$bound" "${tmp:?}/imgdecode_old" > "${tmp:?}/old.out" 2>&1 || status=$?
 	expired "the host test without kCGImageSourceAllowableTypes"
 	if [ "$status" -ne 0 ]; then
 		cat "${tmp:?}/old.out"
@@ -311,14 +229,13 @@ else
 		echo "check-image-decoder: the leaks(1) probe does not build"
 		exit 1
 	fi
-	bounded "$probe" leakprobe leaks --atExit -- "${tmp:?}/leakprobe" > "${tmp:?}/probe.out" 2>&1 || :
+	bounded "$probe" leaks --atExit -- "${tmp:?}/leakprobe" > "${tmp:?}/probe.out" 2>&1 || :
 	if [ -e "${tmp:?}/expired" ]; then
-		reaped
 		echo "check-image-decoder: leaks(1) could not inspect a process within $probe s: it needs Developer Mode (DevToolsSecurity -enable) or an unlocked session that answers the developer-tools authorization"
 		exit 1
 	fi
 	status=0
-	bounded "$bound" imgdecode_plain env MallocStackLogging=1 leaks --atExit -- "${tmp:?}/imgdecode_plain" \
+	bounded "$bound" env MallocStackLogging=1 leaks --atExit -- "${tmp:?}/imgdecode_plain" \
 		--bound "$bound" --loop 20 > "${tmp:?}/leaks.out" 2>&1 || status=$?
 	if [ -e "${tmp:?}/expired" ]; then
 		cat "${tmp:?}/leaks.out"

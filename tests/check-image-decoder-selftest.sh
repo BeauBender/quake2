@@ -155,7 +155,7 @@ main(int argc, char **argv)
 		pause();
 }
 EOF
-printf '#include <unistd.h>\nint main(void){sleep(120);return 0;}\n' > "${tmp:?}/decoy.c"
+printf '#include <unistd.h>\nint main(void){pause();return 0;}\n' > "${tmp:?}/decoy.c"
 mkdir -p "${tmp:?}/decoy"
 cc=${CC:-cc}
 if ! $cc -o "${tmp:?}/spawnstop" "${tmp:?}/spawnstop.c" ||
