@@ -6,6 +6,8 @@
 #   one_fail  one failing check fails the run and is named; the checks
 #             after it still run;
 #   two_fail  two failing checks are both named;
+#   sv126     a supervisor that exits 126 (a group it cannot empty) fails
+#             its check, shown as FAILED (status 126);
 #   signal    a check that dies from a signal fails the run;
 #   log       a log that cannot be printed fails the run;
 #   order     each check's output (standard output and error) is printed
@@ -40,9 +42,10 @@
 #   kgrp      SIGKILL to test.sh's process group there: test.sh's status
 #             137, and what the running check started is gone within 10 s;
 #   sigs      a check run by test.sh there gets SIGINT, SIGQUIT, SIGHUP,
-#             SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU as one started directly does (as
-#             origin/main's test.sh ran each check), SIGINT delivered
-#             (not asked when SIGINT is ignored here);
+#             SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU as one started directly
+#             with every signal at its default does, SIGINT delivered (each
+#             check's supervisor starts it so, TASK221: also when SIGINT is
+#             ignored here);
 #   ttyfork   what the shell writes between fork and exec when test.sh
 #             starts the scheduler, or the scheduler a check, reaches no
 #             terminal: on a tostop one it would stop that child (forced
@@ -53,6 +56,9 @@
 #   watchfork the same for test.sh's start of the lock watcher, under the
 #             lock, and the scheduler's own standard error reaches test.sh's;
 #   leave    what a passing check leaves running is gone after the run;
+#   killgrace SIGTERM to the scheduler, its check ignoring SIGTERM, then
+#             SIGKILL to the scheduler once the check has said it got the
+#             TERM: the check still ends after the grace (TASK221);
 #   stop      the disposition probe of the gate's stop (FIX186, through the
 #             bounded-run primitive): a check and its grandchild, each held
 #             by a flag file and each writing every signal it gets to a
@@ -78,11 +84,20 @@
 #   dropabsent gate_drop of an entry that is not in the running list leaves
 #             the list as it is, and of one that is takes it out;
 #   stopnoerr the scheduler itself started with its standard error closed:
-#             what a passing check left running (its flag-held grandchild)
-#             is gone after the run, and so are a check and its grandchild
-#             after a SIGTERM to the scheduler;
+#             a bad GATE_JOBS still gives status 2 and runs no check (the
+#             line it writes there cannot fail under set -e); what a
+#             passing check left running (its flag-held grandchild) is gone
+#             after the run, and so are a check and its grandchild after a
+#             SIGTERM to the scheduler;
+#   termign   the scheduler started with SIGTERM ignored refuses to start:
+#             status 2 within 10 s, one line that says why, no check run
+#             (every supervisor would inherit the ignore, so no stop could
+#             end a check);
 #   intskip   interrupt, testsh and sigs, run by this self-test started
-#             with SIGINT ignored, each say what they skip and pass.
+#             with SIGINT ignored, pass: interrupt and testsh each say what
+#             they skip, and sigs says it skips nothing (its check gets
+#             SIGINT at its default from its supervisor, TASK221, so it
+#             still asserts SIGINT delivered).
 # Then each case is shown failing against at least one mutant of the
 # scheduler (or of scripts/test.sh, for wiring and testsh). Every run of the
 # scheduler is bounded in time here; one that outlives its bound fails its
@@ -94,9 +109,11 @@
 # a signal ignored on entry cannot be trapped or reset). It asks first, as
 # tests/check-bench.sh does, whether SIGINT reaches a command here; when it
 # does not, the parts that need it are skipped, each with a line that says
-# so: interrupt sends SIGTERM in its place, testsh sends no SIGINT, sigs
-# does not ask for SIGINT delivered, and the mutants that only SIGINT can
-# catch are counted as skipped, never as caught. Every other assertion runs.
+# so: interrupt sends SIGTERM in its place, testsh sends no SIGINT, and the
+# mutants that only SIGINT can catch are counted as skipped, never as
+# caught. sigs skips nothing: each check's supervisor starts it with every
+# signal at its default (TASK221), so a check gets SIGINT however this
+# self-test was started. Every other assertion runs.
 # GP_ONLY="<case>..." runs those cases alone, stopping at the first that
 # fails, and no mutant (intskip uses it).
 #
@@ -149,6 +166,7 @@ quiet=0
 SCHED=$real
 # (printf, not echo: this shell's echo decodes backslashes, and a line can
 # hold process text, which is printed as it is)
+. "$top/tests/lib/proc.sh"
 bad() { printf '%s\n' "$me: $*"; fail=1; }
 say() { [ "$quiet" = 1 ] || printf '%s\n' "$me: $*"; }
 # skipint <part>: says that <part> is skipped, as SIGINT is ignored here
@@ -170,6 +188,13 @@ mkdir "${tmp:?}/bin" "${tmp:?}/shim" "${tmp:?}/make"
 # own directory (FIX186): its mutants are written to $tmp, so it is there too
 mkdir -p "${tmp:?}/bench/core"
 cp "$top/scripts/bench/core/common.sh" "${tmp:?}/bench/core/common.sh"
+# and its process supervisor from lib/ (TASK221), built once here into the
+# tool cache, which every run then shares (a case may set HOME elsewhere)
+mkdir "${tmp:?}/lib"
+cp "$top/scripts/lib/supervise.sh" "$top/scripts/lib/supervise.c" "${tmp:?}/lib/"
+_gsv=$(. "$top/scripts/lib/supervise.sh" && sv_path) || { printf '%s\n' "$me: cannot build the process supervisor"; exit 1; }
+SUPERVISE_CACHE=$(dirname "$_gsv")
+export SUPERVISE_CACHE
 cat > "${tmp:?}/fake" << 'EOF'
 #!/bin/sh
 n=${0##*/}
@@ -379,6 +404,30 @@ c_two_fail() {
 	[ "$rc" -eq 1 ] || { say "two_fail: status $rc, want 1"; return 1; }
 	[ "$(status "$d" a)" = "FAILED (status 1)" ] && [ "$(status "$d" c)" = "FAILED (status 2)" ] || { say "two_fail: a failing check is not shown as failed"; return 1; }
 	has "$d" "gate: checks: 2 of 4 FAILED in N s, 2 at a time: check-a.sh check-c.sh" || { say "two_fail: the last line does not name both failing checks"; return 1; }
+}
+
+# sv126: a supervisor that exits 126 (its check's group could not be
+# emptied) fails its check, shown as FAILED (status 126). The supervisor is
+# a stand-in that exits 126 at once, in a tool cache of the case's own,
+# under the name the real one has there (the same compiler and source).
+c_sv126() {
+	d=$(newcase)
+	spec "$d" a 1 0 0
+	spec "$d" b 1 0 0
+	mkdir "$d/cache"
+	chmod 700 "$d/cache"
+	printf '%s\n' '#!/bin/sh' 'exit 126' > "$d/cache/${_gsv##*/}"
+	chmod 700 "$d/cache/${_gsv##*/}"
+	_svk=$SUPERVISE_CACHE
+	SUPERVISE_CACHE=$d/cache
+	rc=0
+	run "$d" 2 "" a b || rc=$?
+	SUPERVISE_CACHE=$_svk
+	[ "$rc" -eq 1 ] || { say "sv126: status $rc, want 1"; return 1; }
+	[ ! -s "$d/events" ] || { say "sv126: a check ran, so the stand-in was not the supervisor"; return 1; }
+	[ "$(status "$d" a)" = "FAILED (status 126)" ] && [ "$(status "$d" b)" = "FAILED (status 126)" ] ||
+		{ say "sv126: a supervisor's 126 is not shown as FAILED (status 126): $(tr '\n' '|' < "$d/norm")"; return 1; }
+	has "$d" "gate: checks: 2 of 2 FAILED in N s, 2 at a time: check-a.sh check-b.sh" || { say "sv126: the last line does not name both checks"; return 1; }
 }
 
 c_signal() {
@@ -720,14 +769,16 @@ signalled() {
 
 # interrupt: SIGINT to the scheduler with two checks running, a and b, c
 # and d waiting. b ignores SIGTERM: only the SIGKILL after the grace ends
-# it. a's SIGTERM trap takes 5 s: the grace (10 s) lets it finish. SIGTERM
-# in its place when SIGINT is ignored here: the rest still holds.
+# it, as its sleep (60 s) outlasts the run's 30 s bound, so a grace that
+# never ends (one not passed to the supervisor) fails the case. a's SIGTERM
+# trap takes 5 s: the grace (10 s) lets it finish. SIGTERM in its place
+# when SIGINT is ignored here: the rest still holds.
 c_interrupt() {
 	_ii=INT:130
 	[ -n "$INT_OK" ] || { skipint "interrupt's SIGINT (SIGTERM is sent in its place)"; _ii=TERM:143; }
 	d=$(newcase)
 	spec "$d" a 1 0 0 holdtrap 30
-	spec "$d" b 1 0 0 holdterm 30
+	spec "$d" b 1 0 0 holdterm 60
 	spec "$d" c 1 0 0
 	spec "$d" d 1 0 0
 	launch "$d" env GATE_JOBS=2 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
@@ -763,6 +814,8 @@ gtree() {
 	cp "$SCHED" "$_gtd/tree/scripts/gate-checks.sh"
 	mkdir -p "${_gtd:?}/tree/scripts/bench/core"
 	cp "$(dirname "$SCHED")/bench/core/common.sh" "$_gtd/tree/scripts/bench/core/common.sh"
+	mkdir "${_gtd:?}/tree/scripts/lib"
+	cp "$(dirname "$SCHED")/lib/supervise.sh" "$(dirname "$SCHED")/lib/supervise.c" "$_gtd/tree/scripts/lib/"
 	chmod +x "$_gtd/tree/scripts/test.sh" "$_gtd/tree/scripts/gate-checks.sh"
 	spec "$_gtd" a "$@"
 	for _tn in $(sed -n -e 's/^gate_first="\(.*\)"$/\1/p' -e 's/^gate_serial="\(.*\)"$/\1/p' "$_gtf") check-z.sh; do
@@ -803,10 +856,10 @@ c_kgrp() {
 
 # sigs: a probe check-a.sh run through scripts/test.sh (or $WIRING), on a
 # copy of the gate's layout, gets SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGTSTP,
-# SIGTTIN and SIGTTOU as it does when it is started directly from here, as
-# origin/main's test.sh ran each check (in its own foreground, no trap set),
-# and SIGINT is delivered to it (when SIGINT is ignored here, both show it
-# ignored, and that last is skipped)
+# SIGTTIN and SIGTTOU as it does when it is started directly from here with
+# every signal at its default, and SIGINT is delivered to it. When SIGINT is
+# ignored here, the direct start shows it ignored and is read as delivered:
+# the check's supervisor resets it (TASK221), so nothing is skipped
 c_sigs() {
 	_tf=${WIRING:-$top/scripts/test.sh}
 	dc=$(newcase)
@@ -825,13 +878,13 @@ c_sigs() {
 	lwait 90 || rc=$?
 	[ "$rc" -eq 0 ] && grep -q '^make ' "$d/events" || { say "sigs: test.sh on the probe gave status $rc"; return 1; }
 	_sgt=$(grep '^sig ' "$d/events" || :)
+	# each check's supervisor starts it with every signal at its default
+	# (TASK221), so a signal ignored here (SIGINT, under the merge gate) is
+	# delivered there all the same
+	_sgw=$(printf '%s\n' "$_sgw" | sed 's/ ignored$/ delivered/')
 	[ "$_sgt" = "$_sgw" ] ||
-		{ say "sigs: a check run by test.sh got: $(printf '%s\n' "$_sgt" | tr '\n' ' ')run directly: $(printf '%s\n' "$_sgw" | tr '\n' ' ')"; return 1; }
-	if [ -n "$INT_OK" ]; then
-		printf '%s\n' "$_sgt" | grep -qx 'sig a INT delivered' || { say "sigs: SIGINT is not delivered to a check run by test.sh"; return 1; }
-	else
-		skipint "sigs' assertion that SIGINT is delivered"
-	fi
+		{ say "sigs: a check run by test.sh got: $(printf '%s\n' "$_sgt" | tr '\n' ' ')run directly, every signal at its default: $(printf '%s\n' "$_sgw" | tr '\n' ' ')"; return 1; }
+	printf '%s\n' "$_sgt" | grep -qx 'sig a INT delivered' || { say "sigs: SIGINT is not delivered to a check run by test.sh"; return 1; }
 }
 
 # tscrub: its standard input on one line (lines joined by a space), with the
@@ -1088,7 +1141,9 @@ c_ttylate() {
 #   child that becomes the scheduler is not stopped by its own trace line;
 # - the scheduler run with sh -x on one check writes no trace of the
 #   check's command (the child's line) to its own output, while it writes
-#   its other traces there (+ set -m)
+#   its other traces there (+ gate_start 1). That child is the check's
+#   supervisor, in the scheduler's process group with SIGTTOU ignored, so
+#   no write of its own can stop it (TASK221)
 # Every sh -x run here has PS4='+ ' in its own environment, so a PS4 this
 # self-test is started with changes no trace line it looks for.
 c_ttyfork() {
@@ -1099,7 +1154,7 @@ c_ttyfork() {
 	bounded 90 "$d/out" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PS4='+ ' \
 		sh -x "$SCHED" "" "" "$d/check-a.sh" || rc=$?
 	[ "$rc" -eq 0 ] && grep -qx 'a line 1' "$d/out" || { say "ttyfork: the scheduler with sh -x gave status $rc"; return 1; }
-	grep -qx '+ set -m' "$d/out" || { say "ttyfork: the scheduler with sh -x wrote no trace"; return 1; }
+	grep -qx '+ gate_start 1' "$d/out" || { say "ttyfork: the scheduler with sh -x wrote no trace"; return 1; }
 	if grep -qxF "+ $d/check-a.sh" "$d/out"; then
 		say "ttyfork: the scheduler's child wrote to its standard error before its exec (+ $d/check-a.sh)"
 		return 1
@@ -1372,6 +1427,49 @@ c_leave() {
 	[ "$rc" -eq 0 ] && [ "$(status "$d" a)" = ok ] || { say "leave: status $rc, want 0, and check-a.sh passed"; return 1; }
 }
 
+# killgrace (TASK221): the scheduler gets SIGTERM while its one check ignores
+# it, and SIGKILL once the check has said it got the TERM: the stop still
+# ends the check after the grace, since the check's own supervisor owns it,
+# not the scheduler. The check writes its lines to a FIFO and holds its write
+# end, so end of file there means it has exited (tests/lib/proc.sh). On a
+# scheduler that stops its checks itself, the KILL ends that stop, and the
+# check outlives the bound.
+c_killgrace() {
+	d=$(newcase)
+	mkfifo "$d/fifo"
+	cat > "$d/check-k.sh" << 'EOF'
+#!/bin/sh
+exec > "$GP_FIFO"
+trap 'echo term' TERM
+echo "ready $$"
+while :; do sleep 1 > /dev/null; done
+EOF
+	chmod +x "$d/check-k.sh"
+	launch "$d" env GATE_JOBS=1 GP_FIFO="$d/fifo" TMPDIR="$d/td" sh "$SCHED" "" "" "$d/check-k.sh"
+	proc_open "$d/fifo"
+	_kr=0 _kp=
+	if ! proc_await 'ready *'; then
+		say "killgrace: the check did not start: $(cat "$d/out")"
+		_kr=1
+	fi
+	_kp=${PROC_LINE#ready }
+	proc_alone
+	if [ "$_kr" -eq 0 ]; then
+		kill -s TERM "$_lp" 2> /dev/null || :
+		proc_await term || { say "killgrace: the check did not get the scheduler's TERM"; _kr=1; }
+	fi
+	kill -s KILL "$_lp" 2> /dev/null || :
+	wait "$_lp" 2> /dev/null || :
+	_lp=
+	if [ "$_kr" -eq 0 ] && ! proc_eof; then
+		say "killgrace: the check (pid $_kp) outlived the scheduler's KILL by ${PROC_BOUND:-60} s: no one ended its stop"
+		_kr=1
+	fi
+	proc_close
+	case $_kp in '' | *[!0-9]*) ;; *) kill -s KILL "$_kp" 2> /dev/null || : ;; esac
+	return "$_kr"
+}
+
 # stop_one <signal> <status> [ignore] [intign] [<how>]: one run of the stop
 # case (see the top of this file) on a check-a.sh stand-in, GATE_JOBS=1.
 # Once both stand-ins have written their pids, the scheduler gets <signal>
@@ -1480,12 +1578,42 @@ c_stop() {
 	stop_one TERM 143 ignore || return 1
 	stop_one INTTERM 143 "" intign
 }
-# stopnoerr: the stop case's stand-ins under a scheduler whose own standard
-# error is closed (as scripts/ci-checks.sh can start it): its stops must not
-# depend on that standard error (FIX186)
+# stopnoerr: a scheduler whose own standard error is closed (as
+# scripts/ci-checks.sh can start it): neither its status nor its stops may
+# depend on that standard error (FIX186). Its error before any check starts
+# (a bad GATE_JOBS) is status 2, as in errors: a scheduler that leaves the
+# closed fd as it is fails the write of that line, and set -e ends it with
+# status 1. Then the stop case's stand-ins under it.
 c_stopnoerr() {
+	d=$(newcase)
+	spec "$d" a 1 0 0
+	rc=0
+	bounded 30 "$d/out" env GATE_JOBS=abc GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
+		sh -c 'exec 2>&-; exec sh "$1" "" "" "$2"' sh "$SCHED" "$d/check-a.sh" || rc=$?
+	[ "$rc" -eq 2 ] && [ ! -s "$d/events" ] ||
+		{ say "stopnoerr: GATE_JOBS=abc, the scheduler's standard error closed: status $rc, want 2 and no check run"; return 1; }
 	stop_one none 0 "" "" nostderr || return 1
 	stop_one TERM 143 "" "" nostderr
+}
+# termign: a scheduler started with SIGTERM ignored refuses to start. A
+# signal ignored at entry cannot be trapped, and every check's supervisor
+# would inherit the ignore and never begin a stop, so a stop would wait,
+# with no bound, for each check to end by itself. Status 2, within a few
+# seconds, one line that says why, and no check run (the one given holds
+# for 15 s: a scheduler that runs it outlives the 10 s bound).
+c_termign() {
+	d=$(newcase)
+	spec "$d" a 1 0 0 hold 15
+	rc=0
+	_ti0=$(date +%s)
+	bounded 10 "$d/out" env GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
+		sh -c 'trap "" TERM; exec sh "$1" "" "" "$2"' sh "$SCHED" "$d/check-a.sh" || rc=$?
+	_ti=$(($(date +%s) - _ti0))
+	[ "$rc" -eq 2 ] && [ ! -s "$d/events" ] ||
+		{ say "termign: SIGTERM ignored at the start: status $rc, want 2 and no check run ($(tr '\n' '|' < "$d/out"))"; return 1; }
+	[ "$_ti" -le 10 ] || { say "termign: the refusal took $_ti s, want at most 10"; return 1; }
+	[ "$(wc -l < "$d/out" | tr -d ' ')" = 1 ] && grep -q '^gate: SIGTERM is ignored' "$d/out" ||
+		{ say "termign: want one line, 'gate: SIGTERM is ignored ...', got: $(tr '\n' '|' < "$d/out")"; return 1; }
 }
 
 # drop: see the top of this file. check-a.sh (x) starts a child that
@@ -1554,8 +1682,10 @@ c_drop() {
 	[ "$_prs" -eq 143 ] || { say "drop: status $_prs, want 143"; return 1; }
 	[ -z "$_pleft" ] || { say "drop: left running:$_pleft"; return 1; }
 	[ "$_pcs" = 'TERM ' ] && [ "$_pgs" = 'TERM ' ] || { say "drop: the running check and its grandchild must each get one SIGTERM"; return 1; }
-	[ "$_pbef" -gt 0 ] || { say "drop: the ps shim saw no call on the first check's pid (the shim is not in use)"; return 1; }
-	[ "$_paft" -eq 0 ] || { say "drop: the stop on the way out asked about the first check's pid again ($_paft ps calls): it was still in the running list after its record went"; return 1; }
+	# the supervisor owns each check's identity and reap (TASK221): the
+	# scheduler asks ps nothing about a check, before the SIGTERM or after
+	grep -q . "$_pd/ps.log" || { say "drop: the ps shim saw no call at all (the shim is not in use)"; return 1; }
+	[ "$_pbef" -eq 0 ] && [ "$_paft" -eq 0 ] || { say "drop: the scheduler asked ps about the first check's pid ($_pbef ps calls before the SIGTERM, $_paft after)"; return 1; }
 }
 # dropabsent: gate_drop, taken from the scheduler, on a list of two entries
 c_dropabsent() {
@@ -1572,8 +1702,10 @@ printf "%s\n" "$*"' 2>&1)
 }
 
 # intskip: interrupt, testsh and sigs, run by this self-test (or $SELF)
-# alone (GP_ONLY), started with SIGINT ignored: each says what it skips,
-# none fails, and the run passes
+# alone (GP_ONLY), started with SIGINT ignored: interrupt and testsh each
+# say what they skip, sigs says it skips nothing (its assertion that SIGINT
+# is delivered runs: a supervisor gives each check every signal at its
+# default, TASK221), none fails, and the run passes
 c_intskip() {
 	_xf=${SELF:-$top/tests/check-gate-parallel.sh}
 	d=$(newcase)
@@ -1581,10 +1713,14 @@ c_intskip() {
 	bounded 240 "$d/out" env GP_ONLY="sigs testsh interrupt" TMPDIR="$d/td" \
 		sh -c 'trap "" INT; exec sh "$1"' sh "$_xf" || rc=$?
 	[ "$rc" -eq 0 ] || { say "intskip: the cases that need SIGINT, run with SIGINT ignored, gave status $rc:"; [ "$quiet" = 1 ] || sed 's/^/  | /' "$d/out"; return 1; }
-	for _xp in "interrupt's SIGINT (SIGTERM is sent in its place)" "testsh's SIGINT" "sigs' assertion that SIGINT is delivered"; do
+	for _xp in "interrupt's SIGINT (SIGTERM is sent in its place)" "testsh's SIGINT"; do
 		grep -qxF "$me: SIGINT is ignored where this check runs, so $_xp is skipped" "$d/out" ||
 			{ say "intskip: no line says that $_xp is skipped"; return 1; }
 	done
+	if grep -F "$me: SIGINT is ignored where this check runs, so sigs" "$d/out" > /dev/null; then
+		say "intskip: sigs skipped a part, though its check gets SIGINT at its default from its supervisor"
+		return 1
+	fi
 	for _xc in sigs testsh interrupt; do
 		grep -qx "  ok   $_xc" "$d/out" || { say "intskip: $_xc did not pass"; return 1; }
 	done
@@ -1623,7 +1759,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave stop stopnoerr drop dropabsent intskip ttyself"
+cases="one_fail two_fail sv126 signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tdesc scrub tty ttymsg ttylate ttyfork nostderr watchfork leave killgrace stop stopnoerr termign drop dropabsent intskip ttyself"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
@@ -1658,6 +1794,7 @@ mutant status-ignored one_fail 'wait "$_grpid" || _grst=$?' 'wait "$_grpid" || :
 mutant stop-at-failure one_fail '		gate_start "$_gpi"' '		[ "$_gnf" -ne 0 ] || gate_start "$_gpi"'
 mutant first-only two_fail '_gfailed="$_gfailed $_gfname"' '_gfailed=${_gfailed:-" $_gfname"}'
 mutant signal-ok signal '[ "$_gfs" -eq 0 ] || _gfwhy=' '[ "$_gfs" -eq 0 ] || [ "$_gfs" -gt 128 ] || _gfwhy='
+mutant sv126-ok sv126 '[ "$_gfs" -eq 0 ] || _gfwhy=' '[ "$_gfs" -eq 0 ] || [ "$_gfs" -eq 126 ] || _gfwhy='
 mutant log-unchecked log 'cat "$_gd/$_gnext.log" || _gfwhy="its log cannot be read"' 'cat "$_gd/$_gnext.log" || :'
 mutant no-log order '"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &' '"$_gsc" < /dev/null &'
 mutant print-unended order 'while [ "$_gnext" -le "$_gn" ] && [ -e "$_gd/$_gnext.end" ]; do' 'while [ "$_gnext" -le "$_gn" ]; do'
@@ -1691,13 +1828,22 @@ mutant no-checks errors 'if [ $# -eq 0 ]; then' 'if false; then'
 # case's own scratch and does not exist, so every write fails there
 mutant no-scratch errors '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX") ||' '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX" || echo "${TMPDIR:?}/gate.none") ||'
 mutant guard-off guard 'if [ "$_gnext" -le "$_gn" ]; then' 'if false; then'
-mutant no-process-group interrupt '	set -m' '	:'
+# the check run without its supervisor (TASK221): what the deleted set -m
+# job, its trap - TTOU and gate_end at the reap covered, the supervisor now
+# covers, so each of those cases fails without it
+mutant no-supervisor interrupt '"$gate_sv" --grace "$gate_grace" --name "${_gsc##*/}" -- "$_gsc"' '"$_gsc"'
+mutant no-supervisor-leave leave '"$gate_sv" --grace "$gate_grace" --name "${_gsc##*/}" -- "$_gsc"' '"$_gsc"'
+mutant no-supervisor-killgrace killgrace '"$gate_sv" --grace "$gate_grace" --name "${_gsc##*/}" -- "$_gsc"' '"$_gsc"'
+mutant no-supervisor-sigs sigs '"$gate_sv" --grace "$gate_grace" --name "${_gsc##*/}" -- "$_gsc"' '"$_gsc"'
+mutant grace-unpassed interrupt '--grace "$gate_grace"' '--grace 3600'
 mutant grace-3s interrupt 'gate_grace=10' 'gate_grace=3'
 mutant grace-3s-stop stop 'gate_grace=10' 'gate_grace=3'
-mutant no-stop stop '	bench_stop_groups "$gate_grace" group "$@" || :' '	:'
+mutant no-stop stop '		kill -s TERM "$_gep" 2> /dev/null || :' '		:'
+mutant no-stop-wait interrupt '	for _gep; do wait "$_gep" 2> /dev/null || :; done' '	:'
 mutant stderr-closed-unguarded-sched stopnoerr '{ :; } 8>&2 2> /dev/null || exec 2> /dev/null' ':'
+# the refusal of an ignored SIGTERM dropped: the run starts its checks
+mutant term-ignored-starts termign "case \$({ sh -c 'echo started; kill -s TERM \$\$; echo ignored'; } 2> /dev/null) in" 'case started in'
 mutant no-parent-check kgrp 'if [ -n "$_gparent" ] && ! gate_parent "$_gparent"; then' 'if false; then'
-mutant no-end-at-exit leave '			gate_end "$_grpid"' '			:'
 intmut mutant int-passes interrupt "trap 'exit 130' INT" "trap 'exit 0' INT"
 mutant term-goes-on interrupt1 "trap 'exit 143' TERM" "trap ':' TERM"
 mutant term-passes interrupt1 "trap 'exit 143' TERM" "trap 'exit 0' TERM"
@@ -1705,24 +1851,30 @@ mutant hup-passes interrupt1 "trap 'exit 129' HUP" "trap 'exit 0' HUP"
 
 # mutants of the bounded-run primitive the scheduler sources (FIX186):
 # cmutant <name> <case> <old> <new>, the scheduler as it is beside it
+# cmutant <name> <case> <old> <new>: the scheduler with a supervisor built
+# from scripts/lib/supervise.c with <old> replaced, in a tool cache of its
+# own, must fail <case> (TASK221: the stop's TERM, CONT and KILL are the
+# supervisor's)
 cmutant() {
 	_cm=$tmp/cm-$1
-	mkdir -p "${_cm:?}/bench/core"
+	mkdir -p "${_cm:?}/bench/core" "${_cm:?}/lib" "${_cm:?}/cache"
 	cp "$real" "$_cm/gate-checks.sh"
-	lit "$top/scripts/bench/core/common.sh" "$3" "$4" > "$_cm/bench/core/common.sh" ||
-		{ bad "mutant $1 does not apply to scripts/bench/core/common.sh"; return 0; }
-	SCHED=$_cm/gate-checks.sh quiet=1
+	cp "$top/scripts/bench/core/common.sh" "$_cm/bench/core/common.sh"
+	cp "$top/scripts/lib/supervise.sh" "$_cm/lib/supervise.sh"
+	lit "$top/scripts/lib/supervise.c" "$3" "$4" > "$_cm/lib/supervise.c" ||
+		{ bad "mutant $1 does not apply to scripts/lib/supervise.c"; return 0; }
+	chmod 700 "$_cm/cache"
+	SCHED=$_cm/gate-checks.sh quiet=1 SUPERVISE_CACHE=$_cm/cache
 	if "c_$2"; then bad "mutant $1 was not caught by case $2"; else mutants=$((mutants + 1)); fi
-	SCHED=$real quiet=0
+	SCHED=$real quiet=0 SUPERVISE_CACHE=$(dirname "$_gsv")
 }
-cmutant group-kill-dropped interrupt 'kill -s "$1" -- "-$2" 2> /dev/null' 'kill -s "$1" -- "$2" 2> /dev/null'
-cmutant no-kill-after-grace interrupt 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
-cmutant no-kill-after-grace-stop stop 'bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' ':'
-cmutant no-cont stop 'bench_signal_group CONT "$_sg_p" "$_sg_o" || true' ':'
-# gate_drop (FIX186, slice 2): emptied, the first of two checks ended in one
-# poll is still in the running list when a signal comes in the second's
-# grace; absent-entry guard dropped, an absent entry doubles the list
-mutant drop-emptied drop '	_grun="${_gdr%% "$1" *} ${_gdr#* "$1" }"' '	:'
+cmutant group-kill-dropped interrupt 'kill(-sv_leader, sig) < 0' 'kill(sv_leader, sig) < 0'
+cmutant no-kill-after-grace interrupt '		sv_group(SIGKILL, "kill-sent");' '		sv_group(0, "kill-sent");'
+cmutant no-kill-after-grace-stop stop '		sv_group(SIGKILL, "kill-sent");' '		sv_group(0, "kill-sent");'
+cmutant no-cont stop '	sv_group(SIGCONT, NULL);' '	(void)0;'
+# gate_drop (FIX186, slice 2): absent-entry guard dropped, an absent entry
+# doubles the list. (Its drop-emptied mutant went with TASK221: the reap
+# waits no grace any more, so no signal can come in one.)
 mutant drop-absent-doubles dropabsent '	case " $_grun " in *" $1 "*) ;; *) return 0 ;; esac' '	:'
 
 # mutants of scripts/test.sh: wmut <name> <case> <old> <new>
@@ -1738,13 +1890,10 @@ wmut wiring-subset wiring 'scripts/gate-checks.sh "$gate_serial" "$gate_first" t
 wmut wiring-no-errexit wiring 'set -eu' 'set -u'
 wmut stop-not-passed testsh '		kill -s TERM "$gate_sched" 2> /dev/null || :' '		:'
 wmut stop-passes testsh "trap 'gate_stop 143' TERM" "trap 'gate_stop 0' TERM"
-mutant ttou-to-checks sigs '	trap - TTOU' '	:'
-# (the two re-ignores: the one in gate_start is told apart by its comment)
-mutant ttou-after-start tty "trap '' TTOU # the scheduler again" ':'
-mutant ttou-scheduler tty "trap '' TTOU" ':' "	trap '' TTOU #"
+# (the scheduler's one ignore of SIGTTOU, which its supervisors inherit)
+mutant ttou-scheduler tty "trap '' TTOU" ':'
 # (the shell's standard error left on the terminal for the fork of a check,
 # and of the scheduler; the scheduler's own standard error lost with it)
-mutant start-stderr-on-tty ttyfork '{ "$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 & } 2> /dev/null' '"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &'
 wmut sched-stderr-on-tty ttyfork '{ 2>&3 3>&- GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh & } 3>&2 2> /dev/null' 'GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &'
 wmut sched-stderr-lost wiring '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
 wmut sched-stderr-lost-run watchfork '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
@@ -1752,9 +1901,13 @@ wmut sched-stderr-lost-run watchfork '{ 2>&3 3>&- GATE_PARENT' '{ GATE_PARENT'
 # left closed, so the scheduler's start fails and $! is not its pid)
 wmut watch-stderr-on-tty watchfork '{ sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 & } 2> /dev/null' 'sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 &'
 wmut stderr-closed-unguarded nostderr '{ :; } 3>&2 2> /dev/null || exec 2> /dev/null' ':'
-# (without its own group the scheduler, and every check, ignore SIGINT and
-# SIGQUIT; when this self-test already ignores both, nothing differs)
-intmut wmut no-own-group sigs 'set -m' ':'
+# (without its own group the scheduler is in test.sh's, and so is every
+# check's supervisor, its background job: a SIGKILL to that group kills
+# them all and leaves each check, in a group of its own, running. The
+# SIGINT and SIGQUIT a check gets no longer hang on it: its supervisor
+# starts it with every signal at its default, TASK221, so sigs passes with
+# this mutant and no-supervisor-sigs covers that)
+wmut no-own-group kgrp 'set -m' ':'
 wmut no-parent-pid kgrp 'GATE_PARENT=$$ scripts/gate-checks.sh' 'scripts/gate-checks.sh'
 
 # mutants of this self-test, run from a copy of the scripts it tests:
@@ -1771,6 +1924,9 @@ smut() {
 	cp "$top/scripts/test.sh" "$top/scripts/gate-checks.sh" "$_sm/scripts/"
 	mkdir -p "${_sm:?}/scripts/bench/core"
 	cp "$top/scripts/bench/core/common.sh" "$_sm/scripts/bench/core/common.sh"
+	mkdir -p "${_sm:?}/tests/lib" "${_sm:?}/scripts/lib"
+	cp "$top/scripts/lib/supervise.sh" "$top/scripts/lib/supervise.c" "$_sm/scripts/lib/"
+	cp "$top/tests/lib/proc.sh" "$_sm/tests/lib/proc.sh"
 	lit "$top/tests/check-gate-parallel.sh" "$3" "$4" "smut " > "$_sm/tests/check-gate-parallel.sh" ||
 		{ bad "mutant $1 does not apply to this self-test"; return 0; }
 	shift 4
