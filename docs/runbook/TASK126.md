@@ -226,9 +226,11 @@ No kernel is wired in this slice, so there is no run at an effect scale of 1/2.
     `xcrun metal`. The mutants: the sample at the traced pixel itself (twice), the motion not divided,
     its sign flipped, the reset not passed, the weights at divisor 1, a pixel with no normal not
     skipped, every tap taken as traced, the neutral value 1, the fallback never counted, and the
-    visibility 1 in the light.
-  - It pins the back end's take at the divisor (mutant: the plain take) and the scene's cvar and
-    divisor (mutants: the default 0.5, the divisor left at 1).
+    visibility 1 in the light, and taps 1 and 2 swapped in the upsample's x and y tap lines (once
+    each).
+  - It pins the back end's take at the divisor (mutant: the plain take) and the scene's cvar,
+    divisor and traced-size history call (mutants: the default 0.5, the divisor left at 1, the render
+    width).
   - Segment 20 gains five kernel-call pairs of the new kernels.
 - **The scenario** `rt-sun-half`: `rt-sun` plus `r_rt_sun_scale 0.5`, in the scenarios README (both
   tables) and `doc/100_renderpins.md`.
