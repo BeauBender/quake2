@@ -51,6 +51,105 @@
 /* the samples a history counts at most (the denoiser of slice 2 reads the count) */
 #define MTL_RTT_COUNT_MAX 255.0f
 
+/*
+ * The guards of the history (a NaN fails, a count below 1 is empty, a light
+ * outside [0, 1] is bad) test the float's bit pattern as an integer, not
+ * with a float compare. The Metal shaders build with fast math, under which
+ * a float compare may be folded as if no NaN came (the compiler emits
+ * "fcmp fast" with nnan), so a NaN could pass a guard written as "a NaN
+ * fails this compare" and be reprojected from frame to frame. An integer
+ * test is no float operation and keeps its meaning (as mtl_rtm_index1's).
+ * For every input each test gives the float compare's answer, -0 included
+ * (-0 >= 0 holds, so -0 is non-negative, as in the compares).
+ */
+#ifdef __METAL_VERSION__
+#define MTL_RTT_BITS(f) as_type<uint>(f)
+#else
+static inline unsigned
+mtl_rtt_bits(float f)
+{
+	union
+	{
+		float f;
+		unsigned u;
+	} b;
+
+	b.f = f;
+	return b.u;
+}
+
+#define MTL_RTT_BITS(f) mtl_rtt_bits(f)
+#endif
+
+#define MTL_RTT_SIGN 0x80000000u        /* the sign bit; -0 is the sign alone */
+#define MTL_RTT_BITS_INF 0x7f800000u    /* +inf: every pattern above it with the sign clear is a NaN */
+#define MTL_RTT_BITS_1 0x3f800000u      /* 1.0f */
+#define MTL_RTT_BITS_MAX 0x437f0000u    /* MTL_RTT_COUNT_MAX, 255.0f */
+
+/* 1 when f >= 0 (+0, -0, every positive value and +inf; not a NaN, not a negative value) */
+static inline int
+mtl_rtt_nonneg(float f)
+{
+	const unsigned u = MTL_RTT_BITS(f);
+
+	return (u <= MTL_RTT_BITS_INF) || (u == MTL_RTT_SIGN);
+}
+
+/* 1 when f is a number in [0, 1], -0 included */
+static inline int
+mtl_rtt_unit(float f)
+{
+	const unsigned u = MTL_RTT_BITS(f);
+
+	return (u <= MTL_RTT_BITS_1) || (u == MTL_RTT_SIGN);
+}
+
+/* 1 when f >= 1 (+inf included; not a NaN, not a negative value, not a fraction) */
+static inline int
+mtl_rtt_atleast1(float f)
+{
+	const unsigned u = MTL_RTT_BITS(f);
+
+	return (u >= MTL_RTT_BITS_1) && (u <= MTL_RTT_BITS_INF);
+}
+
+/* 1 when f > 0 (+inf included; not a NaN, not 0 or -0, not a negative value) */
+static inline int
+mtl_rtt_positive(float f)
+{
+	const unsigned u = MTL_RTT_BITS(f);
+
+	return (u != 0u) && (u <= MTL_RTT_BITS_INF);
+}
+
+/* 1 when f <= MTL_RTT_COUNT_MAX (every negative value, -inf and -0 included; not a NaN, not +inf) */
+static inline int
+mtl_rtt_atmost_max(float f)
+{
+	const unsigned u = MTL_RTT_BITS(f);
+
+	return (u <= MTL_RTT_BITS_MAX) || ((u >= MTL_RTT_SIGN) && (u <= (MTL_RTT_SIGN | MTL_RTT_BITS_INF)));
+}
+
+/*
+ * 1 when f < lim, for an f that is not negative (the caller tested
+ * mtl_rtt_nonneg; a negative f here is 0, not below) and a lim that is not
+ * negative and not a NaN: with the sign clear, the patterns of non-negative
+ * values order as the values do, -0 is 0, and a NaN f is not below.
+ */
+static inline int
+mtl_rtt_below(float f, float lim)
+{
+	unsigned u = MTL_RTT_BITS(f);
+
+	if (u == MTL_RTT_SIGN)
+	{
+		u = 0u;
+	}
+
+	return (u < MTL_RTT_BITS(lim)) && (u <= MTL_RTT_BITS_INF);
+}
+
 /* where a pixel was in the history: its texel, ok 0 when that is off the screen */
 typedef struct
 {
@@ -75,8 +174,8 @@ mtl_rtt_reproject(unsigned x, unsigned y, float mx, float my, unsigned w, unsign
 	r.x = 0;
 	r.y = 0;
 
-	/* written so that a NaN fails */
-	if (!((hx >= 0.0f) && (hy >= 0.0f) && (hx < (float)w) && (hy < (float)h)))
+	/* a NaN fails (an integer test of the pattern, see MTL_RTT_BITS); a negative is already refused by mtl_rtt_nonneg */
+	if (!(mtl_rtt_nonneg(hx) && mtl_rtt_nonneg(hy) && mtl_rtt_below(hx, (float)w) && mtl_rtt_below(hy, (float)h)))
 	{
 		return r;
 	}
@@ -93,9 +192,16 @@ mtl_rtt_depth_ok(float dist, float hdist, float move)
 {
 	const float d = dist - hdist;
 	const float tol = move + MTL_RTT_DEPTH_ABS + MTL_RTT_DEPTH_REL * dist;
+	const unsigned ad = MTL_RTT_BITS(d) & ~MTL_RTT_SIGN;     /* |d|; a NaN stays above +inf */
+	unsigned t = MTL_RTT_BITS(tol);
 
-	/* written so that a NaN fails */
-	return (d <= tol) && (-d <= tol);
+	/* |d| <= tol, a NaN in d or tol failing, as (d <= tol) && (-d <= tol) does; a negative tol fails (its sign makes it a pattern above +inf); -0 is 0 */
+	if (t == MTL_RTT_SIGN)
+	{
+		t = 0u;
+	}
+
+	return (ad <= MTL_RTT_BITS_INF) && (t <= MTL_RTT_BITS_INF) && (ad <= t);
 }
 
 /*
@@ -136,7 +242,7 @@ mtl_rtt_reject(unsigned reset, int ok, float dist, float hdist, float move, unsi
 		r |= MTL_RTT_REJ_LIGHTS;
 	}
 
-	if (!(hcount >= 1.0f))
+	if (!mtl_rtt_atleast1(hcount))
 	{
 		r |= MTL_RTT_REJ_EMPTY;
 	}
@@ -148,7 +254,7 @@ mtl_rtt_reject(unsigned reset, int ok, float dist, float hdist, float move, unsi
 static inline float
 mtl_rtt_count(unsigned rejected, float hcount)
 {
-	if (rejected || !(hcount >= 1.0f))
+	if (rejected || !mtl_rtt_atleast1(hcount))
 	{
 		return 1.0f;
 	}
@@ -167,7 +273,7 @@ mtl_rtt_blend(unsigned rejected, float cur, float hist, float hcount, float alph
 {
 	float w;
 
-	if (rejected || !(hcount >= 1.0f) || !(alpha > 0.0f))
+	if (rejected || !mtl_rtt_atleast1(hcount) || !mtl_rtt_positive(alpha))
 	{
 		return cur;
 	}
