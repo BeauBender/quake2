@@ -395,6 +395,10 @@ test_hist(void)
 	unsigned seq;
 
 	memset(&st, 0, sizeof(st));
+	/* as the back ends' static histories start (TASK126 slice 2: the take reads the divisor) */
+	memset(&sh, 0, sizeof(sh));
+	memset(&sun, 0, sizeof(sun));
+	memset(&ao, 0, sizeof(ao));
 	rm_rtt_state_reset(&st);
 	rm_rtt_hist_reset(&sh);
 	rm_rtt_hist_reset(&sun);
@@ -475,6 +479,91 @@ test_hist(void)
 	CHECK(rm_rtt_hist_take(&sh, &t) == RM_RTT_RESET_FIRST);
 }
 
+/*
+ * An effect traced at its own scale (TASK126 slice 2): each history
+ * records the divisor it was taken at, and a view at another divisor
+ * resets that history alone with RM_RTT_RESET_SCALE, which
+ * RM_RTT_RESET_ALL holds. rm_rtt_hist_reset keeps the divisor (a history
+ * made again at the effect's new size still says why it reset), and a
+ * history with none recorded yet resets for FIRST alone. The plain take
+ * is the take at divisor 1.
+ */
+static void
+test_scale(void)
+{
+	rm_rtt_state_t st;
+	rm_rtt_hist_t sun, ao;
+	rm_rtt_key_t k = key(100, 200, 50);
+	rm_rtt_view_t t;
+	char buf[160];
+
+	memset(&st, 0, sizeof(st));
+	memset(&sun, 0, sizeof(sun));
+	memset(&ao, 0, sizeof(ao));
+
+	CHECK((RM_RTT_RESET_ALL & RM_RTT_RESET_SCALE) == RM_RTT_RESET_SCALE);
+	CHECK((RM_RTT_RESET_SCALE & (RM_RTT_RESET_FIRST | RM_RTT_RESET_SIZE | RM_RTT_RESET_RECT | RM_RTT_RESET_CUT)) == 0);
+	CHECK(RM_RTT_RESET_SCALE != 0);
+
+	/* the first view at divisor 2: no divisor recorded yet, so FIRST alone */
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take_at(&sun, &t, 2u) == RM_RTT_RESET_FIRST);
+	CHECK(rm_rtt_hist_take(&ao, &t) == RM_RTT_RESET_FIRST);
+	rm_rtt_frame_end(&st);
+
+	/* the same divisor: kept */
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take_at(&sun, &t, 2u) == 0);
+	CHECK(rm_rtt_hist_take(&ao, &t) == 0);
+	rm_rtt_frame_end(&st);
+
+	/* the sun's divisor changes: its history alone resets, for its scale */
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take_at(&sun, &t, 3u) == RM_RTT_RESET_SCALE);
+	CHECK(rm_rtt_hist_take(&ao, &t) == 0);
+	rm_rtt_frame_end(&st);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take_at(&sun, &t, 3u) == 0);
+	rm_rtt_frame_end(&st);
+
+	/* the plain take is divisor 1: back to scale 1 resets the history taken at 3 */
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take(&sun, &t) == RM_RTT_RESET_SCALE);
+	rm_rtt_frame_end(&st);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take_at(&sun, &t, 1u) == 0);
+	rm_rtt_frame_end(&st);
+
+	/* the history made again at the new size (rm_rtt_hist_reset) still resets for its scale, with FIRST */
+	rm_rtt_hist_reset(&sun);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take_at(&sun, &t, 2u) == (RM_RTT_RESET_FIRST | RM_RTT_RESET_SCALE));
+	rm_rtt_frame_end(&st);
+
+	/* the view's own reasons are kept beside it */
+	k = key(100, 200, 50 + 300);
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take_at(&sun, &t, 1u) == (RM_RTT_RESET_CUT | RM_RTT_RESET_SCALE));
+	rm_rtt_frame_end(&st);
+
+	/* a divisor of 0 is 1 */
+	t = step(&st, &k);
+	CHECK(rm_rtt_hist_take_at(&sun, &t, 0u) == 0);
+	rm_rtt_frame_end(&st);
+
+	/* the lines: the reset line, and the stats line's part for an effect traced below the drawn size */
+	CHECK(rm_rtt_scale_line_format("sun", buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: sun scale") == 0);
+	CHECK(!rm_rtt_scale_line_format("sun", buf, 10));
+	CHECK(buf[0] == 0);
+	CHECK(rm_rtt_traced_format(320, 240, 17, buf, sizeof(buf)));
+	CHECK(strcmp(buf, ", traced at 320x240, 17 upsample fallbacks") == 0);
+	CHECK(rm_rtt_traced_format(1, 1, 0, buf, sizeof(buf)));
+	CHECK(strcmp(buf, ", traced at 1x1, 0 upsample fallbacks") == 0);
+	CHECK(!rm_rtt_traced_format(320, 240, 17, buf, 12));
+	CHECK(buf[0] == 0);
+}
+
 int
 main(void)
 {
@@ -486,6 +575,7 @@ main(void)
 	test_reset();
 	test_lights();
 	test_hist();
+	test_scale();
 
 	printf("rm_rttemporal_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

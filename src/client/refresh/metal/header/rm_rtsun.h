@@ -181,7 +181,7 @@ typedef struct
 	float bias_k;       /* mtl_rtao_bias's k: 4 x 2^-24 / gl_znear */
 	float floor_;       /* rm_rtsun_floor */
 	unsigned show;      /* rm_rtsun_show */
-	unsigned pad;
+	unsigned div;       /* TASK126: r_rt_sun_scale's divisor (mtl_rtup_div); 1 traces every pixel, as rm_rtsun_trace */
 } rm_rtsun_view_t;
 
 /*
@@ -205,9 +205,16 @@ typedef struct
 	unsigned long rays;         /* below the floor and facing it: one ray each */
 	unsigned long lit;          /* rays that reached the sky: the term added */
 	double ms;                  /* the pass's GPU time; below 0 when not measured */
+	unsigned div;               /* TASK126: the view's divisor; above 1 the counts above are the traced pixels' */
+	unsigned long tw, th;       /* the traced size (the render size at divisor 1) */
+	unsigned long fallbacks;    /* the upsample's fallbacks (common/mtl_rtup_math.h), 0 at divisor 1 */
 } rm_rtsun_stats_t;
 
-/* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
+/*
+ * The r_rt_stats 2 line of a frame's pass, without a newline: 1 when it
+ * fits in len; 0 with buf empty otherwise. Above divisor 1 it ends with
+ * the traced size and the fallbacks (rm_rtt_traced_format).
+ */
 int rm_rtsun_stats_format(const rm_rtsun_stats_t *s, char *buf, size_t len);
 
 /*
@@ -230,14 +237,25 @@ void rmb_rtsun_close(void);
  * Before the G-buffer raster: the kernel's outputs at the render size w x
  * h (the class, R8Uint, and the light the resolve reads, RGBA16Unorm). 1
  * when the view can trace; 0 when the pass is not open or they cannot be
- * made.
+ * made. TASK126: above divisor 1 (r_rt_sun_scale, the view's div) also the
+ * traced size's class and visibility (R8Uint, R32Float) and the pipelines
+ * of rm_rtsun_trace_lo, rm_rtsun_temporal_lo, rm_rtsun_denoise_lo and
+ * rm_rtsun_up, a failure latched until the pass is closed; at divisor 1
+ * the traced size's textures are released.
  */
-int rmb_rtsun_prepare(unsigned long w, unsigned long h);
+int rmb_rtsun_prepare(unsigned long w, unsigned long h, unsigned div);
+
+/*
+ * TASK126: 1 once after a view whose sun history reset for r_rt_sun_scale
+ * (RM_RTT_RESET_SCALE from the take), for the r_rt_stats 1 line.
+ */
+int rmb_rtsun_scale_reset(void);
 
 /*
  * RT7 (TASK59 slice 1b): the next traced view accumulates its visibility
  * with t (copied), at the render size w x h, through rm_rtsun_temporal
- * after the trace; its pipeline and the two histories are made at the
+ * after the trace (TASK126: at the traced size, through
+ * rm_rtsun_temporal_lo, above divisor 1); its pipeline and the two histories are made at the
  * first such view, a failure latched. NULL, or t's alpha 0, releases the
  * histories and accumulates nothing. 1 when the view accumulates.
  */

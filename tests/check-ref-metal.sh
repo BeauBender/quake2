@@ -57,8 +57,10 @@
 #     the header and five pins of rm_rtpdenoise.metal with six mutants,
 #     tests/metal/rm_rtup_test.c, the joint bilateral upsample of an effect
 #     traced below the drawn size (common/mtl_rtup_math.h, option E, TASK126
-#     slice 1), with eight mutants of the header it must fail, the header
-#     compiled as Metal where xcrun metal is there,
+#     slices 1 and 2), with nine mutants of the header it must fail, the header
+#     compiled as Metal where xcrun metal is there; then the sun's kernels at
+#     r_rt_sun_scale (slice 3, rm_rtsun_lo.metal) pinned as text with their
+#     mutants, compiled where xcrun metal is there,
 #     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
 #     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eighteen
 #     scratch mutants of the two must fail it, and all eighteen must),
@@ -330,10 +332,12 @@ fi
 # the mutants: a rejection reason dropped (material, lights, depth, off screen), the view's reset
 # ignored, the frame without an accumulated view not resetting, a map load not resetting; slice 1b's:
 # the light set's flags not masked, a history that skipped a view still read (the early return), a
-# history made again still read, the views' number restarting on a map load. Each must compile (a
+# history made again still read, the views' number restarting on a map load; TASK126 slice 2's: the
+# scale reason dropped, the divisor not compared, the divisor forgotten when a history is made again
+# (so the history remade at an effect's new size no longer says why). Each must compile (a
 # mutant the compiler refuses tests nothing, review TASK59 slice 1, I1) and fail the test.
 rtt_mutants=0
-for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep; do
+for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep scalereason scalecmp scalekeep; do
 	rtt_tree "${tmp:?}/rttm"
 	h=${tmp:?}/rttm/src/client/refresh/metal/common/mtl_rtt_math.h
 	c=${tmp:?}/rttm/src/client/refresh/metal/rm_rttemporal.c
@@ -352,6 +356,9 @@ for m in mat lights depth off reset frameend mapload lightsmask histgap histrese
 			"$rm_dir/rm_rttemporal.c" > "$c" ;;
 		histreset) sed 's/	h->valid = 0;/	h->valid = h->valid;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		seqkeep) sed 's/	st->seq = seq;/	st->seq = seq \& 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		scalereason) sed 's/r |= RM_RTT_RESET_SCALE;/r |= 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		scalecmp) sed 's/(h->div != d)/((h->div != d) \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		scalekeep) sed 's/	h->valid = 0;/	h->valid = 0; h->div = 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 	esac
 	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$h" && cmp -s "$rm_dir/rm_rttemporal.c" "$c"; then
 		bad "the temporal mutant ($m) changed nothing"
@@ -619,13 +626,14 @@ fi
 seg 6 "; water ${rtw:-host test}"
 
 # the pure part of the sun and sky shadow (RT4, TASK56): rm_rtsun.c and common/mtl_rtsun_math.h, with
-# rm_rtshadow.c for the view's inverse, rm_rt.c for the material ids and rm_pure.c; it reads the
-# committed table scripts/rt/sun-angles.txt from this directory
+# rm_rtshadow.c for the view's inverse, rm_rt.c for the material ids, rm_pure.c and rm_rttemporal.c
+# (the stats line's traced part, TASK126); it reads the committed table scripts/rt/sun-angles.txt
+# from this directory
 rtsun=""
 # shellcheck disable=SC2086 # flags is a word list
 if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_rtsun_test" tests/metal/rm_rtsun_test.c \
 	"$rm_dir/rm_rtsun.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
-	"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	"$rm_dir/common/mtl_ring.c" "$rm_dir/rm_rttemporal.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
 	bad "tests/metal/rm_rtsun_test.c does not compile"
 elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtsun_test" > "${tmp:?}/out" 2>&1; then
@@ -1535,6 +1543,9 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	"rm_rtdenoise.metal rm_rtd_filter mtl_rtd_weight" "rm_rtdenoise.metal rm_rtd_filter mtl_rtd_add" \
 	"rm_rtdenoise.metal rm_rtd_filter mtl_rtd_result" "rm_rtdenoise.metal rm_rtao_denoise rm_rtd_filter" \
 	"rm_rtdenoise.metal rm_rtsun_denoise rm_rtd_filter" \
+	"rm_rtsun.metal rm_rtsun_temporal_lo mtl_rtup_reproject" "rm_rtsun.metal rm_rtsun_temporal_lo mtl_rtt_blend" \
+	"rm_rtsun.metal rm_rtsun_denoise_lo mtl_rtd_weight" "rm_rtsun.metal rm_rtsun_up mtl_rtup_weights" \
+	"rm_rtsun.metal rm_rtsun_up mtl_rtup_value" \
 	"rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_rweight" "rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_add" \
 	"rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_rresult"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
@@ -3142,14 +3153,15 @@ seg 7.8 "; RT-primary filter ${rtpd:-host test}, $rtpd_mutants rule mutants, $rt
 # each of which must compile and fail it with a FAIL line (a crash or a sanitizer trip is an error, not a
 # refusal): the depth guide, the material test, the normal guide and the
 # sample test dropped, the fallback taking the first tap, the fallback not counted, and the identity
-# dropped at a scale of 1, and the two cross weights of the bilinear taps swapped. Where the Metal
+# dropped at a scale of 1, and the two cross weights of the bilinear taps swapped; slice 2's, RT7's
+# reprojection at the effect size with the motion not divided by the divisor. Where the Metal
 # compiler is there, a kernel that calls every function of the header must compile.
 rtup=""
 rtup_tree() { # <dir>: a copy of the test and the headers, laid out as the test includes them
 	rm -rf "${1:?}"
 	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
 	cp "$rm_dir/common/mtl_rtup_math.h" "$rm_dir/common/mtl_rtd_math.h" "$rm_dir/common/mtl_rtao_math.h" \
-		"$rm_dir/common/mtl_shader_math.h" "$1/src/client/refresh/metal/common/"
+		"$rm_dir/common/mtl_shader_math.h" "$rm_dir/common/mtl_rtt_math.h" "$1/src/client/refresh/metal/common/"
 	cp tests/metal/rm_rtup_test.c "$1/tests/metal/"
 }
 rtup_build() { # <tree>: 0 when the tree's test builds
@@ -3173,7 +3185,7 @@ else
 fi
 rtup_mutants=0
 rtup_h=$rm_dir/common/mtl_rtup_math.h
-for m in depth material normal sample first count identity bilinear; do
+for m in depth material normal sample first count identity bilinear motion; do
 	[ -f "$rtup_h" ] || break
 	rtup_tree "${tmp:?}/rtupm"
 	h=${tmp:?}/rtupm/src/client/refresh/metal/common/mtl_rtup_math.h
@@ -3187,6 +3199,7 @@ for m in depth material normal sample first count identity bilinear; do
 		identity) sed 's/if (d <= 1u)$/if (d < 1u)/' ;;
 		bilinear) sed -e 's/in\.b\[1\] = qx\.f \* (1\.0f - qy\.f);/in.b[1] = (1.0f - qx.f) * qy.f;/' \
 			-e 's/in\.b\[2\] = (1\.0f - qx\.f) \* qy\.f;/in.b[2] = qx.f * (1.0f - qy.f);/' ;;
+		motion) sed 's|return mtl_rtt_reproject(x, y, mx / k, my / k, w, h);|return mtl_rtt_reproject(x, y, (mx / k) * k, (my / k) * k, w, h);|' ;;
 	esac < "$rtup_h" > "$h"
 	if cmp -s "$rtup_h" "$h"; then
 		bad "the upsample mutant ($m) changed nothing"
@@ -3203,7 +3216,7 @@ for m in depth material normal sample first count identity bilinear; do
 		rtup_mutants=$((rtup_mutants + 1))
 	fi
 done
-[ "$rtup_mutants" = 8 ] || bad "the upsample test refused $rtup_mutants of its 8 header mutants"
+[ "$rtup_mutants" = 9 ] || bad "the upsample test refused $rtup_mutants of its 9 header mutants"
 rtup_metal=""
 if [ -n "$rtp_metal" ] && [ -f "$rtup_h" ]; then
 	cat > "${tmp:?}/rtup-probe.metal" <<'EOF'
@@ -3228,8 +3241,9 @@ kernel void rtup_probe(device float *o [[buffer(0)]], uint2 px [[thread_position
 	}
 	in = mtl_rtup_bilinear(in, mtl_rtao_up_pair(px.x, d, n), mtl_rtao_up_pair(px.y, d, n));
 	const mtl_rtup_out_t r = mtl_rtup_weights(in, d);
+	const mtl_rtt_px_t rp = mtl_rtup_reproject(px.x, px.y, 1.5f, -0.5f, d, n, n);
 	o[px.y * 16u + px.x] = mtl_rtup_value(r, 0.1f, 0.2f, 0.3f, 0.4f, 1.0f) + mtl_rtup_tap_w(in, 0) +
-		(float)mtl_rtup_src(px.x, d, 16u);
+		(float)mtl_rtup_src(px.x, d, 16u) + (float)rp.x;
 }
 EOF
 	if rtp_compile "${tmp:?}/rtup-probe.metal"; then
@@ -3240,6 +3254,149 @@ EOF
 	fi
 fi
 seg 7.85 "; upsample ${rtup:-host test}, $rtup_mutants rule mutants refused${rtup_metal:+, compiled}"
+
+# The sun at r_rt_sun_scale (TASK126 slice 3). Its four kernels sit behind RM_RTSUN_LO_TU in
+# rm_rtsun.metal, compiled apart by rm_rtsun_lo.metal into ref_metal.metallib (the stock unit then holds
+# no new caller of the helpers rm_rtsun_trace calls), and the Makefile lists the rule's header. The
+# kernels, pinned as text, each with mutants it must refuse: the traced pixel's sample taken at its
+# source pixel (mutant: at the traced pixel itself); RT7's reprojection at the effect size (mutants: the
+# motion not divided, its sign flipped) with the view's reset reaching the rule (mutant: not passed);
+# the upsample's weights at the view's divisor (mutant: at 1), a pixel with no normal skipped before
+# the rule (mutant: only the depth tested), a tap's sample only where it was traced (mutant: every
+# tap), the sun's neutral value 0 (mutant: 1), the fallback counted (mutant: never), and the light
+# composed with the pixel's own N.L and the upsampled visibility (mutant: the visibility 1). Where the
+# Metal compiler is there, the unit and every mutant compile. The back end takes the view into the
+# history at its divisor once (mutant: the plain take, the divisor dropped), dispatches the stock trace
+# at divisor 1, and makes the four pipelines; the scene reads r_rt_sun_scale, default 1, as the view's
+# divisor (mutants: the default 0.5, the divisor left at 1), and sizes the traced-size histories at the traced
+# width (mutant: the render width). The upsample hands the slice-1 rule its four taps in the bilinear
+# order, both the x and the y line pinned (mutants: taps 1 and 2 swapped, once in each).
+sunlo_kpins=0 sunlo_kmut=0 sunlo_bmut=0 sunlo_metal=""
+sunlo_pin() { # <file> <kernel> <call>: 0 when the kernel's body holds the call exactly as pinned
+	awk -v fn="$2" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 } b { print }' "$1" | tr -s ' \t' '  ' |
+		grep -qF "$3"
+}
+sunlo_compile() { # <rm_rtsun.metal>: 0 when it compiles as the Makefile compiles rm_rtsun_lo.metal
+	rm -rf "${tmp:?}/sunlo"
+	mkdir -p "${tmp:?}/sunlo"
+	cp "$1" "${tmp:?}/sunlo/rm_rtsun.metal"
+	cp "$rm_dir/rm_rtsun_lo.metal" "${tmp:?}/sunlo/"
+	xcrun -sdk macosx metal -c -I"$rm_dir" "${tmp:?}/sunlo/rm_rtsun_lo.metal" -o "${tmp:?}/sunlo.air" \
+		> "${tmp:?}/metal.out" 2>&1
+}
+sunlo_f=$rm_dir/rm_rtsun.metal
+if [ ! -f "$rm_dir/rm_rtsun_lo.metal" ] || ! grep -qxF '#define RM_RTSUN_LO_TU 1' "$rm_dir/rm_rtsun_lo.metal" ||
+	! grep -qxF '#include "rm_rtsun.metal"' "$rm_dir/rm_rtsun_lo.metal" ||
+	[ "$(grep -cF 'ref_metal/rm_rtsun_lo.air' Makefile)" != 2 ] ||
+	! grep -qF 'src/client/refresh/metal/common/mtl_rtup_math.h \' Makefile; then
+	bad "rm_rtsun_lo.metal does not compile the sun's reduced-size kernels apart into ref_metal.metallib with its header listed"
+fi
+# the stock kernels before the unit's #else, the four after it
+if [ "$(awk '/^#ifndef RM_RTSUN_LO_TU$/ { s = 1 } /^#else \/\* RM_RTSUN_LO_TU \*\/$/ { s = 2 } /^#endif \/\* RM_RTSUN_LO_TU \*\/$/ { s = 3 }
+	/^rm_rtsun_trace\(|^rm_rtsun_temporal\(|^rm_fragment_rtsun_show\(/ { if (s == 1) a++ }
+	/^rm_rtsun_trace_lo\(|^rm_rtsun_temporal_lo\(|^rm_rtsun_denoise_lo\(|^rm_rtsun_up\(/ { if (s == 2) b++ }
+	END { print a "-" b }' "$sunlo_f")" != 3-4 ]; then
+	bad "rm_rtsun.metal: the stock kernels are not alone before #else /* RM_RTSUN_LO_TU */ or the four reduced-size kernels after it"
+fi
+sunlo_src='const uint2 sp = rm_rtsun_lo_src(px, v.div, depth.get_width(), depth.get_height());'
+for pin in "rm_rtsun_trace_lo|$sunlo_src|atpx" "rm_rtsun_temporal_lo|$sunlo_src|atpx" \
+	"rm_rtsun_temporal_lo|mtl_rtup_reproject(px.x, px.y, mv.x, mv.y, v.div, w, hh)|undivided sign" \
+	"rm_rtsun_temporal_lo|mtl_rtt_reject(t.reset, r.ok, dist, h.y, t.move, m, hm, 0u, 0u, h.w)|noreset" \
+	"rm_rtsun_up|o = mtl_rtup_weights(in, v.div);|weights1" \
+	"rm_rtsun_up|if ((d < 1.0f) && (nn.a > 0.5f))|nonormal" \
+	"rm_rtsun_up|in.ok[i] = ((tc == MTL_RTSUN_C_LIT) || (tc == MTL_RTSUN_C_SHADOW)) ? 1 : 0;|everytap" \
+	"rm_rtsun_up|const uint tx[MTL_RTUP_TAPS] = { qx.lo0, qx.lo1, qx.lo0, qx.lo1 };|taporderx" \
+	"rm_rtsun_up|const uint ty[MTL_RTUP_TAPS] = { qy.lo0, qy.lo0, qy.lo1, qy.lo1 };|taporder" \
+	"rm_rtsun_up|vis = mtl_rtup_value(o, tv[0], tv[1], tv[2], tv[3], 0.0f);|neutral1" \
+	"rm_rtsun_up|fb = o.fallback ? 1u : 0u;|nocount" \
+	"rm_rtsun_up|c = mtl_rtsun_light(c, m, cls, vis, nl, v.sun.x, v.sun.y, v.sun.z);|vis1"; do
+	# three fields: the kernel (the first), the call, its mutants (the last); the tap test's call holds "||"
+	kn=${pin%%|*} rest=${pin#*|}
+	kc=${rest%|*} kms=${rest##*|}
+	if ! sunlo_pin "$sunlo_f" "$kn" "$kc"; then
+		bad "rm_rtsun.metal: $kn does not hold $kc"
+		continue
+	fi
+	sunlo_kpins=$((sunlo_kpins + 1))
+	# shellcheck disable=SC2086 # kms is a word list
+	for m in $kms; do
+		case $m in
+			atpx) sed 's/const uint2 sp = rm_rtsun_lo_src(px, v\.div, depth\.get_width(), depth\.get_height());/const uint2 sp = px;/' ;;
+			undivided) sed 's/mtl_rtup_reproject(px\.x, px\.y, mv\.x, mv\.y, v\.div, w, hh)/mtl_rtt_reproject(px.x, px.y, mv.x, mv.y, w, hh)/' ;;
+			sign) sed 's/mtl_rtup_reproject(px\.x, px\.y, mv\.x, mv\.y, v\.div,/mtl_rtup_reproject(px.x, px.y, -mv.x, mv.y, v.div,/' ;;
+			noreset) awk -v fn="$kn" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+				b { sub(/mtl_rtt_reject\(t\.reset,/, "mtl_rtt_reject(0u,") } { print }' ;;
+			weights1) sed 's/o = mtl_rtup_weights(in, v\.div);/o = mtl_rtup_weights(in, 1u);/' ;;
+			nonormal) awk -v fn="$kn" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+				b { sub(/if \(\(d < 1\.0f\) && \(nn\.a > 0\.5f\)\)/, "if (d < 1.0f)") } { print }' ;;
+			everytap) sed 's/in\.ok\[i\] = ((tc == MTL_RTSUN_C_LIT) || (tc == MTL_RTSUN_C_SHADOW)) ? 1 : 0;/in.ok[i] = (tc == tc) ? 1 : 1;/' ;;
+			taporderx) sed 's/{ qx\.lo0, qx\.lo1, qx\.lo0, qx\.lo1 }/{ qx.lo0, qx.lo0, qx.lo1, qx.lo1 }/' ;;
+			taporder) sed 's/{ qy\.lo0, qy\.lo0, qy\.lo1, qy\.lo1 }/{ qy.lo0, qy.lo1, qy.lo0, qy.lo1 }/' ;;
+			neutral1) sed 's/tv\[3\], 0\.0f);/tv[3], 1.0f);/' ;;
+			nocount) sed 's/fb = o\.fallback ? 1u : 0u;/fb = o.fallback ? 0u : 0u;/' ;;
+			vis1) sed 's/c = mtl_rtsun_light(c, m, cls, vis, nl, v\.sun\.x/c = mtl_rtsun_light(c, m, cls, 1.0f, nl, v.sun.x/' ;;
+		esac < "$sunlo_f" > "${tmp:?}/sunlo-kernel.metal"
+		if cmp -s "$sunlo_f" "${tmp:?}/sunlo-kernel.metal"; then
+			bad "the sun's reduced-size kernel mutant ($m of $kn) changed nothing"
+		elif sunlo_pin "${tmp:?}/sunlo-kernel.metal" "$kn" "$kc"; then
+			bad "the sun's reduced-size kernel pin passes the mutant ($m of $kn)"
+		elif [ -n "$rtp_metal" ] && ! sunlo_compile "${tmp:?}/sunlo-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the sun's reduced-size kernel mutant ($m of $kn) does not compile, so it tests nothing"
+		else
+			sunlo_kmut=$((sunlo_kmut + 1))
+		fi
+	done
+done
+if [ -n "$rtp_metal" ]; then
+	if sunlo_compile "$sunlo_f"; then
+		sunlo_metal=1
+	else
+		cat "${tmp:?}/metal.out"
+		bad "rm_rtsun_lo.metal does not compile"
+	fi
+fi
+# the back end and the scene
+sunlo_b=$rm_dir/rmb_rtsun.m sunlo_s=$rm_dir/rm_rtsunscene.c
+sunlo_take='tv.reset = rm_rtt_hist_take_at(&thist, &tview, view.div);'
+sunlo_back() { # <rmb_rtsun.m>: 0 when it takes the view at its divisor once, in rmb_rtsun_encode_lo, and keeps the stock trace at 1
+	[ "$(grep -cF "$sunlo_take" "$1")" = 1 ] &&
+		awk -v t="$sunlo_take" 'index($0, "rmb_rtsun_encode_lo(") == 1 { b = 1 } b && /^}/ { b = 0 } b && index($0, t) { f = 1 }
+			END { exit !f }' "$1" &&
+		grep -qF '[ce setComputePipelineState:lo ? lo_pipe : trace_pipe];' "$1" &&
+		[ "$(grep -cE '@"rm_rtsun_(trace_lo|temporal_lo|denoise_lo|up)"' "$1")" = 4 ]
+}
+sunlo_scene() { # <rm_rtsunscene.c>: 0 when the scene reads r_rt_sun_scale, default 1, as the view's divisor
+	grep -qF 'r_rt_sun_scale = ri.Cvar_Get("r_rt_sun_scale", "1", CVAR_ARCHIVE);' "$1" &&
+		grep -qF 'v.div = mtl_rtup_div(RM_Effect(r_rt_sun_scale));' "$1" &&
+		grep -qF 'rmb_rtsun_temporal(RM_RTT_ViewFor(view), (unsigned long)mtl_rtup_size((unsigned)w, v.div),' "$1"
+}
+if ! sunlo_back "$sunlo_b"; then
+	bad "rmb_rtsun.m does not take the sun's view at its divisor in rmb_rtsun_encode_lo, keep the stock trace at 1, or make the four pipelines"
+elif ! sunlo_scene "$sunlo_s"; then
+	bad "rm_rtsunscene.c does not read r_rt_sun_scale (default 1) as the sun's divisor"
+else
+	sed 's/tv\.reset = rm_rtt_hist_take_at(&thist, &tview, view\.div);/tv.reset = rm_rtt_hist_take(\&thist, \&tview);/' \
+		"$sunlo_b" > "${tmp:?}/sunlo-back.m"
+	if cmp -s "$sunlo_b" "${tmp:?}/sunlo-back.m" || sunlo_back "${tmp:?}/sunlo-back.m"; then
+		bad "the sun's back-end pin passes the mutant (the divisor dropped from the take)"
+	else
+		sunlo_bmut=$((sunlo_bmut + 1))
+	fi
+	for m in default nodiv sizew; do
+		case $m in
+			default) sed 's/ri\.Cvar_Get("r_rt_sun_scale", "1", CVAR_ARCHIVE)/ri.Cvar_Get("r_rt_sun_scale", "0.5", CVAR_ARCHIVE)/' ;;
+			nodiv) sed 's/v\.div = mtl_rtup_div(RM_Effect(r_rt_sun_scale));/v.div = 1;/' ;;
+			sizew) sed 's/(unsigned long)mtl_rtup_size((unsigned)w, v\.div),/(unsigned long)(unsigned)w,/' ;;
+		esac < "$sunlo_s" > "${tmp:?}/sunlo-scene.c"
+		if cmp -s "$sunlo_s" "${tmp:?}/sunlo-scene.c" || sunlo_scene "${tmp:?}/sunlo-scene.c"; then
+			bad "the sun's scene pin passes the mutant ($m)"
+		else
+			sunlo_bmut=$((sunlo_bmut + 1))
+		fi
+	done
+fi
+seg 7.86 "; sun at its scale $sunlo_kpins kernel pins with $sunlo_kmut kernel mutants${sunlo_metal:+ compiled and} refused, $sunlo_bmut back-end and scene mutants refused"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"
