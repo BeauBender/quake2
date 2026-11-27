@@ -572,7 +572,8 @@ rmb_rtw_prepare_lo(unsigned long w, unsigned long h, unsigned div)
 
 		if (!trace_lo_pipe || !trace_ws_lo_pipe || !compact_lo_pipe || !blur_lo_pipe || !up_pipe)
 		{
-			NSError *e = nil;
+			/* each pipeline its own error, so the latched message names the call that failed */
+			NSError *e0 = nil, *e1 = nil, *e2 = nil, *e3 = nil, *e4 = nil;
 			id<MTLFunction> k[5];
 			NSString *names[5] = { @"rm_rtw_trace_lo", @"rm_rtw_trace_ws_lo", @"rm_rtw_compact_lo", @"rm_rtw_denoise_lo",
 				@"rm_rtw_up" };
@@ -583,22 +584,26 @@ rmb_rtw_prepare_lo(unsigned long w, unsigned long h, unsigned div)
 				k[i] = [rmb_library() newFunctionWithName:names[i]];
 			}
 
-			RMB_RTW_SET(trace_lo_pipe, k[0] ? [rmb_device newComputePipelineStateWithFunction:k[0] error:&e] : nil);
-			RMB_RTW_SET(trace_ws_lo_pipe, k[1] ? [rmb_device newComputePipelineStateWithFunction:k[1] error:&e] : nil);
-			RMB_RTW_SET(compact_lo_pipe, k[2] ? [rmb_device newComputePipelineStateWithFunction:k[2] error:&e] : nil);
-			RMB_RTW_SET(blur_lo_pipe, k[3] ? [rmb_device newComputePipelineStateWithFunction:k[3] error:&e] : nil);
-			RMB_RTW_SET(up_pipe, k[4] ? [rmb_device newComputePipelineStateWithFunction:k[4] error:&e] : nil);
+			RMB_RTW_SET(trace_lo_pipe, k[0] ? [rmb_device newComputePipelineStateWithFunction:k[0] error:&e0] : nil);
+			RMB_RTW_SET(trace_ws_lo_pipe, k[1] ? [rmb_device newComputePipelineStateWithFunction:k[1] error:&e1] : nil);
+			RMB_RTW_SET(compact_lo_pipe, k[2] ? [rmb_device newComputePipelineStateWithFunction:k[2] error:&e2] : nil);
+			RMB_RTW_SET(blur_lo_pipe, k[3] ? [rmb_device newComputePipelineStateWithFunction:k[3] error:&e3] : nil);
+			RMB_RTW_SET(up_pipe, k[4] ? [rmb_device newComputePipelineStateWithFunction:k[4] error:&e4] : nil);
 
 			if (!trace_lo_pipe || !trace_ws_lo_pipe || !compact_lo_pipe || !blur_lo_pipe || !up_pipe)
 			{
+				/* the first that failed: its function missing, or its pipeline with the error it gave */
+				const int f = !trace_lo_pipe ? 0 : !trace_ws_lo_pipe ? 1 : !compact_lo_pipe ? 2 : !blur_lo_pipe ? 3 : 4;
+				NSError *e = (f == 0) ? e0 : (f == 1) ? e1 : (f == 2) ? e2 : (f == 3) ? e3 : e4;
+
 				RMB_RTW_SET(trace_lo_pipe, nil);
 				RMB_RTW_SET(trace_ws_lo_pipe, nil);
 				RMB_RTW_SET(compact_lo_pipe, nil);
 				RMB_RTW_SET(blur_lo_pipe, nil);
 				RMB_RTW_SET(up_pipe, nil);
 				lo_refused = 1;
-				fprintf(stderr, "ref_metal: rt water: no pipelines for r_rt_water_scale below 1%s%s; no water reflections\n",
-						e ? ": " : "", e ? e.localizedDescription.UTF8String : "");
+				fprintf(stderr, "ref_metal: rt water: no pipelines for r_rt_water_scale below 1: %s: %s; no water reflections\n",
+						names[f].UTF8String, !k[f] ? "no such function" : e ? e.localizedDescription.UTF8String : "no error given");
 				return 0;
 			}
 		}
