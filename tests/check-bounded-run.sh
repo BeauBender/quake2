@@ -1266,11 +1266,49 @@ sv_first() {
 	done
 	return 1
 }
+# sv_seen <pattern>...: reads every line to end of file, with the bound
+# plus the case's grace (sv_grace) for the whole read, and sets sv_why when
+# a <pattern> matched no line; else when end of file did not come by then.
+# The verdict is on the set of lines read, never on their order: no line
+# ends the read early, as "grace-end" and "group-empty" end sv_first's
+# (review round 3)
+sv_seen() {
+	_se_end=$(($(date +%s) + PROC_BOUND + ${sv_grace:-1}))
+	_se_all=
+	_se_eof=
+	while :; do
+		_se_left=$((_se_end - $(date +%s)))
+		[ "$_se_left" -gt 0 ] || break
+		if ! IFS= read -r -t "$_se_left" PROC_LINE <&6; then
+			# bash 3.2's read -t says 1 at the bound as at end of file
+			[ "$(date +%s)" -lt "$_se_end" ] && _se_eof=1
+			break
+		fi
+		_se_all="$_se_all
+$PROC_LINE"
+	done
+	for _se_p in "$@"; do
+		_se_hit=
+		while IFS= read -r _se_l; do
+			# shellcheck disable=SC2254 # the pattern is the caller's
+			case $_se_l in $_se_p) _se_hit=1 ;; esac
+		done << EOS
+$_se_all
+EOS
+		if [ -z "$_se_hit" ]; then
+			sv_why="no line $_se_p after the INT, in any order, before end of file"
+			return
+		fi
+	done
+	[ -n "$_se_eof" ] || sv_why="the caller or the supervisor outlived the INT by $((PROC_BOUND + ${sv_grace:-1})) s"
+}
 # sv_case <root> <name> <wall> <until or -> <event> <command> [<line>...]:
 # runs the caller on <command> (sh -c), waits for the supervisor's
 # "spawned" line, then for the line <event> (a case pattern), sends the
 # caller INT, waits for each <line> (a case pattern) in turn, each before
 # the supervisor's stop has ended (sv_first), and then for end of file.
+# With sv_any set, it instead reads every line to end of file and wants
+# each <line> among them, in any order (sv_seen).
 # The caller's grace is sv_grace (1); the end of file may take that grace
 # on top of the bound. Sets sv_rc (the caller's status), sv_pg (the
 # command's process group, from "spawned"), sv_s (the seconds from the INT
@@ -1297,13 +1335,17 @@ os.execvp(sys.argv[1], sys.argv[1:])' /bin/bash "$W/svcaller" "$1" "$3" "$4" "$_
 			kill -s INT "$_sp"
 			_st0=$(date +%s)
 			shift 6
-			for _sl in "$@"; do
-				sv_first "$_sl" || {
-					sv_why="no line $_sl after the INT before the supervisor's stop ended (the last line read: ${PROC_LINE:-none})"
-					break
-				}
-			done
-			if [ -z "$sv_why" ]; then
+			if [ -n "${sv_any:-}" ]; then
+				sv_seen "$@"
+			else
+				for _sl in "$@"; do
+					sv_first "$_sl" || {
+						sv_why="no line $_sl after the INT before the supervisor's stop ended (the last line read: ${PROC_LINE:-none})"
+						break
+					}
+				done
+			fi
+			if [ -z "$sv_why" ] && [ -z "${sv_any:-}" ]; then
 				_sb=$PROC_BOUND
 				PROC_BOUND=$((PROC_BOUND + ${sv_grace:-1}))
 				proc_eof || sv_why="the caller or the supervisor outlived the INT by $PROC_BOUND s"
@@ -1350,9 +1392,14 @@ sv_judge spawned
 # supervisor's own stop of the member ends (correctness I1, round 1). The
 # grace is above the bound, so a trap that waited for that stop, or a stop
 # that sent no TERM, fails at the bound, never by a race; the member is
-# killed at the grace's end, and nothing is left
+# killed at the grace's end, and nothing is left. The member ignores TERM
+# from its fork on: the command's shell ignores it first, and the member
+# inherits that (review round 3). In round 1's form, (trap "" TERM; exec
+# sleep 30) &, the member set its ignore itself, racing the supervisor's
+# TERM to the group at "exited"; a member that lost that race ended at
+# once, and "group-empty" could come before the caller's "trap 130"
 sv_grace=$((PROC_BOUND + 2))
-sv_case "$here" endgroup 30 - 'exited *' '(trap "" TERM; exec sleep 30) & exit 0' 'trap 130' 'signal name=TERM'
+sv_case "$here" endgroup 30 - 'exited *' 'trap "" TERM; sleep 30 & exit 0' 'trap 130' 'signal name=TERM'
 sv_grace=
 sv_judge endgroup
 # FIX199 (#741): an INT while the until test's poll waits leaves no scratch
@@ -1804,9 +1851,14 @@ if sv_stage "$W/stage-noterm" scripts/lib/supervise.sh '	[ -z "$SV_PID" ] || kil
 		fails="$fails sv-no-term"
 		;;
 	esac
-	sv_grace=$((PROC_BOUND + 2))
-	sv_case "$W/stage-noterm" endgroup 30 - 'exited *' '(trap "" TERM; exec sleep 30) & exit 0' 'trap 130' 'signal name=TERM'
-	sv_grace=
+	# judged only by what the mutant changes, whether the supervisor got a
+	# TERM: every line to end of file is read (sv_any), so the order of
+	# "trap 130" and "group-empty" cannot change the verdict (review round
+	# 3). Nothing else sends the supervisor TERM here: the case's INT goes
+	# to the caller's pid alone, and its KILLs come after the verdict
+	sv_grace=$((PROC_BOUND + 2)) sv_any=1
+	sv_case "$W/stage-noterm" endgroup 30 - 'exited *' 'trap "" TERM; sleep 30 & exit 0' 'signal name=TERM'
+	sv_grace= sv_any=
 	case $sv_why in
 	'no line signal name=TERM'*) echo "$me: mutant sv-no-term: refused by endgroup ($sv_why)" ;;
 	*)
@@ -1817,6 +1869,36 @@ if sv_stage "$W/stage-noterm" scripts/lib/supervise.sh '	[ -z "$SV_PID" ] || kil
 else
 	echo "$me: FAIL: mutant sv-no-term does not apply"
 	fails="$fails sv-no-term"
+fi
+# the mutant's verdict by construction (review round 3): on each line
+# stream a run of it can give after the INT (no "signal name=TERM", and
+# "trap 130" before or after "group-empty"), read from a file on fd 6 as
+# the case reads its FIFO, sv_seen gives the one refusal; sv_first, round
+# 1's in-order read, gave "no line trap 130" on the last two, the line two
+# loaded runs printed
+_eo_why=
+for _eo_s in 'trap 130|term-sent name=TERM|grace-end|kill-sent|group-empty|reaped status=137' \
+	'term-sent name=TERM|trap 130|grace-end|kill-sent|group-empty|reaped status=137' \
+	'term-sent name=TERM|group-empty|trap 130|reaped status=0' \
+	'term-sent name=TERM|group-empty|reaped status=0|trap 130'; do
+	printf '%s\n' "$_eo_s" | tr '|' '\n' > "$W/eo.lines"
+	exec 6< "$W/eo.lines"
+	sv_why=
+	sv_grace=$((PROC_BOUND + 2))
+	sv_seen 'signal name=TERM'
+	sv_grace=
+	exec 6<&-
+	case $sv_why in
+	'no line signal name=TERM after the INT, in any order, before end of file') ;;
+	*) _eo_why="${_eo_why:+$_eo_why; }[$_eo_s] gave \"$sv_why\"" ;;
+	esac
+done
+rm -f "$W/eo.lines"
+if [ -n "$_eo_why" ]; then
+	echo "$me: FAIL: sv endgroup order: the mutant's verdict depends on the order of its lines: $_eo_why"
+	fails="$fails sv-endgroup-order"
+else
+	echo "$me: ok   sv endgroup order: every order of trap 130 and group-empty gives the mutant the one refusal"
 fi
 
 # The lock run's watch, with ps silent (correctness I2, round 1): the
