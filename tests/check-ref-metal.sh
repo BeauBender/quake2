@@ -1552,7 +1552,13 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	"rm_rtshadow.metal rm_rts_up mtl_rtup_weights" "rm_rtshadow.metal rm_rts_up mtl_rtup_light" \
 	"rm_rtshadow.metal rm_rts_up mtl_rts_holds" \
 	"rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_rweight" "rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_add" \
-	"rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_rresult"; do
+	"rm_rtwdenoise.metal rm_rtw_denoise mtl_rtd_rresult" \
+	"rm_rtwater.metal rm_rtw_trace_lo mtl_rtw_choose" "rm_rtwater.metal rm_rtw_trace_ws_lo mtl_rtw_choose_ws" \
+	"rm_rtwater.metal rm_rtw_compact_lo mtl_rtw_listed" \
+	"rm_rtwater.metal rm_rtw_denoise_lo mtl_rtd_rweight" "rm_rtwater.metal rm_rtw_denoise_lo mtl_rtd_add" \
+	"rm_rtwater.metal rm_rtw_denoise_lo mtl_rtd_rresult" "rm_rtwater.metal rm_rtw_denoise_lo rm_rtw_lo_rok" \
+	"rm_rtwater.metal rm_rtw_up mtl_rtup_bilinear" "rm_rtwater.metal rm_rtw_up mtl_rtup_weights" \
+	"rm_rtwater.metal rm_rtw_up mtl_rtup_value" "rm_rtwater.metal rm_rtw_up rm_rtw_lo_rok"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
 	set -- $pair
 	f=$rm_dir/$1 kn=$2 hp=$3
@@ -3658,6 +3664,231 @@ else
 	done
 fi
 seg 7.87 "; shadows at their scale $shlo_kpins kernel pins with $shlo_kmut kernel mutants${shlo_metal:+ compiled and} refused, $shlo_bmut back-end and scene mutants refused"
+
+# The water reflections at r_rt_water_scale (TASK126 slice 5). rm_rtwater_lo.metal compiles rm_rtwater.metal
+# again with RM_RTW_LO_TU into ref_metal.metallib: the compaction and the two traces become rm_rtw_compact_lo,
+# rm_rtw_trace_lo and rm_rtw_trace_ws_lo through three macros, and the unit adds rm_rtw_denoise_lo and
+# rm_rtw_up. In the stock unit each macro is the stock kernels' own token (pinned; mutants: the stock
+# sample or picture moved), so that unit compiles what it did before. In the lo unit (mutants: each macro
+# given the stock meaning) the G-buffer sample, and the marks' nine, are read at the traced pixel's source
+# pixel, the picture stays the render size and the outputs' bounds are the traced size's; the kernels'
+# reads go through the macros (mutants: a read, the dilation, the unprojection's centre, the bounds or the
+# picture at the traced pixel or size). The upsample: its four taps in the bilinear order (mutants: taps
+# 1 and 2 swapped, in x and in y), each tap's guides at its source pixel (mutant: at the traced pixel), a
+# tap holding a sample only where it found water of the drawn pixel's layer with a reflection (mutants:
+# the class test dropped, every pixel taken as opaque water), a pixel with no depth or normal skipped
+# before the rule (mutant: only the depth tested), the weights at the divisor (mutant: at 1), the
+# fallback counted (mutant: never), a pixel no tap gave a reflection written as the stock does (mutant:
+# a non-water pixel written as water), and translucent water's distance upsampled (mutant: 0). The blur
+# at the traced size takes each tap's distance at its source pixel (mutant: at the traced pixel) as its
+# depth guide (mutant: the pixel's own), and its class test is rm_rtwdenoise.metal's (mutant: the layer
+# term dropped). Where the Metal compiler is there, both units and every kernel mutant compile. The back
+# end sizes the world-space list at the traced size (mutants: the render size, in prepare and in the
+# trace's test), dispatches the compaction and the trace at the traced size (mutant: the compaction at
+# the render size), the upsample behind a barrier (mutant: none), keeps the stock blur off below divisor
+# 1 (mutant: run over the upsampled reflection) and the stock pipelines at 1 (mutant: the traced one at
+# every divisor); the scene reads r_rt_water_scale, default 1, as the divisor it prepares with (mutants:
+# the default 0.5, the divisor left at 1, divisor 1 passed).
+wlo_kpins=0 wlo_kmut=0 wlo_bmut=0 wlo_metal=""
+wlo_f=$rm_dir/rm_rtwater.metal
+wlo_compile() { # <rm_rtwater.metal>: 0 when it compiles as the Makefile compiles rm_rtwater_lo.metal and itself
+	rm -rf "${tmp:?}/wlo"
+	mkdir -p "${tmp:?}/wlo"
+	cp "$1" "${tmp:?}/wlo/rm_rtwater.metal"
+	cp "$rm_dir/rm_rtwater_lo.metal" "${tmp:?}/wlo/"
+	xcrun -sdk macosx metal -c -I"$rm_dir" "${tmp:?}/wlo/rm_rtwater_lo.metal" -o "${tmp:?}/wlo.air" \
+		> "${tmp:?}/metal.out" 2>&1 &&
+		xcrun -sdk macosx metal -c -I"$rm_dir" "${tmp:?}/wlo/rm_rtwater.metal" -o "${tmp:?}/wlo-stock.air" \
+			>> "${tmp:?}/metal.out" 2>&1
+}
+wlo_in() { # <function> <regex> <text>: stdin with the regex's first match on each line of the function's body replaced
+	awk -v fn="$1" -v from="$2" -v to="$3" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 } b { sub(from, to) } { print }'
+}
+wlo_macros() { # <file>: 0 when the stock unit's macros are the stock tokens and the lo unit's the traced size's
+	awk 'BEGIN { want = "#ifndef RM_RTW_LO_TU|#define RM_RTW_PIC(out, gb) out|#define RM_RTW_OUT(pic, out) pic|#define RM_RTW_AT(p) p|#else" }
+		/^#ifndef RM_RTW_LO_TU$/ { got = $0; n = 1; next }
+		n && (n < 5) { got = got "|" $0; n++; if (n == 5) { if (got == want) ok++; n = 0 } }
+		END { exit !(ok == 1) }' "$1" &&
+		[ "$(grep -cxF '#define RM_RTW_PIC(out, gb) gb' "$1")" = 1 ] &&
+		[ "$(grep -cxF '#define RM_RTW_OUT(pic, out) out' "$1")" = 1 ] &&
+		[ "$(grep -cxF '#define RM_RTW_AT(p) rm_rtw_lo_src(p, lo.div, w, h)' "$1")" = 1 ] &&
+		[ "$(grep -cE '^#define RM_RTW_(PIC|OUT|AT)\(' "$1")" = 6 ]
+}
+if [ ! -f "$rm_dir/rm_rtwater_lo.metal" ] || ! grep -qxF '#define RM_RTW_LO_TU 1' "$rm_dir/rm_rtwater_lo.metal" ||
+	! grep -qxF '#include "rm_rtwater.metal"' "$rm_dir/rm_rtwater_lo.metal" ||
+	[ "$(grep -cF 'ref_metal/rm_rtwater_lo.air' Makefile)" != 2 ] ||
+	! grep -qF 'src/client/refresh/metal/rm_rtwater_lo.metal \' Makefile; then
+	bad "rm_rtwater_lo.metal does not compile the water's reduced-size kernels apart into ref_metal.metallib"
+fi
+if ! wlo_macros "$wlo_f"; then
+	bad "rm_rtwater.metal: the stock unit's RM_RTW_PIC, RM_RTW_OUT and RM_RTW_AT are not the stock tokens, or the lo unit's not the traced size's"
+else
+	wlo_kpins=$((wlo_kpins + 1))
+	for m in stockat stockpic lopx lopic loout; do
+		case $m in
+			stockat) sed 's/^#define RM_RTW_AT(p) p$/#define RM_RTW_AT(p) (p \/ 2u)/' ;;
+			stockpic) sed 's/^#define RM_RTW_PIC(out, gb) out$/#define RM_RTW_PIC(out, gb) gb/' ;;
+			lopx) sed 's/^#define RM_RTW_AT(p) rm_rtw_lo_src(p, lo\.div, w, h)$/#define RM_RTW_AT(p) p/' ;;
+			lopic) sed 's/^#define RM_RTW_PIC(out, gb) gb$/#define RM_RTW_PIC(out, gb) out/' ;;
+			loout) sed 's/^#define RM_RTW_OUT(pic, out) out$/#define RM_RTW_OUT(pic, out) pic/' ;;
+		esac < "$wlo_f" > "${tmp:?}/wlo-kernel.metal"
+		if cmp -s "$wlo_f" "${tmp:?}/wlo-kernel.metal"; then
+			bad "the water's macro mutant ($m) changed nothing"
+		elif wlo_macros "${tmp:?}/wlo-kernel.metal"; then
+			bad "the water's macro pin passes the mutant ($m)"
+		elif [ -n "$rtp_metal" ] && ! wlo_compile "${tmp:?}/wlo-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the water's macro mutant ($m) does not compile, so it tests nothing"
+		else
+			wlo_kmut=$((wlo_kmut + 1))
+		fi
+	done
+fi
+for pin in "rm_rtw_compact|listed = mtl_rtw_listed(mat.read(RM_RTW_AT(px)).r, marks);|matpx" \
+	"rm_rtw_compact|const int qx = int(RM_RTW_AT(px).x) + dx, qy = int(RM_RTW_AT(px).y) + dy;|dilatepx" \
+	"rm_rtw_compact|else if ((px.x < RM_RTW_OUT(w, refl.get_width())) && (px.y < RM_RTW_OUT(h, refl.get_height())))|outpic" \
+	"rm_rtw_compact|const uint w = RM_RTW_PIC(refl, mat).get_width(), h = RM_RTW_PIC(refl, mat).get_height();|picout" \
+	"rm_rtw_trace|const float d = depth.read(RM_RTW_AT(px));|depthpx" \
+	"rm_rtw_trace|const float2 pc = float2(RM_RTW_AT(px)) + 0.5f;|pcpx" \
+	"rm_rtw_trace|const uint w = RM_RTW_PIC(refl, depth).get_width(), h = RM_RTW_PIC(refl, depth).get_height();|picout" \
+	"rm_rtw_trace_ws|const float4 nn = normal.read(RM_RTW_AT(px));|normalpx" \
+	"rm_rtw_trace_ws|m = mat.read(RM_RTW_AT(px)).r;|matpx" \
+	"rm_rtw_trace_ws|const bool inside = live && (px.x < RM_RTW_OUT(w, refl.get_width())) && (px.y < RM_RTW_OUT(h, refl.get_height()));|outpic" \
+	"rm_rtw_up|const uint tx[MTL_RTUP_TAPS] = { qx.lo0, qx.lo1, qx.lo0, qx.lo1 };|taporderx" \
+	"rm_rtw_up|const uint ty[MTL_RTUP_TAPS] = { qy.lo0, qy.lo0, qy.lo1, qy.lo1 };|taporder" \
+	"rm_rtw_up|const uint2 sp = rm_rtw_lo_src(tp, lo.div, fw, fh);|tapsrc" \
+	"rm_rtw_up|in.ok[i] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv[i].a)) && (ds < 1.0f) && (ns.a > 0.5f)) ? 1 : 0;|everytap" \
+	"rm_rtw_up|const uint own = mtl_rtw_is_water(m) ? MTL_RTW_CLASS_WATER : (MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS);|layer" \
+	"rm_rtw_up|if ((d < 1.0f) && (nn.a > 0.5f))|noskip" \
+	"rm_rtw_up|o = mtl_rtup_weights(in, lo.div);|weights1" \
+	"rm_rtw_up|fb = o.fallback ? 1u : 0u;|nocount" \
+	"rm_rtw_up|else if (!(own & MTL_RTW_CLASS_TRANS))|nonwater" \
+	"rm_rtw_up|wd = (own & MTL_RTW_CLASS_TRANS) ? mtl_rtup_value(o, tw[0], tw[1], tw[2], tw[3], 0.0f) : 0.0f;|nodist" \
+	"rm_rtw_denoise_lo|dn = ok ? rm_rtw_lo_dist(v, depth, wdist, uint2(q), rm_rtw_lo_src(uint2(q), lo.div, fw, fh), cn) : dc;|distpx" \
+	"rm_rtw_denoise_lo|wt = mtl_rtd_rweight(dx, dy, dc, dn, ok);|rdepth" \
+	"rm_rtw_lo_rok|((cn & MTL_RTW_CLASS_TRANS) == (cc & MTL_RTW_CLASS_TRANS));|rlayer"; do
+	# three fields: the function (the first), the call, its mutants (the last); a call may hold "|"
+	kn=${pin%%|*} rest=${pin#*|}
+	kc=${rest%|*} kms=${rest##*|}
+	if ! sunlo_pin "$wlo_f" "$kn" "$kc"; then
+		bad "rm_rtwater.metal: $kn does not hold $kc"
+		continue
+	fi
+	wlo_kpins=$((wlo_kpins + 1))
+	# shellcheck disable=SC2086 # kms is a word list
+	for m in $kms; do
+		case $m in
+			matpx) wlo_in "$kn" 'mat\\.read\\(RM_RTW_AT\\(px\\)\\)' 'mat.read(px)' ;;
+			dilatepx) wlo_in "$kn" 'int\\(RM_RTW_AT\\(px\\)\\.x\\) \\+ dx' 'int(px.x) + dx' ;;
+			outpic) wlo_in "$kn" 'px\\.x < RM_RTW_OUT\\(w, refl\\.get_width\\(\\)\\)' 'px.x < w' ;;
+			picout) wlo_in "$kn" 'const uint w = RM_RTW_PIC\\(refl, [a-z]+\\)\\.get_width\\(\\)' 'const uint w = refl.get_width()' ;;
+			depthpx) wlo_in "$kn" 'depth\\.read\\(RM_RTW_AT\\(px\\)\\)' 'depth.read(px)' ;;
+			pcpx) wlo_in "$kn" 'float2\\(RM_RTW_AT\\(px\\)\\)' 'float2(px)' ;;
+			normalpx) wlo_in "$kn" 'normal\\.read\\(RM_RTW_AT\\(px\\)\\)' 'normal.read(px)' ;;
+			taporderx) sed 's/{ qx\.lo0, qx\.lo1, qx\.lo0, qx\.lo1 }/{ qx.lo0, qx.lo0, qx.lo1, qx.lo1 }/' ;;
+			taporder) sed 's/{ qy\.lo0, qy\.lo0, qy\.lo1, qy\.lo1 }/{ qy.lo0, qy.lo1, qy.lo0, qy.lo1 }/' ;;
+			tapsrc) sed 's/const uint2 sp = rm_rtw_lo_src(tp, lo\.div, fw, fh);/const uint2 sp = tp;/' ;;
+			everytap) sed 's/in\.ok\[i\] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv\[i\]\.a)) && (ds < 1\.0f)/in.ok[i] = ((ds < 1.0f)/' ;;
+			layer) sed 's/const uint own = mtl_rtw_is_water(m) ? MTL_RTW_CLASS_WATER : (MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS);/const uint own = MTL_RTW_CLASS_WATER;/' ;;
+			noskip) wlo_in "$kn" 'if \\(\\(d < 1\\.0f\\) && \\(nn\\.a > 0\\.5f\\)\\)' 'if (d < 1.0f)' ;;
+			weights1) sed 's/o = mtl_rtup_weights(in, lo\.div);/o = mtl_rtup_weights(in, 1u);/' ;;
+			nocount) wlo_in "$kn" 'fb = o\\.fallback \\? 1u : 0u;' 'fb = o.fallback ? 0u : 0u;' ;;
+			nonwater) sed 's/else if (!(own & MTL_RTW_CLASS_TRANS))$/else/' ;;
+			nodist) sed 's/wd = (own & MTL_RTW_CLASS_TRANS) ? mtl_rtup_value(o, tw\[0\], tw\[1\], tw\[2\], tw\[3\], 0\.0f) : 0\.0f;/wd = 0.0f;/' ;;
+			distpx) sed 's/rm_rtw_lo_src(uint2(q), lo\.div, fw, fh), cn) : dc;/uint2(q), cn) : dc;/' ;;
+			rdepth) wlo_in "$kn" 'mtl_rtd_rweight\\(dx, dy, dc, dn, ok\\)' 'mtl_rtd_rweight(dx, dy, dc, dc, ok)' ;;
+			rlayer) wlo_in "$kn" '\\(\\(cn & MTL_RTW_CLASS_TRANS\\) == \\(cc & MTL_RTW_CLASS_TRANS\\)\\)' 'true' ;;
+		esac < "$wlo_f" > "${tmp:?}/wlo-kernel.metal"
+		if cmp -s "$wlo_f" "${tmp:?}/wlo-kernel.metal"; then
+			bad "the water's reduced-size kernel mutant ($m of $kn) changed nothing"
+		elif sunlo_pin "${tmp:?}/wlo-kernel.metal" "$kn" "$kc"; then
+			bad "the water's reduced-size kernel pin passes the mutant ($m of $kn)"
+		elif [ -n "$rtp_metal" ] && ! wlo_compile "${tmp:?}/wlo-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the water's reduced-size kernel mutant ($m of $kn) does not compile, so it tests nothing"
+		else
+			wlo_kmut=$((wlo_kmut + 1))
+		fi
+	done
+done
+# the blur's class test is rm_rtwdenoise.metal's rm_rtd_rok, word for word
+wlo_rok() { # <file> <function>: the function's return statement, whitespace squeezed onto one line
+	awk -v fn="$2" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 } b && /return/ { r = 1 } b && r { print } b && /;$/ { r = 0 }' "$1" |
+		tr '\n\t' '  ' | tr -s ' '
+}
+if [ -z "$(wlo_rok "$wlo_f" rm_rtw_lo_rok)" ] ||
+	[ "$(wlo_rok "$wlo_f" rm_rtw_lo_rok)" != "$(wlo_rok "$rm_dir/rm_rtwdenoise.metal" rm_rtd_rok)" ]; then
+	bad "rm_rtwater.metal: rm_rtw_lo_rok is not rm_rtwdenoise.metal's rm_rtd_rok"
+fi
+if [ -n "$rtp_metal" ]; then
+	if wlo_compile "$wlo_f"; then
+		wlo_metal=1
+	else
+		cat "${tmp:?}/metal.out"
+		bad "rm_rtwater_lo.metal or rm_rtwater.metal does not compile"
+	fi
+fi
+# the back end and the scene
+wlo_b=$rm_dir/rmb_rtwater.m wlo_s=$rm_dir/rm_rtwaterscene.c
+wlo_ln='const unsigned long ln = (div > 1) ? (unsigned long)mtl_rtup_size((unsigned)w, div) * mtl_rtup_size((unsigned)h, div) :'
+wlo_back() { # <rmb_rtwater.m>: 0 when the list and the dispatches are at the traced size below divisor 1, the upsample behind a barrier, the stock pipelines and blur at 1
+	grep -qF "$wlo_ln" "$1" &&
+		grep -qF 'RMB_RTW_SET(list, ws ? [rmb_device newBufferWithLength:ln * sizeof(uint32_t)' "$1" &&
+		grep -qF 'list_cap = list ? ln : 0;' "$1" && grep -qF '(!ws || (list && (list_cap == ln))))' "$1" &&
+		grep -qF 'if (ws && (!list || (list_cap != ((prep_div > 1) ? t_refl_lo.width * t_refl_lo.height : w * h)) || !marked ||' "$1" &&
+		grep -qF '[ce setComputePipelineState:((prep_div > 1) ? trace_lo_pipe : trace_pipe)];' "$1" &&
+		grep -qF '[ce setComputePipelineState:(lo ? compact_lo_pipe : compact_pipe)];' "$1" &&
+		grep -qF '[ce setComputePipelineState:(lo ? trace_ws_lo_pipe : trace_ws_pipe)];' "$1" &&
+		[ "$(grep -cF '[ce dispatchThreads:MTLSizeMake(t_refl_lo.width, t_refl_lo.height, 1)' "$1")" = 2 ] &&
+		awk 'index($0, "rmb_rtw_lo_up(") == 1 { b = 1 } b && /^}/ { b = 0 }
+			b && /\[ce memoryBarrierWithScope:MTLBarrierScopeTextures\];/ && !s { f = 1 }
+			b && /^[[:space:]]+if \(blur\)$/ { s = 1 }
+			END { exit !f }' "$1" &&
+		grep -qF 'blurred = (prep_div > 1) ? 0 : rmb_rtw_blur(cmd, depth, w, h);' "$1" &&
+		grep -qF '_Static_assert(sizeof(rmb_rtw_lo_t) == 16,' "$1" && grep -qF '_Static_assert(sizeof(rm_rtw_view_t) == 288,' "$1" &&
+		[ "$(grep -oE '@"rm_rtw_(trace_lo|trace_ws_lo|compact_lo|denoise_lo|up)"' "$1" | sort -u | wc -l | tr -d ' ')" = 5 ]
+}
+wlo_scene() { # <rm_rtwaterscene.c>: 0 when the scene reads r_rt_water_scale, default 1, as the divisor it prepares with
+	grep -qF 'r_rt_water_scale = ri.Cvar_Get("r_rt_water_scale", "1", CVAR_ARCHIVE);' "$1" &&
+		grep -qF 'div = mtl_rtup_div(RM_Effect(r_rt_water_scale));' "$1" &&
+		grep -qF '!rmb_rtw_prepare((unsigned long)w, (unsigned long)h, ws, div))' "$1"
+}
+if ! wlo_back "$wlo_b"; then
+	bad "rmb_rtwater.m does not size the list or dispatch at the traced size, upsample behind a barrier, keep the stock pipelines and blur at 1, or make the five pipelines"
+elif ! wlo_scene "$wlo_s"; then
+	bad "rm_rtwaterscene.c does not read r_rt_water_scale (default 1) as the reflections' divisor"
+else
+	for m in listrender tracelist compactrender nobarrier stockblur stockpipe; do
+		case $m in
+			listrender) sed 's/(div > 1) ? (unsigned long)mtl_rtup_size((unsigned)w, div) \* mtl_rtup_size((unsigned)h, div) :/(div > 1) ? w * h :/' ;;
+			tracelist) sed 's/(list_cap != ((prep_div > 1) ? t_refl_lo\.width \* t_refl_lo\.height : w \* h))/(list_cap != w * h)/' ;;
+			compactrender) awk '/^rmb_rtw_trace_ws\(/ { b = 1 } b && /^}/ { b = 0 }
+				b && /\[ce dispatchThreads:MTLSizeMake\(t_refl_lo\.width, t_refl_lo\.height, 1\)/ { sub(/t_refl_lo\.width, t_refl_lo\.height/, "w, h") } { print }' ;;
+			nobarrier) awk 'index($0, "rmb_rtw_lo_up(") == 1 { b = 1 } b && /^}/ { b = 0 }
+				b && !d && /\[ce memoryBarrierWithScope:MTLBarrierScopeTextures\];/ { d = 1; next } { print }' ;;
+			stockblur) sed 's/blurred = (prep_div > 1) ? 0 : rmb_rtw_blur(cmd, depth, w, h);/blurred = rmb_rtw_blur(cmd, depth, w, h);/' ;;
+			stockpipe) sed 's/\[ce setComputePipelineState:((prep_div > 1) ? trace_lo_pipe : trace_pipe)\];/[ce setComputePipelineState:trace_lo_pipe];/' ;;
+		esac < "$wlo_b" > "${tmp:?}/wlo-back.m"
+		if cmp -s "$wlo_b" "${tmp:?}/wlo-back.m" || wlo_back "${tmp:?}/wlo-back.m"; then
+			bad "the water's back-end pin passes the mutant ($m)"
+		else
+			wlo_bmut=$((wlo_bmut + 1))
+		fi
+	done
+	for m in default nodiv prep1; do
+		case $m in
+			default) sed 's/ri\.Cvar_Get("r_rt_water_scale", "1", CVAR_ARCHIVE)/ri.Cvar_Get("r_rt_water_scale", "0.5", CVAR_ARCHIVE)/' ;;
+			nodiv) sed 's/div = mtl_rtup_div(RM_Effect(r_rt_water_scale));/div = 1;/' ;;
+			prep1) sed 's/(unsigned long)h, ws, div))/(unsigned long)h, ws, 1u))/' ;;
+		esac < "$wlo_s" > "${tmp:?}/wlo-scene.c"
+		if cmp -s "$wlo_s" "${tmp:?}/wlo-scene.c" || wlo_scene "${tmp:?}/wlo-scene.c"; then
+			bad "the water's scene pin passes the mutant ($m)"
+		else
+			wlo_bmut=$((wlo_bmut + 1))
+		fi
+	done
+fi
+seg 7.88 "; water at its scale $wlo_kpins kernel pins with $wlo_kmut kernel mutants${wlo_metal:+ compiled and} refused, $wlo_bmut back-end and scene mutants refused"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"

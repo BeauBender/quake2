@@ -1038,7 +1038,7 @@ rmb_rtw_lo_up(id<MTLComputeCommandEncoder> ce, id<MTLTexture> depth, id<MTLTextu
 		[ce setTexture:depth atIndex:1];
 		[ce setTexture:t_wdist_lo atIndex:2];
 		[ce setTexture:t_rblur_lo atIndex:3];
-		[ce dispatchThreads:MTLSizeMake(t_refl_lo.width, t_refl_lo.height, 1) threadsPerThreadgroup:g];
+		[ce dispatchThreads:MTLSizeMake(t_rblur_lo.width, t_rblur_lo.height, 1) threadsPerThreadgroup:g];
 		[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
 	}
 
