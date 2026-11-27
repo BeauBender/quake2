@@ -754,6 +754,78 @@ cases)"); `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
     `pollint`: "scratch files: bench-sv.<pid>.<id> bench-sv.<pid>.<id>.tap". It is not a
     committed mutant of the check.
 
+### Gate, round 1
+
+The orchestrator's merge gate (`scripts/test.sh`) ran on `45c78346` (main merged in): 55
+of 59 checks passed. Each of the four failures was reproduced standalone on the branch,
+and each passed on main (`740c5791`, a `git archive` copy: check-ci-parity "ok",
+check-rt-variations "0 failed", ios-sim's selftest "ok (211 cases)"; for
+check-require-guards, main's `check-bench.sh` reads `CHECK_BENCH_REQUIRE` on 3 lines, the
+3 cases, counted rather than run, since the copy has no `.git` for the check's git stub),
+so each is this slice's:
+
+- **`tests/check-ci-parity.sh`:** "tests/check-bench.sh:2799: ... the shasum key part
+  skipped: no shasum (a skip with no <NAME>_REQUIRE guard that fails it ...)". Cause:
+  `t_sv_path`'s no-shasum guard, added in `5c59de21`, was `|| bad "..."`, which only
+  counts; check-ci-parity accepts a guard that exits or returns (its `benchbad` case).
+  Fix: `|| { bad "..."; return 1; }`, as the not-macOS guard after it. No entry in
+  `tests/ci-skip-allow.txt`.
+- **`tests/check-require-guards.sh`:** "tests/check-bench.sh reads CHECK_BENCH_REQUIRE on
+  5 lines; the cases prove 3". Cause: `0d0c6980` (not macOS) and `5c59de21` (no shasum)
+  added two guards to `t_sv_path`, and no case forced them. Fix: two cases,
+  `check-bench.sh|noshasum|1|t_sv_path` (a new force: the stripped PATH of `/usr/bin` and
+  `/bin` without `shasum`) and `check-bench.sh|linux|1|t_sv_path`. Each was run by hand
+  first: with the variable set, status 1 and the guard's line; unset, status 0 and the
+  skip's line.
+- **`tests/check-rt-variations.sh`:** 20 failures, each "pins.sh record ... failed: pins:
+  the host lock is off: BENCH_LOCK=0", then "bench: cannot find the process supervisor,
+  scripts/lib/supervise.sh". `pins.sh` does not refuse `BENCH_LOCK=0`: "the host lock is
+  off" is its notice (`lock_self`) before the record runs, unchanged from main. Cause:
+  `ebb35264` moved `bench_bounded` onto the supervisor, found beside the copy of
+  `scripts/bench` (`BENCH_SV_DIR`), and the selftest's stub tree
+  (`scripts/pins/rtvar.py`) copied `common.sh` and `bounded.py` but not
+  `scripts/lib/supervise.sh` and `supervise.c`. Fix: the tree copies both. The case: a
+  rule in `tests/check-bounded-run.sh`'s guard, a file under `scripts/` that copies
+  `common.sh` into a tree (a `cp` or `copy` line naming it) must name `supervise.sh` or
+  `BENCH_SV_LIB`, with the mutant `rtvar-no-supervisor`. It was red on the pre-fix
+  `rtvar.py` ("scripts/pins/rtvar.py:558: a tree copy of the bounded-run primitive
+  without its supervisor"). The other tree copies (`ios-device.sh`'s selftest, and in
+  `tests/` check-bench-entry, check-gate-parallel and check-ci-map) already carried it.
+- **`tests/check-ios.sh`:** `scripts/ios-sim.sh` selftest, "FAIL lost-device-listed-before:
+  its output does not hold "not deleting 55555555-..."". Cause: `ebb35264` too. The fake
+  `xcrun`'s `samename` scenario names the device it lists before the run
+  `yq2-ios-sim-$PPID`, taking its parent for the `ios-sim.sh` under test (whose device
+  is `yq2-ios-sim-$$`). Under the supervisor the parent is the supervisor (by probe:
+  `bench_bounded 5 sh -c 'echo $PPID'` printed the shell's pid on main, the
+  supervisor's on the branch), so the listed device had another name, `lost_device`
+  found only this run's own, and the case's line was never printed. `ios-sim.sh`'s own
+  logic is unchanged and right. Fix: the fake walks up to the first ancestor whose
+  command runs `ios-sim.sh` (five steps at most), and fails the call, saying so, when
+  there is none, so the fake can no longer fall back silently to a wrong name.
+- **Which review could have seen them.** All four come from slice 2's own commits, and
+  each check is outside the list the slice's lanes ran standalone (check-bench,
+  check-bounded-run, check-supervise, check-bench-entry, ios-device's selftest):
+  check-ci-parity and check-require-guards read every check, and the review of
+  `0d0c6980` and `5c59de21` (the hold, review round 5) could have run them on a new
+  `_REQUIRE` line; check-rt-variations and ios-sim's selftest copy or run
+  `bench_bounded`, and the review of `ebb35264` (round 1) could have found them with
+  `git grep -n 'bench/core/common.sh'`.
+- **No signal handling changed:** no `trap`, `set -m` or process-group line is touched,
+  so no disposition probe was needed.
+- **Checks run,** standalone from the worktree, after the fixes: `tests/check-ci-parity.sh`
+  ("ok (57 checks in CI, 2 local only, 7 allowed skips; 49 mutants refused)");
+  `tests/check-require-guards.sh` ("ok (8 variables, 13 cases, 4 unforced guards, 25
+  mutants refused, 589s)"); `tests/check-rt-variations.sh` ("rt-variations selftest: 0
+  failed"); `scripts/ios-sim.sh selftest`, stubbed (a fake `xcrun` and `make`, no
+  simulator; "ok (211 cases)"); the whole `tests/check-bench.sh` under the host lock
+  ("check-bench: ok", 96 mutants caught); `tests/check-bounded-run.sh` ("ok (guard, 66
+  mutants refused, probe, the supervisor cases and their 12 mutants, pyprobe and its 10
+  mutants)"); `tests/check-supervise.sh` ("ok (6 s)"); `tests/check-bench-entry.sh`
+  ("ok"); `scripts/ios-device.sh --selftest` ("ok (65 cases)"); check-doc-links,
+  check-runbook-index and check-runbook-dedupe ("ok"). `tests/check-ios.sh` as a whole
+  was not run here, since it builds with make; its failing part is ios-sim's selftest
+  above.
+
 ## What remains
 
 - **Slice 3: the lock run and the deletions.** `bench_lock_run` through `sv_run`, and the
