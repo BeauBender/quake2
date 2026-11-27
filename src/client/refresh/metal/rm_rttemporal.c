@@ -202,6 +202,12 @@ rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long
 {
 	int changed;
 
+	/* a frame encoded for an earlier map, handed over after this one loaded: not this map's */
+	if (frame < u->from)
+	{
+		return 0;
+	}
+
 	/* a frame older than one handed over already: its totals alone, the traced size is the newer frame's */
 	if (frame < u->frame)
 	{
@@ -233,7 +239,7 @@ rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long
 void
 rm_rtt_up_map(rm_rtt_up_t *u, unsigned long from)
 {
-	(void)from;
+	u->from = from;
 	u->fallbacks = 0;
 	u->pixels = 0;
 }

@@ -340,11 +340,12 @@ fi
 # (so the history remade at an effect's new size no longer says why); TASK126 slice 6's: the
 # upsample's size change judged on the width alone, the size not forgotten at divisor 1, a frame's
 # pixels not added, a map load forgetting the size, the empty total printed; its review round 1's: the
-# frame-order test dropped, so a frame handed over late moves the size back. Each must compile (a
+# frame-order test dropped, so a frame handed over late moves the size back; the map's first frame not
+# kept, and its test dropped, so the last map's frames in flight join the new map's totals. Each must compile (a
 # mutant the compiler refuses tests nothing, review TASK59 slice 1, I1) and fail the test.
 rtt_mutants=0
 for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep scalereason scalecmp scalekeep \
-	upcmp upforget upadd upmapsize upempty uporder; do
+	upcmp upforget upadd upmapsize upempty uporder upfrom upfromkeep; do
 	rtt_tree "${tmp:?}/rttm"
 	h=${tmp:?}/rttm/src/client/refresh/metal/common/mtl_rtt_math.h
 	c=${tmp:?}/rttm/src/client/refresh/metal/rm_rttemporal.c
@@ -373,6 +374,8 @@ for m in mat lights depth off reset frameend mapload lightsmask histgap histrese
 		upmapsize) sed 's/^	u->pixels = 0;$/	u->pixels = 0; u->tw = 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		upempty) sed 's/	if (!u->pixels)$/	if (!u->pixels \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		uporder) sed 's/^	if (frame < u->frame)$/	if ((frame < u->frame) \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upfrom) sed 's/^	if (frame < u->from)$/	if ((frame < u->from) \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upfromkeep) sed 's/^	u->from = from;$/	(void)from;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 	esac
 	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$h" && cmp -s "$rm_dir/rm_rttemporal.c" "$c"; then
 		bad "the temporal mutant ($m) changed nothing"
