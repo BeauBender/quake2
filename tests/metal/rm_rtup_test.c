@@ -405,6 +405,41 @@ test_image(void)
 	CHECK(fallbacks == IMG);
 }
 
+/*
+ * RT7's reprojection at the effect size (slice 2): the render-size motion
+ * vector over the divisor, in traced pixels; at divisor 1, RT7's own.
+ */
+static void
+test_reproject(void)
+{
+	mtl_rtt_px_t a, b;
+
+	/* divisor 1: mtl_rtt_reproject itself */
+	a = mtl_rtup_reproject(5, 7, 2.25f, -3.5f, 1u, 16, 16);
+	b = mtl_rtt_reproject(5, 7, 2.25f, -3.5f, 16, 16);
+	CHECK(a.ok && b.ok && (a.x == b.x) && (a.y == b.y));
+	a = mtl_rtup_reproject(15, 0, 1.0f, 0.0f, 1u, 16, 16);
+	CHECK(!a.ok);
+
+	/* divisor 2, a 4 x 4 traced size: (4, -2) render pixels are (2, -1) traced ones */
+	a = mtl_rtup_reproject(1, 1, 4.0f, -2.0f, 2u, 4, 4);
+	CHECK(a.ok && (a.x == 3) && (a.y == 0));
+
+	/* divisor 3: (-3, 3) render pixels are one traced pixel each way */
+	a = mtl_rtup_reproject(2, 2, -3.0f, 3.0f, 3u, 4, 4);
+	CHECK(a.ok && (a.x == 1) && (a.y == 3));
+
+	/* a move within the traced pixel keeps it */
+	a = mtl_rtup_reproject(2, 2, 0.9f, -0.9f, 2u, 4, 4);
+	CHECK(a.ok && (a.x == 2) && (a.y == 2));
+
+	/* off the traced size, and a vector that is not finite */
+	a = mtl_rtup_reproject(3, 0, 2.0f, 0.0f, 2u, 4, 4);
+	CHECK(!a.ok);
+	a = mtl_rtup_reproject(1, 1, NAN, 0.0f, 2u, 4, 4);
+	CHECK(!a.ok);
+}
+
 int
 main(void)
 {
@@ -417,6 +452,7 @@ main(void)
 	test_bilinear();
 	test_nonfinite();
 	test_image();
+	test_reproject();
 	printf("rm_rtup_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

@@ -222,6 +222,8 @@ static const char *const rtg_cvars[] = {
 	/* the sun's direction, development view, floor and strength: read only while r_rt_sun runs
 	   (RM_RTSun_Show needs sun_active) */
 	"r_rt_sun_angles",
+	/* TASK126: the size the sun traces at, a setting (its effect is off without ray tracing) */
+	"r_rt_sun_scale",
 	"r_rt_sun_show",
 	"r_rt_sunfloor",
 	"r_rt_sunscale",

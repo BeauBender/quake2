@@ -130,3 +130,134 @@ The orchestrator runs the hold script. The values below are filled in from its s
 | every `rtprimary-*` record, byte-identical to main | (from the hold) |
 
 No kernel is wired in this slice, so there is no run at an effect scale of 1/2.
+
+## Slice 2: the plumbing (pure, host-tested, no kernel)
+
+- **The reset reason.** `RM_RTT_RESET_SCALE` (16, named `scale`), which `RM_RTT_RESET_ALL` (now 31)
+  takes, in `header/rm_rttemporal.h`. Each history (`rm_rtt_hist_t`) records `div`, the divisor of its
+  last take. `rm_rtt_hist_take_at(h, t, div)` adds `scale` when that differs (`0` there is no take yet,
+  and adds nothing); `rm_rtt_hist_take` is the take at divisor 1, so the shadows' and the AO's takes
+  are unchanged. `rm_rtt_hist_reset` keeps the divisor, as `rm_rtt_state_reset` keeps `seq`: an
+  effect's histories are made again at its new traced size when its scale changes, which resets them
+  (`first`), and the kept divisor still says why (`first scale`). TASK109's line names `scale` among
+  the temporal reasons (`rm_metalfx.c`); the state's own step never sets it, so that line is as before.
+- **Reprojection at the effect size.** `mtl_rtup_reproject` in `common/mtl_rtup_math.h`: the
+  render-size motion vector, read at the traced pixel's source pixel, over the divisor, through
+  `mtl_rtt_reproject` at the traced size. In TASK157's layout traced pixel `x`'s centre is at
+  `x d + o + 1/2` render pixels, so the traced pixel nearest the point is the one holding
+  `x + 1/2 + mx / d`. At divisor 1 it is `mtl_rtt_reproject` itself. `common/mtl_rtt_math.h` is not
+  edited (FIX212 rewrites its guards on another branch).
+- **The formatters,** in `rm_rttemporal.c`: `rm_rtt_scale_line_format` writes
+  `ref_metal: r_rt_stats: reset: <effect> scale`, and `rm_rtt_traced_format` writes the stats line's
+  part `, traced at WxH, F upsample fallbacks`.
+- **The tests.**
+  - `tests/metal/rm_rttemporal_test.c` (`test_scale`): the bit is distinct and in `ALL`; the first
+    take resets for `first` alone; the same divisor keeps; a change resets that history alone; the
+    plain take is divisor 1; a history made again keeps its divisor (`first scale`); the view's own
+    reasons are kept beside it; a divisor of 0 is 1; both lines. `test_hist`'s histories are now
+    zeroed as the back ends' static ones are, since the take reads the divisor.
+  - `tests/metal/rm_rtup_test.c` (`test_reproject`): divisor 1 against `mtl_rtt_reproject`, divisors
+    2 and 3, a move inside the traced pixel, off the traced size, a vector that is not finite.
+  - `tests/metal/rm_fx_test.c`: the reset line with `scale`, and the unknown bit moved to `0x20`.
+- **The mutants** in `tests/check-ref-metal.sh`, each compiled and refused: the scale reason dropped
+  (`scalereason`), the divisor not compared (`scalecmp`), the divisor forgotten when a history is made
+  again (`scalekeep`), and in the upsample segment the motion not divided (`motion`, the ninth header
+  mutant). The upsample's Metal probe calls `mtl_rtup_reproject`.
+
+### Host checks (no lock)
+
+| Check | Result |
+|---|---|
+| the tests at the red commit (`6a1f206e`) | do not compile: `RM_RTT_RESET_SCALE`, `rm_rtt_hist_take_at` and `mtl_rtup_reproject` undeclared |
+| `rm_rttemporal_test`, `rm_rtup_test`, `rm_fx_test` with the change | 148, 79 and 394 checks, 0 failed |
+| the temporal segment of `tests/check-ref-metal.sh` | 14 rule mutants (11 before), 7 kernel pins with 10 kernel mutants and 4 back-end mutants refused |
+| the upsample segment | `upsample 79 checks, 0 failed, 9 rule mutants refused, compiled` |
+
+## Slice 3: the sun at `r_rt_sun_scale`
+
+- **The cvar.** `r_rt_sun_scale`, archived, default `1` (`rm_rtsunscene.c`), taken through
+  `mtl_rtup_div` as the view's divisor (`rm_rtsun_view_t`'s last word, `pad` before, now `div`; the
+  stock kernels never read it). Its `doc/040_cvarlist.md` entry names `r_rt_sunscale`, the strength,
+  and that entry points back. `rtg_cvars` lists it as a setting.
+- **The kernels,** in `rm_rtsun.metal` behind `RM_RTSUN_LO_TU`, compiled apart by
+  `rm_rtsun_lo.metal` (TASK59 slice 1b's arrangement for the shadows' temporal kernel), so the stock
+  unit holds no new caller of the helpers `rm_rtsun_trace` calls:
+  - `rm_rtsun_trace_lo`, at the traced size: `rm_rtsun_trace`'s class and ray for each traced pixel,
+    from its source pixel's G-buffer sample and lightmap. It writes the class (`R8Uint`) and the
+    visibility (`R32Float`), and the counts of the traced pixels.
+  - `rm_rtsun_temporal_lo` and `rm_rtsun_denoise_lo`, at the traced size, while `r_rt_temporal` is
+    above 0: `rm_rtsun_temporal`'s accumulation with `mtl_rtup_reproject`, and RT7's 5 x 5 with the
+    normals read at the source pixels. They write the visibility again, never the light.
+  - `rm_rtsun_up`, at the render size. Each lightmapped world pixel with a depth and a normal (a pixel
+    without one is skipped before the rule, so the fallbacks are not inflated) takes its own floor
+    gate and its own `max(0, N.L)`. Below the floor and facing the sun, its visibility comes from the
+    four traced pixels about it under `mtl_rtup_weights`. A tap's sample counts only where the tap was
+    traced (lit or shadowed). Then the class and the light are written as `rm_rtsun_trace` writes
+    them, and the fallbacks are counted.
+- **The neutral value.** Where no traced pixel about a pixel has a sample, the sun's visibility is
+  `0`: no term, the frame of the effect off. The plan's "visibility 1" is the dlight shadows' neutral
+  (the stock dlight); for the sun, which only adds light, 1 would add the sun where no ray looked.
+- **At scale 1** `rmb_rtsun_trace` dispatches `rm_rtsun_trace` and the stock temporal and denoise
+  kernels exactly as before, in an `else` branch. Compiled with `xcrun metal`, main's
+  `rm_rtsun.metal` and this branch's give AIR whose disassembly differs only in the module's path and
+  in the view's last field's name (`pad`, `div`): the stock code is the same.
+- **The back end** (`rmb_rtsun.m`):
+  - `rmb_rtsun_prepare(w, h, div)` makes the traced size's two textures and the four pipelines above
+    divisor 1, a pipeline failure latched until the pass is closed, and releases the textures at 1.
+  - `rmb_rtsun_encode_lo` encodes the temporal pass, the denoise and the upsample behind barriers. It
+    takes the view into the history with `rm_rtt_hist_take_at(&thist, &tview, view.div)`. The stock
+    path's take is the plain one (divisor 1), so a change either way resets the history for its scale.
+  - The histories are made at the traced size: the scene passes `mtl_rtup_size` of the render size to
+    `rmb_rtsun_temporal`.
+  - The counts take a sixth word, the fallbacks; each stats slot keeps its divisor and traced size.
+- **Lines.**
+  - Under `r_rt_stats 2` the sun's line ends `, traced at WxH, F upsample fallbacks` below divisor 1,
+    and is unchanged at 1.
+  - Under `r_rt_stats 1`, a view whose take set `scale` prints `ref_metal: r_rt_stats: reset: sun
+    scale` once, at any `r_metalfx`.
+  - The model view takes no sun (`RDF_NOWORLDMODEL`), and `fov` is not the divisor, so neither prints
+    it.
+- **The Makefile** compiles `rm_rtsun_lo.air` into `ref_metal.metallib` and lists `rm_rtsun_lo.metal`
+  and `common/mtl_rtup_math.h` as its prerequisites.
+- **The check** (`tests/check-ref-metal.sh`, segment 7.86):
+  - It checks the unit's arrangement, and that the stock kernels sit alone before the `#else` and the
+    four after it.
+  - It pins twelve kernel calls with thirteen mutants, each of which must be refused and must compile with
+    `xcrun metal`. The mutants: the sample at the traced pixel itself (twice), the motion not divided,
+    its sign flipped, the reset not passed, the weights at divisor 1, a pixel with no normal not
+    skipped, every tap taken as traced, the neutral value 1, the fallback never counted, and the
+    visibility 1 in the light, and taps 1 and 2 swapped in the upsample's x and y tap lines (once
+    each).
+  - It pins the back end's take at the divisor (mutant: the plain take) and the scene's cvar,
+    divisor and traced-size history call (mutants: the default 0.5, the divisor left at 1, the render
+    width).
+  - Segment 20 gains five kernel-call pairs of the new kernels.
+- **The scenario** `rt-sun-half`: `rt-sun` plus `r_rt_sun_scale 0.5`, in the scenarios README (both
+  tables) and `doc/100_renderpins.md`.
+
+### Host checks (no lock)
+
+| Check | Result |
+|---|---|
+| `rm_rtsun_test` at the red commit (`3b4cb486`) | does not compile: `rm_rtsun_stats_t` has no `div`, `tw`, `th`, `fallbacks`, the view no `div` |
+| `rm_rtsun_test` with the change | 716 checks, 0 failed |
+| `xcrun metal -c` of `rm_rtsun.metal` and `rm_rtsun_lo.metal` | both compile, no warning |
+| the stock unit's AIR against main's | the disassembly differs only in the module path and the field name `pad` / `div` |
+| segment 7.86 | `sun at its scale 12 kernel pins with 13 kernel mutants compiled and refused, 4 back-end and scene mutants refused` |
+| segments 5.5, 5.6, 7, 10, 11, 12, 13, 15, 20 | pass; 40 `r_rt_*` cvars classified; 34 kernel calls, 340 kernel-call mutants refused |
+| `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh`, `scripts/pins.sh check-content` | ok, each |
+
+### The hold of slices 2 and 3 (M6, under the timing lock)
+
+The orchestrator runs the hold script. The values below are filled in from its summary.
+
+| Check | Result |
+|---|---|
+| base and branch | (from the hold) |
+| `make ref_metal`, `make`, `make test` | (from the hold) |
+| `tests/check-ref-metal.sh`, with the new segments' mutant counts | (from the hold) |
+| the 30 stock scenarios outside `rtprimary-*` (the `rt-*` records at their defaults among them), byte-identical to main | (from the hold) |
+| the 20 RT-primary records, byte-identical to main | (from the hold) |
+| `rt-sun-half`, three runs identical, and different from `rt-sun` | (from the hold) |
+| the `r_rt_stats 2` sun line at `r_rt_sun_scale 0.5`, with its fallback count | (from the hold) |
+| the reset line on a change from 1 to 0.5 | (from the hold) |

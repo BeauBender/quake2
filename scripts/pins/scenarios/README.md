@@ -32,6 +32,7 @@ scenario through it. The cases each of them is held to are in
 | `rt-ao` | `world` with `r_rt_ao 1`: the world's lightmap term darkened by `ref_metal`'s ray-traced ambient occlusion, two hemisphere rays a pixel; other renderers ignore the cvars; temporal accumulation is off (`r_rt_temporal 0`, the design's pins run without it, TASK59) and the noise is fixed (`r_rt_ao_seed 1`), so the frames are stateless; judged against `ref_metal` itself once the owner accepts the look (TASK57) |
 | `rt-ao-entities` | `rt-ao` with `cl_entities 1`: the brush entities and the alias models, which the rays meet and the pass never darkens; recorded with `PINS_SEED`, as `models` (TASK57) |
 | `rt-sun` | `world` with `r_rt_sun 1`: dim world surfaces lit by `ref_metal`'s ray-traced sun where a ray toward it reaches the sky (`r_rt_sunscale 0.35`, below `r_rt_sunfloor 0.5`, the direction from `scripts/rt/sun-angles.txt` or `r_rt_sun_angles`); a map under 2 % sky draws `world`'s frames; other renderers ignore the cvars; temporal accumulation is off (`r_rt_temporal 0`, the design's pins run without it, TASK59) and the pass draws no noise, so the frames are stateless; no footprint band yet, so its companion is `models`; judged against `ref_metal` itself once the owner accepts the look (TASK56) |
+| `rt-sun-half` | `rt-sun` with `r_rt_sun_scale 0.5`: the sun traced at one pixel of each 2 x 2 block and upsampled to every drawn pixel by the joint bilateral rule, each pixel's light composed with its own angle to the sun (TASK126, option E); stateless as `rt-sun`, its frames differ from `rt-sun`'s; its companion is `models` |
 | `rt-water` | `skywater` with `r_rt_water 1`: `ref_metal`'s ray-traced water reflections, one bounce, blended over the water (`r_rt_water_reflect 0.5`, the warp's tilt at `r_rt_water_normal 0.08`); other renderers ignore the cvars; recorded on `skywater`'s camera path (`PINS_DEMO=water.dm2`); temporal accumulation is off (`r_rt_temporal 0`, the design's pins run without it, TASK59) and the pass draws no noise; judged against `ref_metal` itself once the owner accepts the look (TASK58) |
 | `rt-water-entities` | `rt-water` with `cl_entities 1`: the brush entities and the alias models, which the reflection rays meet and the pass never reflects on; recorded with `PINS_SEED` on `skywater`'s camera path (`PINS_DEMO=water.dm2`), as `models` (TASK58) |
 | `dlights-lmcubic` | `dlights` with `metal_lightmap_filter 1`; not deterministic unseeded, recorded with `PINS_SEED` (TASK120) |
@@ -201,6 +202,7 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `rt-water` | world | `rt-water-entities` |
 | `rt-water-entities` | world,entities,alias-models | `-` |
 | `rt-sun` | world | `models` |
+| `rt-sun-half` | world | `models` |
 | `rt-all-metalfx2` | world,dynamic-lights | `particles` |
 | `rtprimary-metalfx2` | world | `models` |
 | `rtprimary-overlayfx` | world | `models` |
