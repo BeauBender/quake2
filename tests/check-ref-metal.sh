@@ -58,6 +58,9 @@
 #     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
 #     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eighteen
 #     scratch mutants of the two must fail it, and all eighteen must),
+#     tests/metal/rm_rtmtemporal_test.c, the model pixels' accumulation
+#     (common/mtl_rtmt_math.h, TASK191 slice 4), with five mutants of the
+#     header and seven pins of rm_rtmtemporal.metal with eleven mutants,
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -2604,7 +2607,8 @@ seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, $rt
 # (no-pullback: the hit distance not used; wall-models: a model read as a wall), a ray that meets no wall
 # past the weapon's distance, finite (miss-len: the distance itself, which fast math may put an ulp short). The back end binds the view with no own-light table
 # (model-own-ray: nself left as the trace's) and exactly its seven textures (bind-extra), each mutant
-# compiled where the compiler is there.
+# compiled where the compiler is there; slice 4's five more for rm_rtm_temporal, behind the accumulation
+# alone (segment 7.96 pins them).
 rtk_metal=""
 if [ "$(uname -s)" = Darwin ] && command -v xcrun >/dev/null 2>&1 && xcrun -f metal >/dev/null 2>&1; then
 	rtk_metal=1
@@ -2704,11 +2708,12 @@ rtk_bind() { # <file> <pin>: 0 when the file (rmb_rtmodel.m) holds the pin
 	case $2 in
 		own) awk '/^\t\tmv\.nself = 0u;$/ { s = NR } /^\t\t\[ce setBytes:&mv length:sizeof\(mv\) atIndex:0\];$/ { b = NR; c++ }
 			END { exit !(s && b && (s < b) && (c == 1)) }' "$1" ;;
-		bind) [ "$(grep -c 'setTexture' "$1")" = 7 ] &&
+		bind) [ "$(grep -c 'setTexture' "$1")" = 12 ] &&
 			grep -qxF '		[ce setTexture:depth atIndex:0];' "$1" && grep -qxF '		[ce setTexture:normal atIndex:1];' "$1" &&
 			grep -qxF '		[ce setTexture:material atIndex:2];' "$1" && grep -qxF '		[ce setTexture:gbl atIndex:3];' "$1" &&
 			grep -qxF '		[ce setTexture:f.vis atIndex:5];' "$1" && grep -qxF '		[ce setTexture:light atIndex:6];' "$1" &&
-			grep -qxF '		[ce setTexture:f.atlas atIndex:7];' "$1" ;;
+			grep -qxF '		[ce setTexture:f.atlas atIndex:7];' "$1" &&
+			[ "$(awk '/^\t\tif \(acc\)$/ { b = 1 } b && /^\t\t}$/ { b = 0 } b' "$1" | grep -c 'setTexture')" = 5 ] ;;
 	esac
 }
 for p in own bind; do
@@ -2837,7 +2842,158 @@ for m in key-flags key-low model-world alpha-kept pass; do
 	fi
 done
 [ "$rmt_mutants" = 5 ] || bad "the model accumulation test refused $rmt_mutants of its 5 header mutants"
-seg 7.96 "; model accumulation ${rmt:-host test}, $rmt_mutants rule mutants"
+# The kernel, rm_rtmtemporal.metal, pinned as text, each pin with its mutants, each of which must compile with
+# the Metal compiler where it is there and be refused: it includes rm_rtmodel.metal with exactly its three
+# entry points renamed (rename-extra: a fourth #define); its light is rm_rtm_trace's, line for line, at the
+# weapon's own point (own-point: the world's unprojection for every model); it writes the light, the
+# visibility, the history and the key of model pixels only, each once (writes-world: world pixels;
+# hist-everywhere: the history written for every pixel); the key is the model's, at the shading point's
+# distance (key-material: the bare material compared; dist-world: the distance of the world's unprojection);
+# the history is read where the motion vector says (no-motion) after the view's reset (no-reset); the
+# resolve's light is the model colour of the blend and the history the blended light (color-unblended: the
+# colour of this frame's sample; hist-raw: this frame's sample kept); no lightmap (reads-lm). The back end
+# runs it only on a view whose light the world's accumulation wrote (acc-any-light: any view), binds its five
+# textures and the temporal view only then (bind-always), and the direct pass hands over the history it read
+# and the one it wrote, after its swap (hist-swapped: the two exchanged).
+rmt_body() { # <file>: rm_rtm_temporal's code, comments and literals blanked, whitespace squeezed
+	strip "$1" | awk '/^rm_rtm_temporal\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' | tr -s ' \t' '  '
+}
+rmt_lines='const uint f = rm_rtm_px_flags(m, gbl.read(px));
+const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);
+const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
+const float3 raw = rm_rtdir_direct(v, pt, n, styles, ias, inst, tmat, ntris, lights, dl, self, t);
+const float3 open = rm_rtdir_open(v, px, pt, n, ias, inst, tmat, ntris, tile, t);
+const float3 bounce = rm_rtdir_bounce(v, px, pt, n, ias, inst, tmat, ntris, tile, atlas, verts, idx, g, brec, t);
+const float4 l = rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open + bounce, v.show);'
+rmt_pin() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		rename) [ "$(grep -cE '^[[:space:]]*#[[:space:]]*define' "$1")" = 3 ] &&
+			grep -qxF '#define rm_rtm_unused_trace rm_rtmt_unused_trace' "$1" &&
+			grep -qxF '#define rm_rtm_unused_show rm_rtmt_unused_show' "$1" &&
+			grep -qxF '#define rm_rtm_trace rm_rtmt_unused_model' "$1" && grep -qxF '#include "rm_rtmodel.metal"' "$1" ;;
+		same) printf '%s\n' "$rmt_lines" | while IFS= read -r line; do
+				rmt_body "$1" | grep -qF " $line" && rtk_body "$rtk_k" | grep -qF " $line" || exit 1
+			done ;;
+		gate) rmt_body "$1" | grep -qF 'if (inside && (m == MTL_GB_MAT_ALIAS))' &&
+			rmt_body "$1" | grep -qF 'model = mtl_rtmt_model(m, d, nn.a) ? 1u : 0u;' &&
+			[ "$(strip "$1" | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.write\(' | sort | tr -d '\n')" = 'hist_out.write(key_out.write(light_out.write(vis_out.write(' ] &&
+			[ "$(rmt_body "$1" | awk '/^ if \(model\)$/ { b = 1 } b && /^ }$/ { b = 0 } b' | grep -cE '(light_out|vis_out|hist_out|key_out)\.write\(')" = 4 ] ;;
+		key) rmt_body "$1" | grep -qF 'const uint k = mtl_rtmt_key(f);' &&
+			rmt_body "$1" | grep -qF 'const float dist = distance(pt, v.eye.xyz);' &&
+			rmt_body "$1" | grep -qF 'tv.move, k, hk.y, hv);' &&
+			rmt_body "$1" | grep -qF 'key_out.write(uint4(as_type<uint>(dist), k, 0u, 0u), px);' ;;
+		motion) rmt_body "$1" | grep -qF 'const float2 mv = motion.read(px).xy;' &&
+			rmt_body "$1" | grep -qF 'mtl_rtt_reproject(px.x, px.y, mv.x, mv.y, w, hh);' &&
+			rmt_body "$1" | grep -qF 'const uint rej = mtl_rtp_reject(tv.reset, r.ok, dist, as_type<float>(hk.x),' ;;
+		blend) rmt_body "$1" | grep -qF 'const mtl_rtp_px_t q = mtl_rtmt_pixel(rej, mtl_rtm_v3(l.r, l.g, l.b), hv, tv.alpha);' &&
+			rmt_body "$1" | grep -qF 'light_out.write(rm_rtm_out(float3(q.out.r, q.out.g, q.out.b), f, p, tabs), px);' &&
+			rmt_body "$1" | grep -qF 'hist_out.write(float4(q.hist.r, q.hist.g, q.hist.b, q.hist.a), px);' &&
+			[ "$(strip "$1" | grep -oF 'rm_rtm_out(' | wc -l | tr -d ' ')" = 1 ] ;;
+		nolm) ! strip "$1" | grep -qwE 'lm|lightmap|lms' ;;
+	esac
+}
+rmt_kpins=0 rmt_kmut=0
+rmt_k=$rm_dir/rm_rtmtemporal.metal
+if [ -n "$rtk_metal" ] && ! rtk_compile "$rmt_k"; then
+	cat "${tmp:?}/metal.out"
+	bad "rm_rtmtemporal.metal does not compile"
+fi
+for p in rename same gate key motion blend nolm; do
+	if ! rmt_pin "$rmt_k" "$p"; then
+		bad "rm_rtmtemporal.metal does not hold the model accumulation's $p pin"
+		continue
+	fi
+	rmt_kpins=$((rmt_kpins + 1))
+	case $p in
+		rename) kms="rename-extra" ;;
+		same) kms="own-point" ;;
+		gate) kms="writes-world hist-everywhere" ;;
+		key) kms="key-material dist-world" ;;
+		motion) kms="no-motion no-reset" ;;
+		blend) kms="color-unblended hist-raw" ;;
+		*) kms="reads-lm" ;;
+	esac
+	for m in $kms; do
+		case $m in
+			rename-extra) awk '{ print } /^#define rm_rtm_trace / { print "#define rm_rtm_out rm_rtmt_out" }' ;;
+			own-point) sed 's/const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);/const float3 pt = rm_rtdir_position(v, px, d);/' ;;
+			writes-world) sed 's/if (inside && (m == MTL_GB_MAT_ALIAS))/if (inside \&\& (m == MTL_GB_MAT_WORLD))/' ;;
+			hist-everywhere) awk '/^	\/\* the frame.s counts, one atomic/ { print "\tif (inside)"; print "\t{"; print "\t\thist_out.write(float4(0.0f), px);"; print "\t}"; print "" } { print }' ;;
+			key-material) sed 's/tv\.move, k, hk\.y, hv);/tv.move, m, hk.y, hv);/' ;;
+			dist-world) sed 's/const float dist = distance(pt, v\.eye\.xyz);/const float dist = distance(rm_rtdir_position(v, px, d), v.eye.xyz);/' ;;
+			no-motion) sed 's/mtl_rtt_reproject(px\.x, px\.y, mv\.x, mv\.y, w, hh);/mtl_rtt_reproject(px.x, px.y, 0.0f * mv.x, 0.0f * mv.y, w, hh);/' ;;
+			no-reset) sed 's/mtl_rtp_reject(tv\.reset, r\.ok,/mtl_rtp_reject(0u * tv.reset, r.ok,/' ;;
+			color-unblended) sed 's/light_out\.write(rm_rtm_out(float3(q\.out\.r, q\.out\.g, q\.out\.b), f, p, tabs), px);/light_out.write(rm_rtm_out(l.rgb, f, p, tabs), px);/' ;;
+			hist-raw) sed 's/hist_out\.write(float4(q\.hist\.r, q\.hist\.g, q\.hist\.b, q\.hist\.a), px);/hist_out.write(float4(l.r, l.g, l.b, q.hist.a), px);/' ;;
+			reads-lm) awk '/texture\(12\)\]\],$/ { print; print "\t\ttexture2d<float, access::read> lm [[texture(4)]],"; next }
+				/^		light_out\.write\(rm_rtm_out\(/ { sub(/q\.out\.r,/, "q.out.r + lm.read(px).r,") } { print }' ;;
+		esac < "$rmt_k" > "${tmp:?}/rmt-kernel.metal"
+		if cmp -s "$rmt_k" "${tmp:?}/rmt-kernel.metal"; then
+			bad "the model accumulation's kernel mutant ($m) changed nothing"
+		elif [ -n "$rtk_metal" ] && ! rtk_compile "${tmp:?}/rmt-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the model accumulation's kernel mutant ($m) does not compile, so it tests nothing"
+		elif rmt_pin "${tmp:?}/rmt-kernel.metal" "$p"; then
+			bad "the model accumulation's $p pin passes its mutant ($m)"
+		else
+			rmt_kmut=$((rmt_kmut + 1))
+		fi
+	done
+done
+[ "$rmt_kpins" = 7 ] && [ "$rmt_kmut" = 11 ] ||
+	bad "rm_rtmtemporal.metal holds $rmt_kpins of its 7 pins and refuses $rmt_kmut of its 11 mutants"
+# the back ends: rmb_rtmodel.m runs rm_rtm_temporal on the accumulated light alone and binds its inputs only
+# then; rmb_rtdir.m hands over the history read (1 - hist_cur after the swap) and the one written (hist_cur)
+rmt_bpins=0 rmt_bmut=0
+rmt_back() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		accpipe) grep -qxF '		[ce setComputePipelineState:(acc ? rtm_tpipe : rtm_pipe)];' "$1" &&
+			grep -qF 'acc = rtm_tpipe && f.acc && (light == f.acc) && f.hist_in && f.key_in && f.hist_out && f.key_out && mvt &&' "$1" &&
+			[ "$(grep -cE '^[[:space:]]+acc = ' "$1")" = 1 ] ;;
+		accbind) awk '/^\t\tif \(acc\)$/ { b = 1; n++ } b && /setTexture|setBytes:&f\.tview/ { c++ } b && /^\t\t}$/ { b = 0 }
+			END { exit !((n == 1) && (c == 6)) }' "$1" &&
+			[ "$(grep -c 'setBytes:&f.tview length:sizeof(f.tview) atIndex:19' "$1")" = 1 ] ;;
+		swap) grep -qxF '		f->hist_in = acc ? t_hist[1 - hist_cur] : nil;' "$1" &&
+			grep -qxF '		f->key_in = acc ? t_key[1 - hist_cur] : nil;' "$1" &&
+			grep -qxF '		f->hist_out = acc ? t_hist[hist_cur] : nil;' "$1" &&
+			grep -qxF '		f->key_out = acc ? t_key[hist_cur] : nil;' "$1" &&
+			awk '/^\t\thist_cur = 1 - hist_cur;$/ { h = NR } /^\t\ttbound = tv;$/ { t = NR } END { exit !(h && t && (t == h + 1)) }' "$1" ;;
+	esac
+}
+for p in accpipe accbind swap; do
+	case $p in
+		swap) rmt_b=$rm_dir/rmb_rtdir.m ;;
+		*) rmt_b=$rm_dir/rmb_rtmodel.m ;;
+	esac
+	if ! rmt_back "$rmt_b" "$p"; then
+		bad "${rmt_b##*/} does not hold the model accumulation's $p pin"
+		continue
+	fi
+	rmt_bpins=$((rmt_bpins + 1))
+	case $p in
+		accpipe) sed 's/acc = rtm_tpipe \&\& f\.acc \&\& (light == f\.acc) \&\& /acc = rtm_tpipe \&\& f.acc \&\& /' ;;
+		accbind) sed 's/^		if (acc)$/		if (acc || !acc)/' ;;
+		*) sed 's/^		f->hist_in = acc ? t_hist\[1 - hist_cur\] : nil;$/		f->hist_in = acc ? t_hist[hist_cur] : nil;/' ;;
+	esac < "$rmt_b" > "${tmp:?}/rmt-back.m"
+	if cmp -s "$rmt_b" "${tmp:?}/rmt-back.m"; then
+		bad "the model accumulation's back-end mutant ($p) changed nothing"
+	elif [ -n "$rtk_metal" ] && ! $cc -fsyntax-only -fobjc-arc -I"$rm_dir" -Ithird_party/SDL3/include '-DYQ2OSTYPE="Darwin"' \
+		'-DYQ2ARCH="arm64"' "${tmp:?}/rmt-back.m" > "${tmp:?}/cc.out" 2>&1; then
+		cat "${tmp:?}/cc.out"
+		bad "the model accumulation's back-end mutant ($p) does not compile, so it tests nothing"
+	elif rmt_back "${tmp:?}/rmt-back.m" "$p"; then
+		bad "the model accumulation's back-end $p pin passes its mutant"
+	else
+		rmt_bmut=$((rmt_bmut + 1))
+	fi
+done
+[ "$rmt_bpins" = 3 ] && [ "$rmt_bmut" = 3 ] ||
+	bad "the back ends hold $rmt_bpins of the model accumulation's 3 pins and refuse $rmt_bmut of their 3 mutants"
+if [ "$(grep -cF 'ref_metal/rm_rtmtemporal.air' Makefile)" != 2 ] || ! grep -qF 'src/client/refresh/metal/rm_rtmtemporal.metal \' Makefile ||
+	[ "$(grep -cF '@"rm_rtm_temporal"' "$rm_dir/rmb_rtmodel.m")" != 1 ]; then
+	bad "the model accumulation is not linked into ref_metal.metallib or its pipeline is not made by rmb_rtmodel.m"
+fi
+seg 7.96 "; model accumulation ${rmt:-host test}, $rmt_mutants rule mutants, $rmt_kpins kernel pins with $rmt_kmut kernel mutants${rtk_metal:+ compiled and} refused, $rmt_bpins back-end pins with $rmt_bmut mutants refused"
 
 # RT-primary's 5 x 5 filter of its accumulated light (TASK190 slice 2, PM8): tests/metal/rm_rtpdenoise_test.c
 # holds common/mtl_rtpd_math.h over RT7's weights (mtl_rtd_math.h): the pixels it writes, a neighbour's

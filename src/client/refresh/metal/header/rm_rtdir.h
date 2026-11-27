@@ -624,6 +624,14 @@ typedef struct
 	__unsafe_unretained id<MTLTexture> vis;     /* the trace's visibility (RGBA8Unorm) */
 	__unsafe_unretained id<MTLTexture> atlas;   /* the bounce's lightmap array, or the empty array */
 	__unsafe_unretained id<MTLBuffer> lights, selftab, tile, brec;   /* selftab and brec nil when none was made */
+	/*
+	 * TASK191 slice 4: this view's accumulation, every texture nil when the
+	 * view accumulated nothing: the history and key it read (in) and wrote
+	 * (out), the light it wrote (acc, the resolve's), and the temporal view
+	 * as it bound it (its reset taken).
+	 */
+	__unsafe_unretained id<MTLTexture> hist_in, key_in, hist_out, key_out, acc;
+	rm_rtt_view_t tview;
 } rmb_rtdir_frame_t;
 
 /* 1 with f filled when this frame's trace was encoded (rmb_rtdir_fx_trace), until the show; else 0 */
