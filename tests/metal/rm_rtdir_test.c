@@ -3618,6 +3618,55 @@ test_bounce(void)
 }
 
 /*
+ * FIX197: what RM_RTDir_Lights uploaded is kept only for the world, the
+ * name and the lightmap array it was built for. A world freed and made
+ * again at the same address with the same name (flushmap 1, or the same
+ * map loaded again) has a new array: the bounce records are built again,
+ * so they never name the freed one. Each case with its verdict; the
+ * line printed is the one tests/check-ref-metal.sh's reload mutant
+ * (lmtex-dropped) must show.
+ */
+static void
+test_reload(void)
+{
+	static const char wa[1], wb[1];
+	static const struct
+	{
+		const char *why;
+		const void *last, *world;
+		const char *last_name, *name;
+		int last_lmtex, lmtex, current;
+	} cases[] = {
+		{ "same world, name and array: kept", wa, wa, "maps/base1.bsp", "maps/base1.bsp", 7, 7, 1 },
+		{ "a same-name reload with a new lightmap array is not built again", wa, wa, "maps/base1.bsp",
+			"maps/base1.bsp", 7, 9, 0 },
+		{ "a new world: built again", wa, wb, "maps/base1.bsp", "maps/base1.bsp", 7, 7, 0 },
+		{ "a new name: built again", wa, wa, "maps/base1.bsp", "maps/base2.bsp", 7, 7, 0 },
+		{ "no array before or now: kept", wa, wa, "maps/base1.bsp", "maps/base1.bsp", 0, 0, 1 },
+		{ "an array gone to none: built again", wa, wa, "maps/base1.bsp", "maps/base1.bsp", 7, 0, 0 },
+		{ "an array made where none was: built again", wa, wa, "maps/base1.bsp", "maps/base1.bsp", 0, 7, 0 },
+		{ "no array and a new world: built again", wa, wb, "maps/base1.bsp", "maps/base1.bsp", 0, 0, 0 },
+		{ "the pass reopened (no world uploaded): built again", NULL, wa, "maps/base1.bsp", "maps/base1.bsp", 7, 7, 0 },
+		{ "nothing uploaded yet: built again", NULL, wa, "", "maps/base1.bsp", 0, 7, 0 },
+		{ "a NULL name: built again", wa, wa, NULL, "maps/base1.bsp", 7, 7, 0 },
+	};
+	int i;
+
+	for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++)
+	{
+		const int got = rm_rtdir_lights_current(cases[i].last, cases[i].last_name, cases[i].last_lmtex, cases[i].world,
+				cases[i].name, cases[i].lmtex);
+
+		if (got != cases[i].current)
+		{
+			printf("reload: %s\n", cases[i].why);
+		}
+
+		CHECK(got == cases[i].current);
+	}
+}
+
+/*
  * The kernel's file holds the bounce's rules, and each mutant of one
  * breaks a check (bounce_broken's, or kernel_broken's for the lightmap
  * at the pixel): a second shadow ray at the hit (bounce-shadow-ray), the
@@ -3827,6 +3876,7 @@ main(void)
 	test_mode();
 	test_sky_sun();
 	test_bounce();
+	test_reload();
 	test_bounce_kernel();
 	printf("rm_rtdir_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

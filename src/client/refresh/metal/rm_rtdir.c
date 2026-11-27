@@ -663,6 +663,16 @@ rm_rtdir_fit_face_ok(int flags, int has_samples)
 		!(flags & (RM_RTDIR_SURF_LIGHT | RM_RTDIR_SURF_TRANS33 | RM_RTDIR_SURF_TRANS66 | RM_RTDIR_SURF_SKY | RM_RTDIR_SURF_WARP));
 }
 
+int
+rm_rtdir_lights_current(const void *last, const char *last_name, int last_lmtex, const void *world, const char *name,
+		int lmtex)
+{
+	(void)last_lmtex;
+	(void)lmtex;
+
+	return last_name && name && (last == world) && !strcmp(last_name, name);
+}
+
 long
 rm_rtdir_fit_every(long total, long cap)
 {
