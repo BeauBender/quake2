@@ -1583,6 +1583,27 @@ else
 	else
 		echo "$me: ok   sv 126 nospawn: a 126 with no group named keeps the lock until it is released by hand"
 	fi
+	# the mutants, each today's behaviour back: a 126 with no group named
+	# records nothing (round 1's note only)
+	for _lm in \
+		'nospawn|hand-not-recorded|scripts/bench/core/common.sh|		bench_record_untold "$_bu_g" hand|		:'; do
+		_lmc=${_lm%%|*} _lmr=${_lm#*|}
+		_lmn=${_lmr%%|*} _lmr=${_lmr#*|}
+		_lmf=${_lmr%%|*} _lmr=${_lmr#*|}
+		if sv_stage "$W/stage-$_lmn" "$_lmf" "${_lmr%%|*}" "${_lmr#*|}"; then
+			sv_lock126 "$W/stage-$_lmn" "$_lmc"
+			case $l126_why in
+			'the lock was not kept'*) echo "$me: mutant $_lmn: refused by $_lmc ($l126_why)" ;;
+			*)
+				echo "$me: FAIL: mutant $_lmn passed the 126 $_lmc case: ${l126_why:-held}"
+				fails="$fails $_lmn"
+				;;
+			esac
+		else
+			echo "$me: FAIL: mutant $_lmn does not apply"
+			fails="$fails $_lmn"
+		fi
+	done
 fi
 # A group record whose id a later process group has taken holds nothing
 # (security I2, round 1), as a pid record's does: the group is started

@@ -1137,11 +1137,21 @@ bench_bounded_ours() {
 
 # bench_bounded_untold: after a supervisor's 126, records the command's
 # process group (its "spawned" event) in the lock state, so the lock is
-# kept while the group has a member (bench_record_untold <pgid> group)
+# kept while the group has a member (bench_record_untold <pgid> group).
+# When the supervisor named no group (a failed events write, or its
+# "cannot watch the command"), nothing tells when the command is gone: the
+# lock is kept until the record is removed by hand (bench_record_untold
+# <id> hand, under the supervisor's pid, else this shell's; security I1,
+# review round 2).
 bench_bounded_untold() {
 	_bu_g=$(bench_bounded_event spawned pgid) || _bu_g=
 	case $_bu_g in
-	'' | 0 | 1 | *[!0-9]*) bench_note "the supervisor named no process group: it cannot be recorded in the lock state" ;;
+	'' | 0 | 1 | *[!0-9]*)
+		bench_note "the supervisor named no process group to watch"
+		_bu_g=${BENCH_BOUNDED_PID:-}
+		case $_bu_g in '' | 0 | 1 | *[!0-9]*) _bu_g=$$ ;; esac
+		bench_record_untold "$_bu_g" hand
+		;;
 	*) bench_record_untold "$_bu_g" group ;;
 	esac
 }
