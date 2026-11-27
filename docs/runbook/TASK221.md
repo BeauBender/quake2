@@ -313,7 +313,7 @@ These cases drove the shell watch and stop through `bench_bounded`, which no lon
 | `tests/check-bounded-run.sh` | ok, on the branch; on main, only the three new cases fail. After round 1: "ok (guard, 65 mutants refused, probe, the supervisor cases and their 7 mutants, pyprobe and its 10 mutants)", with 13 supervisor cases (`spawned`, `endgroup`, `pollint`, `126`, `group reuse`, `lock note`, `own 124` to `own 126`, `tap`, `poll-end`) |
 | `tests/check-supervise.sh` | round 1: ok, with the 5 refusal cases, the 7 supervise.c mutants and the 2 helper mutants |
 | `tests/check-bench-entry.sh` | ok (also after round 1) |
-| `tests/check-gate-parallel.sh` | see below |
+| `tests/check-gate-parallel.sh` | round 1: "ok (37 cases, 104 mutants caught)", in 10 min 38 s (a run capped at 590 s passed all 37 cases and ran out in the mutants) |
 | `scripts/ios-device.sh --selftest` | ok, 65 cases (also after round 1) |
 | `tests/check-doc-links.sh`, `tests/check-runbook-index.sh` | round 1: ok |
 | `tests/check-bench.sh` | not run here: the host lock had a queue, so it goes to the hold script (see below) |
