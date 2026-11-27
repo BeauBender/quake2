@@ -218,3 +218,29 @@ No engine code changed. The one red test is `t_argcount` in
 `tests/check-scenario-parsers.sh`: red on the first `rt-all-metalfx2` (141 of 128), green
 on the trimmed one, and its mutant (`argc-restated-defaults`, the ten lines put back) is
 caught.
+
+## Slice 4: the measurement
+
+Slice 4 records the cost table in `docs/audits/rt-performance.md` (the file does not exist
+yet), from #263's plan. For each effect alone and for every effect on at the default scale,
+on the card's T1 and T2 hosts, it records:
+
+- the GPU time per presented frame;
+- the `timedemo` rate;
+- the scaler's GPU time at each host's output;
+- the internal and output sizes.
+
+The M1 cells are informational and are recorded when a device is available. The slice is
+docs only and runs in the owner's quiet window with the screen unlocked. It has not run
+yet.
+
+### Open lines
+
+Two of #263's acceptance lines are not met and need code or a recorded run:
+
+- **No scaler is created with every effect off** (restated for `r_metalfx 0`). A
+  `metal_stats 1` line, or a host test, showing that no scaler exists would prove it.
+- **The fallback line** where the scaler is unsupported or the device has no ray tracing
+  (restated for `r_metalfx_scale` reading 1 with a report line). A run on the VM (T0) or on
+  a device with no ray tracing, with its output in this runbook, or a host test of the
+  fallback line, would show it.

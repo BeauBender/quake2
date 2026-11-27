@@ -422,3 +422,8 @@ Run by the orchestrator at `f89121ee19fc`, on main `d580216f8033` (merged), with
 ## Left for the next slices
 
 - Slice 4: the cost table of section 4.5, measured in the owner's quiet window.
+- Two console-only notes, from #794's review and #537's slice 3 comment. Both are optional
+  and not required for the card:
+  - The menu picks the first debug view whose cvar is set and treats a negative value as
+    set. The renderer counts only values above 0.
+  - `r_rt_direct_show` has no menu row. This is documented in doc/040.
