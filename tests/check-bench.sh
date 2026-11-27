@@ -2764,11 +2764,12 @@ t_sv_path() {
 		sh "$BENCH_SV_LIB" > "${E:?}/sv.out" 2> "${E:?}/sv.err" || _st=$?
 	[ "$_st" -eq 0 ] || bad "sv path: with no shasum, sv_path and its supervisor exited $_st: $(tr '\n' ' ' < "${E:?}/sv.err")"
 	# The cksum key's answer is checked (#758, review round 5): a cksum
-	# that gives no digest is refused, never keyed as zeros.
+	# that gives no digest is refused, never keyed as zeros, and each CRC
+	# is a 32-bit number on its own: no colon, nothing above 4294967295.
 	mkdir "${E:?}/crc"
 	printf '#!/bin/sh\ncat > /dev/null\ncat "$0.answer"\n' > "${E:?}/crc/cksum"
 	chmod +x "${E:?}/crc/cksum"
-	for _a in ''; do
+	for _a in '' '1:2 5' '4294967296 5'; do
 		if [ -n "$_a" ]; then printf '%s\n' "$_a"; fi > "${E:?}/crc/cksum.answer"
 		_st=0
 		env PATH="${E:?}/crc:${E:?}/nosha" SUPERVISE_CACHE="${E:?}/svcache" sh -c '. "$1/supervise.sh" && SV_SRC_DIR=$1 && sv_path' \
@@ -2776,6 +2777,11 @@ t_sv_path() {
 		[ "$_st" -eq 1 ] && grep -qx 'supervise: neither shasum nor cksum gave a digest' "${E:?}/sv.err" ||
 			bad "sv path: a cksum answer [$_a] was not refused: exit $_st, [$(tr '\n' '|' < "${E:?}/sv.err")] [$(tr '\n' '|' < "${E:?}/sv.out")]"
 	done
+	printf '4294967295 5\n' > "${E:?}/crc/cksum.answer"
+	_st=0
+	_p=$(env PATH="${E:?}/crc:${E:?}/nosha" SUPERVISE_CACHE="${E:?}/svcache" sh -c '. "$1/supervise.sh" && SV_SRC_DIR=$1 && sv_path' sh "$BENCH_SV_LIB" 2> "${E:?}/sv.err") || _st=$?
+	[ "$_st" -eq 0 ] && case $_p in */supervise-crc-ffffffffffffffff) ;; *) false ;; esac ||
+		bad "sv path: the cksum answer 4294967295 did not name supervise-crc-ffffffffffffffff: exit $_st, [$_p] [$(tr '\n' '|' < "${E:?}/sv.err")]"
 	# With shasum on PATH the key is shasum's, never the cksum one.
 	if command -v shasum > /dev/null 2>&1; then
 		_st=0
