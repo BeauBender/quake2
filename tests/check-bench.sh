@@ -42,7 +42,8 @@
 #     zombie;
 #   - the wall-time bound: it stops a grandchild, bounds a command that
 #     ignores TERM, stops the work a command leaves running, ends a
-#     stopped command and its group with 74, and shows no job notice;
+#     stopped command and its group with 124 (HOW=wall) at its wall
+#     time, and shows no job notice;
 #   - the host token and class line: stable, from system facts only, and
 #     free of the identity values tests/check-no-local-identity.sh refuses
 #     (hostname -s, whoami, $HOME), with the scrub and the salt tried on
@@ -1334,8 +1335,8 @@ t_bounded() {
 		bench_bounded 5 sh -c 'exit 7' || _st=$?
 		[ "$_st" -eq 7 ] || { echo "$me: bounded: wanted the command's status 7, got $_st"; exit 1; }
 		# A command that is stopped (a STOP to its own group, once its
-		# grandchild runs) is said, stopped with its group, and gives 74
-		# well inside its wall time; nothing of it runs on.
+		# grandchild runs) is said, stopped with its group, and gives 124
+		# (HOW=wall) at its wall time; nothing of it runs on.
 		_st=0
 		bench_bounded 2 sh -c 'echo $$ > "$4"; sh "$1" "$2" "$3" bstop 30 & while [ ! -s "$2" ]; do sleep 0.05; done; kill -s STOP -- "-$$"; echo bstop-went-on >> "$3"' x "${E:?}/gc.sh" "${E:?}/b.stop" "${E:?}/log" "${E:?}/b.leader" 2> "${E:?}/bstop.err" || _st=$?
 		[ "$_st" -eq 124 ] || { echo "$me: bounded: wanted 124 from a stopped command past its wall time, got $_st"; exit 1; }
