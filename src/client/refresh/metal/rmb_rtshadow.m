@@ -86,6 +86,7 @@ static int slot_timed[RMB_FRAMES_IN_FLIGHT];
 static unsigned long slot_frame[RMB_FRAMES_IN_FLIGHT], slot_pixels[RMB_FRAMES_IN_FLIGHT];
 static unsigned slot_div[RMB_FRAMES_IN_FLIGHT];                 /* TASK126: the view's divisor */
 static unsigned long slot_tw[RMB_FRAMES_IN_FLIGHT], slot_th[RMB_FRAMES_IN_FLIGHT];  /* its traced size */
+static unsigned long slot_w[RMB_FRAMES_IN_FLIGHT], slot_h[RMB_FRAMES_IN_FLIGHT];    /* TASK126 slice 6: the drawn size */
 static rm_rts_stats_t done[RMB_FRAMES_IN_FLIGHT];
 static int ndone;
 
@@ -593,6 +594,8 @@ rmb_rts_read(void)
 		s->div = slot_div[k];
 		s->tw = slot_tw[k];
 		s->th = slot_th[k];
+		s->w = slot_w[k];
+		s->h = slot_h[k];
 		s->ms = -1;
 
 		if (slot_timed[k] && samples)
@@ -836,6 +839,8 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 		slot_div[slot] = lo ? prep_div : 1u;
 		slot_tw[slot] = lo ? (unsigned long)t_out_lo.width : (unsigned long)w;
 		slot_th[slot] = lo ? (unsigned long)t_out_lo.height : (unsigned long)h;
+		slot_w[slot] = (unsigned long)w;
+		slot_h[slot] = (unsigned long)h;
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
 			atomic_store(&slot_done[slot], fno);

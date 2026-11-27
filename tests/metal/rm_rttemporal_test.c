@@ -564,6 +564,193 @@ test_scale(void)
 	CHECK(buf[0] == 0);
 }
 
+/* TASK126 slice 6: an effect's upsample totals and the size-change line */
+static void
+test_up(void)
+{
+	rm_rtt_up_t u;
+	char buf[256];
+	unsigned long f = 0;   /* the frames' numbers, in order */
+
+	memset(&u, 0, sizeof(u));
+
+	/* divisor 1 (and 0, which is 1) upsamples nothing: no line, no total */
+	CHECK(rm_rtt_up_frame(&u, ++f, 1u, 640, 480, 307200, 0) == 0);
+	CHECK(rm_rtt_up_frame(&u, ++f, 0u, 640, 480, 307200, 5) == 0);
+	CHECK((u.tw == 0) && (u.th == 0) && (u.fallbacks == 0) && (u.pixels == 0));
+	CHECK(!rm_rtt_up_total_format("base1", "sun", &u, buf, sizeof(buf)));
+	CHECK(buf[0] == 0);
+
+	/* the first frame below divisor 1: the line is due, and the frame is in the totals */
+	CHECK(rm_rtt_up_frame(&u, ++f, 2u, 320, 240, 307200, 933) == 1);
+	CHECK((u.tw == 320) && (u.th == 240) && (u.fallbacks == 933) && (u.pixels == 307200));
+
+	/* the same size again: not due, the totals grow */
+	CHECK(rm_rtt_up_frame(&u, ++f, 2u, 320, 240, 307200, 67) == 0);
+	CHECK((u.fallbacks == 1000) && (u.pixels == 614400));
+
+	/* a width or a height alone changed: due */
+	CHECK(rm_rtt_up_frame(&u, ++f, 2u, 321, 240, 307200, 0) == 1);
+	CHECK(rm_rtt_up_frame(&u, ++f, 2u, 321, 241, 307200, 0) == 1);
+	CHECK(rm_rtt_up_frame(&u, ++f, 2u, 321, 241, 307200, 0) == 0);
+
+	/* another divisor, another size: due */
+	CHECK(rm_rtt_up_frame(&u, ++f, 3u, 214, 161, 307200, 0) == 1);
+	CHECK(u.pixels == 307200ull * 6);
+
+	/* back to divisor 1: the size is forgotten and nothing is added; the next frame below is due again */
+	CHECK(rm_rtt_up_frame(&u, ++f, 1u, 640, 480, 307200, 0) == 0);
+	CHECK((u.tw == 0) && (u.th == 0) && (u.pixels == 307200ull * 6) && (u.fallbacks == 1000));
+	CHECK(rm_rtt_up_frame(&u, ++f, 3u, 214, 161, 307200, 0) == 1);
+
+	/* the summary's line: the totals and their share */
+	memset(&u, 0, sizeof(u));
+	CHECK(rm_rtt_up_frame(&u, ++f, 2u, 320, 240, 211046400ul, 354398) == 1);
+	CHECK(rm_rtt_up_total_format("base1", "sun", &u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt: base1: upsample: sun 354398 fallbacks of 211046400 upsampled pixels (0.168 %)") == 0);
+	CHECK(!rm_rtt_up_total_format("base1", "sun", &u, buf, 20));
+	CHECK(buf[0] == 0);
+
+	/* totals past 32 bits */
+	u.fallbacks = 5000000000ull;
+	u.pixels = 10000000000ull;
+	CHECK(rm_rtt_up_total_format("q2dm1", "water", &u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt: q2dm1: upsample: water 5000000000 fallbacks of 10000000000 upsampled pixels "
+			"(50.000 %)") == 0);
+
+	/* a map load: the totals start again, the size is kept, so the same size is not due */
+	rm_rtt_up_map(&u, f + 1);
+	CHECK((u.fallbacks == 0) && (u.pixels == 0) && (u.tw == 320) && (u.th == 240));
+	CHECK(rm_rtt_up_frame(&u, ++f, 2u, 320, 240, 100, 1) == 0);
+	CHECK(rm_rtt_up_total_format("base2", "ao", &u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt: base2: upsample: ao 1 fallbacks of 100 upsampled pixels (1.000 %)") == 0);
+
+	/* the size-change line */
+	CHECK(rm_rtt_up_line_format("shadows", 320, 240, 640, 480, 597, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: upsample: shadows 320x240 of 640x480, 597 fallbacks") == 0);
+	CHECK(rm_rtt_up_line_format("water", 427, 240, 1280, 720, 0, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: upsample: water 427x240 of 1280x720, 0 fallbacks") == 0);
+	CHECK(!rm_rtt_up_line_format("water", 427, 240, 1280, 720, 0, buf, 30));
+	CHECK(buf[0] == 0);
+	buf[0] = 'x';
+	CHECK(!rm_rtt_up_line_format("water", 427, 240, 1280, 720, 0, buf, 0));
+	CHECK(!rm_rtt_up_total_format("base2", "ao", &u, buf, 0));
+	CHECK(buf[0] == 'x');
+}
+
+/*
+ * Review round 1, I1: a back end hands its completed frames over in slot
+ * order, so a read can hand a newer frame over before an older one. The
+ * size-change line is due once per change of the traced size, in frame
+ * order, whatever the order; the totals take every frame.
+ */
+static int
+up_lines(const unsigned long *frame, const unsigned long *tw, int n, rm_rtt_up_t *u)
+{
+	int i, due = 0;
+
+	for (i = 0; i < n; i++)
+	{
+		due += rm_rtt_up_frame(u, frame[i], 2u, tw[i], 240, 1000, (unsigned long)(i + 1));
+	}
+
+	return due;
+}
+
+static void
+test_up_order(void)
+{
+	/* frames 4 and 5 at the old size (320), 6 and 7 at the new one (214), handed over in these orders */
+	static const unsigned long orders[][4] = {
+		{ 4, 5, 6, 7 },
+		{ 4, 6, 5, 7 },   /* new, old, new: the case the review traced */
+		{ 4, 6, 7, 5 },
+		{ 4, 7, 5, 6 },
+		{ 4, 7, 6, 5 },
+		{ 6, 4, 7, 5 },
+		{ 7, 6, 5, 4 },
+	};
+	rm_rtt_up_t u;
+	unsigned long fr[4], tw[4];
+	int o, i;
+
+	for (o = 0; o < (int)(sizeof(orders) / sizeof(orders[0])); o++)
+	{
+		memset(&u, 0, sizeof(u));
+		CHECK(rm_rtt_up_frame(&u, 3, 2u, 320, 240, 1000, 0) == 1);   /* frame 3: the first size */
+
+		for (i = 0; i < 4; i++)
+		{
+			fr[i] = orders[o][i];
+			tw[i] = (fr[i] >= 6) ? 214 : 320;
+		}
+
+		/* one change of size (320 to 214): one line */
+		CHECK(up_lines(fr, tw, 4, &u) == 1);
+		CHECK((u.tw == 214) && (u.th == 240));
+		/* the totals take all five frames, in any order */
+		CHECK((u.pixels == 5000) && (u.fallbacks == 10));
+		/* the next frame at the new size: no line */
+		CHECK(rm_rtt_up_frame(&u, 8, 2u, 214, 240, 1000, 0) == 0);
+	}
+
+	/* an old frame at divisor 1 handed over late neither forgets the size nor adds */
+	memset(&u, 0, sizeof(u));
+	CHECK(rm_rtt_up_frame(&u, 11, 2u, 320, 240, 1000, 3) == 1);
+	CHECK(rm_rtt_up_frame(&u, 10, 1u, 640, 480, 307200, 0) == 0);
+	CHECK((u.tw == 320) && (u.pixels == 1000) && (u.fallbacks == 3));
+	CHECK(rm_rtt_up_frame(&u, 12, 2u, 320, 240, 1000, 0) == 0);
+
+	/* an old frame at a third size handed over late: no line, and none when the newer size comes back */
+	memset(&u, 0, sizeof(u));
+	CHECK(rm_rtt_up_frame(&u, 21, 2u, 320, 240, 1000, 0) == 1);
+	CHECK(rm_rtt_up_frame(&u, 23, 3u, 214, 161, 1000, 0) == 1);
+	CHECK(rm_rtt_up_frame(&u, 22, 2u, 320, 240, 1000, 0) == 0);
+	CHECK(rm_rtt_up_frame(&u, 24, 3u, 214, 161, 1000, 0) == 0);
+	CHECK(u.pixels == 4000);
+}
+
+/*
+ * Review round 1, N2: the frames still in flight when a map loads are
+ * handed over at the new map's first frame, after its rm_rtt_up_map.
+ * They are not added to the new map's totals, and their size prints no
+ * line; the new map's own frames are added, in any order.
+ */
+static void
+test_up_map(void)
+{
+	rm_rtt_up_t u;
+	char buf[256];
+
+	memset(&u, 0, sizeof(u));
+	CHECK(rm_rtt_up_frame(&u, 10, 2u, 320, 240, 1000, 7) == 1);
+	CHECK(rm_rtt_up_frame(&u, 11, 2u, 320, 240, 1000, 7) == 0);
+
+	/* the old map's frames 12 to 14 are in flight; the new map's first frame is 15 */
+	rm_rtt_up_map(&u, 15);
+	CHECK((u.pixels == 0) && (u.fallbacks == 0) && (u.tw == 320));
+
+	/* its first read hands over the new frame 15 and the old 13 and 14, at another size */
+	CHECK(rm_rtt_up_frame(&u, 13, 2u, 214, 161, 1000, 50) == 0);
+	CHECK(rm_rtt_up_frame(&u, 15, 2u, 320, 240, 2000, 3) == 0);
+	CHECK(rm_rtt_up_frame(&u, 14, 2u, 214, 161, 1000, 50) == 0);
+	CHECK((u.pixels == 2000) && (u.fallbacks == 3) && (u.tw == 320) && (u.th == 240));
+
+	/* then the old 12, and the new 16 and 17 out of order */
+	CHECK(rm_rtt_up_frame(&u, 12, 2u, 214, 161, 1000, 50) == 0);
+	CHECK(rm_rtt_up_frame(&u, 17, 2u, 320, 240, 2000, 1) == 0);
+	CHECK(rm_rtt_up_frame(&u, 16, 2u, 320, 240, 2000, 1) == 0);
+	CHECK((u.pixels == 6000) && (u.fallbacks == 5));
+	CHECK(rm_rtt_up_total_format("base2", "sun", &u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt: base2: upsample: sun 5 fallbacks of 6000 upsampled pixels (0.083 %)") == 0);
+
+	/* an old frame at divisor 1 does not forget the size either */
+	rm_rtt_up_map(&u, 20);
+	CHECK(rm_rtt_up_frame(&u, 19, 1u, 640, 480, 307200, 0) == 0);
+	CHECK(u.tw == 320);
+	CHECK(rm_rtt_up_frame(&u, 20, 2u, 320, 240, 2000, 0) == 0);
+}
+
 int
 main(void)
 {
@@ -576,6 +763,9 @@ main(void)
 	test_lights();
 	test_hist();
 	test_scale();
+	test_up();
+	test_up_order();
+	test_up_map();
 
 	printf("rm_rttemporal_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

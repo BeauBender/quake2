@@ -53,7 +53,7 @@ extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
 #define RMB_RTAO_GROUP 8        /* the kernel's threadgroup side */
-#define RMB_RTAO_COUNTS 7       /* traced, occluded, at the floor, up, up and occluded, rays, hits (rm_rtao.metal) */
+#define RMB_RTAO_COUNTS 8       /* traced, occluded, at the floor, up, up and occluded, rays, hits, fallbacks (rm_rtao.metal) */
 
 _Static_assert(sizeof(rm_rtao_view_t) == 128, "the view is rm_rtao.metal's 128 bytes");
 
@@ -91,6 +91,9 @@ static atomic_ulong slot_done[RMB_FRAMES_IN_FLIGHT];
 static int slot_pending[RMB_FRAMES_IN_FLIGHT];
 static int slot_timed[RMB_FRAMES_IN_FLIGHT];
 static unsigned long slot_frame[RMB_FRAMES_IN_FLIGHT], slot_pixels[RMB_FRAMES_IN_FLIGHT];
+static unsigned slot_div[RMB_FRAMES_IN_FLIGHT];                 /* TASK126 slice 6: the view's divisor */
+static unsigned long slot_tw[RMB_FRAMES_IN_FLIGHT], slot_th[RMB_FRAMES_IN_FLIGHT];  /* its traced size */
+static unsigned long slot_w[RMB_FRAMES_IN_FLIGHT], slot_h[RMB_FRAMES_IN_FLIGHT];    /* the drawn size */
 static rm_rtao_stats_t done[RMB_FRAMES_IN_FLIGHT];
 static int ndone;
 
@@ -462,6 +465,12 @@ rmb_rtao_read(void)
 		s->up_occluded = c[4];
 		s->rays = c[5];
 		s->hits = c[6];
+		s->fallbacks = c[7];
+		s->div = slot_div[k];
+		s->tw = slot_tw[k];
+		s->th = slot_th[k];
+		s->w = slot_w[k];
+		s->h = slot_h[k];
 		s->ms = -1;
 
 		if (slot_timed[k] && samples)
@@ -671,6 +680,11 @@ rmb_rtao_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mater
 		slot_timed[slot] = timed;
 		slot_frame[slot] = fno;
 		slot_pixels[slot] = (unsigned long)(w * h);
+		slot_div[slot] = (view.div > 1) ? view.div : 1u;
+		slot_tw[slot] = (view.div > 1) ? (unsigned long)t_ao_lo.width : (unsigned long)w;
+		slot_th[slot] = (view.div > 1) ? (unsigned long)t_ao_lo.height : (unsigned long)h;
+		slot_w[slot] = (unsigned long)w;
+		slot_h[slot] = (unsigned long)h;
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
 			atomic_store(&slot_done[slot], fno);

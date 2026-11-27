@@ -195,3 +195,83 @@ rm_rtt_traced_format(unsigned w, unsigned h, unsigned long fallbacks, char *buf,
 
 	return rm_rtt_fits(snprintf(buf, len, ", traced at %ux%u, %lu upsample fallbacks", w, h, fallbacks), buf, len);
 }
+
+int
+rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long tw, unsigned long th,
+		unsigned long pixels, unsigned long fallbacks)
+{
+	int changed;
+
+	/* a frame encoded for an earlier map, handed over after this one loaded: not this map's */
+	if (frame < u->from)
+	{
+		return 0;
+	}
+
+	/* a frame older than one handed over already: its totals alone, the traced size is the newer frame's */
+	if (frame < u->frame)
+	{
+		if (div > 1u)
+		{
+			u->fallbacks += fallbacks;
+			u->pixels += pixels;
+		}
+
+		return 0;
+	}
+
+	u->frame = frame;
+
+	if (div <= 1u)
+	{
+		u->tw = u->th = 0;
+		return 0;
+	}
+
+	changed = (tw != u->tw) || (th != u->th);
+	u->tw = tw;
+	u->th = th;
+	u->fallbacks += fallbacks;
+	u->pixels += pixels;
+	return changed;
+}
+
+void
+rm_rtt_up_map(rm_rtt_up_t *u, unsigned long from)
+{
+	u->from = from;
+	u->fallbacks = 0;
+	u->pixels = 0;
+}
+
+int
+rm_rtt_up_line_format(const char *effect, unsigned long tw, unsigned long th, unsigned long w, unsigned long h,
+		unsigned long fallbacks, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	return rm_rtt_fits(snprintf(buf, len, "ref_metal: r_rt_stats: upsample: %s %lux%lu of %lux%lu, %lu fallbacks",
+			effect, tw, th, w, h, fallbacks), buf, len);
+}
+
+int
+rm_rtt_up_total_format(const char *map, const char *effect, const rm_rtt_up_t *u, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	if (!u->pixels)
+	{
+		buf[0] = 0;
+		return 0;
+	}
+
+	return rm_rtt_fits(snprintf(buf, len, "ref_metal: rt: %s: upsample: %s %llu fallbacks of %llu upsampled pixels "
+			"(%.3f %%)", map, effect, u->fallbacks, u->pixels, 100.0 * (double)u->fallbacks / (double)u->pixels),
+			buf, len);
+}
