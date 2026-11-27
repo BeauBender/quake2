@@ -1239,6 +1239,7 @@ shift 4
 . "$r/scripts/bench/core/common.sh"
 exec 8>&-
 on_sig() {
+	echo "trap $1"
 	if bench_deferred "$1"; then return 0; fi
 	trap '' INT TERM HUP
 	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group "$BENCH_BOUNDED_PID" "" "${BENCH_BOUNDED_REAPED:-}" || :; fi
@@ -1248,25 +1249,39 @@ bench_on_signal() { on_sig "$1"; }
 trap 'on_sig 130' INT
 trap 'on_sig 143' TERM
 polled() { echo polled; return 1; }
-BENCH_STOP_GRACE=1
+BENCH_STOP_GRACE=${SV_GRACE:-1}
 [ "$u" = - ] || BENCH_BOUNDED_UNTIL=$u
 st=0
 bench_bounded "$w" bench_to "$o" "$o" "$@" || st=$?
 echo "returned $st"
 EOF
-# sv_case <root> <name> <wall> <until or -> <event> <command>: runs the
-# caller on <command> (sh -c), waits for the supervisor's "spawned" line,
-# then for the line <event> (a case pattern), sends the caller INT and waits
-# for end of file. Sets sv_rc (the caller's status), sv_pg (the command's
-# process group, from "spawned"), sv_s (the seconds from the INT to the end
-# of file) and sv_why (empty when every wait held). What outlived the bound
-# is killed: the caller, and the command's group.
+# sv_first <pattern>: reads the case's lines up to the first that matches
+# <pattern> (true) or ends the supervisor's stop, "grace-end" or
+# "group-empty" (false); false at end of file or at the bound too
+sv_first() {
+	while proc_await '*'; do
+		case $PROC_LINE in grace-end | group-empty) return 1 ;; esac
+		# shellcheck disable=SC2254 # the pattern is the caller's
+		case $PROC_LINE in $1) return 0 ;; esac
+	done
+	return 1
+}
+# sv_case <root> <name> <wall> <until or -> <event> <command> [<line>...]:
+# runs the caller on <command> (sh -c), waits for the supervisor's
+# "spawned" line, then for the line <event> (a case pattern), sends the
+# caller INT, waits for each <line> (a case pattern) in turn, each before
+# the supervisor's stop has ended (sv_first), and then for end of file.
+# The caller's grace is sv_grace (1); the end of file may take that grace
+# on top of the bound. Sets sv_rc (the caller's status), sv_pg (the
+# command's process group, from "spawned"), sv_s (the seconds from the INT
+# to the end of file) and sv_why (empty when every wait held). What
+# outlived the bound is killed: the caller, and the command's group.
 sv_case() {
 	_sd=$W/sv-$2-$(basename "$1")
 	rm -rf "$_sd"
 	mkdir -p "$_sd/tmp" && mkfifo "$_sd/fifo" || return 1
 	proc_open "$_sd/fifo"
-	env TMPDIR="$_sd/tmp" BENCH_BOUNDED_TAP="$_sd/fifo" python3 -I -c 'import os, signal, sys
+	env TMPDIR="$_sd/tmp" BENCH_BOUNDED_TAP="$_sd/fifo" SV_GRACE="${sv_grace:-1}" python3 -I -c 'import os, signal, sys
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 os.execvp(sys.argv[1], sys.argv[1:])' /bin/bash "$W/svcaller" "$1" "$3" "$4" "$_sd/out" sh -c "$6" < /dev/null > "$_sd/fifo" 2> "$_sd/err" &
 	_sp=$!
@@ -1281,7 +1296,19 @@ os.execvp(sys.argv[1], sys.argv[1:])' /bin/bash "$W/svcaller" "$1" "$3" "$4" "$_
 		else
 			kill -s INT "$_sp"
 			_st0=$(date +%s)
-			proc_eof || sv_why="the caller or the supervisor outlived the INT by 10 s"
+			shift 6
+			for _sl in "$@"; do
+				sv_first "$_sl" || {
+					sv_why="no line $_sl after the INT before the supervisor's stop ended (the last line read: ${PROC_LINE:-none})"
+					break
+				}
+			done
+			if [ -z "$sv_why" ]; then
+				_sb=$PROC_BOUND
+				PROC_BOUND=$((PROC_BOUND + ${sv_grace:-1}))
+				proc_eof || sv_why="the caller or the supervisor outlived the INT by $PROC_BOUND s"
+				PROC_BOUND=$_sb
+			fi
 			sv_s=$(($(date +%s) - _st0))
 		fi
 	fi
@@ -1318,13 +1345,16 @@ sv_case "$here" spawned 30 - spawned 'exec sleep 30'
 sv_judge spawned
 # FIX195 (#726): an INT once the command has exited and left a member that
 # ignores TERM (the end-group window of the shell watch) runs the trap at
-# once; the supervisor's stop ends the member within its grace (1 s)
-sv_case "$here" endgroup 30 - 'exited *' '(trap "" TERM; exec sleep 30) & exit 0'
+# once, and the trap's stop sends the supervisor TERM: the caller's "trap"
+# line and then the supervisor's "signal name=TERM" both come before the
+# supervisor's own stop of the member ends (correctness I1, round 1). The
+# grace is above the bound, so a trap that waited for that stop, or a stop
+# that sent no TERM, fails at the bound, never by a race; the member is
+# killed at the grace's end, and nothing is left
+sv_grace=$((PROC_BOUND + 2))
+sv_case "$here" endgroup 30 - 'exited *' '(trap "" TERM; exec sleep 30) & exit 0' 'trap 130' 'signal name=TERM'
+sv_grace=
 sv_judge endgroup
-if [ -z "$sv_why" ] && [ "${sv_s:-99}" -gt 5 ]; then
-	echo "$me: FAIL: sv endgroup: the caller took $sv_s s after the INT, more than 5"
-	fails="$fails sv-endgroup-slow"
-fi
 # FIX199 (#741): an INT while the until test's poll waits leaves no scratch
 # file in TMPDIR (a bench-poll directory, the events file) and nothing running
 sv_case "$here" pollint 30 polled polled 'exec sleep 30'
@@ -1479,14 +1509,25 @@ else
 	done
 fi
 # the mutant: sv_stop sends the supervisor no TERM, so a caller's INT
-# waits for the command to the wall time (30 s, past the 10 s bound)
+# waits for the command to the wall time (30 s, past the 10 s bound), and
+# in the endgroup case no "signal name=TERM" comes before the stop's end
 if sv_stage "$W/stage-noterm" scripts/lib/supervise.sh '	[ -z "$SV_PID" ] || kill -s TERM "$SV_PID" 2> /dev/null || :' '	:'; then
 	sv_case "$W/stage-noterm" spawned 30 - spawned 'exec sleep 30'
 	case $sv_why in
-	*'outlived the INT'*) echo "$me: mutant sv-no-term: refused ($sv_why)" ;;
+	*'outlived the INT'*) echo "$me: mutant sv-no-term: refused by spawned ($sv_why)" ;;
 	*)
 		echo "$me: FAIL: mutant sv-no-term (sv_stop sends no TERM) passed the spawned case: ${sv_why:-exit $sv_rc}"
 		fails="$fails sv-no-term"
+		;;
+	esac
+	sv_grace=$((PROC_BOUND + 2))
+	sv_case "$W/stage-noterm" endgroup 30 - 'exited *' '(trap "" TERM; exec sleep 30) & exit 0' 'trap 130' 'signal name=TERM'
+	sv_grace=
+	case $sv_why in
+	'no line signal name=TERM'*) echo "$me: mutant sv-no-term: refused by endgroup ($sv_why)" ;;
+	*)
+		echo "$me: FAIL: mutant sv-no-term (sv_stop sends no TERM) passed the endgroup case: ${sv_why:-exit $sv_rc}"
+		fails="$fails sv-no-term-endgroup"
 		;;
 	esac
 else
