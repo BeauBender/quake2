@@ -558,16 +558,22 @@ Slice 5 follows slices 3 and 4: a separate low-scale unit, a stock path that is 
   - It checks the unit's arrangement in the Makefile.
   - It pins the macros: the stock unit's are the stock tokens, and the lo unit's the traced size's.
     Five mutants: the stock sample or picture moved, and each lo macro given the stock meaning.
-  - It pins twenty-three kernel lines with twenty-three mutants. Each must be refused and must
+  - It checks mechanically (round 1) that the three kernels compiled again use `px` only through
+    `RM_RTW_AT(px)`, the outputs' bounds, the list's packing and the outputs' writes, so every
+    G-buffer read, the view test and the unprojection's centre take the source pixel, a read added
+    later included. Two mutants: a read added at the traced pixel, and the review's four reads moved
+    there at once.
+  - It pins twenty-nine kernel lines with twenty-nine mutants. Each must be refused and must
     compile with `xcrun metal`, both units:
-    - in the three kernels compiled again: a read at the traced pixel (the material twice, the depth,
-      the normal), the marks' dilation about the traced pixel, the unprojection's centre at the
-      traced pixel, the bounds at the render size (twice) and the picture at the traced size (twice);
+    - in the three kernels compiled again: a read at the traced pixel (the material three times, the
+      depth twice, the normal twice), the view test at the traced pixel, the marks' dilation about the
+      traced pixel, the unprojection's centre at the traced pixel (twice), the bounds at the render
+      size (twice) and the picture at the traced size (twice);
     - in the upsample: taps 1 and 2 swapped in the x and the y tap lines (once each), a tap's guides
       at the traced pixel, the class test dropped (so non-water pixels take a reflection), every pixel
-      taken as opaque water, the skip testing only the depth, the weights at divisor 1, the fallback
-      not counted, a non-water pixel written as water, and translucent water's distance not
-      upsampled;
+      taken as opaque water, the skip testing only the depth, the own-material fallback
+      (`mtl_rtup_own`) dropped, the weights at divisor 1, the fallback not counted, a non-water pixel
+      written as water, and translucent water's distance not upsampled;
     - in the blur: a tap's distance at the traced pixel, the depth guide given the pixel's own
       distance, and the class test's layer term dropped.
   - `rm_rtw_lo_rok` must be `rm_rtd_rok` word for word.
@@ -575,7 +581,9 @@ Slice 5 follows slices 3 and 4: a separate low-scale unit, a stock path that is 
     test, the compaction dispatched at the render size, the upsample's barrier dropped, the stock
     blur run below divisor 1, and the traced pipeline at divisor 1. It pins the scene with three: the
     default 0.5, the divisor left at 1, and divisor 1 passed to prepare.
-  - Segment 20 gains eleven kernel-call pairs of the new kernels.
+  - Segment 20 gains twelve kernel-call pairs of the new kernels (the twelfth, `rm_rtw_up` and
+    `mtl_rtup_own`, from round 1). Segment 7.85 gains the header mutant that drops `mtl_rtup_own`'s
+    material test, which `rm_rtup_test`'s `test_own` must refuse.
 - **The scenarios.**
   - `rt-water-half`: `rt-water` plus `r_rt_water_scale 0.5`.
   - `rt-water-entities-half`: `rt-water-entities` plus `r_rt_water_scale 0.5`. The plan's hold
@@ -621,6 +629,52 @@ Slice 5 follows slices 3 and 4: a separate low-scale unit, a stock path that is 
 `make`, `make test`, the pins and the whole of `tests/check-ref-metal.sh` were not run here. The
 hold runs them.
 
+### Review round 1
+
+The panel at `8377f53a`: correctness ACCEPT-WITH-FINDINGS (I1, I2, N1 to N4), security CLEAN (N1,
+N2), spec CLEAN (N1 to N5).
+
+- **Correctness I1: segment 7.88 left five reads unpinned.** In `rm_rtw_trace` the material and
+  normal reads, in `rm_rtw_trace_ws` the depth read and the unprojection's centre, and in
+  `rm_rtw_compact` the view test. The review's mutant, with four of them at the traced pixel, passed
+  the segment (24 pins, 28 mutants, `fail=0`, as on the head). Fix: the mechanical check above
+  (`wlo_atpx`, two mutants), and a line pin for each of the five, each with its mutant. On the new
+  segment the four-read mutant fails, refused by the mechanical check and four line pins.
+- **Correctness I2 and spec N2: the fallback took another material's tap.** A non-water pixel next to
+  translucent water could fall back to a water tap, be written as translucent water and be counted.
+  Fix: `mtl_rtup_own` in `common/mtl_rtup_math.h`, called by `rm_rtw_up` alone, before the weights. Its
+  host test, `rm_rtup_test`'s `test_own`, failed 4 of 104 checks at the red commit (`0abd8014`).
+  Mutants: the header's material test dropped (segment 7.85), and the call dropped from `rm_rtw_up`
+  (segment 7.88). The lines on non-water pixels and on the fallback count above, and doc 040's, now
+  say what the code does. The same-material case is left, as "What slice 5 leaves" says.
+- **Correctness N1 and spec N3: one path pinned.** Fix: `rt-water-ss-third`, the screen-space path at
+  divisor 3 with the blur on.
+- **Correctness N2: "`0.67` and above".** Fix: doc 040 says "above 2/3".
+- **Security N2: one `NSError` for five pipelines.** Fix: each pipeline in `rmb_rtw_prepare_lo` has
+  its own, and the latched message names the first that failed: its kernel, then "no such function",
+  the pipeline's error, or "no error given".
+- Not changed: correctness N3, `mtl_rtup_weights`' comment on a pixel whose own depth is not finite,
+  is slice 2's and outside this diff (`rm_rtw_up` tests `d < 1.0f` first); security N1, the normal's
+  and material's sizes, holds as for the stock trace, which assumes one size for every G-buffer
+  attachment; correctness N4 and spec N1 are the hold's.
+- Seen while fixing: an unmatched name in segment 7.88's mutant lists made an empty file, which
+  compiled and was counted as refused. The two lists now copy the file for such a name, so it reads
+  as "changed nothing".
+
+| Check (round 1) | Result |
+|---|---|
+| the review's four-read mutant against segment 7.88 at `8377f53a` | passes: `24 kernel pins with 28 kernel mutants`, `fail=0` |
+| the same mutant against the new segment | refused: the mechanical check and four line pins, `fail=1` |
+| `rm_rtup_test` at the red commit (`0abd8014`) | 104 checks, 4 failed |
+| `rm_rtup_test` with the change | 104 checks, 0 failed |
+| segment 7.88 | `water at its scale 31 kernel pins with 36 kernel mutants compiled and refused, 9 back-end and scene mutants refused` |
+| segment 7.85 | `upsample 104 checks, 0 failed, 16 rule mutants refused, compiled` |
+| segment 20 | `55 kernel calls, 550 kernel-call mutants refused` |
+| `xcrun metal -S -emit-llvm` of `rm_rtsun`, `rm_rtsun_lo`, `rm_rtshadow`, `rm_rtshadow_lo` and `rm_rtshadow_temporal`, at `8377f53a` and after | identical, the file-name lines aside |
+| the same of the stock `rm_rtwater.metal` | identical |
+| `cc -fsyntax-only -fobjc-arc -Wall -Wextra -Werror` of `rmb_rtwater.m` | no diagnostic |
+| `tests/check-cvar-docs.sh`, `check-doc-links.sh`, `check-runbook-index.sh`, `check-scenario-parsers.sh`, `check-pin-chars.sh`; `pins.sh check-content` | ok, each |
+
 ### The hold of slice 5 (M6, under the timing lock)
 
 The orchestrator runs the hold script. The base is the parent slice, `task126s4`.
@@ -630,9 +684,10 @@ The orchestrator runs the hold script. The base is the parent slice, `task126s4`
 | base and branch | to be filled from the hold's summary |
 | `make ref_metal`, `make`, `make test` | to be filled |
 | `tests/check-ref-metal.sh`, with segment 7.88's mutant counts | to be filled |
-| every stock scenario outside `rtprimary-*`, `rt-water-half` and `rt-water-entities-half`, byte-identical to the parent | to be filled |
+| every stock scenario outside `rtprimary-*`, `rt-water-half`, `rt-water-entities-half` and `rt-water-ss-third`, byte-identical to the parent | to be filled |
 | the 20 RT-primary records, byte-identical to the parent | to be filled |
-| `rt-water-half` and `rt-water-entities-half`, three runs each identical, and different from `rt-water` and `rt-water-entities` | to be filled |
+| `rt-water-half`, `rt-water-entities-half` and `rt-water-ss-third`, three runs each identical, and different from `rt-water`, `rt-water-entities` and `rt-water` | to be filled |
 | the `r_rt_stats 2` water line at `r_rt_water_scale 0.5`, with its fallback count | to be filled |
 | the water lines with a reflected pixel, at `r_rt_water_scale 0.5` | to be filled |
+| the `r_rt_stats 2` water lines of `rt-water-ss-third` (screen space, divisor 3), with a reflected pixel and the fallback count | to be filled |
 | the live run: both paths below scale 1, the blur, no validation or pipeline error | to be filled |
