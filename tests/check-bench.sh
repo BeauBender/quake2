@@ -2763,6 +2763,29 @@ t_sv_path() {
 	env PATH="${E:?}/nosha" SUPERVISE_CACHE="${E:?}/svcache" sh -c '. "$1/supervise.sh" && SV_SRC_DIR=$1 && p=$(sv_path) && "$p" --timeout 5 -- true' \
 		sh "$BENCH_SV_LIB" > "${E:?}/sv.out" 2> "${E:?}/sv.err" || _st=$?
 	[ "$_st" -eq 0 ] || bad "sv path: with no shasum, sv_path and its supervisor exited $_st: $(tr '\n' ' ' < "${E:?}/sv.err")"
+	# The cksum key's answer is checked (#758, review round 5): a cksum
+	# that gives no digest is refused, never keyed as zeros.
+	mkdir "${E:?}/crc"
+	printf '#!/bin/sh\ncat > /dev/null\ncat "$0.answer"\n' > "${E:?}/crc/cksum"
+	chmod +x "${E:?}/crc/cksum"
+	for _a in ''; do
+		if [ -n "$_a" ]; then printf '%s\n' "$_a"; fi > "${E:?}/crc/cksum.answer"
+		_st=0
+		env PATH="${E:?}/crc:${E:?}/nosha" SUPERVISE_CACHE="${E:?}/svcache" sh -c '. "$1/supervise.sh" && SV_SRC_DIR=$1 && sv_path' \
+			sh "$BENCH_SV_LIB" > "${E:?}/sv.out" 2> "${E:?}/sv.err" || _st=$?
+		[ "$_st" -eq 1 ] && grep -qx 'supervise: neither shasum nor cksum gave a digest' "${E:?}/sv.err" ||
+			bad "sv path: a cksum answer [$_a] was not refused: exit $_st, [$(tr '\n' '|' < "${E:?}/sv.err")] [$(tr '\n' '|' < "${E:?}/sv.out")]"
+	done
+	# With shasum on PATH the key is shasum's, never the cksum one.
+	if command -v shasum > /dev/null 2>&1; then
+		_st=0
+		_p=$(env SUPERVISE_CACHE="${E:?}/svcache" sh -c '. "$1/supervise.sh" && SV_SRC_DIR=$1 && sv_path' sh "$BENCH_SV_LIB" 2> "${E:?}/sv.err") || _st=$?
+		[ "$_st" -eq 0 ] && printf '%s\n' "$_p" | grep -Eq '/supervise-[0-9a-f]{16}$' ||
+			bad "sv path: with shasum on PATH the supervisor is not named supervise- and 16 hex digits: exit $_st, [$_p] [$(tr '\n' '|' < "${E:?}/sv.err")]"
+	else
+		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || bad "t_sv_path: CHECK_BENCH_REQUIRE=1 and there is no shasum"
+		echo "$me: t_sv_path: the shasum key part skipped: no shasum"
+	fi
 	if [ "$(uname -s)" != Darwin ]; then
 		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || { bad "t_sv_path: CHECK_BENCH_REQUIRE=1 and this is not macOS"; return 1; }
 		echo "$me: t_sv_path: the bounded host and snapshot parts skipped: not macOS"
@@ -3773,20 +3796,30 @@ fi
 # ---- Mutants: each must fail the test that targets it. -----------------
 # mutant <name> <file under scripts/bench> <old> <new> <test> [<old2> <new2>];
 # <old> empty appends <new> as a line; <old2> <new2>, a second change in the
-# same file.
+# same file. A file under ../lib/ is changed in a copy of scripts/lib, which
+# the test then finds through BENCH_SV_LIB.
 mutant() {
 	_m=${tmp:?}/mutant.$1
-	rm -rf "${_m:?}"
+	rm -rf "${_m:?}" "${_m:?}.lib"
 	cp -R "$REAL" "$_m"
+	_ml=$BENCH_SV_LIB
+	case $2 in
+	../lib/*)
+		_ml=$_m.lib
+		cp -R "$BENCH_SV_LIB" "$_ml"
+		_mf=$_ml/${2#../lib/}
+		;;
+	*) _mf=$_m/$2 ;;
+	esac
 	if [ -n "$3" ]; then
-		lit "${_m:?}/$2" "$3" "$4" || { echo "$me: mutant $1 does not apply to $2"; return 1; }
+		lit "${_mf:?}" "$3" "$4" || { echo "$me: mutant $1 does not apply to $2"; return 1; }
 	else
-		printf '%s\n' "$4" >> "${_m:?}/$2"
+		printf '%s\n' "$4" >> "${_mf:?}"
 	fi
 	if [ "$#" -ge 7 ]; then
-		lit "${_m:?}/$2" "$6" "$7" || { echo "$me: mutant $1 (second change) does not apply to $2"; return 1; }
+		lit "${_mf:?}" "$6" "$7" || { echo "$me: mutant $1 (second change) does not apply to $2"; return 1; }
 	fi
-	if (R=$_m MUTANT=1 && cd "$REAL/../.." && "$5") > "${tmp:?}/mutant.$1.out" 2>&1; then
+	if (R=$_m BENCH_SV_LIB=$_ml MUTANT=1 && cd "$REAL/../.." && "$5") > "${tmp:?}/mutant.$1.out" 2>&1; then
 		echo "$me: mutant $1 passed $5; the test does not catch it"
 		return 1
 	fi
@@ -3922,6 +3955,10 @@ mutant digit-cap-crc core/common.sh '! bench_is_uint_max "$_bh_a" 10' '! bench_i
 # where the bounded command's standard error is sent away.
 mutant sv-reason-host core/host.sh '		bench_sv' '		:' t_sv_path || mfail=1
 mutant sv-reason-snap core/snap.sh '	bench_sv' '	:' t_sv_path || mfail=1
+# Review round 5: the cksum key's refusal never matching, and the cksum key
+# taken with shasum on PATH.
+mutant novalid ../lib/supervise.sh ':* | *: | *[!0-9:]* | ???????????*:* | *:???????????*)' 'zzq-never)' t_sv_path || mfail=1
+mutant alwayscrc ../lib/supervise.sh 'if command -v shasum > /dev/null 2>&1; then' 'if false; then' t_sv_path || mfail=1
 # Last: it writes into the throwaway repository's work tree.
 mutant store-in-repo core/store.sh 'bench_outside_repo "$BENCH_STORE_ROOT" "the store (BENCH_STORE)"' ':' t_store_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
