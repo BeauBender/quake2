@@ -1440,8 +1440,11 @@ rm_rtw_lo_normal(float4 nv)
  * G-buffer at the drawn pixel and at each tap's source pixel, the same
  * material), a tap holding a sample only where it found water of that
  * layer with a reflection (rm_rtw_lo_rok) at a source pixel with a depth
- * and a normal; where none matches, the one nearest in depth, counted as
- * a fallback. The reflection is the weighted colour, its class the
+ * and a normal; where none matches, the one nearest in depth of those of
+ * the pixel's own material (mtl_rtup_own), counted as a fallback, so a
+ * pixel beside water traced over another surface (a pillar standing in
+ * translucent water) takes no tap of it and is neither marked nor
+ * counted. The reflection is the weighted colour, its class the
  * pixel's layer with the heaviest tap's choice, and translucent water's
  * distance the weighted distance. Where no tap holds a sample, opaque
  * water has no reflection (MTL_RTW_MISS, the stock water) and any other
@@ -1507,6 +1510,8 @@ rm_rtw_up(depth2d<float, access::read> depth [[texture(0)]],
 				in.nn[i] = rm_rtw_lo_normal(ns);
 			}
 
+			/* the fallback takes only a tap of the pixel's own material: a pixel beside water of another is empty */
+			in = mtl_rtup_own(in);
 			o = mtl_rtup_weights(in, lo.div);
 			fb = o.fallback ? 1u : 0u;
 

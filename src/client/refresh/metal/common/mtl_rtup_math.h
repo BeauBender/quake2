@@ -228,6 +228,13 @@ mtl_rtup_weights(mtl_rtup_in_t in, unsigned d)
 static inline mtl_rtup_in_t
 mtl_rtup_own(mtl_rtup_in_t in)
 {
+	int i;
+
+	for (i = 0; i < MTL_RTUP_TAPS; i++)
+	{
+		in.ok[i] = (in.ok[i] && (in.mn[i] == in.m)) ? 1 : 0;
+	}
+
 	return in;
 }
 

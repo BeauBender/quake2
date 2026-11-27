@@ -1558,7 +1558,8 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	"rm_rtwater.metal rm_rtw_denoise_lo mtl_rtd_rweight" "rm_rtwater.metal rm_rtw_denoise_lo mtl_rtd_add" \
 	"rm_rtwater.metal rm_rtw_denoise_lo mtl_rtd_rresult" "rm_rtwater.metal rm_rtw_denoise_lo rm_rtw_lo_rok" \
 	"rm_rtwater.metal rm_rtw_up mtl_rtup_bilinear" "rm_rtwater.metal rm_rtw_up mtl_rtup_weights" \
-	"rm_rtwater.metal rm_rtw_up mtl_rtup_value" "rm_rtwater.metal rm_rtw_up rm_rtw_lo_rok"; do
+	"rm_rtwater.metal rm_rtw_up mtl_rtup_value" "rm_rtwater.metal rm_rtw_up rm_rtw_lo_rok" \
+	"rm_rtwater.metal rm_rtw_up mtl_rtup_own"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
 	set -- $pair
 	f=$rm_dir/$1 kn=$2 hp=$3
@@ -3165,7 +3166,8 @@ seg 7.8 "; RT-primary filter ${rtpd:-host test}, $rtpd_mutants rule mutants, $rt
 # refusal): the depth guide, the material test, the normal guide and the
 # sample test dropped, the fallback taking the first tap, the fallback not counted, and the identity
 # dropped at a scale of 1, and the two cross weights of the bilinear taps swapped; slice 2's, RT7's
-# reprojection at the effect size with the motion not divided by the divisor. Where the Metal
+# reprojection at the effect size with the motion not divided by the divisor; slice 5's, the water's
+# fallback (mtl_rtup_own) taking a tap of another material than the pixel's. Where the Metal
 # compiler is there, a kernel that calls every function of the header must compile.
 rtup=""
 rtup_tree() { # <dir>: a copy of the test and the headers, laid out as the test includes them
@@ -3196,7 +3198,7 @@ else
 fi
 rtup_mutants=0
 rtup_h=$rm_dir/common/mtl_rtup_math.h
-for m in depth material normal sample first count identity bilinear motion lightset lightfb0 lightcount lightnorm; do
+for m in depth material normal sample first count identity bilinear motion lightset lightfb0 lightcount lightnorm own; do
 	[ -f "$rtup_h" ] || break
 	rtup_tree "${tmp:?}/rtupm"
 	h=${tmp:?}/rtupm/src/client/refresh/metal/common/mtl_rtup_math.h
@@ -3217,6 +3219,8 @@ for m in depth material normal sample first count identity bilinear motion light
 		lightfb0) sed 's/l\.vis = 1\.0f;/l.vis = 0.0f;/' ;;
 		lightcount) sed 's/l\.fallback = 1;/l.fallback = 0;/' ;;
 		lightnorm) sed 's|l\.vis = s / ws;|l.vis = s;|' ;;
+		# slice 5, the water's own-material fallback: the material test dropped from mtl_rtup_own
+		own) sed 's/in\.ok\[i\] = (in\.ok\[i\] \&\& (in\.mn\[i\] == in\.m)) ? 1 : 0;/in.ok[i] = in.ok[i] ? 1 : 0;/' ;;
 	esac < "$rtup_h" > "$h"
 	if cmp -s "$rtup_h" "$h"; then
 		bad "the upsample mutant ($m) changed nothing"
@@ -3269,7 +3273,7 @@ for m in holdsguard holdsloop; do
 	fi
 done
 rm -rf "${tmp:?}/rtsm"
-[ "$rtup_mutants" = 15 ] || bad "the upsample and shadows header tests refused $rtup_mutants of their 15 header mutants"
+[ "$rtup_mutants" = 16 ] || bad "the upsample and shadows header tests refused $rtup_mutants of their 16 header mutants"
 rtup_metal=""
 if [ -n "$rtp_metal" ] && [ -f "$rtup_h" ]; then
 	cat > "${tmp:?}/rtup-probe.metal" <<'EOF'
@@ -3293,6 +3297,7 @@ kernel void rtup_probe(device float *o [[buffer(0)]], uint2 px [[thread_position
 		in.ok[i] = 1;
 	}
 	in = mtl_rtup_bilinear(in, mtl_rtao_up_pair(px.x, d, n), mtl_rtao_up_pair(px.y, d, n));
+	in = mtl_rtup_own(in);
 	const mtl_rtup_out_t r = mtl_rtup_weights(in, d);
 	const mtl_rtt_px_t rp = mtl_rtup_reproject(px.x, px.y, 1.5f, -0.5f, d, n, n);
 	const mtl_rtup_light_t li = mtl_rtup_light(r, 1, 0, 1, 0, 0.1f, 0.2f, 0.3f, 0.4f);
@@ -3678,6 +3683,7 @@ seg 7.87 "; shadows at their scale $shlo_kpins kernel pins with $shlo_kmut kerne
 # tap holding a sample only where it found water of the drawn pixel's layer with a reflection (mutants:
 # the class test dropped, every pixel taken as opaque water), a pixel with no depth or normal skipped
 # before the rule (mutant: only the depth tested), the weights at the divisor (mutant: at 1), the
+# fallback taking only a tap of the pixel's own material, mtl_rtup_own (mutant: the call dropped), the
 # fallback counted (mutant: never), a pixel no tap gave a reflection written as the stock does (mutant:
 # a non-water pixel written as water), and translucent water's distance upsampled (mutant: 0). The blur
 # at the traced size takes each tap's distance at its source pixel (mutant: at the traced pixel) as its
@@ -3776,6 +3782,7 @@ else
 				wlo_in rm_rtw_trace 'normal\\.read\\(RM_RTW_AT\\(px\\)\\)' 'normal.read(px)' |
 				wlo_in rm_rtw_trace_ws 'depth\\.read\\(RM_RTW_AT\\(px\\)\\)' 'depth.read(px)' |
 				wlo_in rm_rtw_compact 'rm_rtw_in_view\\(v, RM_RTW_AT\\(px\\), w, h\\)' 'rm_rtw_in_view(v, px, w, h)' ;;
+			*) cat ;;
 		esac < "$wlo_f" > "${tmp:?}/wlo-kernel.metal"
 		if cmp -s "$wlo_f" "${tmp:?}/wlo-kernel.metal"; then
 			bad "the water's traced-pixel mutant ($m) changed nothing"
@@ -3810,6 +3817,7 @@ for pin in "rm_rtw_compact|listed = mtl_rtw_listed(mat.read(RM_RTW_AT(px)).r, ma
 	"rm_rtw_up|in.ok[i] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv[i].a)) && (ds < 1.0f) && (ns.a > 0.5f)) ? 1 : 0;|everytap" \
 	"rm_rtw_up|const uint own = mtl_rtw_is_water(m) ? MTL_RTW_CLASS_WATER : (MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS);|layer" \
 	"rm_rtw_up|if ((d < 1.0f) && (nn.a > 0.5f))|noskip" \
+	"rm_rtw_up|in = mtl_rtup_own(in);|noown" \
 	"rm_rtw_up|o = mtl_rtup_weights(in, lo.div);|weights1" \
 	"rm_rtw_up|fb = o.fallback ? 1u : 0u;|nocount" \
 	"rm_rtw_up|else if (!(own & MTL_RTW_CLASS_TRANS))|nonwater" \
@@ -3843,12 +3851,15 @@ for pin in "rm_rtw_compact|listed = mtl_rtw_listed(mat.read(RM_RTW_AT(px)).r, ma
 			layer) sed 's/const uint own = mtl_rtw_is_water(m) ? MTL_RTW_CLASS_WATER : (MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS);/const uint own = MTL_RTW_CLASS_WATER;/' ;;
 			noskip) wlo_in "$kn" 'if \\(\\(d < 1\\.0f\\) && \\(nn\\.a > 0\\.5f\\)\\)' 'if (d < 1.0f)' ;;
 			weights1) sed 's/o = mtl_rtup_weights(in, lo\.div);/o = mtl_rtup_weights(in, 1u);/' ;;
+			noown) awk '/^rm_rtw_up\(/ { b = 1 } b && /^}/ { b = 0 } b && /^[[:space:]]+in = mtl_rtup_own\(in\);$/ { next } { print }' ;;
 			nocount) wlo_in "$kn" 'fb = o\\.fallback \\? 1u : 0u;' 'fb = o.fallback ? 0u : 0u;' ;;
 			nonwater) sed 's/else if (!(own & MTL_RTW_CLASS_TRANS))$/else/' ;;
 			nodist) sed 's/wd = (own & MTL_RTW_CLASS_TRANS) ? mtl_rtup_value(o, tw\[0\], tw\[1\], tw\[2\], tw\[3\], 0\.0f) : 0\.0f;/wd = 0.0f;/' ;;
 			distpx) sed 's/rm_rtw_lo_src(uint2(q), lo\.div, fw, fh), cn) : dc;/uint2(q), cn) : dc;/' ;;
 			rdepth) wlo_in "$kn" 'mtl_rtd_rweight\\(dx, dy, dc, dn, ok\\)' 'mtl_rtd_rweight(dx, dy, dc, dc, ok)' ;;
 			rlayer) wlo_in "$kn" '\\(\\(cn & MTL_RTW_CLASS_TRANS\\) == \\(cc & MTL_RTW_CLASS_TRANS\\)\\)' 'true' ;;
+			# a mutant named with no edit is the file unchanged, so "changed nothing" catches it
+			*) cat ;;
 		esac < "$wlo_f" > "${tmp:?}/wlo-kernel.metal"
 		if cmp -s "$wlo_f" "${tmp:?}/wlo-kernel.metal"; then
 			bad "the water's reduced-size kernel mutant ($m of $kn) changed nothing"
