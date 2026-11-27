@@ -21,7 +21,10 @@
 #           scripts source it, none of the four defines a bench_* function
 #           of its own (bench_on_signal, the primitive's hook, aside), and
 #           none sends a signal itself (any kill, pkill or killall,
-#           unmarked).
+#           unmarked). A file that copies the primitive into a tree (a cp
+#           or copy line naming common.sh) names its supervisor too
+#           (supervise.sh, or BENCH_SV_LIB), or the copy's bounded runs
+#           stop (TASK221).
 #   mutants each one literal change to a copy of scripts/ must be refused,
 #           in its own file and for its own rule.
 #   pyprobe the same for the Python helper, scripts/lib/bounded.py, and ten
@@ -370,8 +373,28 @@ guard() {
 			printf '%s\n' "$_g_o"
 			_g_bad=1
 		fi
+		_g_o=$(copies_sv "$1" "$_g_f") || { echo "$_g_f:0: the copy scan failed"; _g_bad=1; continue; }
+		if [ -n "$_g_o" ]; then
+			printf '%s\n' "$_g_o"
+			_g_bad=1
+		fi
 	done < "$_g_list"
 	return "$_g_bad"
+}
+
+# copies_sv <root> <file>: a file that copies the primitive into a tree (a
+# line, not a whole-line comment, that names common.sh and cp or copy)
+# names its supervisor too (supervise.sh, or BENCH_SV_LIB, on a line that is
+# not a whole-line comment): bench_bounded finds scripts/lib/supervise.sh
+# beside the copy, and without it the tree's every bounded run stops,
+# "cannot find the process supervisor" (TASK221, gate round 1: the stub
+# tree of scripts/pins/rtvar.py's selftest)
+copies_sv() {
+	awk -v rel="$2" '
+	/^[ \t]*#/ { next }
+	/common\.sh/ && /(cp |copy)/ { if (!at) at = FNR }
+	/supervise\.sh|BENCH_SV_LIB/ { sv = 1 }
+	END { if (at && !sv) printf "%s:%d: a tree copy of the bounded-run primitive without its supervisor, scripts/lib/supervise.sh\n", rel, at }' "$1/$2"
 }
 
 # mutant <name> <file> <expected rule> <old> <new> [<old2> <new2>]: a copy
@@ -984,6 +1007,10 @@ mutant mfx-os-kill scripts/metalfx-report/mfx.py "$K" 'def parse_scenario(path):
 mutant device-poll-loop scripts/ios-device.sh 'polling loop' '	[ -n "${BENCH_BOUNDED_PID:-}" ] || return 0' '	[ -n "${BENCH_BOUNDED_PID:-}" ] || return 0
 	while kill -0 "$BENCH_BOUNDED_PID" 2>/dev/null; do sleep 0.2; done'
 mutant device-own-watchdog scripts/ios-device.sh 'does not source' '. "$repo/scripts/bench/core/common.sh"' 'bench_bounded() { "$@" & p=$!; sleep "$1"; kill -TERM "$p"; sleep 5; kill -KILL "$p"; }'
+# a tree copy of the primitive that leaves its supervisor out (TASK221, gate round 1)
+mutant rtvar-no-supervisor scripts/pins/rtvar.py 'without its supervisor' '        for f in ("supervise.sh", "supervise.c"):
+            shutil.copy2(os.path.join(ROOT, "scripts", "lib", f), os.path.join(tree, "scripts", "lib"))
+' ''
 mutant adapter-term-runner scripts/bench/adapters/quake2.sh 'sends a signal itself' '	bench_bounded "$(bench_case_wall)" "$_qr_bin" "$@" > "${_qr_log:?}" 2>&1 || _qr_st=$?' \
 	'	{ "$_qr_bin" "$@" & p=$!; sleep "$BENCH_BOUNDED_QUIT"; kill -TERM "$p"; wait "$p"; } > "${_qr_log:?}" 2>&1 || _qr_st=$?'
 mutant kill9-elsewhere scripts/gate-checks.sh "$K" 'gate_end() {' 'gate_end() {
