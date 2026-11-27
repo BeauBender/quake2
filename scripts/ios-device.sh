@@ -204,6 +204,13 @@ selftest()
 	sroot=$(mktemp -d "${TMPDIR:-/tmp}/ios-device-selftest.XXXXXX") || die "no scratch directory"
 	trap 'rm -rf "${sroot:?}"' EXIT
 	mkdir -p "${sroot:?}/bin" || die "cannot create $sroot/bin"
+	# the bounded path's supervisor (TASK221): the scratch repository holds
+	# common.sh alone, so it finds scripts/lib here, and every case shares
+	# one tool cache, built once, before any fake is on PATH
+	BENCH_SV_LIB=$repo/scripts/lib
+	SUPERVISE_CACHE=$sroot/svcache
+	export BENCH_SV_LIB SUPERVISE_CACHE
+	( . "$BENCH_SV_LIB/supervise.sh" && SV_SRC_DIR=$BENCH_SV_LIB && sv_path > /dev/null ) || die "cannot build the process supervisor"
 	# every fake logs its arguments, "|" after each, to FAKE_STATE/calls
 	cat > "${sroot:?}/bin/security" <<'EOF'
 #!/bin/bash
@@ -225,8 +232,6 @@ done
 [ "$(stat -f %Lp "$(dirname "$out")")" = 700 ] || { echo "fake security: $(dirname "$out") is readable by others" >&2; exit 1; }
 tail -n +2 "$in" > "$out"
 [ "$FAKE_SCENARIO" = cmsfail ] && { echo "security: the signer is not trusted" >&2; exit 1; }
-# a staged case: the record of the next command's spawn lingers (FIX192)
-[ -z "${FAKE_STAGE_SPAWN:-}" ] || : > "$FAKE_STATE/stage-pgid"
 exit 0
 EOF
 	cat > "${sroot:?}/bin/codesign" <<'EOF'
@@ -343,29 +348,6 @@ EOF
 	mkdir -p "$sroot/repo/scripts/bench/core" "$sroot/repo/build/ios-iphoneos/release" || die "cannot create the scratch repository"
 	cp "$self" "$sroot/repo/scripts/ios-device.sh" && cp "$repo/scripts/bench/core/common.sh" "$sroot/repo/scripts/bench/core/common.sh" && cp -R "$sroot/signed.app" "$sroot/repo/build/ios-iphoneos/release/Quake2.app" \
 		|| die "cannot fill the scratch repository"
-	# a second copy whose primitive is staged (FIX192): its ps read, once
-	# FAKE_STATE/stage-<field> exists (stat: a poll of the watch; pgid: the
-	# record of a spawn), closes its output once ps has answered and
-	# lingers, INT ignored, until FAKE_STATE/sent exists (10 s at most),
-	# once: the window in which bash 3.2 drops an INT (between the end of a
-	# command substitution's output and its reap), or a HUP comes before
-	# the command's pid is stored, opened at will
-	local stage_old stage_new stage_s stage_c
-	stage_old='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null) || return 1'
-	stage_new='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null; _st=$?; exec >&-; if rm "${FAKE_STATE:-/nonexistent}/stage-${2:-stat}" 2> /dev/null; then trap "" INT; : > "$FAKE_STATE/at-ps"; _n=0; while [ ! -e "$FAKE_STATE/sent" ] && [ "$_n" -lt 100 ]; do sleep 0.1; _n=$((_n + 1)); done; fi; exit "$_st") || return 1'
-	stage_s=$(cat "$repo/scripts/bench/core/common.sh") || die "cannot read the primitive"
-	case $stage_s in
-	*"$stage_old"*"$stage_old"*) die "the stage anchor is in the primitive twice" ;;
-	*"$stage_old"*) ;;
-	*) die "the stage anchor is not in the primitive" ;;
-	esac
-	# the replacement quoted, so that bash 5.2 (patsub_replacement) does not
-	# read its & as the match; in an assignment, where bash 3.2 drops the
-	# quotes too
-	stage_c=${stage_s/"$stage_old"/"$stage_new"}
-	mkdir -p "$sroot/stagerepo/scripts/bench/core" || die "cannot create the staged repository"
-	cp "$self" "$sroot/stagerepo/scripts/ios-device.sh" && printf '%s\n' "$stage_c" > "$sroot/stagerepo/scripts/bench/core/common.sh" \
-		|| die "cannot fill the staged repository"
 	# the scratch root as the script sees it (pwd -P); no message names it
 	sroot_p=$(cd "$sroot" && pwd -P) || die "cannot resolve the scratch root"
 
@@ -455,16 +437,12 @@ EOF
 	# HUP, which the exit cleanup handles) within 10 s; the fake's recorded
 	# PID is gone; no scratch file is left; an interrupted sign leaves no
 	# profile and no signature in the bundle, an interrupted install or
-	# launch leaves the signed bundle as it was. With dt_stage, the staged
-	# copy runs (FIX192), and the signal comes inside the staged window:
-	# "stat", once the step hangs, the watch's next ps read lingers; "pgid",
-	# the record of the spawn after the fake security's lingers
+	# launch leaves the signed bundle as it was.
 	command -v perl > /dev/null 2>&1 || die "perl not found: the selftest's interrupt cases need it"
 	dt_signal()
 	{
-		local name=$1 sig=$2 sc=$3 app=$4 d why= a hp rc want=1 left script=$self stage=${dt_stage:-}
-		local -a args=() stagenv=()
-		dt_stage=
+		local name=$1 sig=$2 sc=$3 app=$4 d why= a hp rc want=1 left script=$self
+		local -a args=()
 		shift 4
 		[ "${1:-}" = -- ] && shift
 		ncase=$((ncase + 1))
@@ -474,10 +452,6 @@ EOF
 		: > "${d:?}/state/calls"
 		cp -R "$sroot/$app" "${d:?}/Quake2.app" || die "cannot copy $app"
 		for a in "$@"; do a=${a//@APP@/"$d/Quake2.app"}; a=${a//@P@/"$p"}; args+=("$a"); done
-		if [ -n "$stage" ]; then
-			script=$sroot/stagerepo/scripts/ios-device.sh
-			[ "$stage" = pgid ] && stagenv=(FAKE_STAGE_SPAWN=1)
-		fi
 		# a foreground subshell: the script inherits this shell's INT, and
 		# set -m starts it in its own process group
 		(
@@ -485,21 +459,15 @@ EOF
 			perl -e '$SIG{INT} = $SIG{QUIT} = "DEFAULT"; exec { $ARGV[0] } @ARGV or exit 127' \
 				env -u IOS_SIGN_IDENTITY -u IOS_PROFILE -u IOS_DEVICE -u IOS_BUNDLE_ID -u IOS_APP \
 				PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" TMPDIR="$d/tmp" HOME="$d" \
-				IOS_APP="$d/Quake2.app" ${stagenv[@]+"${stagenv[@]}"} bash "$script" "${args[@]}" > "$d/out" 2>&1 &
+				IOS_APP="$d/Quake2.app" bash "$script" "${args[@]}" > "$d/out" 2>&1 &
 			spid=$!
 			n=0
 			while [ ! -s "$d/state/hang.pid" ] && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
-			if [ -n "$stage" ]; then
-				[ "$stage" = stat ] && : > "$d/state/stage-stat"
-				n=0
-				while [ ! -e "$d/state/at-ps" ] && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
-			fi
 			if [ "$sig" = INT ]; then
 				kill -INT -- "-$spid" # bounded-run: allowed: selftest: sends INT under test to the group of the script
 			else
 				kill -"$sig" "$spid" # bounded-run: allowed: selftest: sends the signal under test
 			fi
-			: > "$d/state/sent"
 			n=0
 			while kill -0 "$spid" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done # bounded-run: allowed: selftest: waits for the script under test
 			if kill -0 "$spid" 2>/dev/null; then # bounded-run: allowed: selftest: the script under test outlived the signal
@@ -522,8 +490,6 @@ EOF
 		fi
 		if [ -z "$hp" ]; then
 			why="the fake never started its hanging step"
-		elif [ -n "$stage" ] && [ ! -e "$d/state/at-ps" ]; then
-			why="the staged window did not open"
 		elif [ "$rc" = hung ]; then
 			why="it outlived 10 s after the $sig${left:+, and so did the fake (PID $hp)}"
 		elif [ -n "$left" ]; then
@@ -634,12 +600,6 @@ codesign|--verify|--strict|@APP@|"
 	dt_signal sign-quit-hang QUIT signhang device.app -- sign --identity "$who" --profile @P@/good
 	dt_signal sign-hup-hang HUP signhang device.app -- sign --identity "$who" --profile @P@/good
 	dt_signal install-int-hang INT devhang signed.app -- install --device "$dev"
-	# the same, the signal inside a window the staged primitive opens
-	# (FIX192): an INT between the end of the watch's ps read and its reap,
-	# which bash 3.2 drops; a HUP before the command's pid is stored
-	dt_stage=stat dt_signal sign-int-window INT signhang device.app -- sign --identity "$who" --profile @P@/good
-	dt_stage=stat dt_signal install-int-window INT devhang signed.app -- install --device "$dev"
-	dt_stage=pgid dt_signal sign-hup-spawn HUP signhang device.app -- sign --identity "$who" --profile @P@/good
 	dt_signal launch-term-hang TERM devhang signed.app -- launch --device "$dev"
 	# install and launch
 	dt_case install-no-device 2 "usage: scripts/ios-device.sh install" "" signed.app -- install

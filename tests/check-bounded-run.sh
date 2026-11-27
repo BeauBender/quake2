@@ -126,6 +126,8 @@ scripts/bench/core/common.sh the primitive: bench_signal_group, to the group
 scripts/bench/core/common.sh the primitive: bench_signal_group, to the pid
 scripts/bench/core/common.sh the primitive: bench_stop_groups, the KILL after the grace
 scripts/bench/core/lock.sh the lock: its holder group still has a member; it signals none
+scripts/bench/core/lock.sh the lock: a recorded group still has a member; it signals none
+scripts/lib/supervise.sh sv_wait: its own supervisor is there
 scripts/test.sh the gate parent watch: it polls the caller, and sends TERM only
 scripts/ios-sim.sh selftest: the fake xcrun terminate, only the app it started
 scripts/ios-sim.sh selftest: ends the fake hung call it checked
@@ -475,9 +477,6 @@ EOF
 	esac
 	_p_root=$1 _p_who=$2 _p_case=$3
 	shift 3
-	# int-spawn: the record of the first spawn (its pgid read) is staged
-	# before the caller starts (FIX192, round 2)
-	[ "$_p_case" != int-spawn ] || : > "$_p_d/stage-pgid"
 	# SIGINT back to the default first: a background job of this shell starts with it ignored
 	PROBE_DIR=$_p_d python3 -I -c 'import os, signal, sys
 signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -499,30 +498,6 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$@" < /dev/null > "$_p_d/log" 2>&1 &
 	term) kill -s TERM "$_p_c" ;;
 	int) kill -s INT "$_p_c" ;;
 	kill) kill -s KILL "$_p_c" ;;
-	int-window)
-		# a root made by stage_root: the next ps read of the watch closes
-		# its output and lingers until the INT is sent (FIX192)
-		: > "$_p_d/stage-stat"
-		_p_n=0
-		while [ ! -e "$_p_d/at-ps" ] && [ "$_p_n" -lt 100 ]; do
-			sleep 0.1
-			_p_n=$((_p_n + 1))
-		done
-		[ -e "$_p_d/at-ps" ] || _p_w=" (the staged window did not open)"
-		kill -s INT "$_p_c"
-		: > "$_p_d/sent"
-		;;
-	int-spawn)
-		# the spawn's ps read, staged above, lingers once ps has answered
-		_p_n=0
-		while [ ! -e "$_p_d/at-ps" ] && [ "$_p_n" -lt 100 ]; do
-			sleep 0.1
-			_p_n=$((_p_n + 1))
-		done
-		[ -e "$_p_d/at-ps" ] || _p_w=" (the staged window did not open)"
-		kill -s INT "$_p_c"
-		: > "$_p_d/sent"
-		;;
 	esac
 	_p_n=0
 	_p_h=
@@ -1315,7 +1290,7 @@ os.execvp(sys.argv[1], sys.argv[1:])' /bin/bash "$W/svcaller" "$1" "$3" "$4" "$_
 		case $sv_pg in '' | *[!0-9]*) ;; *) kill -s KILL -- "-$sv_pg" 2> /dev/null ;; esac
 	fi
 	sv_rc=0
-	wait "$_sp" || sv_rc=$?
+	wait "$_sp" 2> /dev/null || sv_rc=$?
 	proc_close
 	return 0
 }
@@ -1372,61 +1347,151 @@ done
 printf '%s\n' "$pout" | grep -E "^ios-sim late: caller exit [1-9][0-9]*; child gone; grandchild gone; scratch removed$" > /dev/null ||
 	{ echo "$me: FAIL: probe ios-sim late: a second signal in cleanup's late call must leave nothing running and no scratch"; fails="$fails probe-ios-sim-late"; }
 
-# an INT in the window bash 3.2 drops it in (FIX192): the watch's next ps
-# read, staged, closes its output and lingers; the INT comes then. Before
-# the fix the script ignored it to its wall time and left the stand-ins
-# running. The mutant puts the watch's ps read back in the foreground; the
-# same case must then hang (its bound cut to 10 s)
-if stage_root "$W/stage"; then
-	sout=$(probe_one "$W/stage" ios-device int-window)
-	printf '%s\n' "$sout" | sed "s/^/$me: probe: /"
-	printf '%s\n' "$sout" | grep -E "^ios-device int-window: caller exit [1-9][0-9]*; child gone; grandchild gone$" > /dev/null ||
-		{ echo "$me: FAIL: probe ios-device int-window: an INT in the dropped-INT window must stop the caller and leave nothing running"; fails="$fails probe-ios-device-int-window"; }
-else
-	echo "$me: FAIL: probe ios-device int-window: the stage does not apply"
-	fails="$fails probe-ios-device-int-window"
-fi
-if stage_root "$W/stage-fg" '		bench_poll bench_watch_read "$_bw_p" "$_bw_s" || _bw_r=$?' '		bench_watch_read "$_bw_p" "$_bw_s" || _bw_r=$?'; then
-	mout=$(PROBE_HANG=100 probe_one "$W/stage-fg" ios-device int-window)
-	case $mout in
-	"ios-device int-window: caller exit 137 (hung: killed by the probe); "*) echo "$me: mutant watch-foreground-ps: refused ($mout)" ;;
-	*)
-		echo "$me: FAIL: mutant watch-foreground-ps (the watch's ps read in the foreground) passed the int-window case: $mout"
-		fails="$fails watch-foreground-ps"
-		;;
-	esac
-else
-	echo "$me: FAIL: mutant watch-foreground-ps does not apply"
-	fails="$fails watch-foreground-ps"
-fi
+# The dropped-INT windows of the shell watch and spawn (FIX192), opened in
+# ios-device.sh's bounded runs by a staged ps read, are gone with them: its
+# bounded runs no longer read ps (TASK221). The INT cases above stand in.
 
-# an INT in the spawn's record (FIX192, round 2): bench_spawn_id's ps read,
-# staged, closes its output and lingers; the INT comes then, in the window
-# bench_undefer covers. It must reach the trap, which bench_undefer then
-# acts on. The mutant puts the spawn's ps read back in the foreground (a
-# command substitution in this shell); the same case must then hang (its
-# bound cut to 10 s)
-if stage_root "$W/stage"; then
-	sout=$(probe_one "$W/stage" ios-device int-spawn)
-	printf '%s\n' "$sout" | sed "s/^/$me: probe: /"
-	printf '%s\n' "$sout" | grep -E "^ios-device int-spawn: caller exit [1-9][0-9]*; child gone; grandchild gone$" > /dev/null ||
-		{ echo "$me: FAIL: probe ios-device int-spawn: an INT in the spawn's ps read must stop the caller and leave nothing running"; fails="$fails probe-ios-device-int-spawn"; }
+# sv_stage <dir> <file> <old> <new>: a copy of scripts/ in <dir>, <old>
+# replaced by <new> once in <file> (a path under scripts/); false when the
+# edit does not apply
+sv_stage() {
+	rm -rf "$1"
+	mkdir -p "$1" && cp -R "$here/scripts" "$1/scripts" || return 1
+	python3 -I -c 'import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+if s.count(old) != 1: sys.exit("the edit does not apply: %d" % s.count(old))
+open(p, "w").write(s.replace(old, new))' "$1/$2" "$3" "$4"
+}
+
+# A supervisor that could not empty its command's group (its 126) keeps the
+# lock while that group has a member, and says so (TASK221): bench_bounded
+# records the group in the lock state, and the lock shell's release waits
+# for it. The supervisor is a stand-in, planted in a tool cache of its own
+# under the name sv_path gives the real one: it starts the command in a
+# process group of its own, writes its "spawned" event (also to the case's
+# FIFO, FAKE_TAP) and exits 126 at once. The command reads a FIFO, so it
+# runs until the case writes there. Sets l126_why (empty: it held).
+sv_bin=$(SV_SRC_DIR=$here/scripts/lib && . "$here/scripts/lib/supervise.sh" && SV_SRC_DIR=$here/scripts/lib && sv_path) || sv_bin=
+cat > "$W/fake126" << 'EOF'
+#!/bin/sh
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+python3 -I -c 'import os, sys
+os.setpgid(0, 0)
+os.execvp(sys.argv[1], sys.argv[1:])' "$@" < /dev/null > /dev/null 2>&1 9>&- &
+echo "spawned pid=$! pgid=$!" >&9
+echo "spawned pid=$! pgid=$!" >> "$FAKE_TAP"
+echo "group-left count=1" >&9
+exit 126
+EOF
+sv_lock126() {
+	_ld=$W/sv-126-$(basename "$1")
+	l126_why=
+	rm -rf "$_ld"
+	mkdir -p "$_ld/cache" "$_ld/state" "$_ld/tmp" && chmod 700 "$_ld/cache" && mkfifo "$_ld/fifo" "$_ld/hold" || return 1
+	cp "$W/fake126" "$_ld/cache/${sv_bin##*/}" && chmod 700 "$_ld/cache/${sv_bin##*/}" || return 1
+	proc_open "$_ld/fifo"
+	# the lock shell's lines go to the FIFO too; the command says
+	# "command-ended" there as it ends, so the lock shell's last line
+	# ("... have ended ...; freeing the lock") must come after it
+	env TMPDIR="$_ld/tmp" SUPERVISE_CACHE="$_ld/cache" BENCH_STATE="$_ld/state" FAKE_TAP="$_ld/fifo" \
+		sh "$1/scripts/bench/bench.sh" lock run t126 -- sh -c '. "$1/scripts/bench/core/common.sh"; . "$1/scripts/bench/core/lock.sh"
+st=0; bench_bounded 30 sh -c "read x < \"\$0\"; echo command-ended >> \"\$1\"" "$2" "$3" || st=$?; echo "bounded $st $BENCH_BOUNDED_HOW"' x "$1" "$_ld/hold" "$_ld/fifo" < /dev/null > "$_ld/fifo" 2>&1 &
+	_lp=$!
+	_lg=
+	if ! proc_await 'spawned *'; then
+		l126_why="no spawned event from the supervisor"
+	else
+		_lg=${PROC_LINE##*pgid=}
+		proc_alone
+		if ! proc_await 'bounded *'; then
+			l126_why="the bounded call did not return"
+		elif [ "$PROC_LINE" != "bounded 125 untold" ]; then
+			l126_why="the bounded call said \"$PROC_LINE\", not \"bounded 125 untold\""
+		else
+			_ll=$(env BENCH_STATE="$_ld/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
+			case $_ll in
+			lock=held*" untold=$_lg"*) ;;
+			*) l126_why="the lock was not kept for the group the supervisor could not empty: $_ll" ;;
+			esac
+		fi
+		if [ -z "$l126_why" ] && ! proc_await 'bench: keeping the lock while recorded pid*'; then
+			l126_why="the lock shell did not say it kept the lock"
+		fi
+	fi
+	# the command may end now: the lock shell frees the lock once its group is gone
+	exec 7<> "$_ld/hold"
+	echo go >&7
+	exec 7>&-
+	if [ -z "$l126_why" ]; then
+		if ! proc_await '*ended*'; then
+			l126_why="neither the command nor the lock shell said it ended"
+		elif [ "$PROC_LINE" != command-ended ]; then
+			l126_why="the lock was not kept until the group was gone: \"$PROC_LINE\" came first"
+		fi
+	fi
+	if ! proc_eof; then
+		l126_why=${l126_why:-"the lock shell did not exit once the group was gone"}
+		kill -s KILL "$_lp" 2> /dev/null
+	fi
+	case $_lg in '' | *[!0-9]*) ;; *) kill -s KILL -- "-$_lg" 2> /dev/null ;; esac
+	wait "$_lp"
+	proc_close
+	if [ -z "$l126_why" ]; then
+		_ll=$(env BENCH_STATE="$_ld/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
+		[ "$_ll" = lock=free ] || l126_why="the lock was not freed once the group was gone: $_ll"
+	fi
+}
+if [ -z "$sv_bin" ]; then
+	echo "$me: FAIL: sv 126: no supervisor built"
+	fails="$fails sv-126"
 else
-	echo "$me: FAIL: probe ios-device int-spawn: the stage does not apply"
-	fails="$fails probe-ios-device-int-spawn"
+	sv_lock126 "$here"
+	if [ -n "$l126_why" ]; then
+		echo "$me: FAIL: sv 126: $l126_why"
+		fails="$fails sv-126"
+	else
+		echo "$me: ok   sv 126: the lock is kept while the group runs, said, and freed after"
+	fi
+	# the mutants, each with the lock freed while the group runs: the group
+	# not recorded on a 126; the record not written; the lock shell's
+	# release not waiting for it (FIX184's two, moved here from check-bench)
+	for _lm in \
+		'lock-freed-on-126|scripts/bench/core/common.sh|	*) bench_record_untold "$_bu_g" group ;;|	*) : ;;' \
+		'record-not-written|scripts/bench/core/lock.sh|mv -f "$_lk_t" "${BENCH_LOCK_DIR:?}/untold.$1"|false' \
+		'release-no-wait|scripts/bench/core/lock.sh|while bench_lock_untold_live; do bench_nap 1; done|:'; do
+		_lmn=${_lm%%|*} _lmr=${_lm#*|}
+		_lmf=${_lmr%%|*} _lmr=${_lmr#*|}
+		if sv_stage "$W/stage-$_lmn" "$_lmf" "${_lmr%%|*}" "${_lmr#*|}"; then
+			sv_lock126 "$W/stage-$_lmn"
+			case $l126_why in
+			'the lock was not kept'* | 'the lock shell did not say'*) echo "$me: mutant $_lmn: refused ($l126_why)" ;;
+			*)
+				echo "$me: FAIL: mutant $_lmn passed the 126 case: ${l126_why:-held}"
+				fails="$fails $_lmn"
+				;;
+			esac
+		else
+			echo "$me: FAIL: mutant $_lmn does not apply"
+			fails="$fails $_lmn"
+		fi
+	done
 fi
-if stage_root "$W/stage-sp" '		if bench_poll_line bench_spawn_read "$1" && [ -n "$BENCH_POLL_LINE" ]; then' '		if bench_proc_read "$1" pgid && BENCH_POLL_LINE="$BENCH_PS_F|$BENCH_PS_START"; then'; then
-	mout=$(PROBE_HANG=100 probe_one "$W/stage-sp" ios-device int-spawn)
-	case $mout in
-	"ios-device int-spawn: caller exit 137 (hung: killed by the probe); "*) echo "$me: mutant spawn-foreground-ps: refused ($mout)" ;;
+# the mutant: sv_stop sends the supervisor no TERM, so a caller's INT
+# waits for the command to the wall time (30 s, past the 10 s bound)
+if sv_stage "$W/stage-noterm" scripts/lib/supervise.sh '	[ -z "$SV_PID" ] || kill -s TERM "$SV_PID" 2> /dev/null || :' '	:'; then
+	sv_case "$W/stage-noterm" spawned 30 - spawned 'exec sleep 30'
+	case $sv_why in
+	*'outlived the INT'*) echo "$me: mutant sv-no-term: refused ($sv_why)" ;;
 	*)
-		echo "$me: FAIL: mutant spawn-foreground-ps (the spawn's ps read in a command substitution) passed the int-spawn case: $mout"
-		fails="$fails spawn-foreground-ps"
+		echo "$me: FAIL: mutant sv-no-term (sv_stop sends no TERM) passed the spawned case: ${sv_why:-exit $sv_rc}"
+		fails="$fails sv-no-term"
 		;;
 	esac
 else
-	echo "$me: FAIL: mutant spawn-foreground-ps does not apply"
-	fails="$fails spawn-foreground-ps"
+	echo "$me: FAIL: mutant sv-no-term does not apply"
+	fails="$fails sv-no-term"
 fi
 
 # a trap that runs in a bare nap prints its lines (FIX192, round 2): with fd
@@ -1510,4 +1575,4 @@ if [ -n "$fails" ]; then
 	echo "$me: failed:$fails"
 	exit 1
 fi
-echo "$me: ok (guard, $nmut mutants refused, probe, the dropped-INT window and its mutant, pyprobe and its 10 mutants)"
+echo "$me: ok (guard, $nmut mutants refused, probe, the supervisor cases and their 4 mutants, pyprobe and its 10 mutants)"

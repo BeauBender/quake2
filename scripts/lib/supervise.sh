@@ -137,3 +137,83 @@ sv_path() {
 	fi
 	printf '%s\n' "$_sv_bin"
 }
+
+# sv_run runs one supervisor at a time for this shell, in the background,
+# and is the only shell code that signals it (TASK221). The supervisor is a
+# background job without job control: it starts with SIGINT and SIGQUIT
+# ignored, which it keeps (it names them "ignored"), so every stop it is
+# sent is a TERM, whatever signal the caller got. sv_run sets no trap: a
+# trap it replaced could not be put back without eval. The caller's own
+# INT, TERM or HUP trap, which runs in sv_wait's wait at once, calls
+# sv_stop, which sends the supervisor TERM and waits for it again; the
+# supervisor stops the command's group (TERM and CONT, KILL after --grace)
+# and exits once the group is empty.
+SV_BIN=
+SV_PID=
+SV_LAST=
+SV_FORK=
+SV_STATUS=0
+
+# sv_run <options> -- cmd args...: the supervisor (sv_path, found once per
+# shell) on the command, waited for; its status, or 125 when there is no
+# supervisor (said on standard error).
+sv_run() {
+	if [ -z "$SV_BIN" ]; then SV_BIN=$(sv_path) || return 125; fi
+	sv_start "$SV_BIN" "$@"
+	sv_wait
+}
+
+# sv_start <binary> <options> -- cmd args...: forks the supervisor; SV_PID is
+# its pid. A trap that runs between the fork and that store finds it as $!
+# (sv_pid), by SV_FORK and SV_LAST ($! before the fork).
+sv_start() {
+	_ss_b=$1
+	shift
+	case $- in *u*) set +u && SV_LAST=$! && set -u ;; *) SV_LAST=$! ;; esac
+	SV_FORK=1
+	"$_ss_b" "$@" &
+	SV_PID=$!
+	SV_FORK=
+}
+
+# sv_pid: SV_PID, also for a trap that runs in sv_start's fork window
+sv_pid() {
+	[ -z "$SV_PID" ] && [ -n "$SV_FORK" ] || return 0
+	case $- in *u*) set +u && _sp_p=$! && set -u ;; *) _sp_p=$! ;; esac
+	[ "$_sp_p" = "$SV_LAST" ] || SV_PID=$_sp_p
+}
+
+# sv_wait: waits for the supervisor, and returns its status (SV_STATUS).
+# A wait a trap ended (above 128) is waited again while the supervisor is
+# there; once it is not, one more wait collects its status (127 from a
+# shell that has none: the status above 128 is kept). A trap that collected
+# it itself (sv_stop) and returned leaves its status.
+sv_wait() {
+	while [ -n "$SV_PID" ]; do
+		_sw_r=0
+		wait "$SV_PID" 2> /dev/null || _sw_r=$?
+		[ -n "$SV_PID" ] || break
+		if [ "$_sw_r" -gt 128 ]; then
+			kill -0 "$SV_PID" 2> /dev/null && continue # bounded-run: allowed: sv_wait: its own supervisor is there
+			_sw_s=0
+			wait "$SV_PID" 2> /dev/null || _sw_s=$?
+			[ "$_sw_s" -eq 127 ] || _sw_r=$_sw_s
+		fi
+		SV_STATUS=$_sw_r
+		SV_PID=
+	done
+	return "$SV_STATUS"
+}
+
+# sv_term: TERM to the supervisor (it begins its stop), no wait
+sv_term() {
+	sv_pid
+	[ -z "$SV_PID" ] || kill -s TERM "$SV_PID" 2> /dev/null || :
+}
+
+# sv_stop: for a trap: sv_term, then sv_wait; 0 when no supervisor runs
+sv_stop() {
+	sv_term
+	[ -n "$SV_PID" ] || return 0
+	sv_wait
+}

@@ -525,8 +525,17 @@ bench_lock_release() {
 # (the lock directory is resolved here when this process has not done so).
 # Call it before the command is forgotten (bench_spawn_forget).
 bench_lock_record() {
-	bench_spawned "$1" || return 0
-	_lk_s=${BENCH_ID_START:-?}
+	_lk_g=
+	if [ "${2:-}" = group ]; then
+		# a bounded command's process group its supervisor could not empty
+		# (TASK221): live while the group has a member (bench_lock_untold_live)
+		_lk_g="group=$1
+"
+		_lk_s=-
+	else
+		bench_spawned "$1" || return 0
+		_lk_s=${BENCH_ID_START:-?}
+	fi
 	if [ -z "${BENCH_LOCK_DIR:-}" ]; then
 		[ -n "${BENCH_LOCK_TOKEN:-}" ] || return 0
 		# A subshell asks first: bench_lock_init dies on a bad setting.
@@ -552,7 +561,7 @@ bench_lock_record() {
 	# A temporary file mktemp makes (a name no other process knows ahead, so
 	# none can plant a link there), renamed into place.
 	_lk_t=$(mktemp "${BENCH_LOCK_DIR:?}/untold.tmp.XXXXXX" 2> /dev/null) || _lk_t=
-	if [ -n "$_lk_t" ] && printf 'pid=%s\nstart=%s\nwritten=%s\ntoken=%s\n' "$1" "$_lk_s" "$_lk_w" "$_lk_k" > "$_lk_t" 2> /dev/null &&
+	if [ -n "$_lk_t" ] && printf 'pid=%s\nstart=%s\nwritten=%s\ntoken=%s\n%s' "$1" "$_lk_s" "$_lk_w" "$_lk_k" "$_lk_g" > "$_lk_t" 2> /dev/null &&
 		mv -f "$_lk_t" "${BENCH_LOCK_DIR:?}/untold.$1" 2> /dev/null; then
 		bench_note "recorded pid $1 in the lock state: the lock is kept while it may still run"
 		return 0
@@ -626,6 +635,13 @@ bench_lock_untold_live() {
 		'' | 0 | 1 | *[!0-9]*) continue ;;
 		esac
 		_lu_s=$(bench_kv "$_lu_h" start)
+		# a group record (TASK221): no process takes a group's id while the
+		# group has a member, so no ps is asked
+		if [ "$(bench_kv "$_lu_h" group)" = "$_lu_p" ]; then
+			kill -0 -- "-$_lu_p" 2> /dev/null || continue # bounded-run: allowed: the lock: a recorded group still has a member; it signals none
+			BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"
+			continue
+		fi
 		_lu_r=0
 		bench_proc_same "$_lu_p" "$_lu_s" || _lu_r=$?
 		case $_lu_r in

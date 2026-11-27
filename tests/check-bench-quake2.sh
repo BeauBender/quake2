@@ -114,6 +114,10 @@ printf '#!/bin/sh\nif [ "$*" = -u ] && [ -n "${STUB_UID:-}" ]; then echo "$STUB_
 chmod +x "${T:?}/bin/ioreg" "${T:?}/bin/pgrep" "${T:?}/bin/system_profiler" "${T:?}/bin/make" "${T:?}/bin/id"
 PATH=${T:?}/bin:$PATH
 export PATH
+# the bounded path's process supervisor (TASK221): the mutants' copy of
+# scripts/bench alone finds scripts/lib here
+BENCH_SV_LIB=$(cd "$REAL/../lib" && pwd -P)
+export BENCH_SV_LIB
 printf 'physical-gpu=yes\nraytracing=yes\nmetalfx=yes\nmetalfx-temporal=yes\ndisplay-hz=60\n' > "${T:?}/caps-all"
 printf 'physical-gpu=yes\nraytracing=no\nmetalfx=yes\nmetalfx-temporal=yes\ndisplay-hz=60\n' > "${T:?}/caps-nort"
 printf 'physical-gpu=yes\nraytracing=yes\nmetalfx=yes\nmetalfx-temporal=no\ndisplay-hz=60\n' > "${T:?}/caps-spatial"
