@@ -667,10 +667,7 @@ int
 rm_rtdir_lights_current(const void *last, const char *last_name, int last_lmtex, const void *world, const char *name,
 		int lmtex)
 {
-	(void)last_lmtex;
-	(void)lmtex;
-
-	return last_name && name && (last == world) && !strcmp(last_name, name);
+	return last_name && name && (last == world) && !strcmp(last_name, name) && (last_lmtex == lmtex);
 }
 
 long

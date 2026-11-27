@@ -3666,6 +3666,62 @@ test_reload(void)
 	}
 }
 
+/* the glue's key, RM_RTDir_Lights's one early return: the pure rule's, with the world's array now and the one stored */
+#define RELOAD_GLUE "\tif (rm_rtdir_lights_current(dir_world, dir_map, dir_lmtex, wm->world, wm->name, wm->world->lmtex))\n" \
+	"\t{\n" \
+	"\t\treturn;\n" \
+	"\t}\n" \
+	"\n" \
+	"\tdir_world = wm->world;\n" \
+	"\tQ_strlcpy(dir_map, wm->name, sizeof(dir_map));\n" \
+	"\tdir_lmtex = wm->world->lmtex;\n"
+
+/* NULL when rm_rtdirscene.c's text (src) keys the upload by rm_rtdir_lights_current alone, else the rule broken */
+static const char *
+reload_glue_broken(const char *src)
+{
+	static char text[65536];
+	fn_t li;
+
+	strip_comments(src, text, sizeof(text));
+
+	if (!find_fn(text, "static void\nRM_RTDir_Lights(", &li))
+	{
+		return "RM_RTDir_Lights is not defined once";
+	}
+
+	if ((pin_count(li.body, li.nbody, RELOAD_GLUE, 1) != PIN_OK) ||
+		(count_in(text, strlen(text), "rm_rtdir_lights_current(") != 1) || (words_in(text, strlen(text), "dir_lmtex") != 4) ||
+		(count_in(li.body, li.nbody, "return;") != 1))
+	{
+		return "the upload is not kept by the world, the name and the lightmap array it was built for";
+	}
+
+	return NULL;
+}
+
+/* the glue holds the key, and a mutant that drops the array from it (reload-glue-lmtex) is refused for that */
+static void
+test_reload_glue(void)
+{
+	static char scene[65536], m[65536 + 1024];
+	const char *why;
+
+	CHECK(read_file("src/client/refresh/metal/rm_rtdirscene.c", scene, sizeof(scene)));
+	why = reload_glue_broken(scene);
+
+	if (why)
+	{
+		printf("rm_rtdirscene.c: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+	CHECK(mutate(scene, "dir_lmtex, wm->world, wm->name, wm->world->lmtex))", "dir_lmtex, wm->world, wm->name, dir_lmtex))", m,
+		sizeof(m)));
+	why = reload_glue_broken(m);
+	CHECK(why && !strcmp(why, "the upload is not kept by the world, the name and the lightmap array it was built for"));
+}
+
 /*
  * The kernel's file holds the bounce's rules, and each mutant of one
  * breaks a check (bounce_broken's, or kernel_broken's for the lightmap
@@ -3877,6 +3933,7 @@ main(void)
 	test_sky_sun();
 	test_bounce();
 	test_reload();
+	test_reload_glue();
 	test_bounce_kernel();
 	printf("rm_rtdir_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
