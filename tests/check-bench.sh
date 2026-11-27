@@ -3465,8 +3465,14 @@ t_probe_first() {
 	fi
 	store_setup
 	mkdir -p "${E:?}/cc"
+	# The stub stands in for the probe's build only: the bounded path's
+	# supervisor (TASK221) asks cc for its version line and builds
+	# supervise.c with it, and those go to the real cc, unlogged (#758).
 	cat > "${E:?}/cc/cc" << 'EOF'
 #!/bin/sh
+case " $* " in
+*" --version "* | *"/supervise.c "*) exec "$ZZQ_CC" "$@" ;;
+esac
 echo cc >> "$STUB/log"
 while [ "$#" -gt 1 ]; do
 	if [ "$1" = -o ]; then cp "$ZZQ_PROBE" "$2"; fi
@@ -3475,11 +3481,12 @@ done
 EOF
 	chmod +x "${E:?}/cc/cc"
 	qcase c 's/^runs=.*/runs=1/; s/^warmup=.*/warmup=0/'
+	ZZQ_CC=$(command -v cc) || { bad "probe first: no cc on PATH"; return 1; }
 	(
 		unset BENCH_FREQ_PROBE
 		ZZQ_PROBE=${tmp:?}/freqstub
 		PATH=${E:?}/cc:$PATH
-		export ZZQ_PROBE PATH
+		export ZZQ_PROBE ZZQ_CC PATH
 		sh "$R/bench.sh" baseline put "${E:?}/c.case" "$cA" > /dev/null 2> "${E:?}/err"
 	) || bad "probe first: the put failed: $(cat "${E:?}/err")"
 	[ "$(sed -n 1p "${STUB:?}/log" 2> /dev/null)" = cc ] || bad "probe first: the probe was built after: $(tr '\n' '|' < "${STUB:?}/log")"
@@ -3864,6 +3871,10 @@ mutant settle-no-nap core/snap.sh '		bench_nap "$_st_nap"' '		:' t_settle || mfa
 mutant poll-digits-unbounded core/common.sh '[ "${#1}" -le 12 ]' 'true' t_gate_poll || mfail=1
 mutant digit-cap-dropped core/common.sh '	bench_is_uint_max "$1" 9' '	bench_is_uint_max "$1" 99' t_digit_cap || mfail=1
 mutant digit-cap-crc core/common.sh '! bench_is_uint_max "$_bh_a" 10' '! bench_is_uint_max "$_bh_a" 9' t_digit_cap || mfail=1
+# The TASK221 slice 2 hold (#758): a refused supervisor's reason is said
+# where the bounded command's standard error is sent away.
+mutant sv-reason-host core/host.sh '		bench_sv' '		:' t_sv_path || mfail=1
+mutant sv-reason-snap core/snap.sh '	bench_sv' '	:' t_sv_path || mfail=1
 # Last: it writes into the throwaway repository's work tree.
 mutant store-in-repo core/store.sh 'bench_outside_repo "$BENCH_STORE_ROOT" "the store (BENCH_STORE)"' ':' t_store_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
