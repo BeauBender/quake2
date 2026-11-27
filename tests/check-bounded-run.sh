@@ -1554,6 +1554,17 @@ else
 	echo "$me: FAIL: tap: wanted \"status 124 how wall\", a deadline line in the tap and an empty TMPDIR; got \"$_to\", tap [$(tr '\n' '|' < "$_td/tap" 2> /dev/null)], TMPDIR [$(ls -A "$_td/tmp" | tr '\n' ' ')]"
 	fails="$fails tap"
 fi
+# bench_poll_end removes its own bounded run's events file only (round 1,
+# N3): a sibling subshell's has the same $$ in its name
+mkdir -p "$_td/sib" || exit 1
+_tp=$(env TMPDIR="$_td/sib" sh -c '. "$1/scripts/bench/core/common.sh"; : > "$TMPDIR/bench-sv.$$.sibling"; bench_poll_end; ls -A "$TMPDIR"' sh "$here" 2>&1)
+case $_tp in
+*'bench-sv.'*'.sibling') echo "$me: ok   poll-end: a sibling's events file is left" ;;
+*)
+	echo "$me: FAIL: poll-end: bench_poll_end removed a sibling's events file: [$_tp]"
+	fails="$fails poll-end-sibling"
+	;;
+esac
 
 # a trap that runs in a bare nap prints its lines (FIX192, round 2): with fd
 # 8 closed, a TERM in bench_nap runs the caller's trap and its EXIT trap,
