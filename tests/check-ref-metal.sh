@@ -1148,6 +1148,14 @@ if ! "$pt" "$ptfix/hdr.cfg" --as enhanced > "${tmp:?}/pt.hdr" 2> /dev/null || gr
 elif ! "$pt" "$ptfix/hdr.cfg" 2>&1 | grep -q '^r_hdr: 0 -> 1$'; then
 	bad "$pt --as defaults did not list r_hdr: 0 -> 1 for $ptfix/hdr.cfg"
 fi
+# TASK237: every mode's rows name a macro that the shared table (common/rm_pres_table.h) defines
+for ptm in enhanced:ENHANCED retro:RETRO raytraced:RTPRIMARY; do
+	if ! "$pt" "$ptfix/good.cfg" --as "${ptm%%:*}" > "${tmp:?}/pt.out" 2> /dev/null ||
+		! grep -qx "#define RM_PRES_${ptm#*:}_ROWS \\\\" "${tmp:?}/pt.out" ||
+		! grep -qx "#define RM_PRES_${ptm#*:}_ROWS \\\\" "$rm_dir/common/rm_pres_table.h"; then
+		bad "$pt --as ${ptm%%:*} printed no RM_PRES_${ptm#*:}_ROWS that $rm_dir/common/rm_pres_table.h defines"
+	fi
+done
 for ptbad in badline badname; do
 	if "$pt" "$ptfix/$ptbad.cfg" > "${tmp:?}/pt.out" 2>&1; then
 		bad "$pt accepted $ptfix/$ptbad.cfg"
