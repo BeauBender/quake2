@@ -202,7 +202,19 @@ rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long
 {
 	int changed;
 
-	(void)frame;
+	/* a frame older than one handed over already: its totals alone, the traced size is the newer frame's */
+	if (frame < u->frame)
+	{
+		if (div > 1u)
+		{
+			u->fallbacks += fallbacks;
+			u->pixels += pixels;
+		}
+
+		return 0;
+	}
+
+	u->frame = frame;
 
 	if (div <= 1u)
 	{
