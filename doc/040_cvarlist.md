@@ -1377,7 +1377,9 @@ is.
   out of the ray-traced scene whatever `r_rt_gunshadow` says. Fullbright
   and translucent models, shells, models seen through the IR goggles and
   the other depth-hacked models stay stock-lit. `0`: every model and the
-  view weapon stock-lit, as before. With `r_rt_stats 2`
+  view weapon stock-lit, as before. While `r_rt_temporal` is above `0`
+  the traced model pixels and the weapon's are accumulated over the
+  frames as the world's light is (see `r_rt_temporal`). With `r_rt_stats 2`
   the model pass prints a line a frame (`ref_metal: rt models: ...`, see
   `r_rt_stats`). It does nothing
   outside the Ray traced presentation or on a device without ray
@@ -1591,7 +1593,10 @@ is.
   `r_rt_direct_models` on a line for the model pass,
   `ref_metal: rt models: frame N: P model pixels, R shadow rays, O sky, sun and bounce rays, T ms`:
   the model pixels it traced, their shadow rays, their sky, sun and bounce
-  rays, and the pass's GPU time (`- ms` when no time was measured). At
+  rays, and the pass's GPU time (`- ms` when no time was measured),
+  followed, on a frame whose model pixels were accumulated
+  (`r_rt_temporal` above `0`), by `, accumulated: K kept their history`,
+  the model pixels whose history was kept. At
   `1` and above, with a MetalFX scaler on
   (`r_metalfx`), a 3D view that drops the scaler's history or that of
   `r_rt_temporal` (the history RT-primary's accumulation shares with the
@@ -1702,7 +1707,16 @@ is.
   light. That light is then denoised by the same 5 x 5 filter, the sum
   rather than each term, each of red, green and blue with its own
   neighbours, by the same guides and the same strength by the sample
-  count (TASK190 slice 2); the history keeps the accumulation alone. The
+  count (TASK190 slice 2); the history keeps the accumulation alone. With
+  `r_rt_direct_models` on, the traced model pixels, the view weapon's
+  among them, are accumulated in the same history (TASK191 slice 4): each
+  model pixel's traced light, before the stock model colour, is read where
+  the G-buffer's motion vector says it was (the weapon's is its own
+  projection's), by the same rejections, under a key of its own, so a
+  model's history never blends with the world's, nor the weapon's with
+  another model's; the glow pulse, the minlight floor, overbright and
+  gamma are applied to each frame's blend, not averaged. The 5 x 5 filter
+  does not run on model pixels. The
   presentation does not set `r_rt_temporal`: the value is the
   user's, and at `0` the presentation's frames are the same as without it.
   `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the
