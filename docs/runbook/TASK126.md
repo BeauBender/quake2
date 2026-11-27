@@ -436,17 +436,19 @@ them.
 
 ### The hold of slice 4 (M6, under the timing lock)
 
-The orchestrator runs the hold script. The values below are filled in from its summary. The base
+The orchestrator runs the hold script. The values below are copied from its summary. The base
 is the parent slice, `task126s23`.
 
 | Check | Result |
 |---|---|
-| base and branch | (from the hold) |
-| `make ref_metal`, `make`, `make test` | (from the hold) |
-| `tests/check-ref-metal.sh`, with segment 7.87's mutant counts | (from the hold) |
-| every stock scenario outside `rtprimary-*` (`dlights`, `rt-shadows` and `rt-sun-half` among them), byte-identical to the parent | (from the hold) |
-| the 20 RT-primary records, byte-identical to the parent | (from the hold) |
-| `rt-shadows-half`, three runs identical, and different from `rt-shadows` | (from the hold) |
-| the `r_rt_stats 2` shadows line at `r_rt_shadows_scale 0.5`, with its fallback count | (from the hold) |
-| the shadows lines with a shadowed pixel, at `r_rt_shadows_scale 0.5` | (from the hold) |
-| the reset line on a change from 1 to 0.5 | (from the hold) |
+| base and branch | The hold's commit is `2256773b`, 0 files changed, based on `task126s23` (`e96c43b8`), an ancestor of it. The base builds: `make` and `make ref_metal` exit 0. |
+| `make ref_metal`, `make`, `make test` | `make ref_metal` exit 0, `make` exit 0, `make test` exit 0 (591 tests, 0 failed). Build warnings: 0 for `ref_metal`, 2 for `make`. |
+| `tests/check-ref-metal.sh`, with segment 7.87's mutant counts | ok, 13162 checks, 0 failed. Shadows 4395 checks, 0 failed. Temporal 148 checks, 14 rule mutants, 7 kernel pins with 10 kernel mutants and 4 back-end mutants refused. Upsample 92 checks, 13 rule mutants refused. Sun at its scale: 12 kernel pins, 13 kernel mutants and 4 back-end and scene mutants refused. Shadows at their scale (segment 7.87): 20 kernel pins, 23 kernel mutants and 6 back-end and scene mutants refused. 43 kernel calls, 430 kernel-call mutants refused. The summary's line for the whole run is cut off after the sun's check count, so the sun's own totals are not recorded here. |
+| every stock scenario outside `rtprimary-*` (`dlights`, `rt-shadows` and `rt-sun-half` among them), byte-identical to the parent | 31 scenarios on the base and 31 on the branch, 0 failed. 31 of 31 outside `rtprimary-*` and `rt-shadows-half` byte-identical to the parent (`rt-*`: 9 of 9). `dlights` 5552278ed108, `rt-shadows-entities` 04e115786187, `rt-shadows` 2b8d11a25392 and `rt-sun-half` 1bbb1b9b59f6, all identical. |
+| the 20 RT-primary records, byte-identical to the parent | 20 of 20 records byte-identical to the parent's, each 23 frames unless noted: `rtprimary-world` c2d7b7d94e6c, `-direct` 8975350df42b, `-vis` 469ce42fec8c, `-noshadow` b3d10fafdc08, `-sky` 9acbe75f592b, `-sun` 6f6c37b9a084, `-bounce` e2a45f031fcc, `-metalfx2` b03c73ee59d1, `-denoise` 371419d919dd, `-overlayfx` 77f3485fe88f, `-styles` a254ac92e157 (89 frames), `-pool` e73ffa9aea7d (4 frames), `-denoise-pool` b5cc3f8dd8bf (4 frames), `-dlights` 6d01f9bb9bca, `-dlights-d2` 8f8b43a1f6ee (89 frames), `-models-off` c5ec8f241450, `-models` 93c5ef890067, `-models-vis` a5cd3e3316b9, `-weapon` 7a061e1228e1, `-weapon-gunshadow` 7a061e1228e1. |
+| `rt-shadows-half`, three runs identical, and different from `rt-shadows` | Three runs identical, 23 frames, 428dde119d31. Against `rt-shadows` (2b8d11a25392) they differ, 4 of 23 frames. The engine reports the half-size buffers: 640x480 traced at 320x240, 671744 bytes, and 640x480, 4947968 bytes. |
+| the `r_rt_stats 2` shadows line at `r_rt_shadows_scale 0.5`, with its fallback count | At scale 0.5: 329 shadows lines, 329 with the traced part, 129 with a shadowed pixel, 299 with a ray. Totals: 101068800 pixels, 8056260 in range, 6071183 traced, 66387 shadowed, 6410378 rays. Fallbacks: 14181 of 101068800 drawn pixels (0.014 %). The line with the most shadowed pixels, frame 227: 307200 pixels, 18651 in range, 13506 traced, 5665 shadowed, 13506 rays, 0.477 ms, traced at 320x240, 597 upsample fallbacks. For comparison, `rt-shadows` at full scale: 329 lines, 0 with the traced part, 140 with a shadowed pixel, 299 with a ray, 32296034 in range, 24357171 traced, 265302 shadowed; its frame 227 line is 74261 in range, 53962 traced, 22521 shadowed, 0.324 ms. |
+| the shadows lines with a shadowed pixel, at `r_rt_shadows_scale 0.5` | 129 of 329 lines at scale 0.5 (140 of 329 at full scale). |
+| the reset line on a change from 1 to 0.5 | The live run exit 0, 0 validation or pipeline errors, 0 events wrong. The reset line appears on the change to `half` (1 line, one wanted), on `third` (1) and on `full` (1), and on no other event. Allocations seen: 1280x720 traced at 427x240 (933888 bytes), traced at 640x360 (1982464 bytes), and 1280x720 untraced-scale (15204352 bytes). The hold ended with 0 untracked files left and 0 failed. |
+
+The round 1 fixes after the hold (`769dc80b`, `ceae532a`, `f7709471`) change only the bench adapter, the tests, `tests/check-ref-metal.sh` and the runbook, not the engine, which is why the hold was not run again.
