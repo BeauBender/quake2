@@ -29,6 +29,7 @@ scenario through it. The cases each of them is held to are in
 | `world-lmcubic` | `world` with `metal_lightmap_filter 1`: the cubic lightmap filter of `ref_metal`; other renderers ignore the cvar (TASK120) |
 | `rt-shadows` | `dlights` with `r_rt_shadows 1`: the dynamic lights added in `ref_metal`'s resolve, each with a ray-traced shadow; other renderers ignore the cvar; temporal accumulation is off (`r_rt_temporal 0`, the design's pins run without it, TASK59) and the pass draws no noise, so the frames are stateless; recorded with `PINS_SEED`, as `dlights`, and judged against `ref_metal` itself once the owner accepts the look (TASK55) |
 | `rt-shadows-entities` | `rt-shadows` with `cl_entities 1`: the brush entities, which gl1 lights in their model's space with the light's world origin, and the alias models, which the pass never lights, in the double-count check; recorded with `PINS_SEED`, as `dlights` (TASK55) |
+| `rt-shadows-half` | `rt-shadows` with `r_rt_shadows_scale 0.5`: the shadow rays traced at one pixel of each 2 x 2 block and upsampled to every drawn pixel by the joint bilateral rule, each pixel's lights and their adds its own and only a light's visibility taken from the traced pixels whose light set holds it (TASK126, option E); stateless as `rt-shadows`, recorded with `PINS_SEED`, its frames differ from `rt-shadows`'s; no band of its own, so its companion is nominal, `particles` |
 | `rt-ao` | `world` with `r_rt_ao 1`: the world's lightmap term darkened by `ref_metal`'s ray-traced ambient occlusion, two hemisphere rays a pixel; other renderers ignore the cvars; temporal accumulation is off (`r_rt_temporal 0`, the design's pins run without it, TASK59) and the noise is fixed (`r_rt_ao_seed 1`), so the frames are stateless; judged against `ref_metal` itself once the owner accepts the look (TASK57) |
 | `rt-ao-entities` | `rt-ao` with `cl_entities 1`: the brush entities and the alias models, which the rays meet and the pass never darkens; recorded with `PINS_SEED`, as `models` (TASK57) |
 | `rt-sun` | `world` with `r_rt_sun 1`: dim world surfaces lit by `ref_metal`'s ray-traced sun where a ray toward it reaches the sky (`r_rt_sunscale 0.35`, below `r_rt_sunfloor 0.5`, the direction from `scripts/rt/sun-angles.txt` or `r_rt_sun_angles`); a map under 2 % sky draws `world`'s frames; other renderers ignore the cvars; temporal accumulation is off (`r_rt_temporal 0`, the design's pins run without it, TASK59) and the pass draws no noise, so the frames are stateless; no footprint band yet, so its companion is `models`; judged against `ref_metal` itself once the owner accepts the look (TASK56) |
@@ -197,6 +198,7 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `cinematic` | cinematic | `models` |
 | `rt-shadows` | world,dynamic-lights | `rt-shadows-entities` |
 | `rt-shadows-entities` | world,entities,alias-models,dynamic-lights | `-` |
+| `rt-shadows-half` | world,dynamic-lights | `particles` |
 | `rt-ao` | world | `rt-ao-entities` |
 | `rt-ao-entities` | world,entities,alias-models | `-` |
 | `rt-water` | world | `rt-water-entities` |

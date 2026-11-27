@@ -1936,6 +1936,47 @@ test_stats_format(void)
 		CHECK(rm_rts_stats_format(&s, buf, len + 1) && strlen(buf) == len);
 	}
 	CHECK(!rm_rts_stats_format(&s, buf, 0));
+
+	/* TASK126 slice 4: at divisor 1 (or 0, a stats slot never traced) the line is the one above */
+	s.ms = 0.25;
+	s.div = 1;
+	s.tw = 640;
+	s.th = 480;
+	s.fallbacks = 9;
+	CHECK(rm_rts_stats_format(&s, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt shadows: frame 12: 307200 pixels, 1000 in range, 900 traced, "
+				"300 shadowed, 1200 rays, 0.250 ms") == 0);
+	s.div = 0;
+	CHECK(rm_rts_stats_format(&s, buf, sizeof(buf)) && !strstr(buf, "traced at"));
+
+	/* below it, the traced size and the upsample's fallbacks (pixels) */
+	s.div = 2;
+	s.tw = 320;
+	s.th = 240;
+	CHECK(rm_rts_stats_format(&s, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt shadows: frame 12: 307200 pixels, 1000 in range, 900 traced, "
+				"300 shadowed, 1200 rays, 0.250 ms, traced at 320x240, 9 upsample fallbacks") == 0);
+	CHECK(!rm_rts_stats_format(&s, buf, 110) && buf[0] == 0);
+}
+
+/* TASK126 slice 4: whether a traced pixel's packed light set holds a light, for the upsample's weights */
+static void
+test_holds(void)
+{
+	mtl_rts_top_t t = mtl_rts_top_init();
+	unsigned p;
+
+	CHECK(!mtl_rts_holds(mtl_rts_pack_idx(t, 0), 0));
+	CHECK(!mtl_rts_holds(mtl_rts_pack_idx(t, MTL_RTS_IN_RANGE | MTL_RTS_SHADOWED), MTL_RTS_NO_LIGHT));
+	t = mtl_rts_top_add(t, 5, 10.0f);
+	t = mtl_rts_top_add(t, 0, 20.0f);
+	t = mtl_rts_top_add(t, 31, 5.0f);
+	p = mtl_rts_pack_idx(t, MTL_RTS_IN_RANGE | MTL_RTS_SHADOWED);
+	CHECK(mtl_rts_holds(p, 5) && mtl_rts_holds(p, 0) && mtl_rts_holds(p, 31));
+	CHECK(!mtl_rts_holds(p, 1) && !mtl_rts_holds(p, 6) && !mtl_rts_holds(p, 30));
+
+	/* an empty slot is no light: the empty slots' index names none, and no index past the 6 bits does */
+	CHECK(!mtl_rts_holds(p, MTL_RTS_NO_LIGHT) && !mtl_rts_holds(p, 64 + 5));
 }
 
 int
@@ -1970,6 +2011,7 @@ main(void)
 	test_light_bit();
 	test_show();
 	test_stats_format();
+	test_holds();
 
 	printf("rm_rtshadow_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

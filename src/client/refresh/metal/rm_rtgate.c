@@ -213,6 +213,8 @@ static const char *const rtg_cvars[] = {
 	"r_rt_motion_test",
 	/* RT3's dynamic-light shadows (TASK55): a ray each light and pixel */
 	"r_rt_shadows",
+	/* TASK126: the size the shadows trace at, a setting (its effect is off without ray tracing) */
+	"r_rt_shadows_scale",
 	/* the shadows' development view: drawn only while the shadow pass runs (RM_RTS_Show) */
 	"r_rt_shadows_show",
 	/* the structures' report: draws nothing, and without ray tracing builds nothing and says so once */

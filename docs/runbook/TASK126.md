@@ -119,15 +119,15 @@ at 1:1, as temporal anti-aliasing.
 
 ### The hold (M6, under the timing lock)
 
-The orchestrator runs the hold script. The values below are filled in from its summary.
+The orchestrator ran the hold script. The values are its summary's; it ended `hold done, 0 failed`.
 
 | Check | Result |
 |---|---|
-| base and branch | (from the hold) |
-| `make ref_metal`, `make`, `make test` | (from the hold) |
-| `tests/check-ref-metal.sh` | (from the hold) |
-| the 30 scenarios outside `rtprimary-*`, byte-identical to main | (from the hold) |
-| every `rtprimary-*` record, byte-identical to main | (from the hold) |
+| base and branch | branch `ca41f718f58b`, base main `9a81cceeef7d`, an ancestor of the branch; one engine file changed, `common/mtl_rtup_math.h` |
+| `make ref_metal`, `make`, `make test` | exit 0, each; `yq2test: 591 tests, 0 failed` |
+| `tests/check-ref-metal.sh` | exit 0; `upsample 72 checks, 0 failed, 8 rule mutants refused, compiled` |
+| the 30 scenarios outside `rtprimary-*`, byte-identical to main | 30 of 30 (the `rt-*`: 8 of 8) |
+| every `rtprimary-*` record, byte-identical to main | 20 of 20 |
 
 No kernel is wired in this slice, so there is no run at an effect scale of 1/2.
 
@@ -249,15 +249,206 @@ No kernel is wired in this slice, so there is no run at an effect scale of 1/2.
 
 ### The hold of slices 2 and 3 (M6, under the timing lock)
 
-The orchestrator runs the hold script. The values below are filled in from its summary.
+The orchestrator ran the hold script. The values are its summary's, and the lit rays are a probe's
+that counted the `r_rt_stats 2` sun lines of both scenarios.
 
 | Check | Result |
 |---|---|
-| base and branch | (from the hold) |
-| `make ref_metal`, `make`, `make test` | (from the hold) |
-| `tests/check-ref-metal.sh`, with the new segments' mutant counts | (from the hold) |
-| the 30 stock scenarios outside `rtprimary-*` (the `rt-*` records at their defaults among them), byte-identical to main | (from the hold) |
-| the 20 RT-primary records, byte-identical to main | (from the hold) |
-| `rt-sun-half`, three runs identical, and different from `rt-sun` | (from the hold) |
-| the `r_rt_stats 2` sun line at `r_rt_sun_scale 0.5`, with its fallback count | (from the hold) |
-| the reset line on a change from 1 to 0.5 | (from the hold) |
+| base and branch | branch `94001f0c92d9`, base main `bd82ccb8f876`, not an ancestor of the branch |
+| `make ref_metal`, `make`, `make test` | exit 0, each; `yq2test: 591 tests, 0 failed` |
+| `tests/check-ref-metal.sh`, with the new segments' mutant counts | exit 0; `temporal 148 checks, 0 failed, 14 rule mutants, 7 kernel pins with 10 kernel mutants and 4 back-end mutants refused`; `upsample 79 checks, 0 failed, 9 rule mutants refused, compiled`; `sun at its scale 10 kernel pins with 11 kernel mutants compiled and refused, 3 back-end and scene mutants refused`; `34 kernel calls, 340 kernel-call mutants refused` |
+| the 30 stock scenarios outside `rtprimary-*` (the `rt-*` records at their defaults among them), byte-identical to main | 30 of 30 (the `rt-*`: 8 of 8) |
+| the 20 RT-primary records, byte-identical to main | 20 of 20 |
+| `rt-sun-half`, three runs identical, and different from `rt-sun` | three runs identical, `1bbb1b9b59f6`; `rt-sun` is `b7e0212dfda8`, and 1 of 23 frames differs |
+| the `r_rt_stats 2` sun line at `r_rt_sun_scale 0.5`, with its fallback count | 688 sun lines, 687 with the traced part; the first, `frame 18: 307200 pixels, 76800 world, 17120 bright, 12869 facing away, 46811 rays, 0 lit, 0.224 ms, traced at 320x240, 933 upsample fallbacks`; over the lines, 354398 fallbacks of 211046400 drawn pixels (0.168 %) |
+| the rays that reached the sky, over the 688 lines (the probe) | `rt-sun`: 197639 lit of 107904687 rays, 37 lines with a lit ray; `rt-sun-half`: 49497 lit of 26957759 rays, 36 lines |
+| the reset line on a change from 1 to 0.5 | one `reset: sun scale` line on each change (1 to 0.5, 0.5 to 0.33, 0.33 to 1), three in all; none at the three steady views, the `fov` change or the player-setup model view; the run exited 0 under Metal's validation layer |
+
+- **The summary's last line.** It is `hold done, 1 failed`. The one failure is the hold script's own
+  marker check, which asked for at least 12 events where the run makes 11. Each of the 11 is `ok`
+  or unjudged above, and the summary says `live: 0 events wrong`.
+- **Its `validation or pipeline errors: 1`.** That is the validation layer's banner line,
+  `Metal API Validation Enabled`, which the script counted. No assertion failed and no pipeline was
+  refused.
+- **The sun's segment.** The hold ran the tip before the tap-order and traced-size pins. The
+  host-check table above has the later tip's 12 pins, 13 kernel mutants and 4 back-end and scene
+  mutants.
+
+## Slice 4: the dlight shadows at `r_rt_shadows_scale`
+
+Slice 4 follows slice 3's arrangement: a separate low-scale unit, a stock path that is the parent's
+at scale 1, kernel pins with mutants, and a skip before the rule.
+
+- **The cvar.** `r_rt_shadows_scale`, archived, default `1` (`rm_rtshadowscene.c`), taken through
+  `mtl_rtup_div`. `rtg_cvars` lists it as a setting, and `doc/040_cvarlist.md` has its entry.
+- **Where the divisor travels.** `rm_rts_view_t` has no word to spare and keeps its 128 bytes. The
+  scene hands the divisor to `rmb_rts_prepare(w, h, div)`, and the back end binds it to the new
+  kernels as a 16-byte block of its own (`rmb_rts_lo_t`, buffer 13). Both sizes have a
+  `_Static_assert`. The stock kernels bind nothing new.
+- **The rule's extension** (host-tested):
+  - `mtl_rtup_light` in `common/mtl_rtup_math.h`: one light's visibility under the pixel's weights.
+    A tap weighs for a light only when its packed set holds that light, and the holders' weights are
+    taken over their own sum. A light that no weighted tap traced takes visibility 1, the stock
+    dlight, with `fallback` set.
+  - `mtl_rts_holds` in `common/mtl_rts_math.h`: whether packed indices hold a light. The empty
+    slots' index names none.
+- **The kernels,** in `rm_rtshadow.metal` behind `RM_RTS_LO_TU`, inside its `RM_RTS_TEMPORAL_TU`
+  part, compiled apart by `rm_rtshadow_lo.metal`. That unit holds the helpers and `rm_rts_shade`,
+  without `rm_rts_trace`, the resolve and `rm_rts_temporal`. So neither stock unit holds a new
+  caller of its helpers.
+  - `rm_rts_trace_lo`, at the traced size: `rm_rts_shade` for each traced pixel, from its source
+    pixel's G-buffer sample. It writes the packed words alone (RT3's `t_out` layout, `RG32Uint`)
+    and the counts.
+  - `rm_rts_temporal_lo`, in its place while `r_rt_temporal` is above 0: RT3's fused accumulation
+    with `mtl_rtup_reproject`, the motion read at the source pixel. It rejects on distance, material
+    and the light set, as the stock one does. The histories are at the traced size.
+  - `rm_rts_lit`: `rm_rts_shade` without its shadow rays and their start, copied line for line. The
+    check pins the two alike.
+  - `rm_rts_up`, at the render size. It builds `t_out` and `t_term` as the stock trace writes them,
+    so `rm_fragment_resolve_rts` is unchanged.
+- **The drawn pixel's own light set.** It is the stock trace's at that pixel: `rm_rts_lit` finds
+  the pixel's surface as `rm_rts_trace` does (the G-buffer's surface attachment, or the eye ray),
+  every light's add there, and the four lights that add the most. Only each of those lights'
+  visibility comes from the taps. A light past the four is added unshadowed, as in the stock trace.
+- **The fallback counter counts pixels.** A drawn pixel is counted once when the weights fell back
+  to the tap nearest in depth, or when a light of its set took visibility 1 because no weighted tap
+  traced it. The line's `F upsample fallbacks` is that count of drawn pixels.
+- **The skip before the rule.** A pixel with no normal (nothing lit there), or with no light in
+  its set, reads no tap and counts nothing.
+- **A tap's sample.** A tap holds a sample where `rm_rts_shade` traced its source pixel: a world
+  pixel with a depth and a normal.
+- **RT7.** The stock shadows have no denoise, and slice 4 adds none. RT7 at the traced size is the
+  fused accumulation alone.
+- **At scale 1** the back end dispatches `rm_rts_trace`, or `rm_rts_temporal`, and the resolve as
+  before, in `else` branches. Compiled with `xcrun metal`, the parent's `rm_rtshadow.metal` and
+  `rm_rtshadow_temporal.metal` and this branch's give AIR whose disassembly differs only in the
+  module's path. No field is renamed.
+- **The back end** (`rmb_rtshadow.m`):
+  - `rmb_rts_prepare(w, h, div)` makes the traced size's texture and the three pipelines above
+    divisor 1, a pipeline failure latched until the pass is closed. At 1 it releases the texture.
+  - `rmb_rts_trace` takes the view into the history with `rm_rtt_hist_take_at(&thist, &tview,
+    prep_div)` below the render size. The stock path's take stays the plain one, so a change either
+    way resets the histories for the scale.
+  - The upsample is dispatched after the trace, behind a texture barrier, in the same encoder.
+  - The counts take a fifth word, the fallbacks. Each stats slot keeps its divisor and traced size.
+  - The histories are made at the traced size: the scene passes `mtl_rtup_size` of the render size
+    to `rmb_rts_temporal`.
+- **The counts below divisor 1.** `in range`, `traced` and `shadowed` are of the traced pixels.
+  `rays` is the traced pixels' rays plus the eye rays the upsample took for a pixel whose surface
+  the G-buffer does not name.
+- **Lines.**
+  - Under `r_rt_stats 2` the shadows' line ends `, traced at WxH, F upsample fallbacks` below
+    divisor 1, and is unchanged at 1. `rm_rtshadow.c` writes that part itself, in
+    `rm_rtt_traced_format`'s words, because many host tests link it without `rm_rttemporal.c`.
+  - Under `r_rt_stats 1`, a view whose take set `scale` prints
+    `ref_metal: r_rt_stats: reset: shadows scale` once, at any `r_metalfx`.
+  - The model view traces no shadows (`RDF_NOWORLDMODEL`), and `fov` is not the divisor, so neither
+    prints it.
+  - The take runs only on a view that accumulates (`r_rt_temporal` above 0) with a dynamic light in
+    it. So the line follows the first such view after the change.
+- **The Makefile** compiles `rm_rtshadow_lo.air` into `ref_metal.metallib` and lists
+  `rm_rtshadow_lo.metal` as a prerequisite.
+- **The check** (`tests/check-ref-metal.sh`, segment 7.87):
+  - It checks the unit's arrangement, and that `rm_rts_temporal` sits alone before the `#else` and
+    the three kernels and `rm_rts_lit` after it.
+  - It pins `rm_rts_lit` to `rm_rts_shade`'s code, with two mutants: an add halved, and a pixel
+    without light to add no longer skipped.
+  - It pins nineteen kernel lines with twenty-one mutants. Each must be refused and must compile
+    with `xcrun metal`:
+    - the sample at the traced pixel itself (twice), and the trace run at the traced pixel (twice);
+    - the motion not divided, its sign flipped, the reset not passed, the light set not passed, and
+      the distance taken at the traced pixel;
+    - the upsample calling `rm_rts_shade`, which traces;
+    - a pixel with no normal or no light not skipped;
+    - taps 1 and 2 swapped in the x and the y tap lines (once each);
+    - every tap taken as traced, and the weights at divisor 1;
+    - the light-set test dropped, so every tap weighs for every light;
+    - taps 2 and 3's visibilities swapped, and the visibility 1 in the slot;
+    - neither fallback counted (once each), and the term made without the visibility.
+  - It pins the back end with three mutants (the plain take, the accumulation tested at the render
+    size, the barrier dropped) and the scene with three (the default 0.5, the divisor left at 1,
+    the render width).
+  - The upsample segment (7.85) gains four header mutants of `mtl_rtup_light`: the set test
+    dropped, the fallback visibility 0, the fallback not flagged, and the weights not taken over
+    their sum.
+  - Segment 20 gains nine kernel-call pairs of the new kernels.
+- **The scenario** `rt-shadows-half`: `rt-shadows` plus `r_rt_shadows_scale 0.5`, in the scenarios
+  README (both tables) and `doc/100_renderpins.md`. It declares no band of its own, so its
+  companion is nominal. `dlights` gets no `-half` variant: it runs with `r_rt_shadows 0`, where the
+  scale does nothing, and the hold holds it byte-identical to the parent.
+
+### What slice 4 leaves
+
+- The `r_rt_stats 1` parts of the plan's slice 4 are cut, and move to slice 6 for the sun and the
+  shadows, beside AO's count: the map-summary share of the fallback and the line
+  `ref_metal: r_rt_stats: upsample: <effect> WxH of WxH, F fallbacks`. The per-frame `r_rt_stats 2`
+  shadows line carries `traced at WxH, F upsample fallbacks` below scale 1 in this slice. The rule,
+  the cvar, the trace, RT7 at the traced size and the upsample are all here.
+- The counts buffer: `RMB_RTS_COUNTS` went from 4 to 5 words per slot, so the buffer's stride (the
+  offsets 0, 20 and 40) changes at scale 1 too. The stock kernels still write words 0 to 3, the
+  buffer is cleared each frame and the offsets stay 4-byte aligned, and the stock AIR is identical to
+  the parent's. No frame changes.
+- A scale change made while `r_rt_shadows` is off prints `reset: shadows scale` on the first
+  accumulating view after the shadows are turned back on: the histories keep their divisor across a
+  pass close, and only the next accumulation compares it.
+- The low path has never run on a GPU on this branch. The host checks compile it and pin its text.
+  The hold below is its first run.
+
+### Host checks (no lock)
+
+| Check | Result |
+|---|---|
+| `rm_rtup_test` and `rm_rtshadow_test` at the red commit (`f30bd472`) | do not compile: `mtl_rtup_light_t`, `mtl_rtup_light` and `mtl_rts_holds` undeclared, `rm_rts_stats_t` has no `div`, `tw`, `th`, `fallbacks` |
+| `rm_rtup_test`, `rm_rtshadow_test` with the change | 94 and 4395 checks, 0 failed |
+| `xcrun metal -c` of `rm_rtshadow.metal`, `rm_rtshadow_temporal.metal` and `rm_rtshadow_lo.metal` | all three compile, no warning |
+| the two stock units' AIR against the parent's (`e96c43b8`) | each disassembly differs only in the module path |
+| `cc -fsyntax-only -Wall -Wextra` of `rmb_rtshadow.m` and `rm_rtshadowscene.c` | no diagnostic |
+| segment 7.87 | `shadows at their scale 20 kernel pins with 23 kernel mutants compiled and refused, 6 back-end and scene mutants refused` |
+| segment 7.85 | `upsample 94 checks, 0 failed, 15 rule mutants refused, compiled` (13 upsample header mutants and 2 of `mtl_rts_holds`) |
+| segment 5.5 | `temporal 148 checks, 0 failed, 14 rule mutants, 7 kernel pins with 10 kernel mutants and 4 back-end mutants refused, 3 stock-trace pins with 6 mutants refused` |
+| segments 4, 7.86, 10, 10.2, 11, 12, 15, 20 | pass; 41 `r_rt_*` cvars classified; 43 kernel calls, 430 kernel-call mutants refused |
+| `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh`, `tests/check-scenario-parsers.sh`, `scripts/pins.sh check-content` | ok, each |
+
+`make`, `make test` and the whole of `tests/check-ref-metal.sh` were not run here. The hold runs
+them.
+
+### Review round 1
+
+- **Correctness I1, the bench adapter dropped the shadows line below scale 1.** Fixed. The parser in
+  `scripts/bench/adapters/quake2.sh` keeps the 18-field line and the 24-field line that ends in
+  `traced at WxH, F upsample fallbacks`, the ms field being field 17 in both. The metrics fixture in
+  `tests/check-bench-quake2.sh` has a divisor-2 line (the text `rm_rtshadow_test` expects), and
+  `rts_ms` counts 4 (median 1.5) and `rts_traced_ms` 3, and 3 and 3 after frame 3. It failed at
+  `2256773b`. The check has a mutant list: a mutant that goes back to `n == 18` is refused.
+- **Spec I1, the `r_rt_stats 1` fallback lines.** Accepted as deferred to slice 6, as above.
+- **Note, `mtl_rtup_light` and a NaN weight.** A NaN-weight case is added to `rm_rtup_test`. The
+  `ws <= 0.0f` mutant of `!(ws > 0.0f)` is equivalent, so it is not in the list: a weight is added
+  only when it is above 0, so the sum is never a NaN and the two forms never differ.
+- **Note, `mtl_rts_holds`.** Two header mutants, the `MTL_RTS_NO_LIGHT` guard dropped and the slot loop
+  reading one slot, are refused by `rm_rtshadow_test` (`test_holds`). They run in segment 7.85, whose
+  mutant count is now 15.
+- **Notes N4 and N5.** The counts buffer's stride and the `reset: shadows scale` print are stated
+  above.
+- **Note N3, `shlo_lit`'s cut window.** Fixed. The cut ends at the shadow loop's own closing brace
+  instead of at `nl = nl;`, so a line added between them is part of what `rm_rts_lit` must hold. Its
+  two mutants are still refused (segment 7.87 is unchanged: 20, 23 and 6).
+- **Notes N1 and N2.** Accepted: a host cannot run the kernels; the hold does.
+
+### The hold of slice 4 (M6, under the timing lock)
+
+The orchestrator runs the hold script. The values below are copied from its summary. The base
+is the parent slice, `task126s23`.
+
+| Check | Result |
+|---|---|
+| base and branch | The hold's commit is `2256773b`, 0 files changed, based on `task126s23` (`e96c43b8`), an ancestor of it. The base builds: `make` and `make ref_metal` exit 0. |
+| `make ref_metal`, `make`, `make test` | `make ref_metal` exit 0, `make` exit 0, `make test` exit 0 (591 tests, 0 failed). Build warnings: 0 for `ref_metal`, 2 for `make`. |
+| `tests/check-ref-metal.sh`, with segment 7.87's mutant counts | ok, 13162 checks, 0 failed. Shadows 4395 checks, 0 failed. Temporal 148 checks, 14 rule mutants, 7 kernel pins with 10 kernel mutants and 4 back-end mutants refused. Upsample 92 checks, 13 rule mutants refused. Sun at its scale: 12 kernel pins, 13 kernel mutants and 4 back-end and scene mutants refused. Shadows at their scale (segment 7.87): 20 kernel pins, 23 kernel mutants and 6 back-end and scene mutants refused. 43 kernel calls, 430 kernel-call mutants refused. The summary's line for the whole run is cut off after the sun's check count, so the sun's own totals are not recorded here. |
+| every stock scenario outside `rtprimary-*` (`dlights`, `rt-shadows` and `rt-sun-half` among them), byte-identical to the parent | 31 scenarios on the base and 31 on the branch, 0 failed. 31 of 31 outside `rtprimary-*` and `rt-shadows-half` byte-identical to the parent (`rt-*`: 9 of 9). `dlights` 5552278ed108, `rt-shadows-entities` 04e115786187, `rt-shadows` 2b8d11a25392 and `rt-sun-half` 1bbb1b9b59f6, all identical. |
+| the 20 RT-primary records, byte-identical to the parent | 20 of 20 records byte-identical to the parent's, each 23 frames unless noted: `rtprimary-world` c2d7b7d94e6c, `-direct` 8975350df42b, `-vis` 469ce42fec8c, `-noshadow` b3d10fafdc08, `-sky` 9acbe75f592b, `-sun` 6f6c37b9a084, `-bounce` e2a45f031fcc, `-metalfx2` b03c73ee59d1, `-denoise` 371419d919dd, `-overlayfx` 77f3485fe88f, `-styles` a254ac92e157 (89 frames), `-pool` e73ffa9aea7d (4 frames), `-denoise-pool` b5cc3f8dd8bf (4 frames), `-dlights` 6d01f9bb9bca, `-dlights-d2` 8f8b43a1f6ee (89 frames), `-models-off` c5ec8f241450, `-models` 93c5ef890067, `-models-vis` a5cd3e3316b9, `-weapon` 7a061e1228e1, `-weapon-gunshadow` 7a061e1228e1. |
+| `rt-shadows-half`, three runs identical, and different from `rt-shadows` | Three runs identical, 23 frames, 428dde119d31. Against `rt-shadows` (2b8d11a25392) they differ, 4 of 23 frames. The engine reports the half-size buffers: 640x480 traced at 320x240, 671744 bytes, and 640x480, 4947968 bytes. |
+| the `r_rt_stats 2` shadows line at `r_rt_shadows_scale 0.5`, with its fallback count | At scale 0.5: 329 shadows lines, 329 with the traced part, 129 with a shadowed pixel, 299 with a ray. Totals: 101068800 pixels, 8056260 in range, 6071183 traced, 66387 shadowed, 6410378 rays. Fallbacks: 14181 of 101068800 drawn pixels (0.014 %). The line with the most shadowed pixels, frame 227: 307200 pixels, 18651 in range, 13506 traced, 5665 shadowed, 13506 rays, 0.477 ms, traced at 320x240, 597 upsample fallbacks. For comparison, `rt-shadows` at full scale: 329 lines, 0 with the traced part, 140 with a shadowed pixel, 299 with a ray, 32296034 in range, 24357171 traced, 265302 shadowed; its frame 227 line is 74261 in range, 53962 traced, 22521 shadowed, 0.324 ms. |
+| the shadows lines with a shadowed pixel, at `r_rt_shadows_scale 0.5` | 129 of 329 lines at scale 0.5 (140 of 329 at full scale). |
+| the reset line on a change from 1 to 0.5 | The live run exit 0, 0 validation or pipeline errors, 0 events wrong. The reset line appears on the change to `half` (1 line, one wanted), on `third` (1) and on `full` (1), and on no other event. Allocations seen: 1280x720 traced at 427x240 (933888 bytes), traced at 640x360 (1982464 bytes), and 1280x720 (15204352 bytes). The hold ended with 0 untracked files left and 0 failed. |
+
+The round 1 fixes after the hold (`769dc80b`, `ceae532a`, `f7709471`) change only the bench adapter, the tests, `tests/check-ref-metal.sh` and `docs/runbook/TASK126.md`, not the engine, which is why the hold was not run again.

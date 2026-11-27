@@ -440,6 +440,87 @@ test_reproject(void)
 	CHECK(!a.ok);
 }
 
+/*
+ * Slice 4, the dlight shadows: one light's visibility under the weights.
+ * A tap weighs for a light only when its packed set holds that light; the
+ * weights of the taps that hold it are taken over their own sum; a light
+ * that no weighted tap traced takes visibility 1, the stock dlight, and
+ * that is a fallback.
+ */
+static void
+test_light(void)
+{
+	mtl_rtup_in_t in = flat(100.0f);
+	mtl_rtup_out_t o = mtl_rtup_weights(in, 2u);
+	mtl_rtup_light_t l;
+
+	/* every tap traced the light: the weighted mean, no fallback */
+	l = mtl_rtup_light(o, 1, 1, 1, 1, 1.0f, 0.0f, 1.0f, 0.0f);
+	CHECK(near(l.vis, 0.5f) && !l.fallback);
+
+	/* taps 1 and 3 alone hold it: their weights over their own sum, the others' values unread */
+	l = mtl_rtup_light(o, 0, 1, 0, 1, NAN, 0.25f, NAN, 0.75f);
+	CHECK(near(l.vis, 0.5f) && !l.fallback);
+	l = mtl_rtup_light(o, 0, 0, 1, 0, 1.0f, 1.0f, 0.0f, 1.0f);
+	CHECK(near(l.vis, 0.0f) && !l.fallback);
+
+	/* a NaN weight is no weight: it passes no tap's test, so the sum stays finite and the others hold */
+	{
+		mtl_rtup_out_t on = o;
+
+		on.w[0] = NAN;
+		l = mtl_rtup_light(on, 1, 1, 0, 0, 0.0f, 1.0f, 0.0f, 0.0f);
+		CHECK(near(l.vis, 1.0f) && !l.fallback);
+		on.w[1] = NAN;
+		l = mtl_rtup_light(on, 1, 1, 0, 0, 0.0f, 1.0f, 0.0f, 0.0f);
+		CHECK((l.vis == 1.0f) && l.fallback);
+	}
+
+	/* unequal weights among the holders */
+	in.b[0] = 0.5625f;
+	in.b[1] = in.b[2] = 0.1875f;
+	in.b[3] = 0.0625f;
+	o = mtl_rtup_weights(in, 2u);
+	l = mtl_rtup_light(o, 1, 0, 0, 1, 1.0f, 0.0f, 0.0f, 0.0f);
+	CHECK(near(l.vis, 0.9f) && !l.fallback);
+
+	/* no tap holds it: visibility 1, a fallback */
+	l = mtl_rtup_light(o, 0, 0, 0, 0, 0.0f, 0.0f, 0.0f, 0.0f);
+	CHECK((l.vis == 1.0f) && l.fallback);
+
+	/* the one tap that holds it is across a depth step, so it has no weight: visibility 1, a fallback */
+	in = flat(100.0f);
+	in.dn[2] = 400.0f;
+	o = mtl_rtup_weights(in, 2u);
+	CHECK((o.w[2] == 0.0f) && !o.fallback);
+	l = mtl_rtup_light(o, 0, 0, 1, 0, 1.0f, 1.0f, 0.0f, 1.0f);
+	CHECK((l.vis == 1.0f) && l.fallback);
+
+	/* the rule's own fallback tap (the nearest in depth) serves the light when it holds it, and not otherwise */
+	in = flat(100.0f);
+	in.dn[0] = in.dn[1] = in.dn[3] = 400.0f;
+	in.dn[2] = 300.0f;
+	o = mtl_rtup_weights(in, 2u);
+	CHECK(o.fallback && (o.w[2] == 1.0f));
+	l = mtl_rtup_light(o, 1, 1, 1, 1, 1.0f, 1.0f, 0.25f, 1.0f);
+	CHECK(near(l.vis, 0.25f) && !l.fallback);
+	l = mtl_rtup_light(o, 1, 1, 0, 1, 0.0f, 0.0f, 0.0f, 0.0f);
+	CHECK((l.vis == 1.0f) && l.fallback);
+
+	/* no tap has a sample: visibility 1, a fallback, whatever the sets say */
+	in = flat(100.0f);
+	in.ok[0] = in.ok[1] = in.ok[2] = in.ok[3] = 0;
+	o = mtl_rtup_weights(in, 2u);
+	CHECK(o.empty);
+	l = mtl_rtup_light(o, 1, 1, 1, 1, 0.0f, 0.0f, 0.0f, 0.0f);
+	CHECK((l.vis == 1.0f) && l.fallback);
+
+	/* a scale of 1: the pixel's own sample, which holds its own lights */
+	o = mtl_rtup_weights(flat(100.0f), 1u);
+	l = mtl_rtup_light(o, 1, 0, 0, 0, 0.375f, 0.0f, 0.0f, 0.0f);
+	CHECK((l.vis == 0.375f) && !l.fallback);
+}
+
 int
 main(void)
 {
@@ -453,6 +534,7 @@ main(void)
 	test_nonfinite();
 	test_image();
 	test_reproject();
+	test_light();
 	printf("rm_rtup_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }
