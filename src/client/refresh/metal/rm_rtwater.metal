@@ -375,10 +375,11 @@ rm_fragment_rtw_mark(rm_rtw_cand_v in [[stage_in]])
  * on the list alone and writes every listed pixel of the reflection
  * target, so the compaction writes the others 0 (no water).
  */
-kernel void
 #ifndef RM_RTW_LO_TU
+kernel void
 rm_rtw_compact(
 #else
+kernel void
 rm_rtw_compact_lo(constant rm_rtw_lo &lo [[buffer(17)]],
 #endif
 		texture2d<uint, access::read> mat [[texture(0)]],
@@ -618,10 +619,11 @@ rm_rtw_ss_at(constant rm_rtw_view &v, depth2d<float, access::read> depth, textur
  * not show too (FIX92; at 1 that is shaded). r_rt_water_hits 1 is
  * rm_rtw_trace_ws below.
  */
-kernel void
 #ifndef RM_RTW_LO_TU
+kernel void
 rm_rtw_trace(
 #else
+kernel void
 rm_rtw_trace_lo(constant rm_rtw_lo &lo [[buffer(17)]],
 #endif
 		depth2d<float, access::read> depth [[texture(0)]],
@@ -896,10 +898,11 @@ rm_rtw_trace_lo(constant rm_rtw_lo &lo [[buffer(17)]],
  * not show (mtl_rtw_choose_ws): an alias model it does not show passed
  * over (mtl_rtw_ws_next), a hidden brush model shaded.
  */
-kernel void
 #ifndef RM_RTW_LO_TU
+kernel void
 rm_rtw_trace_ws(
 #else
+kernel void
 rm_rtw_trace_ws_lo(constant rm_rtw_lo &lo [[buffer(17)]],
 #endif
 		depth2d<float, access::read> depth [[texture(0)]],
