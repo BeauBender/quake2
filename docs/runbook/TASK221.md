@@ -644,8 +644,21 @@ cases)"); `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
   `tests/check-bench-entry.sh` (ok); `scripts/ios-device.sh --selftest` ("ok (65
   cases)"); `tests/check-bounded-run.sh` ("ok (guard, 65 mutants refused, probe, the supervisor cases
   and their 12 mutants, pyprobe and its 10 mutants)"); `tests/check-doc-links.sh` and
-  `tests/check-runbook-index.sh` (ok); the whole `tests/check-bench.sh`
-  under the host lock (CB_LINE).
+  `tests/check-runbook-index.sh` (ok).
+- **The whole `tests/check-bench.sh`, under the host lock, at `7dbee4ae`:** every case
+  passed (no "failed:" line), and 86 mutants were caught, `sv-reason-host` and
+  `sv-reason-snap` among them. It still exits 1 on two mutants, which no earlier branch
+  run reached, since the cases failed first:
+  ```
+  check-bench: mutant forget-none passed t_core_id; the test does not catch it
+  check-bench: mutant record-no-written passed t_core_id; the test does not catch it
+  ```
+  Neither is touched by this hold. They target `bench_spawn_forget`'s
+  `BENCH_SPAWNED=$_sf_h$_sf_t` and `bench_lock_record`'s `_lk_w=$(bench_lock_now)`, and
+  `t_core_id` lost the cases that reached them through the old bounded path in `ebb35264`
+  ("bench_bounded runs its command under the supervisor"). Each needs a case on today's
+  path (the lock run's spawn table; the 126 record's `written=`), or the mutant moved to
+  the check that covers it. That is open.
 
 ## What remains
 
