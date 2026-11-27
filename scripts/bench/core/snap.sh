@@ -41,12 +41,15 @@ bench_snap_system() {
 	# The CPU's one-second sample first, then the GPU: the driver's
 	# utilization lags (on the M6 it read 100 right after an engine at full
 	# load exited and 0 from 0.2 s on, TASK166), so a snapshot after a run
-	# reads the GPU past the measured workload's tail.
-	bench_sv
+	# reads the GPU past the measured workload's tail. Each bounded call
+	# builds the supervisor first (bench_sv), so a refusal is said; a host
+	# with neither tool reads unknown, as before.
 	if command -v top > /dev/null 2>&1; then
+		bench_sv
 		bench_bounded 15 top -l 2 -n 0 -s 1 > "$_sy_t.top" 2> /dev/null || : > "$_sy_t.top"
 	fi
 	if command -v ioreg > /dev/null 2>&1; then
+		bench_sv
 		bench_bounded 15 ioreg -r -d 1 -w 0 -c IOAccelerator > "$_sy_t.gpu" 2> /dev/null || : > "$_sy_t.gpu"
 	fi
 	{
