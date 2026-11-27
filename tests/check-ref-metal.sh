@@ -327,10 +327,12 @@ fi
 # the mutants: a rejection reason dropped (material, lights, depth, off screen), the view's reset
 # ignored, the frame without an accumulated view not resetting, a map load not resetting; slice 1b's:
 # the light set's flags not masked, a history that skipped a view still read (the early return), a
-# history made again still read, the views' number restarting on a map load. Each must compile (a
+# history made again still read, the views' number restarting on a map load; TASK126 slice 2's: the
+# scale reason dropped, the divisor not compared, the divisor forgotten when a history is made again
+# (so the history remade at an effect's new size no longer says why). Each must compile (a
 # mutant the compiler refuses tests nothing, review TASK59 slice 1, I1) and fail the test.
 rtt_mutants=0
-for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep; do
+for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep scalereason scalecmp scalekeep; do
 	rtt_tree "${tmp:?}/rttm"
 	h=${tmp:?}/rttm/src/client/refresh/metal/common/mtl_rtt_math.h
 	c=${tmp:?}/rttm/src/client/refresh/metal/rm_rttemporal.c
@@ -349,6 +351,9 @@ for m in mat lights depth off reset frameend mapload lightsmask histgap histrese
 			"$rm_dir/rm_rttemporal.c" > "$c" ;;
 		histreset) sed 's/	h->valid = 0;/	h->valid = h->valid;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		seqkeep) sed 's/	st->seq = seq;/	st->seq = seq \& 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		scalereason) sed 's/r |= RM_RTT_RESET_SCALE;/r |= 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		scalecmp) sed 's/(h->div != d)/((h->div != d) \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		scalekeep) sed 's/	h->valid = 0;/	h->valid = 0; h->div = 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 	esac
 	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$h" && cmp -s "$rm_dir/rm_rttemporal.c" "$c"; then
 		bad "the temporal mutant ($m) changed nothing"
@@ -2927,14 +2932,15 @@ seg 7.8 "; RT-primary filter ${rtpd:-host test}, $rtpd_mutants rule mutants, $rt
 # each of which must compile and fail it with a FAIL line (a crash or a sanitizer trip is an error, not a
 # refusal): the depth guide, the material test, the normal guide and the
 # sample test dropped, the fallback taking the first tap, the fallback not counted, and the identity
-# dropped at a scale of 1, and the two cross weights of the bilinear taps swapped. Where the Metal
+# dropped at a scale of 1, and the two cross weights of the bilinear taps swapped; slice 2's, RT7's
+# reprojection at the effect size with the motion not divided by the divisor. Where the Metal
 # compiler is there, a kernel that calls every function of the header must compile.
 rtup=""
 rtup_tree() { # <dir>: a copy of the test and the headers, laid out as the test includes them
 	rm -rf "${1:?}"
 	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
 	cp "$rm_dir/common/mtl_rtup_math.h" "$rm_dir/common/mtl_rtd_math.h" "$rm_dir/common/mtl_rtao_math.h" \
-		"$rm_dir/common/mtl_shader_math.h" "$1/src/client/refresh/metal/common/"
+		"$rm_dir/common/mtl_shader_math.h" "$rm_dir/common/mtl_rtt_math.h" "$1/src/client/refresh/metal/common/"
 	cp tests/metal/rm_rtup_test.c "$1/tests/metal/"
 }
 rtup_build() { # <tree>: 0 when the tree's test builds
@@ -2958,7 +2964,7 @@ else
 fi
 rtup_mutants=0
 rtup_h=$rm_dir/common/mtl_rtup_math.h
-for m in depth material normal sample first count identity bilinear; do
+for m in depth material normal sample first count identity bilinear motion; do
 	[ -f "$rtup_h" ] || break
 	rtup_tree "${tmp:?}/rtupm"
 	h=${tmp:?}/rtupm/src/client/refresh/metal/common/mtl_rtup_math.h
@@ -2972,6 +2978,7 @@ for m in depth material normal sample first count identity bilinear; do
 		identity) sed 's/if (d <= 1u)$/if (d < 1u)/' ;;
 		bilinear) sed -e 's/in\.b\[1\] = qx\.f \* (1\.0f - qy\.f);/in.b[1] = (1.0f - qx.f) * qy.f;/' \
 			-e 's/in\.b\[2\] = (1\.0f - qx\.f) \* qy\.f;/in.b[2] = qx.f * (1.0f - qy.f);/' ;;
+		motion) sed 's|return mtl_rtt_reproject(x, y, mx / k, my / k, w, h);|return mtl_rtt_reproject(x, y, (mx / k) * k, (my / k) * k, w, h);|' ;;
 	esac < "$rtup_h" > "$h"
 	if cmp -s "$rtup_h" "$h"; then
 		bad "the upsample mutant ($m) changed nothing"
@@ -2988,7 +2995,7 @@ for m in depth material normal sample first count identity bilinear; do
 		rtup_mutants=$((rtup_mutants + 1))
 	fi
 done
-[ "$rtup_mutants" = 8 ] || bad "the upsample test refused $rtup_mutants of its 8 header mutants"
+[ "$rtup_mutants" = 9 ] || bad "the upsample test refused $rtup_mutants of its 9 header mutants"
 rtup_metal=""
 if [ -n "$rtp_metal" ] && [ -f "$rtup_h" ]; then
 	cat > "${tmp:?}/rtup-probe.metal" <<'EOF'
@@ -3013,8 +3020,9 @@ kernel void rtup_probe(device float *o [[buffer(0)]], uint2 px [[thread_position
 	}
 	in = mtl_rtup_bilinear(in, mtl_rtao_up_pair(px.x, d, n), mtl_rtao_up_pair(px.y, d, n));
 	const mtl_rtup_out_t r = mtl_rtup_weights(in, d);
+	const mtl_rtt_px_t rp = mtl_rtup_reproject(px.x, px.y, 1.5f, -0.5f, d, n, n);
 	o[px.y * 16u + px.x] = mtl_rtup_value(r, 0.1f, 0.2f, 0.3f, 0.4f, 1.0f) + mtl_rtup_tap_w(in, 0) +
-		(float)mtl_rtup_src(px.x, d, 16u);
+		(float)mtl_rtup_src(px.x, d, 16u) + (float)rp.x;
 }
 EOF
 	if rtp_compile "${tmp:?}/rtup-probe.metal"; then

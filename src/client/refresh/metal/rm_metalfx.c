@@ -427,7 +427,7 @@ rm_fx_fallback_format(const char *what, int asked, int got, const char *why, cha
 static const char *const rm_fx_reasons[] = { "first", "mode", "size", "rect", "cut", "effect" };
 
 /* RT7's reasons, bit k of RM_RTT_RESET_* (header/rm_rttemporal.h) named by entry k; the host test holds the two */
-static const char *const rm_rtt_reasons[] = { "first", "size", "rect", "cut" };
+static const char *const rm_rtt_reasons[] = { "first", "size", "rect", "cut", "scale" };
 
 /* appends " <name>" for each bit of set that names[] names, or " none" when no bit does */
 static int
