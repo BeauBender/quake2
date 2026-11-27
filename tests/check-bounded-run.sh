@@ -1508,6 +1508,47 @@ else
 		fi
 	done
 fi
+# A group record whose id a later process group has taken holds nothing
+# (security I2, round 1), as a pid record's does: the group is started
+# first, in a group of its own (its "up" line on a FIFO says so), then
+# two records name it: one written before it started (a fixed past time),
+# which must hold nothing, and one written after (a fixed future time),
+# which must hold the lock while the group has a member. Sets gr_why.
+sv_reuse() {
+	_rd=$W/sv-reuse-$(basename "$1")
+	gr_why=
+	rm -rf "$_rd"
+	mkdir -p "$_rd/old" "$_rd/new" && mkfifo "$_rd/fifo" "$_rd/hold" || return 1
+	proc_open "$_rd/fifo"
+	python3 -I -c 'import os, sys
+os.setpgid(0, 0)
+os.execvp(sys.argv[1], sys.argv[1:])' sh -c 'echo up; read x < "$0"' "$_rd/hold" < /dev/null > "$_rd/fifo" 2> /dev/null &
+	_rg=$!
+	if ! proc_await up; then
+		gr_why="the group did not start"
+	else
+		printf 'pid=%s\nstart=-\nwritten=Mon Jan 1 00:00:00 2024\ntoken=t\ngroup=%s\n' "$_rg" "$_rg" > "$_rd/old/untold.$_rg"
+		printf 'pid=%s\nstart=-\nwritten=Fri Jan 1 00:00:00 2100\ntoken=t\ngroup=%s\n' "$_rg" "$_rg" > "$_rd/new/untold.$_rg"
+		_rq='. "$1/scripts/bench/core/common.sh"; . "$1/scripts/bench/core/lock.sh"; BENCH_LOCK_DIR=$2; r=0; bench_lock_untold_live || r=$?; echo "$r [$BENCH_LOCK_UNTOLD]"'
+		_ro=$(sh -c "$_rq" sh "$1" "$_rd/old" 2>&1)
+		_rn=$(sh -c "$_rq" sh "$1" "$_rd/new" 2>&1)
+		[ "$_ro" = "1 []" ] || gr_why="a record written before its group started holds the lock: $_ro"
+		[ "$_rn" = "0 [$_rg]" ] || gr_why="${gr_why:+$gr_why; }a record written after its group started does not hold the lock: $_rn"
+	fi
+	exec 7<> "$_rd/hold"
+	echo go >&7
+	exec 7>&-
+	wait "$_rg" 2> /dev/null
+	proc_close
+}
+sv_reuse "$here"
+if [ -n "$gr_why" ]; then
+	echo "$me: FAIL: group reuse: $gr_why"
+	fails="$fails group-reuse"
+else
+	echo "$me: ok   group reuse: a group id taken after the record was written holds nothing"
+fi
+
 # the mutant: sv_stop sends the supervisor no TERM, so a caller's INT
 # waits for the command to the wall time (30 s, past the 10 s bound), and
 # in the endgroup case no "signal name=TERM" comes before the stop's end
