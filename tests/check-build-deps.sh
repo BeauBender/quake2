@@ -30,7 +30,7 @@ missing() {
 	for pair in client:src/client/menu/vidrules server:src/server/sv_main game:src/game/g_main; do
 		tgt=${pair%%:*}
 		obj=${pair#*:}
-		line=$(make -n -f "$1" "$tgt" 2>&1 | grep -e "$obj\\.c" | grep -e ' -c ' | head -1)
+		line=$(make -n -f "$1" MAKE="make -f $1" "$tgt" 2>&1 | grep -e "$obj\\.c" | grep -e ' -c ' | head -1)
 		case $line in
 		"") printf '%s(no-compile-line) ' "$obj" ;;
 		*" -MMD"*) ;;

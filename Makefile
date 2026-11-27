@@ -379,11 +379,12 @@ endif
 #   mostly best practice and not really necessary.
 override CFLAGS += -fno-strict-aliasing -fwrapv -fvisibility=hidden
 
-# -MMD to generate header dependencies. Unsupported by
-#  the Clang shipped with OS X.
-ifneq ($(YQ2_OSTYPE), Darwin)
+# -MMD to generate header dependencies. It was once left out
+#  on Darwin ("unsupported by the Clang shipped with OS X", a
+#  2010 note); Apple clang has supported it for years, and
+#  without it an edited header rebuilt no client, server or
+#  game object (FIX217). tests/check-build-deps.sh keeps it.
 override CFLAGS += -MMD
-endif
 
 # OS X architecture.
 ifeq ($(YQ2_OSTYPE), Darwin)
@@ -1128,7 +1129,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		$(BUILDDIR)/ref_metal/rm_rtpdenoise.air $(BUILDDIR)/ref_metal/rm_rtmodel.air \
 		$(BUILDDIR)/ref_metal/rm_rtmtemporal.air -o $@
 
-# Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
+# Header dependencies: CFLAGS carries -MMD (see above), and
 # the Apple clang this target needs writes them for C and Objective-C
 # alike; REFMETAL_DEPS includes the .d files.
 REFMETAL_DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
@@ -1959,7 +1960,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))
 TEST_BIN = $(TESTDIR)/yq2test
 
-# Header dependencies of the test objects (-MMD, not on Darwin), so that
+# Header dependencies of the test objects (-MMD from CFLAGS), so that
 # an incremental `make test` after a header edit rebuilds what uses it.
 -include $(TEST_OBJS:.o=.d)
 
