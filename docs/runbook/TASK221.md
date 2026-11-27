@@ -158,11 +158,15 @@ prefix to tell it from a second one.
   calls `sv_stop` (through `bench_stop_group`).
 - **The fork window.** A trap that runs between the fork and the store of `SV_PID` finds
   the supervisor as `$!` (`sv_pid`, by `SV_FORK` and `SV_LAST`).
-- **`sv_safe`.** It now also refuses a cache directory or a binary that has an ACL (`+` in
-  `ls -ldn`), and every parent of the cache directory that is writable by group or others
-  and not sticky, or that is owned by neither this user nor root. This closes the TASK218
-  review's ACL and parent-path gap. A deny ACL on a parent (macOS home directories have
-  one) is allowed, because parents are judged by mode and owner only.
+- **`sv_safe`.** It now also refuses a cache directory or a binary that has an ACL (an
+  entry line in `ls -lden`), and every parent of the cache directory that is writable by
+  group or others and not sticky, or that is owned by neither this user nor root. This
+  closes the TASK218 review's ACL and parent-path gap. A deny ACL on a parent (macOS home
+  directories have one) is allowed, because parents are judged by mode and owner only.
+- **The physical path.** `sv_path` resolves the cache to its physical path (`pwd -P`)
+  first. It checks that path, makes its temporary files and builds there, and prints it.
+  So no symbolic link on the way can be swapped once it was checked, and `BENCH_SV` holds
+  that physical path (review round 1, security I1).
 
 ### `bench_bounded` (scripts/bench/core/common.sh)
 
@@ -179,7 +183,11 @@ prefix to tell it from a second one.
   `check-bench`'s mutants, `check-bench-quake2`'s mutants and the `ios-device.sh` self-test.
   Those tests export `BENCH_SV_LIB` (and a `SUPERVISE_CACHE` of their own).
 - **Status contracts kept:**
-  - the command's own status, `HOW=exit`;
+  - the command's own status, `HOW=exit`. This holds for its own 124, 125 and 126 too:
+    the supervisor passes the command's status through, so `bench_bounded_ours` tells the
+    supervisor's own by its events. 124 is the wall time only with a `deadline` event, 125
+    is "cannot run" only with no `spawned` event, and 126 is "cannot empty the group" only
+    with no `reaped` event, because the group may then still have a member;
   - 124 past the wall time, `HOW=wall`, with the supervisor's events appended to standard
     error;
   - 124 with `HOW=until`;
@@ -188,8 +196,11 @@ prefix to tell it from a second one.
 - **126 keeps the lock and says so.** The supervisor's 126 (a group it cannot empty) becomes
   125 with `HOW=untold`. The command's group (its `spawned` event) is recorded in the lock
   state as a group record: `untold.<pgid>` with `group=<pgid>`. `bench_lock_untold_live`
-  takes such a record as live while `kill -0 -- -<pgid>` succeeds, with no ps, because no
-  process takes a group's id while the group has a member. The lock shell's release then
+  takes such a record as live while `kill -0 -- -<pgid>` succeeds, because no process
+  takes a group's id while the group has a member. A record whose id a later group has
+  taken holds nothing: that is when ps shows a process with the pid `<pgid>` that started
+  after `written=` (`bench_lock_untold_reused`, the pid records' rule; review round 1,
+  security I2). A ps that gives no answer keeps the lock. The lock shell's release then
   keeps the lock and says so.
 - **The shims.**
   - `bench_stop_group` on `BENCH_BOUNDED_PID` stops the supervisor (`bench_bounded_stop`:
@@ -199,21 +210,27 @@ prefix to tell it from a second one.
   - Both become two-line shims in slice 3, once nothing else uses the shell stop.
 - **`BENCH_BOUNDED_UNTIL` and `BENCH_BOUNDED_QUIT`** are read at a 1 s poll (`bench_nap 1`)
   while the supervisor runs, and the poll sends it TERM.
-- **The events file.** It is `bench-sv.<pid>.XXXXXX` under TMPDIR. It is removed before
-  the bound returns and by `bench_bounded_stop`. `bench_poll_end`, which every trap path
-  calls first, also removes this shell's `bench-sv.<pid>.*` files while no bounded pid is
-  set (an INT in the `mktemp`). `BENCH_BOUNDED_TAP` (a test's FIFO) takes the events in its
-  place.
+- **The events file.** It is `bench-sv.<pid>.XXXXXX` under TMPDIR. Its name comes from
+  `mktemp -u` and is set before the file is made (noclobber, mode 0600). It is removed
+  before the bound returns and by `bench_bounded_stop`. `bench_poll_end`, which every trap
+  path calls first, removes that one file by its name while no bounded pid is set, never
+  `bench-sv.<pid>.*`, which a sibling subshell shares (review round 1, N3).
+- **`BENCH_BOUNDED_TAP`** (a test's FIFO) gets the events as well as the file. The
+  supervisor writes to a FIFO of the run's own (`<events file>.tap`), and `tee` copies it
+  into both. `tee` opens that FIFO before the supervisor's start does. `bench_bounded_tee`
+  waits for `tee` once the supervisor is gone. A read-write open of the FIFO first ends a
+  `tee` that no supervisor opened (review round 1, N2).
 - **`bench.sh`'s signal path** stops the bounded command through the shim. Its FIX181 hold
   for a bounded command it "could not tell" about is gone, because nothing returns that
   status any more.
 
 ### Behaviour that changed
 
-- **A group record can outlive its group by a reuse.** Once the recorded group has emptied,
-  a new process could take its id as pid and lead a new group with it; the record would
-  then keep the lock until that group ends too. The start-time records' `written=` rule
-  has no group counterpart yet. This needs the pids to wrap around while the lock is held.
+- **A group record and a reuse of its id.** Once the recorded group has emptied, a new
+  process could take its id as pid and lead a new group with it. The record holds nothing
+  then, by the `written=` rule (round 1, security I2). It still keeps the lock when ps
+  gives no answer for that pid, or when the new group's leader has gone and its members
+  remain.
 - **A stopped command** (a stop signal, or the terminal) is no longer told apart: 74 and
   `HOW=stopped` are gone. The supervisor's CONT ends the stop at the wall time (124).
 - **What a command leaves in its group** gets TERM at once, not after 1 to 2 s.
@@ -231,19 +248,44 @@ Each case waits on the supervisor's events (`BENCH_BOUNDED_TAP`) and on end of f
 | Case | What it shows | On main (28ebd7aa) | On this branch |
 |---|---|---|---|
 | `spawned` | an INT at `spawned`: exit 130, the command's group gone, TMPDIR empty | FAIL: no spawned event within 10 s | ok, 0 s |
-| `endgroup` (#726) | an INT once the command exited and left a member that ignores TERM: the trap runs at once, and the member is gone within the grace | FAIL: no spawned event within 10 s | ok, 1 s |
+| `endgroup` (#726) | an INT once the command exited and left a member that ignores TERM: the caller's `trap 130` line and then the supervisor's `signal name=TERM` both come before the supervisor's own stop ends, with a grace of the bound plus 2 s (12 s); then the member is killed and nothing is left | FAIL: no spawned event within 10 s | ok, 12 s |
 | `pollint` (#741) | an INT while the until poll waits: exit 130, nothing running, no scratch file in TMPDIR | FAIL: no spawned event within 10 s | ok, 1 s |
 | `126` | a stand-in supervisor that exits 126: `bounded 125 untold`, lock status shows `untold=<pgid>`, and the lock shell says it keeps the lock, then frees it only after the command has said it ended | (added with the change) | ok |
+| `lock note` | a lock run with ps silent: the watch says a stop goes to the command's group, and a TERM to the lock shell stops it and frees the lock | (round 1) | ok |
+| `group reuse` | a group record written before its group started holds nothing; one written after holds the lock | (round 1) FAIL: the first held the lock | ok |
+| `own 124`, `own 125`, `own 126` | `sh -c 'exit N'`: status N, `HOW=exit`, and nothing said of a wall time or of an untold stop | (round 1) FAIL: `124 how wall`, `127 how exit`, `125 how untold` | ok |
+| `tap` | with `BENCH_BOUNDED_TAP`, a wall time is still `124 how wall`, the tap has the `deadline` line, and TMPDIR is empty | (round 1) FAIL: `124 how exit` | ok |
+| `poll-end` | `bench_poll_end` leaves a sibling's `bench-sv.<pid>.*` file | (round 1) FAIL: removed | ok |
 
 The 126 stand-in is planted in a tool cache of its own, under the name `sv_path` gives the
 real binary, as slice 1's `sv126` case does.
 
 | Mutant | Case | Refused because |
 |---|---|---|
-| `sv-no-term` | `spawned` | `sv_stop` sends no TERM: the caller outlives the INT by the bound |
+| `sv-no-term` | `spawned`, `endgroup` | `sv_stop` sends no TERM: the caller outlives the INT by the bound, and in `endgroup` no `signal name=TERM` comes before the stop's end |
 | `lock-freed-on-126` | `126` | no group record on a 126: lock status shows no `untold=` |
 | `record-not-written` | `126` | the record's `mv` fails (moved from `check-bench`) |
 | `release-no-wait` | `126` | the release does not wait: "freeing the lock" comes before `command-ended` (moved from `check-bench`) |
+| `watch-leader-note` | `lock note` | the watch's leader note is never said (round 1: restored) |
+| `group-reuse-unchecked` | `group reuse` | a group record is live by `kill -0` alone (round 1) |
+| `status-only` | `own 124` to `own 126` | the status alone decides again: each is taken for the supervisor's (round 1) |
+
+In `tests/check-supervise.sh` (round 1), `sv_refusals` runs five cases. Each has a cache of
+its own under the check's TMPDIR, seeded with the built binary, and ACLs are set with
+`chmod +a` there only:
+
+| Case | Verdict |
+|---|---|
+| `parent-0777` | refused |
+| `parent-1777` | accepted, in the physical directory |
+| `acl-cache` (an allow ACL on the cache) | refused |
+| `acl-binary` (an allow ACL on the binary) | refused |
+| `symlink-parent` (the cache through a link in a 0777, not sticky directory) | accepted, in the physical directory, never through the link |
+
+The two helper mutants are one-line `sed` changes to a copy of `supervise.sh`.
+`parents-ok` (`sv_parents` returns 0) fails `parent-0777`. `acl-unread` (the ACL line count
+dropped) fails `acl-cache`. On the round's first head, `parent-1777` and `symlink-parent`
+failed: the printed path was the logical one.
 
 ### What went with the shell path
 
@@ -255,8 +297,9 @@ These cases drove the shell watch and stop through `bench_bounded`, which no lon
 - Their mutants: `watch-leader-note`, `bounded-says-stopped`, `bounded-no-hold`,
   `bounded-hold-lock-grace` and `forget-before-clear`. `record-not-written` and
   `release-no-wait` moved to the 126 case.
-  - `watch-leader-note`'s line is still live, in `bench_lock_run`'s watch. No kept case
-    asserts it, and it goes with `bench_watch` in slice 3.
+  - `watch-leader-note`'s line is still live, in `bench_lock_run`'s watch. Round 1
+    restored it: `check-bounded-run`'s `lock note` case asserts it, and the mutant is
+    back. Both go with `bench_watch` in slice 3.
 - `t_bounded`'s stopped command now wants 124 within a wall time of 2 s.
 - `check-bounded-run`'s `int-window` and `int-spawn` probes and their mutants
   (`watch-foreground-ps`, `spawn-foreground-ps`).
@@ -267,14 +310,78 @@ These cases drove the shell watch and stop through `bench_bounded`, which no lon
 
 | Check | Result |
 |---|---|
-| `tests/check-bounded-run.sh` | ok, on the branch; on main, only the three new cases fail |
-| `tests/check-bench-entry.sh` | ok |
+| `tests/check-bounded-run.sh` | ok, on the branch; on main, only the three new cases fail. After round 1: "ok (guard, 65 mutants refused, probe, the supervisor cases and their 7 mutants, pyprobe and its 10 mutants)", with 13 supervisor cases (`spawned`, `endgroup`, `pollint`, `126`, `group reuse`, `lock note`, `own 124` to `own 126`, `tap`, `poll-end`) |
+| `tests/check-supervise.sh` | round 1: ok, with the 5 refusal cases, the 7 supervise.c mutants and the 2 helper mutants |
+| `tests/check-bench-entry.sh` | ok (also after round 1) |
 | `tests/check-gate-parallel.sh` | see below |
-| `scripts/ios-device.sh --selftest` | ok, 65 cases |
+| `scripts/ios-device.sh --selftest` | ok, 65 cases (also after round 1) |
+| `tests/check-doc-links.sh`, `tests/check-runbook-index.sh` | round 1: ok |
 | `tests/check-bench.sh` | not run here: the host lock had a queue, so it goes to the hold script (see below) |
 
 **The one-time measurement.** `check-bench`'s wall time, on main and on this branch, is
 taken once each by the hold run (`hold-T221s2.sh`), and is recorded here from its output.
+
+### Files outside the card's list
+
+- **`tests/check-bench-quake2.sh`** exports `BENCH_SV_LIB` (and a `SUPERVISE_CACHE` of its
+  own) for its mutants, which run a copy of `scripts/bench` alone. That copy has no
+  `scripts/lib`, so `bench_bounded` would find no supervisor. No behaviour changes.
+- **`scripts/ios-device.sh`** is in the card's list "only if its self-test names a deleted
+  function", which it does not. Its self-test needs the supervisor cache
+  (`BENCH_SV_LIB`), for the same reason as above, and its dead `stopped)` branch went in
+  round 1.
+- **`scripts/pins.sh` and `scripts/ios-sim.sh`** (round 1): their dead `stopped` branches
+  and comment went, because nothing sets `HOW=stopped` any more.
+- **`tests/check-supervise.sh`** (round 1): the refusal cases and helper mutants of
+  security I1 and I3, which test `scripts/lib/supervise.sh`.
+
+### Review round 1
+
+Each finding was reproduced first, and its case was red before the fix:
+
+- **Correctness B1** (a command's own 124, 125 and 126). Reproduced: `own 124 -> 124
+  wall`, `own 125 -> 127 exit`, `own 126 -> 125 untold`. Fixed by `bench_bounded_ours`,
+  which decides by the events. Cases `own 124` to `own 126`; mutant `status-only`.
+- **Correctness I1** (`endgroup` passed with no TERM). Fixed: the caller's trap writes
+  `trap <status>`, and the case waits for it and then for `signal name=TERM`, each before
+  `grace-end` or `group-empty`, with a grace above the bound. `sv-no-term` now runs
+  against `endgroup` too and is refused ("no line signal name=TERM").
+- **Correctness I2** (`watch-leader-note` untested). The branch is reachable: a lock run
+  whose ps gives no answer, with a command that leads its group. Restored as the `lock
+  note` case with its mutant; the branch is kept.
+- **Security I1** (the symbolic link swap). Reproduced by `symlink-parent` and
+  `parent-1777`: the printed path was the logical one. Fixed: `sv_path` checks, builds in
+  and prints the physical path, and `BENCH_SV` keeps it.
+- **Security I2** (a group record's identity). Reproduced by `group reuse`: a record
+  written before its group started held the lock. Fixed by `bench_lock_untold_reused` on
+  group records; mutant `group-reuse-unchecked`. The lock.sh header now describes group
+  records.
+- **Security I3** (refusals with no test). Added the five `sv_refusals` cases and the
+  `parents-ok` and `acl-unread` mutants. Each mutant fails its own case.
+- **Spec I1.** `docs/plans/bench-harness.md`'s adapter bullet no longer says status 74 or 1
+  to 2 s, and describes the supervisor's bounded run.
+- **Spec I2.** The files outside the card's list are named above, each with its reason.
+- **Notes.**
+  - N1: the dead `stopped` branches are gone. `git grep -e 'HOW=stopped' -e 'stopped)'
+    -e 'exit|stopped' -e 'wall, stopped' -- scripts` finds one line only, a lock.sh
+    comment ("command stopped)") about the lock run's own 74.
+  - N2: the tap tees into the events file; case `tap`.
+  - N3: `bench_poll_end` removes only its own file; case `poll-end`.
+
+**The disposition probe** (for the `tee` background job, which is the only new `&` in
+the core; no `trap`, `set -m` or process-group change was made). A background job
+started as `tee` is, with no job control, under `/bin/bash` 3.2 (3.2.57) and `/bin/sh`,
+directly and under `sh -c "trap '' INT; exec ..."`, prints its own dispositions:
+
+```
+bash 3.2: INT ignored, TERM default, HUP default
+/bin/sh: INT ignored, TERM default, HUP default
+bash 3.2 under INT ignored: INT ignored, TERM default, HUP default
+/bin/sh under INT ignored: INT ignored, TERM default, HUP default
+```
+
+So `tee` ends only at the end of its FIFO's input, which comes once the supervisor has
+exited, or at the read-write open in `bench_bounded_tee`.
 
 ## What remains
 

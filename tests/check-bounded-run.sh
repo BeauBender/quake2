@@ -1815,4 +1815,4 @@ if [ -n "$fails" ]; then
 	echo "$me: failed:$fails"
 	exit 1
 fi
-echo "$me: ok (guard, $nmut mutants refused, probe, the supervisor cases and their 4 mutants, pyprobe and its 10 mutants)"
+echo "$me: ok (guard, $nmut mutants refused, probe, the supervisor cases and their 7 mutants, pyprobe and its 10 mutants)"
