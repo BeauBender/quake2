@@ -9,8 +9,11 @@
 #                                 holding the default, from the rt_controls and rt_tune tables of
 #                                 src/client/menu/vidrules.c (read, never hard-coded).
 #   --as enhanced|retro|raytraced the C rows of that presentation's overlay, in the format of
-#                                 pres_row_t in src/client/refresh/metal/rm_rtgate.c, as the macro
-#                                 body RM_PRES_<MODE>_ROWS. The rows go to stdout, the notes to stderr.
+#                                 rm_pres_row_t in src/client/refresh/metal/common/rm_pres_table.h
+#                                 (TASK237: the one table ref_metal and the video menu both read), as
+#                                 the macro body RM_PRES_ENHANCED_ROWS, RM_PRES_RETRO_ROWS or
+#                                 RM_PRES_RTPRIMARY_ROWS, which must be defined there (read, never
+#                                 assumed). The rows go to stdout, the notes to stderr.
 #
 # r_hdr and r_hdr_peak are a player's display setting: the --as overlays leave them out (the defaults
 # output lists them).
@@ -22,6 +25,8 @@
 root=$(cd "$(dirname "$0")/../.." && pwd) || exit 2
 src=${RTP_VIDRULES:-$root/src/client/menu/vidrules.c}
 rel=${src#"$root"/}
+ptab=$root/src/client/refresh/metal/common/rm_pres_table.h
+ptrel=${ptab#"$root"/}
 
 usage() {
 	echo "usage: $0 <preset.cfg> [--as defaults|enhanced|retro|raytraced]" >&2
@@ -113,7 +118,15 @@ if [ "$mode" = defaults ]; then
 fi
 
 # a presentation: rows of numbers (rm_pres_value returns a float, so r_rt_sun_angles is no row)
-macro=RM_PRES_$(printf '%s' "$mode" | tr '[:lower:]' '[:upper:]')_ROWS
+case $mode in
+	raytraced) macro=RM_PRES_RTPRIMARY_ROWS ;;
+	*) macro=RM_PRES_$(printf '%s' "$mode" | tr '[:lower:]' '[:upper:]')_ROWS ;;
+esac
+[ -r "$ptab" ] || { echo "preset-to-table: cannot read $ptrel" >&2; exit 2; }
+grep -q "^#define $macro \\\\\$" "$ptab" || {
+	echo "preset-to-table: $ptrel defines no $macro, the rows of the $mode overlay" >&2
+	exit 2
+}
 rows=""
 while IFS="$tab" read -r name value; do
 	[ -n "$name" ] || continue
@@ -132,7 +145,6 @@ while IFS="$tab" read -r name value; do
 done <<< "$parsed"
 [ -n "$rows" ] || { echo "preset-to-table: no numeric row for $mode" >&2; exit 1; }
 
-echo "preset-to-table: replace the rows of $macro in src/client/refresh/metal/rm_rtgate.c with these" >&2
-[ "$mode" = enhanced ] || echo "preset-to-table: note: rm_rtgate.c has no overlay table for $mode yet; add one beside pres_enhanced" >&2
+echo "preset-to-table: replace the rows of $macro in $ptrel with these (ref_metal and the video menu both read it)" >&2
 printf '#define %s \\\n' "$macro"
 printf '%s' "$rows" | sed '$!s/$/ \\/'
