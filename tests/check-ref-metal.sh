@@ -2780,6 +2780,65 @@ done
 	bad "the scene holds $rtk_wpins of the model pass's 2 wiring pins and refuses $rtk_wmut of their 2 mutants"
 seg 7.95 "; model pass $rtk_kpins kernel pins with $rtk_kmut kernel mutants${rtk_metal:+ compiled and} refused, $rtk_bpins back-end pins with $rtk_bmut mutants refused, $rtk_wpins wiring pins with $rtk_wmut mutants refused"
 
+# The model pixels' accumulation under RT-primary (TASK191 slice 4): tests/metal/rm_rtmtemporal_test.c holds
+# common/mtl_rtmt_math.h (the model pass's pixels and never a world one, the key that keeps model and world
+# history apart and the weapon's apart from every other model's, TASK190's blend with an opaque alpha, and the
+# model colour of the blend keeping the glow pulse and the minlight floor); then the same test against mutants
+# of the header, each of which must compile and fail it: the key without the flags (key-flags), the flags not
+# above the G-buffer's ids (key-low), a world pixel taken as a model one (model-world), the history's count
+# kept as the alpha (alpha-kept), the pixel passed through unblended (pass).
+rmt=""
+rmt_tree() { # <dir>: a copy of the test and the headers, laid out as the test includes them
+	rm -rf "${1:?}"
+	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
+	cp "$rm_dir/common/mtl_rtmt_math.h" "$rm_dir/common/mtl_rtp_math.h" "$rm_dir/common/mtl_rtt_math.h" \
+		"$rm_dir/common/mtl_rtm_math.h" "$rm_dir/common/mtl_shader_math.h" "$rm_dir/common/mtl_gbuf_math.h" \
+		"$1/src/client/refresh/metal/common/"
+	cp tests/metal/rm_rtmtemporal_test.c "$1/tests/metal/"
+}
+rmt_build() { # <tree>: 0 when the tree's test builds
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags -o "$1/t" "$1/tests/metal/rm_rtmtemporal_test.c" -lm > "${tmp:?}/cc.out" 2>&1
+}
+rmt_run() { # <tree>: 0 when the tree's test builds and passes
+	rmt_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
+}
+rmt_tree "${tmp:?}/rmt"
+if ! rmt_run "${tmp:?}/rmt"; then
+	cat "${tmp:?}/cc.out" "${tmp:?}/out"
+	bad "tests/metal/rm_rtmtemporal_test.c fails on the real files"
+else
+	rmt=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtmtemporal_test: //')
+	case $rmt in *", 0 failed") ;; *) bad "tests/metal/rm_rtmtemporal_test.c printed no result line"; rmt="";; esac
+fi
+rmt_mutants=0
+rmt_h=$rm_dir/common/mtl_rtmt_math.h
+for m in key-flags key-low model-world alpha-kept pass; do
+	rmt_tree "${tmp:?}/rmtm"
+	h=${tmp:?}/rmtm/src/client/refresh/metal/common/mtl_rtmt_math.h
+	case $m in
+		key-flags) sed 's/return MTL_GB_MAT_ALIAS + ((f & MTL_RTM_FLAGS) << MTL_RTMT_KEY_SHIFT);/return MTL_GB_MAT_ALIAS + ((f \& 0u) << MTL_RTMT_KEY_SHIFT);/' ;;
+		key-low) sed 's/^#define MTL_RTMT_KEY_SHIFT 8$/#define MTL_RTMT_KEY_SHIFT 0/' ;;
+		model-world) sed 's/return (mat == MTL_GB_MAT_ALIAS) && (depth/return (mat != MTL_GB_MAT_NONE) \&\& (depth/' ;;
+		alpha-kept) sed 's/	cur\.a = 1\.0f;/	cur.a = h.a;/' ;;
+		pass) sed 's/return mtl_rtp_pixel(1, rej,/return mtl_rtp_pixel(0, rej,/' ;;
+	esac < "$rmt_h" > "$h"
+	if cmp -s "$rmt_h" "$h"; then
+		bad "the model accumulation mutant ($m) changed nothing"
+	elif ! rmt_build "${tmp:?}/rmtm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the model accumulation mutant ($m) does not compile, so it tests nothing"
+	elif rmt_run "${tmp:?}/rmtm"; then
+		bad "tests/metal/rm_rtmtemporal_test.c passes the model accumulation mutant ($m)"
+	elif ! grep -q '^FAIL ' "${tmp:?}/out"; then
+		bad "the model accumulation mutant ($m) failed without a FAIL line"
+	else
+		rmt_mutants=$((rmt_mutants + 1))
+	fi
+done
+[ "$rmt_mutants" = 5 ] || bad "the model accumulation test refused $rmt_mutants of its 5 header mutants"
+seg 7.96 "; model accumulation ${rmt:-host test}, $rmt_mutants rule mutants"
+
 # RT-primary's 5 x 5 filter of its accumulated light (TASK190 slice 2, PM8): tests/metal/rm_rtpdenoise_test.c
 # holds common/mtl_rtpd_math.h over RT7's weights (mtl_rtd_math.h): the pixels it writes, a neighbour's
 # weight, each channel with its own neighbours, the strength by the count, the trace's alpha, the clamp,
