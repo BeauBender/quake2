@@ -50,7 +50,9 @@
 #     sun, common/mtl_rtsky_math.h, and the kernel's mutants of them),
 #     tests/metal/rm_rtptemporal_test.c, RT-primary's temporal accumulation
 #     (common/mtl_rtp_math.h, TASK190 slice 1), with five mutants of the
-#     header it must fail and four pins of rm_rtptemporal.metal with seven
+#     header it must fail, the history's guards as integer tests of the bit
+#     pattern with seven float-compare mutants (FIX212), and four pins of
+#     rm_rtptemporal.metal with seven
 #     mutants, compiled with xcrun metal where it is there,
 #     tests/metal/rm_rtpdenoise_test.c, RT-primary's 5 x 5 filter of that
 #     light (common/mtl_rtpd_math.h, TASK190 slice 2), with five mutants of
@@ -2521,6 +2523,64 @@ for m in reset count mix bad pass; do
 	fi
 done
 [ "$rtp_mutants" = 5 ] || bad "the RT-primary temporal test refused $rtp_mutants of its 5 header mutants"
+# The history's guards under fast math (FIX212): the Metal shaders build with fast math, which may fold a
+# float compare that is meant to fail for a NaN (fcmp fast, nnan), so every NaN and range guard of the temporal
+# history and the light clamp tests the float's bit pattern as an integer (MTL_RTT_BITS, as mtl_rtm_index1
+# does), and the headers' code holds no float compare of those guards. Pinned as text on the two headers
+# (comments and literals blanked): the bit-pattern macro under Metal and on the host, each guard's integer
+# form once, and none of the float compares they replaced; then each pin against a mutant that restores
+# the float compare, which must still compile as C (the host test builds it) and be refused.
+rtg_files="common/mtl_rtt_math.h common/mtl_rtp_math.h"
+rtg_ok() { # <rtt header> <rtp header>: 0 when both hold the integer forms and no float compare of a guard
+	rgt=$1 rgp=$2
+	[ "$(grep -cxF '#define MTL_RTT_BITS(f) as_type<uint>(f)' "$rgt")" = 1 ] &&
+		[ "$(grep -cxF '#define MTL_RTT_BITS(f) mtl_rtt_bits(f)' "$rgt")" = 1 ] &&
+		[ "$(strip "$rgt" | grep -cF 'const unsigned u = MTL_RTT_BITS(')" -ge 5 ] &&
+		[ "$(strip "$rgt" | grep -cF 'return (u <= MTL_RTT_BITS_INF) || (u == MTL_RTT_SIGN);')" = 1 ] &&
+		[ "$(strip "$rgt" | grep -cF 'return (u <= MTL_RTT_BITS_1) || (u == MTL_RTT_SIGN);')" = 1 ] &&
+		[ "$(strip "$rgt" | grep -cF 'return (u >= MTL_RTT_BITS_1) && (u <= MTL_RTT_BITS_INF);')" = 1 ] &&
+		[ "$(strip "$rgt" | grep -cF 'return (u != 0u) && (u <= MTL_RTT_BITS_INF);')" = 1 ] &&
+		[ "$(strip "$rgt" | grep -cF 'return (ad <= MTL_RTT_BITS_INF) && (t <= MTL_RTT_BITS_INF) && (ad <= t);')" = 1 ] &&
+		[ "$(strip "$rgt" | grep -cF 'if (!mtl_rtt_atleast1(hcount))')" = 1 ] &&
+		[ "$(strip "$rgt" | grep -cF 'if (rejected || !mtl_rtt_atleast1(hcount))')" = 1 ] &&
+		[ "$(strip "$rgt" | grep -cF 'if (rejected || !mtl_rtt_atleast1(hcount) || !mtl_rtt_positive(alpha))')" = 1 ] &&
+		[ "$(strip "$rgt" | grep -cF 'if (!(mtl_rtt_nonneg(hx) && mtl_rtt_nonneg(hy) && mtl_rtt_below(hx, (float)w) && mtl_rtt_below(hy, (float)h)))')" = 1 ] &&
+		[ "$(strip "$rgp" | grep -cF 'return mtl_rtt_unit(v);')" = 1 ] &&
+		[ "$(strip "$rgp" | grep -cF 'if (!mtl_rtt_nonneg(v))')" = 1 ] &&
+		[ "$(strip "$rgp" | grep -cF 'mtl_rtt_atmost_max(h.a)')" = 1 ] &&
+		! { strip "$rgt"; strip "$rgp"; } | grep -qE '(>= 0\.0f|> 0\.0f|>= 1\.0f|<= 1\.0f|> 1\.0f|<= tol|<= MTL_RTT_COUNT_MAX|isnan|isfinite)'
+}
+rtg_mutants=0 rtg_pin=""
+if rtg_ok "$rm_dir/common/mtl_rtt_math.h" "$rm_dir/common/mtl_rtp_math.h"; then
+	rtg_pin=1
+else
+	bad "common/mtl_rtt_math.h and common/mtl_rtp_math.h: a guard of the temporal history is not the integer test of the float's bit pattern (FIX212), or holds a float compare"
+fi
+for m in bits clamp light depth empty alpha reproject; do
+	rtp_tree "${tmp:?}/rtpm"
+	t=${tmp:?}/rtpm/src/client/refresh/metal/common/mtl_rtt_math.h
+	p=${tmp:?}/rtpm/src/client/refresh/metal/common/mtl_rtp_math.h
+	case $m in
+		bits) sed 's/^#define MTL_RTT_BITS(f) as_type<uint>(f)$/#define MTL_RTT_BITS(f) ((uint)(f))/' "$rm_dir/common/mtl_rtt_math.h" > "$t" ;;
+		clamp) sed 's/if (!mtl_rtt_nonneg(v))/if (!(v >= 0.0f))/' "$rm_dir/common/mtl_rtp_math.h" > "$p" ;;
+		light) sed 's/return mtl_rtt_unit(v);/return (v >= 0.0f) \&\& (v <= 1.0f);/' "$rm_dir/common/mtl_rtp_math.h" > "$p" ;;
+		depth) sed 's/(ad <= t);/(ad <= t) \&\& (d <= tol) \&\& (-d <= tol);/' "$rm_dir/common/mtl_rtt_math.h" > "$t" ;;
+		empty) sed 's/!mtl_rtt_atleast1(hcount)/!(hcount >= 1.0f)/' "$rm_dir/common/mtl_rtt_math.h" > "$t" ;;
+		alpha) sed 's/!mtl_rtt_positive(alpha)/!(alpha > 0.0f)/' "$rm_dir/common/mtl_rtt_math.h" > "$t" ;;
+		reproject) sed 's/if (!(mtl_rtt_nonneg(hx) && mtl_rtt_nonneg(hy) && mtl_rtt_below(hx, (float)w) && mtl_rtt_below(hy, (float)h)))/if (!((hx >= 0.0f) \&\& (hy >= 0.0f) \&\& (hx < (float)w) \&\& (hy < (float)h)))/' "$rm_dir/common/mtl_rtt_math.h" > "$t" ;;
+	esac
+	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$t" && cmp -s "$rm_dir/common/mtl_rtp_math.h" "$p"; then
+		bad "the guard mutant ($m) changed nothing"
+	elif ! rtp_build "${tmp:?}/rtpm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the guard mutant ($m) does not compile, so it tests nothing"
+	elif rtg_ok "$t" "$p"; then
+		bad "the integer-form pin of the history's guards passes its mutant ($m)"
+	else
+		rtg_mutants=$((rtg_mutants + 1))
+	fi
+done
+[ "$rtg_mutants" = 7 ] || bad "the history's guard pin refused $rtg_mutants of its 7 mutants"
 # The kernel, rm_rtptemporal.metal, pinned as text: the reprojection with the motion vector as the
 # G-buffer wrote it (mutants: its sign flipped, no motion read), the view's reset and the material
 # reaching the rule (mutants: the reset not passed, a material compared with itself), no lightmap
@@ -2611,7 +2671,7 @@ if [ "$(grep -cF 'rmb_rtdir_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (un
 	[ "$(grep -cF 'ref_metal/rm_rtptemporal.air' Makefile)" != 2 ]; then
 	bad "the RT-primary accumulation is not stepped by rm_rtdirscene.c or not linked into ref_metal.metallib"
 fi
-seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, $rtp_kpins kernel pins with $rtp_kmut kernel mutants refused${rtp_metal:+ and compiled}"
+seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, ${rtg_pin:+history guards as integer tests with $rtg_mutants float-compare mutants refused,} $rtp_kpins kernel pins with $rtp_kmut kernel mutants refused${rtp_metal:+ and compiled}"
 
 # RT-primary's light on rastered alias models (TASK191 slice 2): rm_rtmodel.metal pinned as text, each
 # pin with its mutants, each of which must compile with the Metal compiler where it is there and be refused.
