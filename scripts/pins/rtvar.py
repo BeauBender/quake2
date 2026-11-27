@@ -561,6 +561,11 @@ def cmd_selftest(a):
         shutil.copy2(MFX, os.path.join(tree, "scripts", "metalfx-report"))
         os.makedirs(os.path.join(tree, "scripts", "lib"))  # the Python bounded-run primitive mfx.py imports
         shutil.copy2(os.path.join(ROOT, "scripts", "lib", "bounded.py"), os.path.join(tree, "scripts", "lib"))
+        # and the process supervisor bench_bounded runs the engine under (TASK221), beside the copy
+        # of scripts/bench as in a checkout: without it pins.sh's record stops, "cannot find the
+        # process supervisor"
+        for f in ("supervise.sh", "supervise.c"):
+            shutil.copy2(os.path.join(ROOT, "scripts", "lib", f), os.path.join(tree, "scripts", "lib"))
         for f in ("framediff.c", "evidence.py", "rtvar.py"):
             shutil.copy2(os.path.join(HERE, f), os.path.join(tree, "scripts", "pins"))
         shutil.copytree(SCEN_DIR, os.path.join(tree, "scripts", "pins", "scenarios"),
