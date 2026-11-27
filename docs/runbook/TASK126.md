@@ -103,12 +103,18 @@ at 1:1, as temporal anti-aliasing.
   Where `xcrun metal` is there, the check also compiles a kernel that calls every function of the
   header.
 
+### What the later slices must do
+
+- Slices 3 to 5: a kernel skips a pixel with no normal (or no sample) before it calls the rule.
+  `mtl_rtd_normal_w` is 0 for a zero normal, so the rule would count such a pixel as a fallback below
+  divisor 1, and the fallback counter would be inflated.
+
 ### Host checks (no lock)
 
 | Check | Result |
 |---|---|
 | the upsample segment of `tests/check-ref-metal.sh`, at the red commit (`87561daa`, the test without the header) | `common/mtl_rtup_math.h is missing`; `refused 0 of its 7 header mutants` |
-| the same segment with the header | `upsample 67 checks, 0 failed, 8 rule mutants refused, compiled` |
+| the same segment with the header | `upsample 72 checks, 0 failed, 8 rule mutants refused, compiled` |
 | `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh` | ok, each |
 
 ### The hold (M6, under the timing lock)
