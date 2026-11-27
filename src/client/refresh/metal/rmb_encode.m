@@ -1787,6 +1787,12 @@ rmb_frame_cut(void)
 	return 1;
 }
 
+unsigned long
+rmb_frame_next(void)
+{
+	return (frame_open && !frame_skipped && frame_cmd) ? frames_begun : frames_begun + 1;
+}
+
 id<MTLCommandBuffer>
 rmb_frame_compute(unsigned long *frame)
 {

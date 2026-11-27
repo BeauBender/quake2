@@ -304,7 +304,7 @@ rm_rtao_view(const float *proj, const float *world, const rm_viewport_t *vp, con
 int
 rm_rtao_stats_format(const rm_rtao_stats_t *s, char *buf, size_t len)
 {
-	char ms[32];
+	char ms[32], up[96] = "";
 	int n;
 
 	if (!len)
@@ -321,9 +321,20 @@ rm_rtao_stats_format(const rm_rtao_stats_t *s, char *buf, size_t len)
 		snprintf(ms, sizeof(ms), "-");
 	}
 
+	/*
+	 * TASK126 slice 6: below the drawn size, the traced size and the
+	 * upsample's fallbacks, in rm_rtt_traced_format's words (written here,
+	 * as rm_rtshadow.c does, so that this file's host tests need no
+	 * rm_rttemporal.c).
+	 */
+	if (s->div > 1)
+	{
+		snprintf(up, sizeof(up), ", traced at %lux%lu, %lu upsample fallbacks", s->tw, s->th, s->fallbacks);
+	}
+
 	n = snprintf(buf, len, "ref_metal: rt ao: frame %lu: %lu pixels, %lu traced, %lu occluded, %lu at the floor, "
-			"%lu up (%lu occluded), %lu rays, %lu hits, %s ms", s->frame, s->pixels, s->traced, s->occluded, s->floored,
-			s->up, s->up_occluded, s->rays, s->hits, ms);
+			"%lu up (%lu occluded), %lu rays, %lu hits, %s ms" "%s", s->frame, s->pixels, s->traced, s->occluded,
+			s->floored, s->up, s->up_occluded, s->rays, s->hits, ms, up);
 
 	if ((n < 0) || ((size_t)n >= len))
 	{

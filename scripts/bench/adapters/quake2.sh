@@ -850,7 +850,7 @@ adapter_metrics() {
 		{ s = from("ref_metal: rt shadows: frame ") }
 		s ~ /^ref_metal: rt shadows: frame [0-9]+: / {
 			n = split(s, f, " ")
-			if (++rs > skip + 0 && f[5] + 0 > after + 0 && n == 18 && num(f[17])) {
+			if (++rs > skip + 0 && f[5] + 0 > after + 0 && (n == 18 || (n == 24 && f[19] == "traced")) && num(f[17])) {
 				print f[17] > (d "/rts_ms")
 				if (f[11] + 0 > 0) print f[17] > (d "/rts_traced_ms")
 			}
@@ -858,7 +858,7 @@ adapter_metrics() {
 		{ s = from("ref_metal: rt ao: frame ") }
 		s ~ /^ref_metal: rt ao: frame [0-9]+: / {
 			n = split(s, f, " ")
-			if (++ra > skip + 0 && f[5] + 0 > after + 0 && n == 25 && num(f[24])) print f[24] > (d "/rtao_ms")
+			if (++ra > skip + 0 && f[5] + 0 > after + 0 && (n == 25 || (n == 31 && f[26] == "traced")) && num(f[24])) print f[24] > (d "/rtao_ms")
 		}
 		END {
 			if (td && num(tdf) && num(tds) && num(tdfps))

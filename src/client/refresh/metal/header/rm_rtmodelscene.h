@@ -55,9 +55,11 @@ typedef struct
 	unsigned long rays;     /* their shadow rays toward the map's and the dynamic lights */
 	unsigned long open;     /* their sky, sun and bounce rays */
 	double ms;              /* the pass's GPU time, -1 when the device gave none */
+	int accumulated;        /* slice 4: the frame's model pixels were accumulated (rm_rtm_temporal) */
+	unsigned long kept;     /* slice 4: of those, the ones whose history was kept */
 } rm_rtm_stats_t;
 
-/* the r_rt_stats 2 line of a frame into buf; 0 when it does not fit */
+/* the r_rt_stats 2 line of a frame into buf, with ", accumulated: K kept their history" when it accumulated; 0 when it does not fit */
 int rm_rtm_stats_format(const rm_rtm_stats_t *s, char *buf, int len);
 
 /*

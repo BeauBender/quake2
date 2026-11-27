@@ -39,6 +39,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rt.h"
 #include "header/rm_rtshadow.h"
+#include "common/mtl_rtup_math.h"
 #include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
@@ -51,10 +52,18 @@ extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
 #define RMB_RTS_GROUP 8         /* the kernel's threadgroup side */
-#define RMB_RTS_COUNTS 4        /* in range, traced, shadowed, rays */
+#define RMB_RTS_COUNTS 5        /* in range, traced, shadowed, rays, the upsample's fallbacks (rm_rtshadow.metal) */
+
+/* rm_rtshadow.metal's rm_rts_lo (TASK126 slice 4): the view's divisor, beside the view, which keeps its 128 bytes */
+typedef struct
+{
+	uint32_t div;
+	uint32_t pad[3];
+} rmb_rts_lo_t;
 
 _Static_assert(sizeof(rm_rts_light_t) == 32, "a light is rm_rtshadow.metal's 32 bytes");
 _Static_assert(sizeof(rm_rts_view_t) == 128, "the view is rm_rtshadow.metal's 128 bytes");
+_Static_assert(sizeof(rmb_rts_lo_t) == 16, "the divisor's block is rm_rtshadow.metal's 16 bytes");
 
 static int rts_open;
 static id<MTLComputePipelineState> trace_pipe;
@@ -75,6 +84,9 @@ static atomic_ulong slot_done[RMB_FRAMES_IN_FLIGHT];
 static int slot_pending[RMB_FRAMES_IN_FLIGHT];
 static int slot_timed[RMB_FRAMES_IN_FLIGHT];
 static unsigned long slot_frame[RMB_FRAMES_IN_FLIGHT], slot_pixels[RMB_FRAMES_IN_FLIGHT];
+static unsigned slot_div[RMB_FRAMES_IN_FLIGHT];                 /* TASK126: the view's divisor */
+static unsigned long slot_tw[RMB_FRAMES_IN_FLIGHT], slot_th[RMB_FRAMES_IN_FLIGHT];  /* its traced size */
+static unsigned long slot_w[RMB_FRAMES_IN_FLIGHT], slot_h[RMB_FRAMES_IN_FLIGHT];    /* TASK126 slice 6: the drawn size */
 static rm_rts_stats_t done[RMB_FRAMES_IN_FLIGHT];
 static int ndone;
 
@@ -99,6 +111,19 @@ static int tmp_refused;                 /* the pipeline could not be made: not t
 static unsigned long tmp_bad_w, tmp_bad_h;  /* a render size whose histories could not be made: not tried again */
 static rm_rtt_view_t tview;
 static int tview_set;
+
+/*
+ * TASK126 slice 4: r_rt_shadows_scale below 1. The divisor rmb_rts_prepare
+ * was last given; the traced size's packed words (RG32Uint), made by it and
+ * released at divisor 1; the three pipelines of rm_rtshadow_lo.metal, made
+ * at the first such view, a failure latched until the pass is closed; and
+ * the latch of a view whose histories reset for the scale.
+ */
+static unsigned prep_div = 1;
+static id<MTLTexture> t_out_lo;
+static id<MTLComputePipelineState> lo_pipe, tlo_pipe, up_pipe;
+static int lo_refused;
+static int scale_reset;
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTS_SET(slot, obj) \
@@ -216,8 +241,14 @@ rmb_rts_close(void)
 		RMB_RTS_SET(t_rec[1], nil);
 		RMB_RTS_SET(t_vis[0], nil);
 		RMB_RTS_SET(t_vis[1], nil);
+		RMB_RTS_SET(t_out_lo, nil);
+		RMB_RTS_SET(lo_pipe, nil);
+		RMB_RTS_SET(tlo_pipe, nil);
+		RMB_RTS_SET(up_pipe, nil);
 	}
 
+	lo_refused = scale_reset = 0;
+	prep_div = 1;
 	tview_set = hist_cur = tmp_refused = 0;
 	tmp_bad_w = tmp_bad_h = 0;
 	rm_rtt_hist_reset(&thist);
@@ -229,10 +260,100 @@ rmb_rts_close(void)
 	m_n[0] = m_n[1] = m_n[2] = m_n[3] = 0;
 }
 
-int
-rmb_rts_prepare(unsigned long w, unsigned long h)
+/*
+ * TASK126 slice 4: for divisor div above 1, the traced size's packed
+ * words at mtl_rtup_size of the render size w x h, and the three
+ * pipelines; 1 when they are there. At divisor 1 the texture is released
+ * and nothing else is needed: the stock kernels run.
+ */
+static int
+rmb_rts_prepare_lo(unsigned long w, unsigned long h, unsigned div)
 {
-	if (!rts_open || !trace_pipe || !resolve_pipe || !counts || (w < 1) || (h < 1))
+	const unsigned long tw = mtl_rtup_size((unsigned)w, div), th = mtl_rtup_size((unsigned)h, div);
+
+	prep_div = (div > 1) ? div : 1;
+
+	if (div <= 1)
+	{
+		if (t_out_lo)
+		{
+			RMB_RTS_SET(t_out_lo, nil);
+		}
+
+		return 1;
+	}
+
+	if (lo_refused)
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		if (!lo_pipe || !tlo_pipe || !up_pipe)
+		{
+			NSError *e = nil;
+			id<MTLFunction> k0 = [rmb_library() newFunctionWithName:@"rm_rts_trace_lo"];
+			id<MTLFunction> k1 = [rmb_library() newFunctionWithName:@"rm_rts_temporal_lo"];
+			id<MTLFunction> k2 = [rmb_library() newFunctionWithName:@"rm_rts_up"];
+
+			RMB_RTS_SET(lo_pipe, k0 ? [rmb_device newComputePipelineStateWithFunction:k0 error:&e] : nil);
+			RMB_RTS_SET(tlo_pipe, k1 ? [rmb_device newComputePipelineStateWithFunction:k1 error:&e] : nil);
+			RMB_RTS_SET(up_pipe, k2 ? [rmb_device newComputePipelineStateWithFunction:k2 error:&e] : nil);
+
+			if (!lo_pipe || !tlo_pipe || !up_pipe)
+			{
+				RMB_RTS_SET(lo_pipe, nil);
+				RMB_RTS_SET(tlo_pipe, nil);
+				RMB_RTS_SET(up_pipe, nil);
+				lo_refused = 1;
+				fprintf(stderr, "ref_metal: rt shadows: no pipelines for r_rt_shadows_scale below 1%s%s; "
+						"the dynamic lights stay in the lightmaps\n", e ? ": " : "",
+						e ? e.localizedDescription.UTF8String : "");
+				return 0;
+			}
+		}
+
+		if (t_out_lo && (t_out_lo.width == tw) && (t_out_lo.height == th))
+		{
+			return 1;
+		}
+
+		{
+			MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG32Uint
+					width:tw height:th mipmapped:NO];
+
+			d.storageMode = MTLStorageModePrivate;
+			d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+			RMB_RTS_SET(t_out_lo, [rmb_device newTextureWithDescriptor:d]);
+
+			if (!t_out_lo)
+			{
+				return 0;
+			}
+
+			fprintf(stderr, "ref_metal: rt shadows %lux%lu traced at %lux%lu: %lu bytes allocated\n", w, h, tw, th,
+					(unsigned long)t_out_lo.allocatedSize);
+		}
+	}
+
+	return 1;
+}
+
+int
+rmb_rts_scale_reset(void)
+{
+	const int r = scale_reset;
+
+	scale_reset = 0;
+	return r;
+}
+
+int
+rmb_rts_prepare(unsigned long w, unsigned long h, unsigned div)
+{
+	if (!rts_open || !trace_pipe || !resolve_pipe || !counts || (w < 1) || (h < 1) || (w > 0xffffffffUL) ||
+		(h > 0xffffffffUL))
 	{
 		return 0;
 	}
@@ -240,7 +361,7 @@ rmb_rts_prepare(unsigned long w, unsigned long h)
 	/* the outputs at the render size, made again when it changes */
 	if (t_out && t_term && (t_out.width == w) && (t_out.height == h))
 	{
-		return 1;
+		return rmb_rts_prepare_lo(w, h, div);
 	}
 
 	@autoreleasepool
@@ -265,7 +386,7 @@ rmb_rts_prepare(unsigned long w, unsigned long h)
 				(unsigned long)(t_out.allocatedSize + t_term.allocatedSize));
 	}
 
-	return 1;
+	return rmb_rts_prepare_lo(w, h, div);
 }
 
 /* releases the histories: the next made are not a history */
@@ -469,6 +590,12 @@ rmb_rts_read(void)
 		s->traced = c[1];
 		s->shadowed = c[2];
 		s->rays = c[3];
+		s->fallbacks = c[4];
+		s->div = slot_div[k];
+		s->tw = slot_tw[k];
+		s->th = slot_th[k];
+		s->w = slot_w[k];
+		s->h = slot_h[k];
 		s->ms = -1;
 
 		if (slot_timed[k] && samples)
@@ -515,7 +642,7 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 	id<MTLComputeCommandEncoder> ce;
 	const NSUInteger w = depth.width, h = depth.height;
 	const int acc_set = tview_set;  /* RT7: this view accumulates, when everything it needs is at this size */
-	int slot, timed, acc;
+	int slot, timed, acc, lo;
 
 	traced = 0;
 	tview_set = 0;
@@ -530,6 +657,15 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 
 	/* the outputs, made by rmb_rts_prepare before the raster at this size */
 	if (!t_out || !t_term || (t_out.width != w) || (t_out.height != h))
+	{
+		return 0;
+	}
+
+	/* TASK126: below the render size, the traced size's texture and pipelines made by rmb_rts_prepare at this size */
+	lo = (prep_div > 1);
+
+	if (lo && (!lo_pipe || !tlo_pipe || !up_pipe || !t_out_lo ||
+		(t_out_lo.width != mtl_rtup_size((unsigned)w, prep_div)) || (t_out_lo.height != mtl_rtup_size((unsigned)h, prep_div))))
 	{
 		return 0;
 	}
@@ -578,12 +714,16 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 		 * RT7 (TASK59 slice 1b): rm_rts_temporal in rm_rts_trace's place, only
 		 * while r_rt_temporal is above 0 and the histories and the motion
 		 * vectors are at the render size; otherwise the stock trace alone.
+		 * TASK126: below the render size the histories are at the traced size
+		 * (the motion vectors stay at the render size), and rm_rts_temporal_lo
+		 * stands in rm_rts_trace_lo's place.
 		 */
 		{
 			id<MTLTexture> mv = acc_set ? rmb_gbuf_motion() : nil;
+			const NSUInteger aw = lo ? t_out_lo.width : w, ah = lo ? t_out_lo.height : h;
 
-			acc = acc_set && tmp_pipe && t_rec[0] && t_rec[1] && t_vis[0] && t_vis[1] && (t_rec[0].width == w) &&
-				(t_rec[0].height == h) && mv && (mv.width == w) && (mv.height == h);
+			acc = acc_set && tmp_pipe && t_rec[0] && t_rec[1] && t_vis[0] && t_vis[1] && (t_rec[0].width == aw) &&
+				(t_rec[0].height == ah) && mv && (mv.width == w) && (mv.height == h);
 
 			if (acc)
 			{
@@ -591,7 +731,14 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 			}
 		}
 
-		[ce setComputePipelineState:(acc ? tmp_pipe : trace_pipe)];
+		if (lo)
+		{
+			[ce setComputePipelineState:(acc ? tlo_pipe : lo_pipe)];
+		}
+		else
+		{
+			[ce setComputePipelineState:(acc ? tmp_pipe : trace_pipe)];
+		}
 
 		if (!rmb_rt_bind_scene(ce, fno, 2, 3, 4, 5))
 		{
@@ -632,8 +779,21 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 		{
 			rm_rtt_view_t tv = tview;
 
-			/* the view is encoded into the history here, and only here */
-			tv.reset = rm_rtt_hist_take(&thist, &tview);
+			/*
+			 * The view is encoded into the history here, and only here: below
+			 * the render size at its divisor (TASK126), so that a change of
+			 * r_rt_shadows_scale either way resets the histories for it.
+			 */
+			if (lo)
+			{
+				tv.reset = rm_rtt_hist_take_at(&thist, &tview, prep_div);
+			}
+			else
+			{
+				tv.reset = rm_rtt_hist_take(&thist, &tview);
+			}
+
+			scale_reset |= (tv.reset & RM_RTT_RESET_SCALE) != 0;
 			[ce setTexture:t_rec[hist_cur] atIndex:7];
 			[ce setTexture:t_vis[hist_cur] atIndex:8];
 			[ce setTexture:t_rec[1 - hist_cur] atIndex:9];
@@ -641,7 +801,30 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 			[ce setBytes:&tv length:sizeof(tv) atIndex:12];
 		}
 
-		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTS_GROUP, RMB_RTS_GROUP, 1)];
+		if (lo)
+		{
+			/*
+			 * TASK126: the rays (with RT7 fused, when the view accumulates) at
+			 * the traced size, then rm_rts_up at the render size, which reads
+			 * the packed words they wrote and writes the two outputs the
+			 * resolve reads: a serial encoder runs its dispatches in order,
+			 * the second behind a barrier.
+			 */
+			const rmb_rts_lo_t lov = { prep_div, { 0, 0, 0 } };
+			const MTLSize g = MTLSizeMake(RMB_RTS_GROUP, RMB_RTS_GROUP, 1);
+
+			[ce setTexture:t_out_lo atIndex:11];
+			[ce setBytes:&lov length:sizeof(lov) atIndex:13];
+			[ce dispatchThreads:MTLSizeMake(t_out_lo.width, t_out_lo.height, 1) threadsPerThreadgroup:g];
+			[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+			[ce setComputePipelineState:up_pipe];
+			[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:g];
+		}
+		else
+		{
+			[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTS_GROUP, RMB_RTS_GROUP, 1)];
+		}
+
 		[ce endEncoding];
 
 		if (acc)
@@ -653,6 +836,11 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 		slot_timed[slot] = timed;
 		slot_frame[slot] = fno;
 		slot_pixels[slot] = (unsigned long)(w * h);
+		slot_div[slot] = lo ? prep_div : 1u;
+		slot_tw[slot] = lo ? (unsigned long)t_out_lo.width : (unsigned long)w;
+		slot_th[slot] = lo ? (unsigned long)t_out_lo.height : (unsigned long)h;
+		slot_w[slot] = (unsigned long)w;
+		slot_h[slot] = (unsigned long)h;
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
 			atomic_store(&slot_done[slot], fno);

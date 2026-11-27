@@ -156,6 +156,24 @@ rm_rtg_reset_format(const char *name, const rm_rtg_t *g, char *buf, size_t len)
 			rm_rtg_why_text(g->why)), buf, len);
 }
 
+int
+rm_rtg_scales_format(const rm_rtg_t *g, char *buf, size_t len)
+{
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	if (rm_rtg_traces(g))
+	{
+		buf[0] = '\0';
+		return 0;
+	}
+
+	return rtg_put(snprintf(buf, len, "ref_metal: ray tracing: none on this device: the effect scales do nothing"),
+			buf, len);
+}
+
 /*
  * Every r_rt_* cvar of ref_metal, sorted by name. An effect switch (the
  * switch of a row of the effect table, rm_rtfx_is_switch: TASK179 keeps
@@ -213,6 +231,8 @@ static const char *const rtg_cvars[] = {
 	"r_rt_motion_test",
 	/* RT3's dynamic-light shadows (TASK55): a ray each light and pixel */
 	"r_rt_shadows",
+	/* TASK126: the size the shadows trace at, a setting (its effect is off without ray tracing) */
+	"r_rt_shadows_scale",
 	/* the shadows' development view: drawn only while the shadow pass runs (RM_RTS_Show) */
 	"r_rt_shadows_show",
 	/* the structures' report: draws nothing, and without ray tracing builds nothing and says so once */
@@ -222,6 +242,8 @@ static const char *const rtg_cvars[] = {
 	/* the sun's direction, development view, floor and strength: read only while r_rt_sun runs
 	   (RM_RTSun_Show needs sun_active) */
 	"r_rt_sun_angles",
+	/* TASK126: the size the sun traces at, a setting (its effect is off without ray tracing) */
+	"r_rt_sun_scale",
 	"r_rt_sun_show",
 	"r_rt_sunfloor",
 	"r_rt_sunscale",
@@ -235,6 +257,8 @@ static const char *const rtg_cvars[] = {
 	"r_rt_water_hits",
 	"r_rt_water_normal",
 	"r_rt_water_reflect",
+	/* TASK126: the size the reflections trace at, a setting (its effect is off without ray tracing) */
+	"r_rt_water_scale",
 	"r_rt_water_show",
 };
 

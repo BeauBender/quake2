@@ -697,6 +697,12 @@ RI_Init(void)
 	rm_rtg_format(&rm_rtg, line, sizeof(line));
 	R_Printf(PRINT_ALL, "%s\n", line);
 
+	/* TASK126 slice 6: where the device traces no rays, the effect scales do nothing, and the line says so */
+	if (rm_rtg_scales_format(&rm_rtg, line, sizeof(line)))
+	{
+		R_Printf(PRINT_ALL, "%s\n", line);
+	}
+
 	/* the presentation mode (TASK183): one line beside the gate's, the mode in use */
 	{
 		int why;

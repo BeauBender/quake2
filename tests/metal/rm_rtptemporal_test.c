@@ -30,6 +30,7 @@
  * =======================================================================
  */
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -291,6 +292,337 @@ test_passthrough(void)
 	CHECK(p.out.r > 0.0f);
 }
 
+/*
+ * FIX212: the guards of the temporal history and the light clamp, against
+ * the float compares they replace. The Metal shaders build with fast math,
+ * which may fold "a NaN fails this compare" away, so the guards test the
+ * float's bit pattern as an integer. For every input the result must be
+ * the old compare's, bit for bit (-0 included: -0 >= 0 holds, so -0 is a
+ * light, a count of -0 is empty, and clamp keeps -0). The host build has no
+ * fast math (the NAN macros do not even compile under it), so these pass
+ * on a header that still uses the compare; they pin what the integer form
+ * must keep, and the Metal compile (check-ref-metal) pins the integer form.
+ */
+static int
+ref_light_ok(float v)
+{
+	return (v >= 0.0f) && (v <= 1.0f);
+}
+
+static float
+ref_clamp(float v)
+{
+	if (!(v >= 0.0f))
+	{
+		return 0.0f;
+	}
+
+	return (v > 1.0f) ? 1.0f : v;
+}
+
+static int
+ref_depth_ok(float dist, float hdist, float move)
+{
+	const float d = dist - hdist;
+	const float tol = move + MTL_RTT_DEPTH_ABS + MTL_RTT_DEPTH_REL * dist;
+
+	return (d <= tol) && (-d <= tol);
+}
+
+static float
+ref_count(unsigned rejected, float hcount)
+{
+	if (rejected || !(hcount >= 1.0f))
+	{
+		return 1.0f;
+	}
+
+	return (hcount + 1.0f < MTL_RTT_COUNT_MAX) ? hcount + 1.0f : MTL_RTT_COUNT_MAX;
+}
+
+static float
+ref_blend(unsigned rejected, float cur, float hist, float hcount, float alpha)
+{
+	float w;
+
+	if (rejected || !(hcount >= 1.0f) || !(alpha > 0.0f))
+	{
+		return cur;
+	}
+
+	w = hcount / (hcount + 1.0f);
+	w = (alpha < w) ? alpha : w;
+	return w * hist + (1.0f - w) * cur;
+}
+
+static mtl_rtt_px_t
+ref_reproject(unsigned x, unsigned y, float mx, float my, unsigned w, unsigned h)
+{
+	mtl_rtt_px_t r;
+	const float hx = (float)x + 0.5f + mx, hy = (float)y + 0.5f + my;
+
+	r.ok = 0;
+	r.x = 0;
+	r.y = 0;
+
+	if (!((hx >= 0.0f) && (hy >= 0.0f) && (hx < (float)w) && (hy < (float)h)))
+	{
+		return r;
+	}
+
+	r.ok = 1;
+	r.x = (unsigned)hx;
+	r.y = (unsigned)hy;
+	return r;
+}
+
+/* the reject's bad-history rule as it was written */
+static unsigned
+ref_bad(int ok, mtl_rtp_rgba_t h)
+{
+	if (ok && !(ref_light_ok(h.r) && ref_light_ok(h.g) && ref_light_ok(h.b) && (h.a <= MTL_RTT_COUNT_MAX)))
+	{
+		return MTL_RTP_REJ_BAD;
+	}
+
+	return 0u;
+}
+
+static float
+from_bits(unsigned u)
+{
+	float f;
+
+	memcpy(&f, &u, sizeof(f));
+	return f;
+}
+
+static unsigned
+to_bits(float f)
+{
+	unsigned u;
+
+	memcpy(&u, &f, sizeof(u));
+	return u;
+}
+
+/* the edges: 0, -0, 1 and its neighbours, denormals, FLT_MAX, the count's limit, infinities, NaNs, and a few between */
+static const unsigned edge_bits[] = {
+	0x00000000u, 0x80000000u, 0x00000001u, 0x80000001u, 0x007fffffu, 0x807fffffu, 0x00800000u, 0x80800000u,
+	0x3f7fffffu, 0x3f800000u, 0x3f800001u, 0xbf7fffffu, 0xbf800000u, 0xbf800001u,
+	0x3f000000u, 0xbf000000u, 0x437effffu, 0x437f0000u, 0x437f0001u, 0xc37f0000u, 0x43800000u,
+	0x3c23d70au, 0x40000000u, 0x42c80000u, 0x7f7fffffu, 0xff7fffffu,
+	0x7f800000u, 0xff800000u, 0x7f800001u, 0x7fc00000u, 0xffc00000u, 0x7fffffffu, 0xffffffffu, 0xff800001u
+};
+#define NEDGE ((int)(sizeof(edge_bits) / sizeof(edge_bits[0])))
+
+/* the per-value guards over the edges, then every pattern at a stride that visits ~1M of the 2^32 */
+static void
+test_guards_sweep(void)
+{
+	unsigned u;
+	int i, bad = 0;
+
+	for (i = 0, u = 0u; i < NEDGE + 1048576; i++, u += 4099u)
+	{
+		const float v = (i < NEDGE) ? from_bits(edge_bits[i]) : from_bits(u);
+		mtl_rtp_rgba_t h;
+
+		if (mtl_rtp_light_ok(v) != ref_light_ok(v) ||
+				to_bits(mtl_rtp_clamp(v)) != to_bits(ref_clamp(v)))
+		{
+			bad++;
+		}
+
+		/* a count: the empty test, the count and the blend it steers; an alpha likewise */
+		if (to_bits(mtl_rtt_count(0u, v)) != to_bits(ref_count(0u, v)) ||
+				to_bits(mtl_rtt_blend(0u, 0.25f, 0.75f, v, 0.9f)) != to_bits(ref_blend(0u, 0.25f, 0.75f, v, 0.9f)) ||
+				to_bits(mtl_rtt_blend(0u, 0.25f, 0.75f, 10.0f, v)) != to_bits(ref_blend(0u, 0.25f, 0.75f, 10.0f, v)) ||
+				((mtl_rtt_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, 0u, 0u, v) & MTL_RTT_REJ_EMPTY) != 0u) != !(v >= 1.0f))
+		{
+			bad++;
+		}
+
+		/* the bad-history rule: the count in a, then the value in a colour channel */
+		h = rgba(0.5f, 0.5f, 0.5f, v);
+
+		if ((mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, h) & MTL_RTP_REJ_BAD) != ref_bad(1, h))
+		{
+			bad++;
+		}
+
+		h = rgba(v, 0.5f, 0.5f, 10.0f);
+
+		if (mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, h) != ref_bad(1, h))
+		{
+			bad++;
+		}
+	}
+
+	CHECK(bad == 0);
+	CHECK(mtl_rtp_light_ok(-0.0f));         /* -0 is a light, as -0 >= 0 */
+	CHECK(to_bits(mtl_rtp_clamp(-0.0f)) == 0x80000000u);
+	CHECK(!mtl_rtp_light_ok(NAN) && !mtl_rtp_light_ok(INFINITY) && !mtl_rtp_light_ok(-INFINITY) && !mtl_rtp_light_ok(-0.25f));
+	CHECK((mtl_rtp_clamp(NAN) == 0.0f) && (mtl_rtp_clamp(-INFINITY) == 0.0f) && (mtl_rtp_clamp(-3.0f) == 0.0f));
+	CHECK((mtl_rtp_clamp(INFINITY) == 1.0f) && (mtl_rtp_clamp(FLT_MAX) == 1.0f));
+	CHECK((mtl_rtp_clamp(1.0f) == 1.0f) && (mtl_rtp_clamp(from_bits(0x3f7fffffu)) == from_bits(0x3f7fffffu)));
+	CHECK(mtl_rtp_clamp(from_bits(0x3f800001u)) == 1.0f);
+	CHECK(mtl_rtp_clamp(from_bits(0x00000001u)) == from_bits(0x00000001u));     /* the smallest denormal stays */
+}
+
+/* the depth rule over the edge triples, a pattern walk of the three arguments, and the tolerance's own edge */
+static void
+test_depth_sweep(void)
+{
+	unsigned s = 12345u;
+	int i, j, k, bad = 0;
+
+	for (i = 0; i < NEDGE; i++)
+	{
+		for (j = 0; j < NEDGE; j++)
+		{
+			for (k = 0; k < NEDGE; k++)
+			{
+				const float a = from_bits(edge_bits[i]), b = from_bits(edge_bits[j]), c = from_bits(edge_bits[k]);
+
+				if (mtl_rtt_depth_ok(a, b, c) != ref_depth_ok(a, b, c))
+				{
+					bad++;
+				}
+			}
+		}
+	}
+
+	for (i = 0; i < 400000; i++)
+	{
+		float a, b, c;
+
+		s = s * 1664525u + 1013904223u;
+		a = from_bits(s);
+		s = s * 1664525u + 1013904223u;
+		b = (i & 1) ? from_bits(s) : a + from_bits(s & 0x3fffffffu) * 1e-9f;
+		s = s * 1664525u + 1013904223u;
+		c = from_bits(s);
+
+		if (mtl_rtt_depth_ok(a, b, c) != ref_depth_ok(a, b, c))
+		{
+			bad++;
+		}
+	}
+
+	/* dist 100, move 0: the tolerance is 2 + 0.02 * 100; hdist at its edge and a few ulps either side */
+	for (i = -3; i <= 3; i++)
+	{
+		const float tol = MTL_RTT_DEPTH_ABS + MTL_RTT_DEPTH_REL * 100.0f;
+		const float hd = 100.0f - from_bits(to_bits(tol) + (unsigned)(i + 3));
+
+		if (mtl_rtt_depth_ok(100.0f, hd, 0.0f) != ref_depth_ok(100.0f, hd, 0.0f))
+		{
+			bad++;
+		}
+	}
+
+	CHECK(bad == 0);
+	CHECK(mtl_rtt_depth_ok(100.0f, 100.0f, 0.0f));
+	CHECK(mtl_rtt_depth_ok(0.0f, -0.0f, -0.0f) == ref_depth_ok(0.0f, -0.0f, -0.0f));
+	CHECK(!mtl_rtt_depth_ok(NAN, 100.0f, 0.0f) && !mtl_rtt_depth_ok(100.0f, NAN, 0.0f) && !mtl_rtt_depth_ok(100.0f, 100.0f, NAN));
+	CHECK(!mtl_rtt_depth_ok(INFINITY, INFINITY, 0.0f));         /* inf - inf is a NaN */
+	CHECK(!mtl_rtt_depth_ok(100.0f, INFINITY, 0.0f) && !mtl_rtt_depth_ok(100.0f, -INFINITY, 0.0f));
+	CHECK(!mtl_rtt_depth_ok(100.0f, 100.0f, -INFINITY) && !mtl_rtt_depth_ok(100.0f, 100.0f, -1000.0f));
+}
+
+/* the reprojection over the edge motions and a pattern walk, with the screen sizes 0, 1 and a few real ones */
+static void
+test_reproject_sweep(void)
+{
+	static const unsigned sizes[] = { 0u, 1u, 7u, 640u, 2560u, 16777216u };
+	unsigned s = 777u;
+	unsigned z;
+	int i, j, bad = 0;
+
+	for (i = 0; i < NEDGE; i++)
+	{
+		for (j = 0; j < NEDGE; j++)
+		{
+			for (z = 0; z < sizeof(sizes) / sizeof(sizes[0]); z++)
+			{
+				const mtl_rtt_px_t a = mtl_rtt_reproject(3u, 0u, from_bits(edge_bits[i]), from_bits(edge_bits[j]), sizes[z], sizes[z]);
+				const mtl_rtt_px_t b = ref_reproject(3u, 0u, from_bits(edge_bits[i]), from_bits(edge_bits[j]), sizes[z], sizes[z]);
+
+				if (a.ok != b.ok || a.x != b.x || a.y != b.y)
+				{
+					bad++;
+				}
+			}
+		}
+	}
+
+	for (i = 0; i < 400000; i++)
+	{
+		const unsigned w = sizes[i % 6];
+		mtl_rtt_px_t a, b;
+		float mx, my;
+
+		s = s * 1664525u + 1013904223u;
+		mx = (i & 1) ? from_bits(s) : (float)(int)(s >> 16) / 64.0f - 512.0f;
+		s = s * 1664525u + 1013904223u;
+		my = (i & 2) ? from_bits(s) : (float)(int)(s >> 16) / 64.0f - 512.0f;
+		a = mtl_rtt_reproject(s & 1023u, (s >> 10) & 1023u, mx, my, w, w);
+		b = ref_reproject(s & 1023u, (s >> 10) & 1023u, mx, my, w, w);
+
+		if (a.ok != b.ok || a.x != b.x || a.y != b.y)
+		{
+			bad++;
+		}
+	}
+
+	CHECK(bad == 0);
+
+	/* the texel edges: 0 is in, the size is out, the last texel's far edge just under it, NaN and the infinities off */
+	CHECK(mtl_rtt_reproject(0u, 0u, -0.5f, -0.5f, 8u, 8u).ok == 1);
+	CHECK(mtl_rtt_reproject(0u, 0u, -0.5f - 1e-3f, 0.0f, 8u, 8u).ok == 0);
+	CHECK(mtl_rtt_reproject(7u, 7u, 0.0f, 0.0f, 8u, 8u).ok == 1);
+	CHECK(mtl_rtt_reproject(7u, 7u, 0.5f, 0.0f, 8u, 8u).ok == 0);
+	CHECK(mtl_rtt_reproject(3u, 3u, NAN, 0.0f, 8u, 8u).ok == 0);
+	CHECK(mtl_rtt_reproject(3u, 3u, 0.0f, NAN, 8u, 8u).ok == 0);
+	CHECK(mtl_rtt_reproject(3u, 3u, INFINITY, 0.0f, 8u, 8u).ok == 0);
+	CHECK(mtl_rtt_reproject(3u, 3u, 0.0f, -INFINITY, 8u, 8u).ok == 0);
+	CHECK(mtl_rtt_reproject(0u, 0u, 0.0f, 0.0f, 0u, 8u).ok == 0);
+}
+
+/* the count, the blend and the bad-history rule on NaN, +inf, -inf and negative inputs, each named */
+static void
+test_history_guards(void)
+{
+	static const float badv[] = { NAN, -INFINITY, -1.0f, -0.0f, 0.0f, 0.5f };
+	unsigned i;
+
+	/* a count that is not 1 or more (NaN, -inf, negative, 0, -0, under 1) restarts at 1 and is not blended */
+	for (i = 0; i < sizeof(badv) / sizeof(badv[0]); i++)
+	{
+		CHECK(mtl_rtt_count(0u, badv[i]) == 1.0f);
+		CHECK(mtl_rtt_blend(0u, 0.25f, 0.75f, badv[i], 0.9f) == 0.25f);
+		CHECK(mtl_rtt_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, 0u, 0u, badv[i]) & MTL_RTT_REJ_EMPTY);
+	}
+
+	/* an alpha that is NaN, -inf, negative, 0 or -0 takes the trace's light */
+	CHECK(mtl_rtt_blend(0u, 0.25f, 0.75f, 10.0f, NAN) == 0.25f);
+	CHECK(mtl_rtt_blend(0u, 0.25f, 0.75f, 10.0f, -INFINITY) == 0.25f);
+	CHECK(mtl_rtt_blend(0u, 0.25f, 0.75f, 10.0f, -0.5f) == 0.25f);
+	CHECK(mtl_rtt_blend(0u, 0.25f, 0.75f, 10.0f, 0.0f) == 0.25f);
+	CHECK(mtl_rtt_blend(0u, 0.25f, 0.75f, 10.0f, -0.0f) == 0.25f);
+
+	/* +inf count: it saturates, never a NaN, and the bad-history rule refuses it */
+	CHECK(mtl_rtt_count(0u, INFINITY) == MTL_RTT_COUNT_MAX);
+	CHECK(mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, rgba(0.5f, 0.5f, 0.5f, INFINITY)) & MTL_RTP_REJ_BAD);
+	CHECK(mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, rgba(0.5f, 0.5f, 0.5f, NAN)) & MTL_RTP_REJ_BAD);
+	CHECK(mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, rgba(0.5f, 0.5f, 0.5f, -INFINITY)) == MTL_RTT_REJ_EMPTY);
+	CHECK(mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, rgba(0.5f, 0.5f, 0.5f, -1.0f)) == MTL_RTT_REJ_EMPTY);
+	CHECK(mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, rgba(0.5f, 0.5f, 0.5f, 1.0f)) == 0u);
+	CHECK(mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, rgba(0.5f, -INFINITY, 0.5f, 5.0f)) == MTL_RTP_REJ_BAD);
+	CHECK(mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, rgba(0.5f, 0.5f, from_bits(0x7fc00001u), 5.0f)) == MTL_RTP_REJ_BAD);
+}
+
 int
 main(void)
 {
@@ -300,6 +632,10 @@ main(void)
 	test_count();
 	test_nan();
 	test_passthrough();
+	test_guards_sweep();
+	test_depth_sweep();
+	test_reproject_sweep();
+	test_history_guards();
 	printf("rm_rtptemporal_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

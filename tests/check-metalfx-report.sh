@@ -22,7 +22,8 @@
 #     the engine's 128, plan prints that count, a value that cannot be written into a console line is
 #     refused with its cvar name, and the script is removed with the held config;
 #   - a run split into chunks (one --out each) is combined by report --dir A --dir B: the same rows as
-#     one run, a row two chunks both hold, a chunk of another engine commit or setting refused;
+#     one run, a row two chunks both hold, a chunk of another engine commit or setting refused; the scenario
+#     tables compared with the load note left out, since it measures the host (FIX204);
 #   - the host lock (the real scripts/bench/bench.sh, a private BENCH_STATE, a stub pins.sh that takes it
 #     as scripts/pins.sh does): the generator holds it once for its whole run, so while another job holds
 #     it the generator waits, and no record times out on that wait, and each record and engine run passes
@@ -174,7 +175,7 @@ cc -O2 -o "$tmp/framediff" "$root/scripts/pins/framediff.c" -lm || { bad "cannot
 
 # fixtures
 mkdir "$tmp/repo" "$tmp/plain" "$tmp/fakegit" "$tmp/real" "$tmp/ro" "$tmp/stubfail" "$tmp/stubtrue" "$tmp/scen" "$tmp/out" \
-    "$tmp/makefail" "$tmp/maketrue" "$tmp/basedir" "$tmp/basedir/baseq2"
+    "$tmp/makefail" "$tmp/maketrue" "$tmp/quietup" "$tmp/basedir" "$tmp/basedir/baseq2"
 git -C "$tmp/repo" init -q || { bad "git init failed"; exit 1; }
 mkdir "$tmp/fakegit/.git"
 ln -s "$tmp/real" "$tmp/link"
@@ -184,6 +185,9 @@ printf '#!/bin/sh\necho boom >&2\nexit 1\n' > "$tmp/stubfail/git"
 printf '#!/bin/sh\necho true\nexit 0\n' > "$tmp/stubtrue/git"
 printf '#!/bin/sh\nexit 1\n' > "$tmp/makefail/make"
 printf '#!/bin/sh\nexit 0\n' > "$tmp/maketrue/make"
+# a quiet host for the chunk fixtures: load1() reads uptime, and the chunks and the full run must be read at one load
+printf '#!/bin/sh\necho "up 1 day, load averages: 1.00 1.00 1.00"\n' > "$tmp/quietup/uptime"
+chmod +x "$tmp/quietup/uptime"
 chmod +x "$tmp/stubfail/git" "$tmp/stubtrue/git" "$tmp/makefail/make" "$tmp/maketrue/make"
 printf 'set timedemo 1\nset r_drawworld 1\nset sw_waterwarp 1\n' > "$tmp/scen/world.cfg"
 printf 'set timedemo 1\nset r_rt_shadows 1\n' > "$tmp/scen/rt-shadows.cfg"
@@ -825,19 +829,30 @@ limit" "$out"
     # a run split into chunks, one --out each, is combined by report with one --dir each; the rows are those of
     # the one full run, and a row two chunks both hold, or a chunk of another commit or setting, is refused
     mkeng "$w/ck" "$tmp/eng-cfg"; mkdir -p "$w/c0" "$w/c1" "$w/c2"
-    out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c0" --scenarios world,models 2>&1); want_rc chunk-full 0 $?
-    out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c1" --scenarios world 2>&1); want_rc chunk-one 0 $?
-    out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c2" --scenarios models 2>&1); want_rc chunk-two 0 $?
+    out=$(PATH="$tmp/quietup:$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c0" --scenarios world,models 2>&1); want_rc chunk-full 0 $?
+    out=$(PATH="$tmp/quietup:$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c1" --scenarios world 2>&1); want_rc chunk-one 0 $?
+    out=$(PATH="$tmp/quietup:$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c2" --scenarios models 2>&1); want_rc chunk-two 0 $?
     r0=$(ls -d "$w"/c0/metalfx-t1-* 2>/dev/null | head -1); r1=$(ls -d "$w"/c1/metalfx-t1-* 2>/dev/null | head -1); r2=$(ls -d "$w"/c2/metalfx-t1-* 2>/dev/null | head -1)
     out=$($py report --dir "$r1" --dir "$r2" --html "$w/out/chunks.html" 2>&1); want_rc chunk-merge 0 $?
     full=$(cut -f1-5,7-17 "$r0/results.tsv" 2>/dev/null | sed 1d | sort)
     parts=$({ cut -f1-5,7-17 "$r1/results.tsv"; cut -f1-5,7-17 "$r2/results.tsv"; } 2>/dev/null | grep -v '^option	' | sort)
     [ -n "$full" ] && [ "$full" = "$parts" ] || ko chunk-merge "the chunks' rows are not the full run's"
-    # the report of the chunks shows what the full run's own report shows: the scenario tables and every crop
-    sec() { sed -e 's/\[measured under load[^]]*\]//g' "$1" 2>/dev/null | awk 'BEGIN { RS = "<h2>" } /^Scenario / { print }'; }
+    # the report of the chunks shows what the full run's own report shows: the scenario tables and every crop.
+    # The one field left out is the load note, a measurement of the host and not of the run: host_cell appends
+    # it to the fps cell as " [measured under load (...)]", and it goes with the blank before it (FIX204: with
+    # the blank left in, a full run and its chunks read at loads on either side of LOAD_QUIET differed)
+    sec() { sed -e 's/ \[measured under load[^]]*\]//g' "$1" 2>/dev/null | awk 'BEGIN { RS = "<h2>" } /^Scenario / { print }'; }
     [ -n "$(sec "$w/out/chunks.html")" ] && [ "$(sec "$w/out/chunks.html")" = "$(sec "$(ls "$w"/c0/metalfx-t1-*.html | head -1)")" ] || ko chunk-merge "the chunks' scenario tables differ from the full run's"
     nf=$(grep -o '<figure>' "$w/out/chunks.html" | wc -l | tr -d ' '); nf0=$(grep -o '<figure>' "$(ls "$w"/c0/metalfx-t1-*.html | head -1)" | wc -l | tr -d ' ')
     [ "$nf" -gt 0 ] && [ "$nf" = "$nf0" ] || ko chunk-merge "the crops of the chunks ($nf) are not the full run's ($nf0)"
+    # (FIX204) the load readings are the host's, not the run's: the same rows read under a 1-minute load over
+    # LOAD_QUIET (8.0) carry a load note that the same rows read on a quiet host do not, and the scenario tables
+    # of the two are the same once that note is left out. Forced here: the full run's rows with every load at 20
+    q0="$w/c0load"; cp -R "$r0" "$q0"
+    awk -F'\t' 'BEGIN { OFS = "\t" } NR > 1 && $3 == "ok" { $6 = "20.00" } { print }' "$r0/results.tsv" > "$q0/results.tsv"
+    out=$($py report --dir "$q0" --html "$w/out/c0load.html" 2>&1); want_rc chunk-load 0 $?
+    want_has chunk-load "[measured under load (1-minute load up to 20.0" "$(cat "$w/out/c0load.html" 2>/dev/null)"
+    [ -n "$(sec "$w/out/c0load.html")" ] && [ "$(sec "$w/out/chunks.html")" = "$(sec "$w/out/c0load.html")" ] || ko chunk-load "the chunks' scenario tables differ from those of the full run read under load"
     cp -R "$r1" "$w/c1dup"
     out=$($py report --dir "$r1" --dir "$w/c1dup" --html "$w/out/dup.html" 2>&1); want_rc chunk-dup 3 $?
     want_has chunk-dup "is in both" "$out"
@@ -1046,6 +1061,14 @@ if python3 -I "$HELP" mutate "$0" "$tmp/self-mutant.sh" 'cd "$(dirname "$0")''/.
     { [ $rc -ne 0 ] && case $out in *"the reasons name cases that did not fail: e2e-"*) true;; *) false;; esac; } || bad "decoy-kowhy-kept: the copy that does not restore KO_WHY was not refused (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-300)"
 else
     bad "decoy-kowhy-kept: $(cat "$tmp/self-mutant.log")"
+fi
+# the same for FIX204: a copy whose sec() leaves the blank before the load note in must fail chunk-load, the full run's
+# rows read under load against the chunks read on this host (the copy runs the groups "run" on the real code only)
+if python3 -I "$HELP" mutate "$0" "$tmp/self-mutant-load.sh" 'cd "$(dirname "$0")''/.."' "cd \"$root\"" "sed -e 's/ "'\[measured under'' load' "sed -e 's/"'\[measured under'' load' > "$tmp/self-mutant-load.log"; then
+    out=$(MFX_GROUPS=run MFX_REAL_ONLY=1 VERBOSE=0 bash "$tmp/self-mutant-load.sh" 2>&1); rc=$?
+    { [ $rc -ne 0 ] && case $out in *"failed: chunk-load ("*) true;; *) false;; esac; } || bad "chunk-load-blank-kept: the copy that keeps the blank before the load note was not refused (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-300)"
+else
+    bad "chunk-load-blank-kept: $(cat "$tmp/self-mutant-load.log")"
 fi
 
 # mutants: one change of the line each assertion covers; the covered assertion must fail

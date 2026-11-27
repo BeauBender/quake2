@@ -436,10 +436,11 @@ L=${T:?}/metrics.log
 	echo 'ref_metal: rt shadows: frame 4: 2073600 pixels, 5 in range, 5 traced, 2 shadowed, 20 rays, 1.700 ms'
 	echo 'ref_metal: rt shadows: frame 5: 2073600 pixels, 7 in range, 7 traced, 3 shadowed, 28 rays, 2.100 ms'
 	echo 'ref_metal: rt shadows: frame 6: 2073600 pixels, 7 in range, 7 traced, 3 shadowed, 28 rays, - ms'
+	echo 'ref_metal: rt shadows: frame 7: 307200 pixels, 1000 in range, 900 traced, 300 shadowed, 1200 rays, 0.250 ms, traced at 320x240, 9 upsample fallbacks'
 	echo 'ref_metal: rt ao: frame 1: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 8.000 ms'
 	echo 'ref_metal: rt ao: frame 2: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 8.000 ms'
 	echo 'Map: base2ref_metal: rt ao: frame 3: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 3.600 ms'
-	echo 'ref_metal: rt ao: frame 4: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 3.700 ms'
+	echo 'ref_metal: rt ao: frame 4: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 3.700 ms, traced at 960x540, 3 upsample fallbacks'
 	echo '689 frames, 0.1 seconds: 6890.0 fps'
 	echo '12 frames, 9.0 seconds: 1.3 fps'
 	echo 'ref_metal: metal_stats: 1000 frames, 400 without a drawable, 3 skipped, 1 failed command buffers, 0 readbacks'
@@ -463,12 +464,12 @@ metric.held=120
 metric.scaler_ms=0.9
 metric.scaler_ms_p90=1
 metric.scaler_ms_n=3
-metric.rts_ms=1.7
+metric.rts_ms=1.5
 metric.rts_ms_p90=2.1
-metric.rts_ms_n=3
-metric.rts_traced_ms=1.9
+metric.rts_ms_n=4
+metric.rts_traced_ms=1.7
 metric.rts_traced_ms_p90=2.1
-metric.rts_traced_ms_n=2
+metric.rts_traced_ms_n=3
 metric.rtao_ms=3.65
 metric.rtao_ms_p90=3.7
 metric.rtao_ms_n=2
@@ -478,7 +479,7 @@ cmp -s "${T:?}/m.want" "${T:?}/m.out" || bad "the metrics of the synthetic log: 
 # scaler's lines have no frame number and are all counted
 mkcase m3 "$ok_set after_frame=3"
 q2h "${T:?}/m3.case" adapter_metrics "${T:?}/m3.case" "$L" > "${T:?}/m3.out" 2> "${T:?}/m.err" || bad "the metrics failed: $(cat "${T:?}/m.err")"
-for l in metric.rts_ms=1.9 metric.rts_ms_n=2 metric.rts_traced_ms_n=2 metric.rtao_ms=3.7 metric.rtao_ms_n=1 metric.scaler_ms=0.95 metric.scaler_ms_n=4; do
+for l in metric.rts_ms=1.7 metric.rts_ms_n=3 metric.rts_traced_ms_n=3 metric.rtao_ms=3.7 metric.rtao_ms_n=1 metric.scaler_ms=0.95 metric.scaler_ms_n=4; do
 	grep -qx "$l" "${T:?}/m3.out" || bad "after_frame=3: no $l in $(tr '\n' ' ' < "${T:?}/m3.out")"
 done
 L=${T:?}/mgl.log
@@ -664,6 +665,39 @@ for mu in 's/w\[i\] = "vsync=0"/w[i] = w[i]/|display sync kept' \
 		echo "$me: mutant (${mu#*|}): caught by the pre-warm test"
 	fi
 done
+# the shadows-line mutant (TASK126): the parser back to the 18-field line only
+# must lose the divisor-2 line and so fail the metrics test
+sed 's/(n == 18 || (n == 24 \&\& f\[19\] == "traced"))/n == 18/' "$REAL/adapters/quake2.sh" > "$M/adapters/quake2.sh"
+if cmp -s "$REAL/adapters/quake2.sh" "$M/adapters/quake2.sh"; then
+	bad "the shadows-line mutant did not apply"
+else
+	Q2H_ROOT=$M
+	export Q2H_ROOT
+	L=${T:?}/metrics.log
+	q2h "${T:?}/m.case" adapter_metrics "${T:?}/m.case" "$L" > "${T:?}/mut.out" 2> /dev/null || true
+	if cmp -s "${T:?}/m.want" "${T:?}/mut.out"; then
+		bad "the mutant (the divisor-2 shadows line dropped) passed the metrics test"
+	else
+		echo "$me: mutant (the divisor-2 shadows line dropped): caught by the metrics test"
+	fi
+fi
+unset Q2H_ROOT
+# the AO-line mutant (TASK126 slice 6): the parser back to the 25-field line only
+# must lose the divisor-2 AO line (r_rt_ao_scale's default) and so fail the metrics test
+sed 's/(n == 25 || (n == 31 \&\& f\[26\] == "traced"))/n == 25/' "$REAL/adapters/quake2.sh" > "$M/adapters/quake2.sh"
+if cmp -s "$REAL/adapters/quake2.sh" "$M/adapters/quake2.sh"; then
+	bad "the AO-line mutant did not apply"
+else
+	Q2H_ROOT=$M
+	export Q2H_ROOT
+	L=${T:?}/metrics.log
+	q2h "${T:?}/m.case" adapter_metrics "${T:?}/m.case" "$L" > "${T:?}/mut.out" 2> /dev/null || true
+	if cmp -s "${T:?}/m.want" "${T:?}/mut.out"; then
+		bad "the mutant (the divisor-2 AO line dropped) passed the metrics test"
+	else
+		echo "$me: mutant (the divisor-2 AO line dropped): caught by the metrics test"
+	fi
+fi
 unset Q2H_ROOT
 
 if [ "$fails" -ne 0 ]; then

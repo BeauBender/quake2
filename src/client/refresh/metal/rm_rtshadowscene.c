@@ -18,8 +18,9 @@
  * =======================================================================
  *
  * The engine side of ref_metal's ray-traced dynamic-light shadows (RT3,
- * TASK55; header/rm_rtshadow.h): the r_rt_shadows cvar and its
- * development view r_rt_shadows_show, the frame's decision (rm_rts_on:
+ * TASK55; header/rm_rtshadow.h): the r_rt_shadows cvar, its
+ * development view r_rt_shadows_show and TASK126's r_rt_shadows_scale
+ * (the traced size), the frame's decision (rm_rts_on:
  * with it, gl1's dynamic-light term leaves the lightmaps, r_dlight_term,
  * and the view takes the G-buffer path), the map's per-triangle
  * transmission and surface tables (built when the shadows are first on
@@ -37,9 +38,11 @@
 #include "header/rm_rtscene.h"
 #include "header/rm_rtaoscene.h"
 #include "header/rm_gbufscene.h"
+#include "common/mtl_rtup_math.h"
 
 static cvar_t *r_rt_shadows;
 static cvar_t *r_rt_shadows_show;
+static cvar_t *r_rt_shadows_scale;  /* TASK126: the traced size, a fraction of the view's width and height */
 static cvar_t *r_rt_stats_ref;
 
 static int rts_device;          /* rmb_caps_t.raytracing */
@@ -93,6 +96,7 @@ RM_RTS_Init(const rmb_caps_t *caps)
 {
 	r_rt_shadows = ri.Cvar_Get("r_rt_shadows", "0", CVAR_ARCHIVE);
 	r_rt_shadows_show = ri.Cvar_Get("r_rt_shadows_show", "0", 0);
+	r_rt_shadows_scale = ri.Cvar_Get("r_rt_shadows_scale", "1", CVAR_ARCHIVE);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	rts_device = caps->raytracing != 0;
 	rts_opened = rts_refused = rts_active = 0;
@@ -308,10 +312,32 @@ RM_RTS_Frame(const refdef_t *fd, int scene_ready)
 
 	n = rmb_rts_stats(st, RMB_FRAMES_IN_FLIGHT);
 
+	/*
+	 * TASK126: a world view whose shadow histories reset for
+	 * r_rt_shadows_scale (the back end's take, rm_rtt_hist_take_at). The
+	 * model view and a change of fov never reach it: the one traces no
+	 * shadows (RDF_NOWORLDMODEL), the other is no divisor.
+	 */
+	if (rmb_rts_scale_reset() && r_rt_stats_ref && (r_rt_stats_ref->value >= 1))
+	{
+		char line[RM_STATS_LINE];
+
+		if (rm_rtt_scale_line_format("shadows", line, sizeof(line)))
+		{
+			R_Printf(PRINT_ALL, "%s\n", line);
+		}
+	}
+
 	/* the settings optimizer's cost hints (TASK203): kept only during its probe */
 	for (i = 0; i < n; i++)
 	{
 		RM_OptCost_Add(RM_COST_SHADOWS, st[i].ms);
+	}
+
+	/* TASK126 slice 6: the upsample's size-change line (r_rt_stats 1) and the map summary's totals */
+	for (i = 0; i < n; i++)
+	{
+		RM_RT_UpFrame(RM_RT_UP_SHADOWS, st[i].frame, st[i].div, st[i].tw, st[i].th, st[i].w, st[i].h, st[i].fallbacks);
 	}
 
 	for (i = 0; i < n && r_rt_stats_ref && (r_rt_stats_ref->value >= 2); i++)
@@ -405,6 +431,7 @@ RM_RTS_View(const rm_view_t *view)
 {
 	static rm_rts_light_t lights[MTL_RTS_MAX_LIGHTS];
 	rm_rts_view_t v;
+	unsigned div;
 	int i, n, w, h;
 
 	r_dlight_term = true;
@@ -430,8 +457,11 @@ RM_RTS_View(const rm_view_t *view)
 	 */
 	RM_GB_TargetSize(&w, &h);
 
+	/* TASK126: the size the shadows trace at, a share of the render size; at 1 the stock trace */
+	div = mtl_rtup_div(RM_Effect(r_rt_shadows_scale));
+
 	if ((n <= 0) || !rm_rts_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value, &v) ||
-		!rmb_rts_prepare((unsigned long)w, (unsigned long)h))
+		!rmb_rts_prepare((unsigned long)w, (unsigned long)h, div))
 	{
 		memset(&v, 0, sizeof(v));
 		v.show = (unsigned)rm_rts_show(r_rt_shadows_show->value);
@@ -460,7 +490,9 @@ RM_RTS_View(const rm_view_t *view)
 	v.carried = RM_RT_Carried();
 	RM_RTS_Ents();
 	rmb_rts_set_view(&v, lights, n);
-	rmb_rts_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (unsigned long)h);
+	/* the histories at the traced size: the render size at divisor 1 */
+	rmb_rts_temporal(RM_RTT_ViewFor(view), (unsigned long)mtl_rtup_size((unsigned)w, div),
+			(unsigned long)mtl_rtup_size((unsigned)h, div));
 
 	/* the dynamic-light term leaves the lightmaps: the resolve adds it back */
 	r_dlight_term = false;
