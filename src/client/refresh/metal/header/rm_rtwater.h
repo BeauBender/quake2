@@ -243,6 +243,7 @@ typedef struct
 	unsigned div;
 	unsigned long tw, th;       /* the traced size (the render size at divisor 1) */
 	unsigned long fallbacks;    /* 0 at divisor 1 */
+	unsigned long w, h;         /* TASK126 slice 6: the drawn size, pixels = w x h */
 } rm_rtw_stats_t;
 
 /*

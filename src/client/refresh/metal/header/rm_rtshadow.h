@@ -260,6 +260,7 @@ typedef struct
 	unsigned div;               /* TASK126: the view's divisor; above 1 the three counts above are the traced pixels' */
 	unsigned long tw, th;       /* the traced size (the render size at divisor 1) */
 	unsigned long fallbacks;    /* the upsample's fallbacks, in drawn pixels (rm_rts_up), 0 at divisor 1 */
+	unsigned long w, h;         /* TASK126 slice 6: the drawn size, pixels = w x h */
 } rm_rts_stats_t;
 
 /*
