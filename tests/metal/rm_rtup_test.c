@@ -304,6 +304,22 @@ test_bilinear(void)
 	CHECK(in.b[0] == 0.25f && in.b[1] == 0.25f && in.b[2] == 0.25f && in.b[3] == 0.25f);
 }
 
+/* a pixel depth that is not finite is empty, the neutral value, even where every tap has a sample */
+static void
+test_nonfinite(void)
+{
+	mtl_rtup_in_t in = flat(100.0f);
+	mtl_rtup_out_t o;
+
+	in.d = INFINITY;
+	o = mtl_rtup_weights(in, 2u);
+	CHECK(o.empty && !o.fallback && (wsum(o) == 0.0f));
+
+	in.d = NAN;
+	o = mtl_rtup_weights(in, 2u);
+	CHECK(o.empty && !o.fallback && (wsum(o) == 0.0f));
+}
+
 /*
  * An 8 x 8 view at divisor 2, upsampled as a kernel would: a near wall
  * (depth 100, value 0.2) in columns 0 to 2, a far one (depth 400, value
@@ -399,6 +415,7 @@ main(void)
 	test_other();
 	test_fallback();
 	test_bilinear();
+	test_nonfinite();
 	test_image();
 	printf("rm_rtup_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

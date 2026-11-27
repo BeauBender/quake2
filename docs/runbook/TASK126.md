@@ -68,7 +68,8 @@ at 1:1, as temporal anti-aliasing.
     `mtl_rtd_normal_w`, and 0 for another material id or a tap with no sample.
   - `mtl_rtup_weights`, the weights normalised. Where none matches, the tap with a sample nearest in
     depth carries the whole weight (the first of equals), with `fallback` set. Where none has a
-    sample, the result is `empty`. At a divisor of 1 it is tap 0, whole, and no fallback.
+    sample, the result is `empty`, and so it is for a pixel whose own depth is not finite (infinity or
+    NaN), whatever its taps hold: the neutral value is the safe result. At a divisor of 1 it is tap 0, whole, and no fallback.
   - `mtl_rtup_value`, one channel under the weights, or the neutral value where they are empty.
 
   No kernel includes it yet, so the Makefile's `ref_metal.metallib` list does not name it. The slice
@@ -80,7 +81,8 @@ at 1:1, as temporal anti-aliasing.
     weighs nothing;
   - the fallback to the tap nearest in depth, with the count, the passed-over tap with no sample,
     equals and a silhouette;
-  - the empty case;
+  - the empty case, and a pixel depth that is not finite;
+  - each tap's bilinear weight on its own axis;
   - an 8 x 8 image at divisor 2. Each side of a depth step keeps its value, and a thin model line that
     no traced pixel lies on takes the far wall's value: the traced pixels nearest it in depth, 8
     fallbacks.

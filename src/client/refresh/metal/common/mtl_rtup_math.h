@@ -154,7 +154,8 @@ mtl_rtup_tap_w(mtl_rtup_in_t in, int i)
  * identity, and no fallback. Below that, the taps' weights over their sum;
  * where they sum to 0, the tap with a sample nearest the pixel in depth
  * (the first of equals), counted as a fallback; where no tap has a sample,
- * empty.
+ * empty. A pixel whose own depth is not finite is empty as well, whatever
+ * its taps hold, the effect's neutral value being the safe result for it.
  */
 static inline mtl_rtup_out_t
 mtl_rtup_weights(mtl_rtup_in_t in, unsigned d)
