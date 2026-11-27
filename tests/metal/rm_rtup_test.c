@@ -281,6 +281,51 @@ test_fallback(void)
 	CHECK(mtl_rtup_value(o, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f) == 1.0f);
 }
 
+/*
+ * mtl_rtup_own (the water, slice 5): a fallback only to a tap of the pixel's
+ * own material. A pillar pixel (material 2) beside water traced over a floor
+ * (material 1): the plain rule falls back to the floor tap nearest in depth;
+ * with mtl_rtup_own no tap is the pillar's, so the pixel is empty, the
+ * neutral value, not counted. A tap of its own material is still taken.
+ */
+static void
+test_own(void)
+{
+	mtl_rtup_in_t in = flat(380.0f);
+	mtl_rtup_out_t o;
+	int i;
+
+	in.m = 2u;
+	in.dn[0] = 100.0f;
+	in.dn[1] = 120.0f;
+	in.dn[2] = 400.0f;
+	in.dn[3] = 410.0f;
+	o = mtl_rtup_weights(in, 2u);
+	CHECK(o.fallback && (o.w[2] == 1.0f));
+	o = mtl_rtup_weights(mtl_rtup_own(in), 2u);
+	CHECK(o.empty && !o.fallback && (wsum(o) == 0.0f));
+	CHECK(mtl_rtup_value(o, 0.2f, 0.2f, 0.9f, 0.8f, 0.0f) == 0.0f);
+
+	/* tap 3 the pillar's, across the depth step: the fallback, whole, and counted */
+	in.mn[3] = 2u;
+	o = mtl_rtup_weights(mtl_rtup_own(in), 2u);
+	CHECK(o.fallback && !o.empty && (o.w[3] == 1.0f) && (o.w[2] == 0.0f));
+
+	/* only the samples change: the taps of the pixel's own material keep theirs, and the weights are the rule's */
+	in = mtl_rtup_own(in);
+	CHECK(!in.ok[0] && !in.ok[1] && !in.ok[2] && in.ok[3]);
+	in = flat(100.0f);
+	in.mn[1] = 2u;
+
+	for (i = 0; i < MTL_RTUP_TAPS; i++)
+	{
+		CHECK(mtl_rtup_tap_w(mtl_rtup_own(in), i) == mtl_rtup_tap_w(in, i));
+	}
+
+	o = mtl_rtup_weights(mtl_rtup_own(in), 2u);
+	CHECK(!o.fallback && !o.empty && near(o.w[0], 1.0f / 3.0f) && (o.w[1] == 0.0f));
+}
+
 /* each tap's bilinear weight follows its axis: tap 1 (the next in x) the x fraction, tap 2 (the next in y) the y fraction */
 static void
 test_bilinear(void)
@@ -530,6 +575,7 @@ main(void)
 	test_material();
 	test_other();
 	test_fallback();
+	test_own();
 	test_bilinear();
 	test_nonfinite();
 	test_image();

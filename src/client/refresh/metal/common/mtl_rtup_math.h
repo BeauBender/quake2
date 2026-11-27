@@ -219,6 +219,19 @@ mtl_rtup_weights(mtl_rtup_in_t in, unsigned d)
 }
 
 /*
+ * in with every tap of another material than the drawn pixel's taken as
+ * holding no sample, for an effect whose fallback must take only a tap of
+ * the pixel's own material (the water's, TASK126 slice 5): a pixel with no
+ * such tap is then empty, the effect's neutral value, and not a fallback.
+ * The weights are unchanged, mtl_rtup_tap_w giving such a tap 0 already.
+ */
+static inline mtl_rtup_in_t
+mtl_rtup_own(mtl_rtup_in_t in)
+{
+	return in;
+}
+
+/*
  * One channel upsampled: the taps' values v0 to v3 under the weights (a
  * tap of weight 0 adds nothing, so its value may be anything), or neutral
  * where the weights are empty.
