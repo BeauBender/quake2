@@ -722,7 +722,8 @@ test_view(void)
 	CHECK(v.bias_k == s.bias_k);
 	CHECK((v.dir[0] == dir[0]) && (v.dir[1] == dir[1]) && (v.dir[2] == dir[2]) && (v.dir[3] == 0));
 	CHECK((v.sun[0] == 0.5f * 0.35f) && (v.sun[1] == 0.35f) && (v.sun[2] == 0.25f * 0.35f) && (v.sun[3] == 0));
-	CHECK((v.floor_ == 0.5f) && (v.show == 2) && (v.pad == 0));
+	/* TASK126 slice 3: the view's divisor is 1, every pixel traced, until the scene sets r_rt_sun_scale's */
+	CHECK((v.floor_ == 0.5f) && (v.show == 2) && (v.div == 1));
 
 	CHECK(rm_rtsun_view(proj, world, &vp, eye, 0, dir, sky, 0.35f, 0.5f, 0, &v) == 0);
 	CHECK(rm_rtsun_view(proj, world, &vp, eye, NAN, dir, sky, 0.35f, 0.5f, 0, &v) == 0);
@@ -751,6 +752,25 @@ test_stats(void)
 	CHECK(rm_rtsun_stats_format(&s, buf, sizeof(buf)) == 1 && strstr(buf, "80000 lit, - ms"));
 	CHECK(rm_rtsun_stats_format(&s, small, sizeof(small)) == 0 && (small[0] == 0));
 	CHECK(rm_rtsun_stats_format(&s, buf, 0) == 0);
+
+	/* TASK126 slice 3: at divisor 1 (or 0, a stats slot never traced) the line is the one above */
+	s.ms = 0.25;
+	s.div = 1;
+	s.tw = 640;
+	s.th = 480;
+	s.fallbacks = 9;
+	CHECK(rm_rtsun_stats_format(&s, buf, sizeof(buf)) == 1 && !strcmp(buf, want));
+	s.div = 0;
+	CHECK(rm_rtsun_stats_format(&s, buf, sizeof(buf)) == 1 && !strcmp(buf, want));
+
+	/* below it, the traced size and the upsample's fallbacks */
+	s.div = 2;
+	s.tw = 320;
+	s.th = 240;
+	CHECK(rm_rtsun_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(!strcmp(buf, "ref_metal: rt sun: frame 7: 307200 pixels, 200000 world, 50000 bright, 30000 facing away, "
+			"120000 rays, 80000 lit, 0.250 ms, traced at 320x240, 9 upsample fallbacks"));
+	CHECK(rm_rtsun_stats_format(&s, buf, strlen(want) + 4) == 0 && (buf[0] == 0));
 
 	CHECK(rm_rtsun_map_format("base1", 12000, 300000, 1, 60, 135, buf, sizeof(buf)) == 1);
 	CHECK(!strcmp(buf, "ref_metal: rt sun: base1: sky 12000 of 300000 square units (4.00 %), the pass runs; "
