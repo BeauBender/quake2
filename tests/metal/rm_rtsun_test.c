@@ -944,6 +944,93 @@ test_up_no_double_count(void)
 	CHECK((empties > 0) && (fallbacks > 0) && (weighted > 0));
 }
 
+/*
+ * TASK126 slice 6, hold round 2: the map summary's totals equal the sums
+ * of the r_rt_stats 2 lines of the same frames. rm_rtsunscene.c hands each
+ * stats slot to rm_rtt_up_frame (through RM_RT_UpFrame) and formats the
+ * same slot's line; the slots come in slot order, not frame order, at a
+ * divisor 1 between, with the old map's frames in flight at the map's
+ * first read. Parsed back as the hold reads them ("frame N: P pixels" and
+ * ", traced at TWxTH, F upsample fallbacks"), the lines of the frames
+ * numbered from the map's first sum to the totals: a frame drawn below
+ * the traced size has its line, and a line of the map before is the only
+ * one the totals leave out.
+ */
+static void
+test_up_lines_sum(void)
+{
+	static const struct
+	{
+		unsigned long frame;
+		unsigned div;
+		unsigned long tw, fallbacks;
+	} in[] = {
+		{ 8, 3u, 214, 40 }, { 9, 3u, 214, 41 },   /* the map before's, in flight */
+		{ 10, 2u, 320, 933 }, { 12, 2u, 320, 670 }, { 11, 2u, 320, 0 },
+		{ 14, 2u, 320, 5 }, { 13, 1u, 640, 0 },   /* r_rt_sun_scale 1 for a frame, handed over late */
+		{ 18, 1u, 640, 0 }, { 19, 2u, 320, 2 },   /* and for a frame in order */
+		{ 16, 3u, 214, 7 }, { 15, 2u, 320, 1 }, { 17, 3u, 214, 0 },
+	};
+	const unsigned long from = 10;
+	rm_rtt_up_t u;
+	rm_rtsun_stats_t s;
+	char buf[RM_STATS_LINE];
+	unsigned long long lp = 0, lf = 0;
+	unsigned long n, p, tw, th, f, counted = 0;
+	size_t i;
+	const char *t;
+	int ok_line = 1;
+
+	memset(&u, 0, sizeof(u));
+	rm_rtt_up_map(&u, from);
+
+	for (i = 0; i < sizeof(in) / sizeof(in[0]); i++)
+	{
+		memset(&s, 0, sizeof(s));
+		s.frame = in[i].frame;
+		s.div = in[i].div;
+		s.w = 640;
+		s.h = 480;
+		s.pixels = s.w * s.h;
+		s.tw = in[i].tw;
+		s.th = (in[i].div > 1u) ? s.h / in[i].div + ((s.h % in[i].div) != 0) : s.h;
+		s.fallbacks = (in[i].div > 1u) ? in[i].fallbacks : 0;
+		s.ms = 0.25;
+
+		/* the scene's order: the totals, then the line */
+		rm_rtt_up_frame(&u, s.frame, s.div, s.tw, s.th, s.w * s.h, s.fallbacks);
+		ok_line &= rm_rtsun_stats_format(&s, buf, sizeof(buf));
+
+		/* the hold's reading */
+		t = strstr(buf, ", traced at ");
+		ok_line &= sscanf(buf, "ref_metal: rt sun: frame %lu: %lu pixels,", &n, &p) == 2;
+		ok_line &= (n == in[i].frame) && (p == s.pixels);
+
+		if (in[i].div <= 1u)
+		{
+			ok_line &= (t == NULL);
+			continue;
+		}
+
+		ok_line &= (t != NULL) && (sscanf(t, ", traced at %lux%lu, %lu upsample fallbacks", &tw, &th, &f) == 3);
+		ok_line &= (t != NULL) && !strcmp(t + strlen(t) - strlen(" upsample fallbacks"), " upsample fallbacks");
+		ok_line &= (tw == s.tw) && (th == s.th) && (f == s.fallbacks);
+
+		if (n >= from)
+		{
+			lp += p;
+			lf += f;
+			counted++;
+		}
+	}
+
+	CHECK(ok_line);
+	CHECK(counted == 8);
+	CHECK(u.pixels == lp);
+	CHECK(u.fallbacks == lf);
+	CHECK((u.pixels == 8ull * 307200) && (u.fallbacks == 933 + 670 + 0 + 5 + 2 + 7 + 1 + 0));
+}
+
 int
 main(void)
 {
@@ -963,6 +1050,7 @@ main(void)
 	test_stats();
 	test_no_double_count();
 	test_up_no_double_count();
+	test_up_lines_sum();
 
 	printf("rm_rtsun_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
