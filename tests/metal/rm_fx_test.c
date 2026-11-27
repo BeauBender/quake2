@@ -718,14 +718,17 @@ test_reset_line(void)
 	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler cut effect, temporal cut") == 0);
 	CHECK(rm_fx_reset_line_format(RM_FX_RESET_ALL, RM_RTT_RESET_ALL, buf, sizeof(buf)));
 	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler first mode size rect cut effect, "
-			"temporal first size rect cut") == 0);
+			"temporal first size rect cut scale") == 0);
+	/* TASK126 slice 2: an effect's history reset for its own scale */
+	CHECK(rm_fx_reset_line_format(0, RM_RTT_RESET_SCALE, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler none, temporal scale") == 0);
 	CHECK(rm_fx_reset_line_format(RM_FX_RESET_MODE | RM_FX_RESET_SIZE | RM_FX_RESET_RECT, 0, buf, sizeof(buf)));
 	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler mode size rect, temporal none") == 0);
 
 	/* bits beyond the known reasons name nothing */
-	CHECK(rm_fx_reset_line_format(RM_FX_RESET_SIZE | 0x40u, RM_RTT_RESET_RECT | 0x10u, buf, sizeof(buf)));
+	CHECK(rm_fx_reset_line_format(RM_FX_RESET_SIZE | 0x40u, RM_RTT_RESET_RECT | 0x20u, buf, sizeof(buf)));
 	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler size, temporal rect") == 0);
-	CHECK(rm_fx_reset_line_format(0x40u, 0x10u, buf, sizeof(buf)));
+	CHECK(rm_fx_reset_line_format(0x40u, 0x20u, buf, sizeof(buf)));
 	CHECK(strcmp(buf, "ref_metal: r_rt_stats: reset: scaler none, temporal none") == 0);
 
 	/* the empty set: nothing to print */
