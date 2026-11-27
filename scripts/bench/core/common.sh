@@ -371,12 +371,12 @@ bench_poll_end() {
 		rm -rf "${BENCH_POLL_DIR:?}"
 		BENCH_POLL_DIR=
 	fi
-	# bench_bounded's events file when no bounded command is set yet (an
-	# INT in its mktemp); with one, its stop removes it (TASK221)
-	if [ -z "${BENCH_BOUNDED_PID:-}" ]; then
-		for _pe_f in "${TMPDIR:-/tmp}/bench-sv.$$."*; do
-			if [ -f "$_pe_f" ]; then rm -f "$_pe_f" || :; fi
-		done
+	# bench_bounded's events file, made but no bounded command set yet;
+	# with one, its stop removes it (TASK221). Only this run's file, by
+	# its name: a sibling subshell's has the same $$ (round 1, N3).
+	if [ -z "${BENCH_BOUNDED_PID:-}" ] && [ -n "${BENCH_BOUNDED_EV:-}" ]; then
+		rm -f "$BENCH_BOUNDED_EV" "$BENCH_BOUNDED_EV.tap" || :
+		BENCH_BOUNDED_EV=
 	fi
 } 2> /dev/null
 
@@ -919,6 +919,7 @@ BENCH_BOUNDED_QUIT=
 BENCH_BOUNDED_TAG=
 BENCH_BOUNDED_UNTIL=
 BENCH_BOUNDED_EV=
+BENCH_BOUNDED_TEE=
 BENCH_SV=
 
 # The process supervisor's library (scripts/lib, TASK221): beside this
@@ -963,7 +964,7 @@ bench_sv() {
 # this shell's (BENCH_BOUNDED_EV, under TMPDIR, removed before the bound
 # returns and by bench_poll_end on a trap's way out); on a timeout they are
 # appended to standard error. With BENCH_BOUNDED_TAP, a path (a test's
-# FIFO), the events go there instead, and the file stays empty.
+# FIFO), the events also go there, through tee (bench_bounded_tee).
 # It is the one bounded-run primitive (FIX122): the adapters,
 # scripts/pins.sh, scripts/ios-sim.sh and scripts/ios-device.sh run their
 # commands through it, and tests/check-bounded-run.sh refuses another
@@ -1006,11 +1007,22 @@ bench_bounded() {
 		_bb_o=$2 _bb_e=$3
 		shift 3
 	fi
-	BENCH_BOUNDED_EV=$(mktemp "${TMPDIR:-/tmp}/bench-sv.$$.XXXXXX") || bench_die 2 "cannot make a temporary file"
+	bench_bounded_ev || bench_die 2 "cannot make a temporary file"
 	# from here a caller's trap calls bench_stop_group, which finds the
 	# supervisor also in sv_start's fork window (sv_pid)
 	BENCH_BOUNDED_PID=starting
-	_bb_v=${BENCH_BOUNDED_TAP:-$BENCH_BOUNDED_EV}
+	_bb_v=$BENCH_BOUNDED_EV
+	if [ -n "${BENCH_BOUNDED_TAP:-}" ]; then
+		# a test's FIFO: the events go to the file too, through tee, which
+		# opens its FIFO before the supervisor's start does (bench_bounded_tee)
+		_bb_v=$BENCH_BOUNDED_EV.tap
+		if ! mkfifo -m 600 "$_bb_v"; then
+			bench_bounded_end
+			bench_die 2 "cannot make a FIFO"
+		fi
+		tee -a "$BENCH_BOUNDED_EV" < "$_bb_v" >> "$BENCH_BOUNDED_TAP" 2> /dev/null &
+		BENCH_BOUNDED_TEE=$!
+	fi
 	# --timeout 0 is no deadline to the supervisor; a wall time of 0 is one
 	_bb_w=$_bb_s
 	[ "$_bb_w" -ne 0 ] || _bb_w=0.001
@@ -1054,6 +1066,7 @@ bench_bounded() {
 	fi
 	_bb_st=0
 	sv_wait || _bb_st=$?
+	bench_bounded_tee
 	# the supervisor's own 124, 125 or 126, by its events; else the command's
 	_bb_w=exit
 	if bench_bounded_ours "$_bb_st"; then _bb_w=$_bb_st; fi
@@ -1133,10 +1146,38 @@ bench_bounded_untold() {
 	esac
 }
 
+# bench_bounded_ev: makes the events file, BENCH_BOUNDED_EV: a name mktemp
+# gives (-u), set before the file is made (noclobber, mode 0600), so a
+# trap that runs at any point finds its own file by that name
+# (bench_poll_end), and only that one (correctness N3, round 1)
+bench_bounded_ev() {
+	_be_n=0
+	while [ "$_be_n" -lt 5 ]; do
+		BENCH_BOUNDED_EV=$(mktemp -u "${TMPDIR:-/tmp}/bench-sv.$$.XXXXXX") || BENCH_BOUNDED_EV=
+		[ -n "$BENCH_BOUNDED_EV" ] || return 1
+		if (umask 077 && set -C && : > "$BENCH_BOUNDED_EV") 2> /dev/null; then return 0; fi
+		BENCH_BOUNDED_EV=
+		_be_n=$((_be_n + 1))
+	done
+	return 1
+}
+
+# bench_bounded_tee: waits for the tee of BENCH_BOUNDED_TAP, once the
+# supervisor is gone, so the events file is whole. A read-write open of
+# its FIFO first ends a tee whose FIFO no supervisor opened (a stop before
+# the start): it sees a writer come and go, and end of file.
+bench_bounded_tee() {
+	[ -n "$BENCH_BOUNDED_TEE" ] || return 0
+	{ :; } 9<> "$BENCH_BOUNDED_EV.tap" 2> /dev/null || :
+	wait "$BENCH_BOUNDED_TEE" 2> /dev/null || :
+	BENCH_BOUNDED_TEE=
+}
+
 # bench_bounded_end: the bounded command is over: no pid, no events file
 bench_bounded_end() {
+	bench_bounded_tee
 	BENCH_BOUNDED_PID=
-	if [ -n "$BENCH_BOUNDED_EV" ]; then rm -f "$BENCH_BOUNDED_EV"; fi
+	if [ -n "$BENCH_BOUNDED_EV" ]; then rm -f "$BENCH_BOUNDED_EV" "$BENCH_BOUNDED_EV.tap"; fi
 	BENCH_BOUNDED_EV=
 }
 
@@ -1146,6 +1187,7 @@ bench_bounded_end() {
 bench_bounded_stop() {
 	_bs_st=0
 	sv_stop || _bs_st=$?
+	bench_bounded_tee
 	if bench_bounded_ours "$_bs_st" && [ "$_bs_st" -eq 126 ]; then bench_bounded_untold; fi
 	bench_bounded_end
 }
