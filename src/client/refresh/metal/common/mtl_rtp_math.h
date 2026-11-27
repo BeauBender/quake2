@@ -65,23 +65,26 @@ mtl_rtp_world(unsigned mat, float depth, float normal_a)
 	return (mat == MTL_GB_MAT_WORLD) && (depth < 1.0f) && (normal_a > 0.5f);
 }
 
-/* 1 when v is a light the history can hold: finite and in [0, 1] (written so that a NaN fails) */
+/* 1 when v is a light the history can hold: finite and in [0, 1] (a NaN fails; an integer test of the pattern, see MTL_RTT_BITS) */
 static inline int
 mtl_rtp_light_ok(float v)
 {
-	return (v >= 0.0f) && (v <= 1.0f);
+	return mtl_rtt_unit(v);
 }
 
 /* a light as the blend takes it: v in [0, 1], 0 for a NaN */
 static inline float
 mtl_rtp_clamp(float v)
 {
-	if (!(v >= 0.0f))
+	const unsigned u = MTL_RTT_BITS(v);
+
+	/* a NaN, -inf and every negative value are 0; -0 stays -0, as (v >= 0) holds for it */
+	if (!mtl_rtt_nonneg(v))
 	{
 		return 0.0f;
 	}
 
-	return (v > 1.0f) ? 1.0f : v;
+	return ((u > MTL_RTT_BITS_1) && (u != MTL_RTT_SIGN)) ? 1.0f : v;
 }
 
 /*
@@ -99,7 +102,7 @@ mtl_rtp_reject(unsigned reset, int ok, float dist, float hdist, float move, unsi
 	unsigned r = mtl_rtt_reject(reset, ok, dist, hdist, move, mat, hmat, 0u, 0u, h.a);
 
 	/* TASK190 slice 2: a count past MTL_RTT_COUNT_MAX, infinite included, is a bad history too (no NaN blend) */
-	if (ok && !(mtl_rtp_light_ok(h.r) && mtl_rtp_light_ok(h.g) && mtl_rtp_light_ok(h.b) && (h.a <= MTL_RTT_COUNT_MAX)))
+	if (ok && !(mtl_rtp_light_ok(h.r) && mtl_rtp_light_ok(h.g) && mtl_rtp_light_ok(h.b) && mtl_rtt_atmost_max(h.a)))
 	{
 		r |= MTL_RTP_REJ_BAD;
 	}
