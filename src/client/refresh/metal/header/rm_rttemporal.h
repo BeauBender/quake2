@@ -29,6 +29,8 @@
 #ifndef RM_RTTEMPORAL_H
 #define RM_RTTEMPORAL_H
 
+#include <stddef.h>
+
 #include "../common/mtl_rtt_math.h"
 
 typedef mtl_rtt_view_t rm_rtt_view_t;
@@ -52,7 +54,8 @@ float rm_rtt_alpha(float v);
 #define RM_RTT_RESET_SIZE 2     /* the render size: r_metalfx_scale's (RT11), r_rt_gbuffer_scale's, the window's */
 #define RM_RTT_RESET_RECT 4     /* the view's rectangle at the render size: viewsize */
 #define RM_RTT_RESET_CUT 8      /* the eye moved further than RM_RTT_CUT_DIST on an axis: a camera cut, a teleport */
-#define RM_RTT_RESET_ALL 15
+#define RM_RTT_RESET_SCALE 16   /* one effect's own: its history was taken at another divisor (TASK126, rm_rtt_hist_take_at) */
+#define RM_RTT_RESET_ALL 31
 
 /* one accumulated world view: the render size, its rectangle in it and the eye */
 typedef struct
@@ -110,9 +113,14 @@ typedef struct
 {
 	int valid;              /* seq holds a view: a dispatch was encoded since the history was made */
 	unsigned seq;
+	unsigned div;           /* the effect's divisor at the last take (TASK126), 0 before the first; kept by rm_rtt_hist_reset */
 } rm_rtt_hist_t;
 
-/* the history was made anew or released: its texels hold no view, so the next take resets (FIRST) */
+/*
+ * The history was made anew or released: its texels hold no view, so the
+ * next take resets (FIRST). The divisor is kept, so a history made again
+ * at an effect's new traced size still resets for its scale.
+ */
 void rm_rtt_hist_reset(rm_rtt_hist_t *h);
 
 /*
@@ -124,5 +132,23 @@ void rm_rtt_hist_reset(rm_rtt_hist_t *h);
  * only where the dispatch is encoded.
  */
 unsigned rm_rtt_hist_take(rm_rtt_hist_t *h, const rm_rtt_view_t *t);
+
+/*
+ * rm_rtt_hist_take for an effect traced at divisor div (TASK126; 0 is 1,
+ * common/mtl_rtup_math.h's mtl_rtup_div): with RM_RTT_RESET_SCALE as well
+ * when the history's last take was at another divisor, and none when it
+ * has had no take. rm_rtt_hist_take is the take at divisor 1.
+ */
+unsigned rm_rtt_hist_take_at(rm_rtt_hist_t *h, const rm_rtt_view_t *t, unsigned div);
+
+/*
+ * TASK126's lines, without a newline; each 1 when it fits in len, 0 with
+ * buf empty otherwise. The r_rt_stats 1 line of a view that reset effect's
+ * history for its scale: "ref_metal: r_rt_stats: reset: <effect> scale".
+ * The part an effect traced w x h below the drawn size adds to its
+ * r_rt_stats 2 line: ", traced at WxH, F upsample fallbacks".
+ */
+int rm_rtt_scale_line_format(const char *effect, char *buf, size_t len);
+int rm_rtt_traced_format(unsigned w, unsigned h, unsigned long fallbacks, char *buf, size_t len);
 
 #endif /* RM_RTTEMPORAL_H */

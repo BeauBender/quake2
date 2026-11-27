@@ -24,6 +24,7 @@
  */
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "header/rm_rttemporal.h"
@@ -131,8 +132,9 @@ rm_rtt_hist_reset(rm_rtt_hist_t *h)
 }
 
 unsigned
-rm_rtt_hist_take(rm_rtt_hist_t *h, const rm_rtt_view_t *t)
+rm_rtt_hist_take_at(rm_rtt_hist_t *h, const rm_rtt_view_t *t, unsigned div)
 {
+	const unsigned d = div ? div : 1u;
 	unsigned r = t->reset;
 
 	/* the history took the view before this one, or it is not a history of the views before it */
@@ -141,7 +143,55 @@ rm_rtt_hist_take(rm_rtt_hist_t *h, const rm_rtt_view_t *t)
 		r |= RM_RTT_RESET_FIRST;
 	}
 
+	/* TASK126: the history was taken at another divisor; 0, no take yet, is not one */
+	if (h->div && (h->div != d))
+	{
+		r |= RM_RTT_RESET_SCALE;
+	}
+
 	h->valid = 1;
 	h->seq = t->seq;
+	h->div = d;
 	return r;
+}
+
+unsigned
+rm_rtt_hist_take(rm_rtt_hist_t *h, const rm_rtt_view_t *t)
+{
+	return rm_rtt_hist_take_at(h, t, 1u);
+}
+
+/* buf from the snprintf that returned n: 1 when it fit, 0 with buf emptied otherwise */
+static int
+rm_rtt_fits(int n, char *buf, size_t len)
+{
+	if ((n < 0) || ((size_t)n >= len))
+	{
+		buf[0] = 0;
+		return 0;
+	}
+
+	return 1;
+}
+
+int
+rm_rtt_scale_line_format(const char *effect, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	return rm_rtt_fits(snprintf(buf, len, "ref_metal: r_rt_stats: reset: %s scale", effect), buf, len);
+}
+
+int
+rm_rtt_traced_format(unsigned w, unsigned h, unsigned long fallbacks, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	return rm_rtt_fits(snprintf(buf, len, ", traced at %ux%u, %lu upsample fallbacks", w, h, fallbacks), buf, len);
 }

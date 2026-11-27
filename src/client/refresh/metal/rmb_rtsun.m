@@ -40,6 +40,7 @@
 #include "header/rm_rt.h"
 #include "common/mtl_rtd_math.h"
 #include "header/rm_rtsun.h"
+#include "common/mtl_rtup_math.h"
 #include "header/rmb_internal.h"
 
 #if !__has_feature(objc_arc)
@@ -52,7 +53,7 @@ extern rm_ledger_t rmb_ledger;
 extern rmb_stats_t rmb_counts;
 
 #define RMB_RTSUN_GROUP 8       /* the kernel's threadgroup side */
-#define RMB_RTSUN_COUNTS 5      /* world, bright, facing away, rays, lit (rm_rtsun.metal) */
+#define RMB_RTSUN_COUNTS 6      /* world, bright, facing away, rays, lit, the upsample's fallbacks (rm_rtsun.metal) */
 
 _Static_assert(sizeof(rm_rtsun_view_t) == 144, "the view is rm_rtsun.metal's 144 bytes");
 
@@ -69,6 +70,8 @@ static atomic_ulong slot_done[RMB_FRAMES_IN_FLIGHT];
 static int slot_pending[RMB_FRAMES_IN_FLIGHT];
 static int slot_timed[RMB_FRAMES_IN_FLIGHT];
 static unsigned long slot_frame[RMB_FRAMES_IN_FLIGHT], slot_pixels[RMB_FRAMES_IN_FLIGHT];
+static unsigned slot_div[RMB_FRAMES_IN_FLIGHT];                 /* TASK126: the view's divisor */
+static unsigned long slot_tw[RMB_FRAMES_IN_FLIGHT], slot_th[RMB_FRAMES_IN_FLIGHT];  /* its traced size */
 static rm_rtsun_stats_t done[RMB_FRAMES_IN_FLIGHT];
 static int ndone;
 
@@ -92,6 +95,18 @@ static int dn_refused;                  /* the denoiser's pipeline could not be 
 static unsigned long tmp_bad_w, tmp_bad_h;  /* a render size whose histories could not be made: not tried again */
 static rm_rtt_view_t tview;
 static int tview_set;
+
+/*
+ * TASK126 slice 3: r_rt_sun_scale below 1. The traced size's class
+ * (R8Uint) and visibility (R32Float), made by rmb_rtsun_prepare and
+ * released at divisor 1; the four pipelines of rm_rtsun_lo.metal, made at
+ * the first such view, a failure latched until the pass is closed; and
+ * the latch of a view whose history reset for the scale.
+ */
+static id<MTLTexture> t_cls_lo, t_vis_lo;
+static id<MTLComputePipelineState> lo_pipe, tlo_pipe, dlo_pipe, up_pipe;
+static int lo_refused;
+static int scale_reset;
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTSUN_SET(slot, obj) \
@@ -201,8 +216,15 @@ rmb_rtsun_close(void)
 		RMB_RTSUN_SET(dn_pipe, nil);
 		RMB_RTSUN_SET(t_hist[0], nil);
 		RMB_RTSUN_SET(t_hist[1], nil);
+		RMB_RTSUN_SET(t_cls_lo, nil);
+		RMB_RTSUN_SET(t_vis_lo, nil);
+		RMB_RTSUN_SET(lo_pipe, nil);
+		RMB_RTSUN_SET(tlo_pipe, nil);
+		RMB_RTSUN_SET(dlo_pipe, nil);
+		RMB_RTSUN_SET(up_pipe, nil);
 	}
 
+	lo_refused = scale_reset = 0;
 	tview_set = hist_cur = tmp_refused = dn_refused = 0;
 	tmp_bad_w = tmp_bad_h = 0;
 	rm_rtt_hist_reset(&thist);
@@ -211,8 +233,93 @@ rmb_rtsun_close(void)
 	ndone = 0;
 }
 
+/*
+ * TASK126 slice 3: for divisor div above 1, the traced size's class and
+ * visibility at mtl_rtup_size of the render size w x h, and the four
+ * pipelines; 1 when they are there. At divisor 1 the textures are
+ * released and nothing else is needed: the stock kernels run.
+ */
+static int
+rmb_rtsun_prepare_lo(unsigned long w, unsigned long h, unsigned div)
+{
+	const unsigned long tw = mtl_rtup_size((unsigned)w, div), th = mtl_rtup_size((unsigned)h, div);
+
+	if (div <= 1)
+	{
+		if (t_cls_lo || t_vis_lo)
+		{
+			RMB_RTSUN_SET(t_cls_lo, nil);
+			RMB_RTSUN_SET(t_vis_lo, nil);
+		}
+
+		return 1;
+	}
+
+	if (lo_refused)
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		if (!lo_pipe || !tlo_pipe || !dlo_pipe || !up_pipe)
+		{
+			NSError *e = nil;
+			id<MTLFunction> k0 = [rmb_library() newFunctionWithName:@"rm_rtsun_trace_lo"];
+			id<MTLFunction> k1 = [rmb_library() newFunctionWithName:@"rm_rtsun_temporal_lo"];
+			id<MTLFunction> k2 = [rmb_library() newFunctionWithName:@"rm_rtsun_denoise_lo"];
+			id<MTLFunction> k3 = [rmb_library() newFunctionWithName:@"rm_rtsun_up"];
+
+			RMB_RTSUN_SET(lo_pipe, k0 ? [rmb_device newComputePipelineStateWithFunction:k0 error:&e] : nil);
+			RMB_RTSUN_SET(tlo_pipe, k1 ? [rmb_device newComputePipelineStateWithFunction:k1 error:&e] : nil);
+			RMB_RTSUN_SET(dlo_pipe, k2 ? [rmb_device newComputePipelineStateWithFunction:k2 error:&e] : nil);
+			RMB_RTSUN_SET(up_pipe, k3 ? [rmb_device newComputePipelineStateWithFunction:k3 error:&e] : nil);
+
+			if (!lo_pipe || !tlo_pipe || !dlo_pipe || !up_pipe)
+			{
+				RMB_RTSUN_SET(lo_pipe, nil);
+				RMB_RTSUN_SET(tlo_pipe, nil);
+				RMB_RTSUN_SET(dlo_pipe, nil);
+				RMB_RTSUN_SET(up_pipe, nil);
+				lo_refused = 1;
+				fprintf(stderr, "ref_metal: rt sun: no pipelines for r_rt_sun_scale below 1%s%s; the sun is not traced\n",
+						e ? ": " : "", e ? e.localizedDescription.UTF8String : "");
+				return 0;
+			}
+		}
+
+		if (t_cls_lo && t_vis_lo && (t_cls_lo.width == tw) && (t_cls_lo.height == th))
+		{
+			return 1;
+		}
+
+		{
+			MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint
+					width:tw height:th mipmapped:NO];
+
+			d.storageMode = MTLStorageModePrivate;
+			d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+			RMB_RTSUN_SET(t_cls_lo, [rmb_device newTextureWithDescriptor:d]);
+			d.pixelFormat = MTLPixelFormatR32Float;
+			RMB_RTSUN_SET(t_vis_lo, [rmb_device newTextureWithDescriptor:d]);
+
+			if (!t_cls_lo || !t_vis_lo)
+			{
+				RMB_RTSUN_SET(t_cls_lo, nil);
+				RMB_RTSUN_SET(t_vis_lo, nil);
+				return 0;
+			}
+
+			fprintf(stderr, "ref_metal: rt sun %lux%lu traced at %lux%lu: %lu bytes allocated\n", w, h, tw, th,
+					(unsigned long)(t_cls_lo.allocatedSize + t_vis_lo.allocatedSize));
+		}
+	}
+
+	return 1;
+}
+
 int
-rmb_rtsun_prepare(unsigned long w, unsigned long h)
+rmb_rtsun_prepare(unsigned long w, unsigned long h, unsigned div)
 {
 	if (!sun_open || !trace_pipe || !counts || (w < 1) || (h < 1) || (w > 0xffffffffUL) || (h > 0xffffffffUL))
 	{
@@ -222,7 +329,7 @@ rmb_rtsun_prepare(unsigned long w, unsigned long h)
 	/* the outputs at the render size, made again when it changes */
 	if (t_class && t_light && (t_class.width == w) && (t_class.height == h))
 	{
-		return 1;
+		return rmb_rtsun_prepare_lo(w, h, div);
 	}
 
 	@autoreleasepool
@@ -247,7 +354,16 @@ rmb_rtsun_prepare(unsigned long w, unsigned long h)
 				(unsigned long)(t_class.allocatedSize + t_light.allocatedSize));
 	}
 
-	return 1;
+	return rmb_rtsun_prepare_lo(w, h, div);
+}
+
+int
+rmb_rtsun_scale_reset(void)
+{
+	const int r = scale_reset;
+
+	scale_reset = 0;
+	return r;
 }
 
 int
@@ -386,6 +502,10 @@ rmb_rtsun_read(void)
 		s->facing = c[2];
 		s->rays = c[3];
 		s->lit = c[4];
+		s->fallbacks = c[5];
+		s->div = slot_div[k];
+		s->tw = slot_tw[k];
+		s->th = slot_th[k];
 		s->ms = -1;
 
 		if (slot_timed[k] && samples)
@@ -424,6 +544,58 @@ rmb_rtsun_stats(rm_rtsun_stats_t *s, int cap)
 	return n;
 }
 
+/*
+ * TASK126 slice 3: after rm_rtsun_trace_lo's dispatch in ce, at a
+ * divisor above 1. RT7 at the traced size while the view accumulates and
+ * the histories are at that size and the motion at the render size w x h
+ * (rm_rtsun_temporal_lo, then rm_rtsun_denoise_lo), the view taken into
+ * the history at its divisor (rm_rtt_hist_take_at); then rm_rtsun_up at
+ * the render size, which reads what they wrote: a serial encoder runs its
+ * dispatches in order, each behind a barrier.
+ */
+static void
+rmb_rtsun_encode_lo(id<MTLComputeCommandEncoder> ce, NSUInteger w, NSUInteger h, int acc_set)
+{
+	const MTLSize g = MTLSizeMake(RMB_RTSUN_GROUP, RMB_RTSUN_GROUP, 1);
+	const MTLSize lo = MTLSizeMake(t_cls_lo.width, t_cls_lo.height, 1);
+
+	if (acc_set && t_hist[0] && t_hist[1] && (t_hist[0].width == t_cls_lo.width) &&
+		(t_hist[0].height == t_cls_lo.height))
+	{
+		id<MTLTexture> mv = rmb_gbuf_motion();
+
+		if (mv && (mv.width == w) && (mv.height == h))
+		{
+			rm_rtt_view_t tv = tview;
+
+			/* the view is encoded into the history here, and only here, at the view's divisor */
+			tv.reset = rm_rtt_hist_take_at(&thist, &tview, view.div);
+			scale_reset |= (tv.reset & RM_RTT_RESET_SCALE) != 0;
+			[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+			[ce setComputePipelineState:tlo_pipe];
+			[ce setTexture:mv atIndex:7];
+			[ce setTexture:t_hist[hist_cur] atIndex:8];
+			[ce setTexture:t_hist[1 - hist_cur] atIndex:9];
+			[ce setBytes:&tv length:sizeof(tv) atIndex:9];
+			[ce dispatchThreads:lo threadsPerThreadgroup:g];
+			hist_cur = 1 - hist_cur;
+
+			/* the denoiser of the history just written (now t_hist[hist_cur]) at the traced size */
+			if (dn_pipe)
+			{
+				[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+				[ce setComputePipelineState:dlo_pipe];
+				[ce setTexture:t_hist[hist_cur] atIndex:8];
+				[ce dispatchThreads:lo threadsPerThreadgroup:g];
+			}
+		}
+	}
+
+	[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+	[ce setComputePipelineState:up_pipe];
+	[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:g];
+}
+
 id<MTLTexture>
 rmb_rtsun_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material, id<MTLTexture> lm,
 		id<MTLTexture> base)
@@ -433,7 +605,7 @@ rmb_rtsun_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 	id<MTLComputeCommandEncoder> ce;
 	const NSUInteger w = depth.width, h = depth.height;
 	const int acc_set = tview_set;  /* RT7: this view accumulates, when everything it needs is at this size */
-	int slot, timed;
+	int slot, timed, lo;
 
 	traced = 0;
 	tview_set = 0;
@@ -449,6 +621,15 @@ rmb_rtsun_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 	/* the outputs, made by rmb_rtsun_prepare before the raster at this size */
 	if (!t_class || !t_light || (t_class.width != w) || (t_class.height != h) || (lm.width != w) || (lm.height != h) ||
 		(base.width != w) || (base.height != h))
+	{
+		return nil;
+	}
+
+	/* TASK126: below the render size, the traced size's textures and pipelines made by rmb_rtsun_prepare at this size */
+	lo = (view.div > 1);
+
+	if (lo && (!lo_pipe || !tlo_pipe || !dlo_pipe || !up_pipe || !t_cls_lo || !t_vis_lo ||
+		(t_cls_lo.width != mtl_rtup_size((unsigned)w, view.div)) || (t_cls_lo.height != mtl_rtup_size((unsigned)h, view.div))))
 	{
 		return nil;
 	}
@@ -493,7 +674,7 @@ rmb_rtsun_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 			return nil;
 		}
 
-		[ce setComputePipelineState:trace_pipe];
+		[ce setComputePipelineState:lo ? lo_pipe : trace_pipe];
 
 		/* the scene; its transmission and count go to slots 7 and 8, which the kernel does not read */
 		if (!rmb_rt_bind_scene(ce, fno, 2, 3, 7, 8))
@@ -520,15 +701,29 @@ rmb_rtsun_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		[ce setTexture:t_light atIndex:6];
 		[ce setBytes:&view length:sizeof(view) atIndex:0];
 		[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTSUN_COUNTS * sizeof(uint32_t) atIndex:6];
-		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTSUN_GROUP, RMB_RTSUN_GROUP, 1)];
+
+		if (lo)
+		{
+			/* TASK126: the rays at the traced size, then RT7 there and the upsample (rmb_rtsun_encode_lo) */
+			[ce setTexture:t_cls_lo atIndex:10];
+			[ce setTexture:t_vis_lo atIndex:11];
+			[ce dispatchThreads:MTLSizeMake(t_cls_lo.width, t_cls_lo.height, 1)
+					threadsPerThreadgroup:MTLSizeMake(RMB_RTSUN_GROUP, RMB_RTSUN_GROUP, 1)];
+			rmb_rtsun_encode_lo(ce, w, h, acc_set && tmp_pipe);
+		}
+		else
+		{
+			[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTSUN_GROUP, RMB_RTSUN_GROUP, 1)];
+		}
 
 		/*
 		 * RT7 (TASK59 slice 1b): the sun's visibility accumulated over the
 		 * views, the light written again from it. Only while r_rt_temporal is
 		 * above 0 and the histories and the motion vectors are at the render
 		 * size; otherwise nothing below runs and the frame is the trace's alone.
+		 * Below the render size (TASK126) rmb_rtsun_encode_lo has done it.
 		 */
-		if (acc_set && tmp_pipe && t_hist[0] && t_hist[1] && (t_hist[0].width == w) && (t_hist[0].height == h))
+		if (!lo && acc_set && tmp_pipe && t_hist[0] && t_hist[1] && (t_hist[0].width == w) && (t_hist[0].height == h))
 		{
 			id<MTLTexture> mv = rmb_gbuf_motion();
 
@@ -538,6 +733,7 @@ rmb_rtsun_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 
 				/* the view is encoded into the history here, and only here */
 				tv.reset = rm_rtt_hist_take(&thist, &tview);
+				scale_reset |= (tv.reset & RM_RTT_RESET_SCALE) != 0;
 				[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
 				[ce setComputePipelineState:tmp_pipe];
 				[ce setTexture:mv atIndex:7];
@@ -576,6 +772,9 @@ rmb_rtsun_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mate
 		slot_timed[slot] = timed;
 		slot_frame[slot] = fno;
 		slot_pixels[slot] = (unsigned long)(w * h);
+		slot_div[slot] = lo ? view.div : 1u;
+		slot_tw[slot] = lo ? (unsigned long)t_cls_lo.width : (unsigned long)w;
+		slot_th[slot] = lo ? (unsigned long)t_cls_lo.height : (unsigned long)h;
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
 			atomic_store(&slot_done[slot], fno);

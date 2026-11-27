@@ -28,7 +28,8 @@
  * traced pixel matches (thin geometry, a silhouette), the one nearest in
  * depth is taken, and the caller counts it for r_rt_stats 1. The block
  * layout is r_rt_ao_scale's (TASK157, common/mtl_rtao_math.h), which this
- * reuses. Plain C99 and Metal Shading Language alike, as
+ * reuses. Slice 2 adds RT7's reprojection at the effect size
+ * (mtl_rtup_reproject). Plain C99 and Metal Shading Language alike, as
  * common/mtl_rtd_math.h; the host test is tests/metal/rm_rtup_test.c.
  *
  * =======================================================================
@@ -38,6 +39,7 @@
 #define MTL_RTUP_MATH_H
 
 #include "mtl_rtd_math.h"
+#include "mtl_rtt_math.h"
 
 /* the four traced pixels about a drawn pixel: (lo0x, lo0y), (lo1x, lo0y), (lo0x, lo1y), (lo1x, lo1y) */
 #define MTL_RTUP_TAPS 4
@@ -236,6 +238,23 @@ mtl_rtup_value(mtl_rtup_out_t o, float v0, float v1, float v2, float v3, float n
 	s += (o.w[2] > 0.0f) ? o.w[2] * v2 : 0.0f;
 	s += (o.w[3] > 0.0f) ? o.w[3] * v3 : 0.0f;
 	return s;
+}
+
+/*
+ * RT7's reprojection at the effect size (slice 2): traced pixel (x, y) of
+ * a w x h traced size at divisor d, with the render-size motion vector
+ * (mx, my) read at its source pixel (mtl_rtup_src). The vector over d is
+ * the move in traced pixels: the block layout puts traced pixel x's
+ * centre at x d + o + 1/2 render pixels, so the traced pixel whose source
+ * is nearest the point the vector names is the one holding x + 1/2 +
+ * mx / d. At d 1, mtl_rtt_reproject itself.
+ */
+static inline mtl_rtt_px_t
+mtl_rtup_reproject(unsigned x, unsigned y, float mx, float my, unsigned d, unsigned w, unsigned h)
+{
+	const float k = (d > 1u) ? (float)d : 1.0f;
+
+	return mtl_rtt_reproject(x, y, mx / k, my / k, w, h);
 }
 
 #endif

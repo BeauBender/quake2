@@ -1068,6 +1068,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_rtshadow_temporal.metal \
 		src/client/refresh/metal/rm_rtao.metal \
 		src/client/refresh/metal/rm_rtsun.metal \
+		src/client/refresh/metal/rm_rtsun_lo.metal \
 		src/client/refresh/metal/rm_rtdenoise.metal \
 		src/client/refresh/metal/rm_rtwdenoise.metal \
 		src/client/refresh/metal/rm_rtwater.metal \
@@ -1085,6 +1086,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/common/mtl_rtp_math.h \
 		src/client/refresh/metal/common/mtl_rtpd_math.h \
 		src/client/refresh/metal/common/mtl_rtsun_math.h \
+		src/client/refresh/metal/common/mtl_rtup_math.h \
 		src/client/refresh/metal/common/mtl_rtw_math.h \
 		src/client/refresh/metal/common/mtl_rtdir_math.h \
 		src/client/refresh/metal/common/mtl_rtsky_math.h \
@@ -1103,6 +1105,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtshadow_temporal.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow_temporal.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtao.metal -o $(BUILDDIR)/ref_metal/rm_rtao.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtsun.metal -o $(BUILDDIR)/ref_metal/rm_rtsun.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtsun_lo.metal -o $(BUILDDIR)/ref_metal/rm_rtsun_lo.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtdenoise.metal -o $(BUILDDIR)/ref_metal/rm_rtdenoise.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtwdenoise.metal -o $(BUILDDIR)/ref_metal/rm_rtwdenoise.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtwater.metal -o $(BUILDDIR)/ref_metal/rm_rtwater.air
@@ -1114,7 +1117,8 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk $(METAL_SDK) metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
 		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air \
 		$(BUILDDIR)/ref_metal/rm_rtshadow_temporal.air \
-		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtsun.air $(BUILDDIR)/ref_metal/rm_rtdenoise.air \
+		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtsun.air $(BUILDDIR)/ref_metal/rm_rtsun_lo.air \
+		$(BUILDDIR)/ref_metal/rm_rtdenoise.air \
 		$(BUILDDIR)/ref_metal/rm_rtwdenoise.air $(BUILDDIR)/ref_metal/rm_rtwater.air \
 		$(BUILDDIR)/ref_metal/rm_rtdir.air $(BUILDDIR)/ref_metal/rm_rtptemporal.air \
 		$(BUILDDIR)/ref_metal/rm_rtpdenoise.air $(BUILDDIR)/ref_metal/rm_rtmodel.air \

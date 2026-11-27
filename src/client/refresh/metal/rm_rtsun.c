@@ -547,13 +547,14 @@ rm_rtsun_view(const float *proj, const float *world, const rm_viewport_t *vp, co
 
 	out->floor_ = floor_;
 	out->show = show;
+	out->div = 1;
 	return 1;
 }
 
 int
 rm_rtsun_stats_format(const rm_rtsun_stats_t *s, char *buf, size_t len)
 {
-	char ms[32];
+	char ms[32], up[96] = "";
 	int n;
 
 	if (!len)
@@ -570,8 +571,14 @@ rm_rtsun_stats_format(const rm_rtsun_stats_t *s, char *buf, size_t len)
 		snprintf(ms, sizeof(ms), "-");
 	}
 
+	/* TASK126: below the drawn size, the traced size and the upsample's fallbacks */
+	if ((s->div > 1) && !rm_rtt_traced_format((unsigned)s->tw, (unsigned)s->th, s->fallbacks, up, sizeof(up)))
+	{
+		up[0] = 0;
+	}
+
 	n = snprintf(buf, len, "ref_metal: rt sun: frame %lu: %lu pixels, %lu world, %lu bright, %lu facing away, "
-			"%lu rays, %lu lit, %s ms", s->frame, s->pixels, s->world, s->bright, s->facing, s->rays, s->lit, ms);
+			"%lu rays, %lu lit, %s ms%s", s->frame, s->pixels, s->world, s->bright, s->facing, s->rays, s->lit, ms, up);
 
 	if ((n < 0) || ((size_t)n >= len))
 	{
