@@ -1059,6 +1059,14 @@ if python3 -I "$HELP" mutate "$0" "$tmp/self-mutant.sh" 'cd "$(dirname "$0")''/.
 else
     bad "decoy-kowhy-kept: $(cat "$tmp/self-mutant.log")"
 fi
+# the same for FIX204: a copy whose sec() leaves the blank before the load note in must fail chunk-load, the full run's
+# rows read under load against the chunks read on this host (the copy runs the groups "run" on the real code only)
+if python3 -I "$HELP" mutate "$0" "$tmp/self-mutant-load.sh" 'cd "$(dirname "$0")''/.."' "cd \"$root\"" "sed -e 's/ "'\[measured under'' load' "sed -e 's/"'\[measured under'' load' > "$tmp/self-mutant-load.log"; then
+    out=$(MFX_GROUPS=run MFX_REAL_ONLY=1 VERBOSE=0 bash "$tmp/self-mutant-load.sh" 2>&1); rc=$?
+    { [ $rc -ne 0 ] && case $out in *"failed: chunk-load ("*) true;; *) false;; esac; } || bad "chunk-load-blank-kept: the copy that keeps the blank before the load note was not refused (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-300)"
+else
+    bad "chunk-load-blank-kept: $(cat "$tmp/self-mutant-load.log")"
+fi
 
 # mutants: one change of the line each assertion covers; the covered assertion must fail
 nm=0
