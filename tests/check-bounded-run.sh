@@ -1583,9 +1583,11 @@ else
 	else
 		echo "$me: ok   sv 126 nospawn: a 126 with no group named keeps the lock until it is released by hand"
 	fi
-	# the mutants, each today's behaviour back: a 126 with no group named
-	# records nothing (round 1's note only)
+	# the mutants, each today's behaviour back: a trap's stop takes sv_stop's
+	# 0 for the status sv_wait collected; a 126 with no group named records
+	# nothing (round 1's note only)
 	for _lm in \
+		'term|trap-status-dropped|scripts/bench/core/common.sh|	if [ -z "$SV_PID" ] && [ -n "$SV_STATUS" ]; then|	if false; then' \
 		'nospawn|hand-not-recorded|scripts/bench/core/common.sh|		bench_record_untold "$_bu_g" hand|		:'; do
 		_lmc=${_lm%%|*} _lmr=${_lm#*|}
 		_lmn=${_lmr%%|*} _lmr=${_lmr#*|}
@@ -1912,4 +1914,4 @@ if [ -n "$fails" ]; then
 	echo "$me: failed:$fails"
 	exit 1
 fi
-echo "$me: ok (guard, $nmut mutants refused, probe, the supervisor cases and their 7 mutants, pyprobe and its 10 mutants)"
+echo "$me: ok (guard, $nmut mutants refused, probe, the supervisor cases and their 9 mutants, pyprobe and its 10 mutants)"

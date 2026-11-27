@@ -1009,7 +1009,9 @@ bench_bounded() {
 	fi
 	bench_bounded_ev || bench_die 2 "cannot make a temporary file"
 	# from here a caller's trap calls bench_stop_group, which finds the
-	# supervisor also in sv_start's fork window (sv_pid)
+	# supervisor also in sv_start's fork window (sv_pid), and its status
+	# once sv_wait has collected it (SV_STATUS, empty until then)
+	SV_STATUS=
 	BENCH_BOUNDED_PID=starting
 	_bb_v=$BENCH_BOUNDED_EV
 	if [ -n "${BENCH_BOUNDED_TAP:-}" ]; then
@@ -1193,10 +1195,18 @@ bench_bounded_end() {
 
 # bench_bounded_stop: bench_stop_group for the bounded command: TERM to its
 # supervisor, which stops the group, and a wait for it (sv_stop); its 126
-# is recorded as bench_bounded records it
+# is recorded as bench_bounded records it. When bench_bounded's sv_wait has
+# already collected the supervisor's status (SV_PID empty, SV_STATUS set),
+# that status is the one acted on, not sv_stop's 0 for no supervisor: a
+# trap that comes after a 126 is collected and before bench_bounded has
+# recorded it records it here (correctness I1, review round 2).
 bench_bounded_stop() {
 	_bs_st=0
-	sv_stop || _bs_st=$?
+	if [ -z "$SV_PID" ] && [ -n "$SV_STATUS" ]; then
+		_bs_st=$SV_STATUS
+	else
+		sv_stop || _bs_st=$?
+	fi
 	bench_bounded_tee
 	if bench_bounded_ours "$_bs_st" && [ "$_bs_st" -eq 126 ]; then bench_bounded_untold; fi
 	bench_bounded_end
