@@ -1429,7 +1429,11 @@ t_core_id() {
 		}
 
 		# The command's own identity at spawn, and the lock's stop of it:
-		# TERM to its group, nothing to its pid alone.
+		# TERM to its group, nothing to its pid alone. The table holds an
+		# entry before the command's and one after it (pids above any the
+		# system gives, never signalled), so the stop's forget is seen to
+		# take out the command's entry alone (TASK221 slice 2 hold).
+		BENCH_SPAWNED=";999991|-|$_other"
 		bench_spawn sh -c 'sleep 30 & printf "%s\n" "$!" > "$1"; wait' x "${E:?}/m.own" < /dev/null
 		_o=$BENCH_SPAWN_PID
 		record "$_o"
@@ -1443,6 +1447,7 @@ t_core_id() {
 		*";$_o|$_o|$BENCH_PS_START") ;;
 		*) nok "spawn: BENCH_SPAWNED does not end with the command's entry: $BENCH_SPAWNED" ;;
 		esac
+		BENCH_SPAWNED="$BENCH_SPAWNED;999992|-|$_other"
 		_st=0
 		bench_watch "$_o" "$(($(date +%s) - 1))" 0.05 || _st=$?
 		[ "$_st" -eq 1 ] || nok "watch: own: the running command was not seen running past its end (status $_st)"
@@ -1454,6 +1459,11 @@ t_core_id() {
 		wait_gone 5 "$_om" || nok "lock: own: the command's group member outlived the stop"
 		grep -qx -- "-s TERM -- -$_o" "${E:?}/sig" || nok "lock: own: no TERM went to the command's group: $(tr '\n' ' ' < "${E:?}/sig")"
 		if grep -q -- "^-s [A-Z]* $_o\$" "${E:?}/sig"; then nok "lock: own: a signal went to the command's pid alone"; fi
+		# The lock run's spawn table: the stopped child leaves it, and the
+		# entries before and after it stay (bench_spawn_forget).
+		if bench_spawned "$_o"; then nok "lock: own: the stopped child's entry was left in the spawn table: $BENCH_SPAWNED"; fi
+		[ "$BENCH_SPAWNED" = ";999991|-|$_other;999992|-|$_other" ] || nok "lock: own: the stop did not take the child's entry alone out of the spawn table: $BENCH_SPAWNED"
+		BENCH_SPAWNED=
 		: > "${E:?}/sig"
 
 		# A decoy in the slot, with another start time: gone to the watch,
@@ -1686,6 +1696,43 @@ t_core_id() {
 		[ $((_t1 - _t0)) -lt 2 ] || nok "record: release: the release took $((_t1 - _t0)) s over a stale record"
 		if [ -s "${E:?}/rel.err" ]; then nok "record: release: the release said it held for a stale record: $(cat "${E:?}/rel.err")"; fi
 		# What a failed case above left, so the cases below start free.
+		rm -rf "${BENCH_LOCK_DIR:?}"
+		# The record bench_lock_record writes, on today's path (TASK221
+		# slice 2 hold): after a supervisor's 126, bench_bounded_untold
+		# records the group its "spawned" event names (here the first
+		# decoy's, which still has a member) under this shell's lock. The
+		# record carries the time it was written (bench_lock_now), and the
+		# reader compares the group leader's start with it: written with
+		# the clock at 2000, the leader started after written=, so it is
+		# another group under the id and the record holds nothing.
+		mkdir -p "${BENCH_LOCK_DIR:?}"
+		BENCH_LOCK_OWNED=1 BENCH_LOCK_MINE=t-rec
+		printf 'spawned pgid=%s\n' "$_d" > "${E:?}/rec.ev"
+		BENCH_BOUNDED_EV=${E:?}/rec.ev
+		_w0=$(bench_lock_now)
+		bench_bounded_untold 2> "${E:?}/rec.err"
+		_rh=$(cat "${BENCH_LOCK_DIR:?}/untold.$_d" 2> /dev/null) || _rh=
+		[ "$(bench_kv "$_rh" group)" = "$_d" ] || nok "record: written: bench_bounded_untold wrote no group record for $_d: $(printf '%s' "$_rh" | tr '\n' ' ')"
+		_w=$(bench_kv "$_rh" written)
+		bench_lock_later "$_w" 'Sat Jan 1 00:00:00 2000' || nok "record: written: the group record holds no written time in the form of a start time: '$_w'"
+		if bench_lock_later "$_w0" "$_w"; then nok "record: written: the record's written time ($_w) is before the call ($_w0)"; fi
+		bench_lock_untold_live || :
+		case " $BENCH_LOCK_UNTOLD " in
+		*" $_d "*) ;;
+		*) nok "record: written: the record of a live group did not hold (untold: $BENCH_LOCK_UNTOLD)" ;;
+		esac
+		rm -f "${BENCH_LOCK_DIR:?}"/untold.*
+		(
+			bench_lock_now() { printf '%s' 'Sat Jan 1 00:00:00 2000'; }
+			bench_bounded_untold
+		) 2>> "${E:?}/rec.err"
+		_w=$(bench_kv "$(cat "${BENCH_LOCK_DIR:?}/untold.$_d" 2> /dev/null)" written)
+		[ "$_w" = 'Sat Jan 1 00:00:00 2000' ] || nok "record: written: the record does not carry the clock's time when it was written: '$_w'"
+		bench_lock_untold_live || :
+		case " $BENCH_LOCK_UNTOLD " in
+		*" $_d "*) nok "record: written: the reader took a group whose leader started after the record's written= ($_w) as the recorded one" ;;
+		esac
+		BENCH_BOUNDED_EV= BENCH_LOCK_OWNED= BENCH_LOCK_MINE=
 		rm -rf "${BENCH_LOCK_DIR:?}"
 
 		# lock run, ps silent (FIX172, round 1, security I1): the command
