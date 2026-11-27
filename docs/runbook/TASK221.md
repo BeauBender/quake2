@@ -744,6 +744,15 @@ cases)"); `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
     refused, probe, the supervisor cases and their 12 mutants, pyprobe and its 10
     mutants)"); `tests/check-supervise.sh` ("ok (6 s)"); `tests/check-bench-entry.sh`,
     `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
+- **The evidence for #741 (FIX199), at `5e595b92`.** Light proofs, no added load:
+  - `pollint` extracted from `tests/check-bounded-run.sh` (the setup lines and the
+    `sv_*` helpers, then the one case) and run 10 times in a row: 10 of 10 gave "sv
+    pollint: exit 130 in 1 s, nothing left", so no run left a scratch file in TMPDIR.
+  - `scripts/ios-device.sh --selftest` once: "ok (65 cases)", with "ok sign-int-hang".
+  - A mutant of a scratch copy that drops the events file's `rm -f` in the stop
+    (`bench_bounded`'s line `if [ -n "$BENCH_BOUNDED_EV" ]; then rm -f ...`) fails
+    `pollint`: "scratch files: bench-sv.<pid>.<id> bench-sv.<pid>.<id>.tap". It is not a
+    committed mutant of the check.
 
 ## What remains
 
