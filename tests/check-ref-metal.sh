@@ -975,6 +975,67 @@ if [ -n "$pm" ]; then
 fi
 seg 10.2 "; menu and renderer scaler rule ${pm:-host test}, $pm_mutants parity mutants refused"
 
+# TASK237: the presentation overlay as the menu shows it (vidrules.c) against the one the renderer runs
+# (rm_rtgate.c), one binary over both. ppbuild <rtgate dir> <vidrules.c> <test.c> <out>; the test finds its
+# headers as "header/..." through -I, so a scratch copy of it builds too. Mutants it must refuse, each on one
+# side only: a row added to the renderer's RT-primary table (the gun shadow read 0); a row added to the
+# menu's (the gun shadow decided under Ray traced); RM_PRES_RETRO changed in the renderer's view; VIDPRES_RETRO
+# changed in the menu header the test reads
+ppbuild() {
+	# shellcheck disable=SC2086 # flags and fxhost are word lists
+	$cc $flags $fxhost -Wno-missing-field-initializers -I"$rm_dir" -Isrc/client/menu -o "$4" "$3" "$1/rm_rtgate.c" \
+		"$rm_dir/rm_rtfx.c" "$2" -lm
+}
+pp=""
+pp_mutants=0
+if ! ppbuild "$rm_dir" src/client/menu/vidrules.c tests/metal/rm_pres_parity_test.c "${tmp:?}/rm_pres_parity_test" \
+	> "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_pres_parity_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_pres_parity_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_pres_parity_test.c failed: the menu and the renderer disagree on a presentation's overlay"
+else
+	pp=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_pres_parity_test: //')
+	case $pp in *", 0 failed") ;; *) bad "tests/metal/rm_pres_parity_test.c printed no result line"; pp="";; esac
+fi
+if [ -n "$pp" ]; then
+	mkdir "${tmp:?}/ppm"
+	for ppm in rrow mrow renum menum; do
+		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c tests/metal/rm_pres_parity_test.c "${tmp:?}/ppm/"
+		case $ppm in
+			rrow) sed 's/{ "r_rt_direct", 1\.0f },/{ "r_rt_direct", 1.0f }, { "r_rt_gunshadow", 0.0f },/' "$rm_dir/rm_rtgate.c" \
+				> "${tmp:?}/ppm/rm_rtgate.c" ;;
+			mrow) sed 's/return (i < 4) \&\& RTPrimaryInForce/return (i <= RT_GUNSHADOW) \&\& RTPrimaryInForce/' \
+				src/client/menu/vidrules.c > "${tmp:?}/ppm/vidrules.c" ;;
+			# the changed header is included first, so its guard keeps the tree's copy out of that file alone
+			renum) sed 's/^#define RM_PRES_RETRO 2$/#define RM_PRES_RETRO 5/' "$rm_dir/header/rm_rtgate.h" > "${tmp:?}/ppm/enum.h"
+				{ printf '#include "%s"\n' "${tmp:?}/ppm/enum.h"; cat "$rm_dir/rm_rtgate.c"; } > "${tmp:?}/ppm/rm_rtgate.c" ;;
+			menum) sed 's/^#define VIDPRES_RETRO 2$/#define VIDPRES_RETRO 5/' src/client/menu/header/vidrules.h > "${tmp:?}/ppm/enum.h"
+				{ printf '#include "%s"\n' "${tmp:?}/ppm/enum.h"; cat tests/metal/rm_pres_parity_test.c; } \
+					> "${tmp:?}/ppm/rm_pres_parity_test.c" ;;
+		esac
+		if [ -f "${tmp:?}/ppm/enum.h" ] && { cmp -s "${tmp:?}/ppm/enum.h" "$rm_dir/header/rm_rtgate.h" ||
+			cmp -s "${tmp:?}/ppm/enum.h" src/client/menu/header/vidrules.h; }; then
+			bad "the overlay-parity mutant ($ppm) changed nothing"
+		elif cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/ppm/rm_rtgate.c" && cmp -s src/client/menu/vidrules.c "${tmp:?}/ppm/vidrules.c" &&
+			cmp -s tests/metal/rm_pres_parity_test.c "${tmp:?}/ppm/rm_pres_parity_test.c"; then
+			bad "the overlay-parity mutant ($ppm) changed nothing"
+		elif ! ppbuild "${tmp:?}/ppm" "${tmp:?}/ppm/vidrules.c" "${tmp:?}/ppm/rm_pres_parity_test.c" "${tmp:?}/ppm/t" \
+			> "${tmp:?}/ppm.out" 2>&1; then
+			cat "${tmp:?}/ppm.out"
+			bad "the overlay-parity mutant ($ppm) does not compile"
+		elif "${tmp:?}/ppm/t" > "${tmp:?}/ppm.out" 2>&1; then
+			bad "tests/metal/rm_pres_parity_test.c passes the overlay-parity mutant ($ppm)"
+		else
+			pp_mutants=$((pp_mutants + 1))
+		fi
+		rm -f "${tmp:?}/ppm/enum.h"
+	done
+	[ "$pp_mutants" = 4 ] || bad "tests/metal/rm_pres_parity_test.c refuses $pp_mutants of its 4 mutants"
+fi
+seg 10.25 "; menu and renderer presentation overlay ${pp:-host test}, $pp_mutants one-sided mutants refused"
+
 # the effect table (TASK179): tests/metal/rm_rtfx_test.c over rm_rtfx.c and rm_rtgate.c, the order every walk
 # takes, each row's switch against the gate's table, and the pipeline rule of rmb_gbuf_pipe3d. fxbuild <dir>
 # <out>: the test built over rm_rtfx.c and rm_rtgate.c of <dir> (a scratch copy finds the headers by -I)
