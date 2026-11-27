@@ -1203,15 +1203,32 @@ bench_bounded_end() {
 # that status is the one acted on, not sv_stop's 0 for no supervisor: a
 # trap that comes after a 126 is collected and before bench_bounded has
 # recorded it records it here (correctness I1, review round 2).
+# SV_STATUS is tested first: sv_wait sets it before it clears SV_PID, and
+# bench_bounded empties it before each run, so a set SV_STATUS is this
+# run's collected status at any point of sv_wait, and the supervisor it
+# belongs to is not signalled or waited for again.
+# A trap that lands after sv_wait's wait has reaped the supervisor and
+# before SV_STATUS is set waits again in sv_stop: bash gives the status
+# again, /bin/sh (bench.sh's shell) gives 127, which is the shell's, not
+# the supervisor's (it never returns 127 itself). So a status is decided
+# by the supervisor's events too, never by the wait alone: with no
+# "reaped" event, a 127, or any status after a "spawned" event, is taken
+# as its 126 (a group record when "spawned" names one, else a hand
+# record), since a command's own status always comes with "reaped"
+# (review round 3, correctness I1 and security I2).
 bench_bounded_stop() {
 	_bs_st=0
-	if [ -z "$SV_PID" ] && [ -n "$SV_STATUS" ]; then
+	if [ -n "$SV_STATUS" ]; then
 		_bs_st=$SV_STATUS
 	else
 		sv_stop || _bs_st=$?
 	fi
 	bench_bounded_tee
-	if bench_bounded_ours "$_bs_st" && [ "$_bs_st" -eq 126 ]; then bench_bounded_untold; fi
+	if bench_bounded_ours "$_bs_st"; then
+		[ "$_bs_st" -ne 126 ] || bench_bounded_untold
+	elif ! bench_bounded_said reaped && { [ "$_bs_st" -eq 127 ] || bench_bounded_said spawned; }; then
+		bench_bounded_untold
+	fi
 	bench_bounded_end
 }
 

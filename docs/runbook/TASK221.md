@@ -417,12 +417,15 @@ group seen to be gone. Each finding's case was red on 0e03a682 first:
   lock). Fixed by the trap path using the collected status (`SV_STATUS`), so the tee wait
   and the `awk` forks between the collect and the record no longer matter. Case
   `126 term`; mutant `trap-status-dropped`.
-  - What is left: inside `sv_wait`, between its `wait` returning and its `SV_STATUS=`,
-    there are three builtins and no fork or wait. A trap there finds `SV_PID` still set,
-    so `sv_stop` waits for the supervisor again. Under `/bin/bash` 3.2 that second wait
-    gives the remembered 126. Under `/bin/sh` it gives 127 ("not a child of this shell"),
-    so the 126 is lost there. No case can land a signal in that window without a sleep,
-    so it is left as a note.
+  - What was left (corrected in round 3): inside `sv_wait`, the window runs from its
+    `wait` returning up to `SV_PID=`, so it takes in `SV_STATUS=` too, not only the three
+    builtins before it. A trap there found `SV_PID` still set, so `sv_stop` sent the
+    collected supervisor's pid a TERM and waited for it again; a trap just after
+    `SV_STATUS=` overwrote the collected 126 with that wait's status. Under `/bin/bash`
+    3.2 the second wait gives the remembered 126. Under `/bin/sh` (bench.sh's shell, so
+    its main path) it gives 127 ("not a child of this shell"), which was not taken as the
+    supervisor's, so nothing was recorded and the lock was freed while the group might
+    still run. Round 3 closes it (see below).
 - **Spec I1.** `scripts/gate-checks.sh` is kept and now named, with its reason, under
   "Files outside the card's list".
 - **Spec N1.** `tests/check-bench.sh`'s header says 124 with `HOW=wall` for a stopped

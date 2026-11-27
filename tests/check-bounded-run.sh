@@ -1583,11 +1583,11 @@ else
 	else
 		echo "$me: ok   sv 126 nospawn: a 126 with no group named keeps the lock until it is released by hand"
 	fi
-	# the mutants, each today's behaviour back: a trap's stop takes sv_stop's
-	# 0 for the status sv_wait collected; a 126 with no group named records
-	# nothing (round 1's note only)
+	# the mutant, today's behaviour back: a 126 with no group named records
+	# nothing (round 1's note only). Round 2's trap-status-dropped is judged
+	# by the window case below (review round 3): the term case's "spawned"
+	# event records the group without the collected status.
 	for _lm in \
-		'term|trap-status-dropped|scripts/bench/core/common.sh|	if [ -z "$SV_PID" ] && [ -n "$SV_STATUS" ]; then|	if false; then' \
 		'nospawn|hand-not-recorded|scripts/bench/core/common.sh|		bench_record_untold "$_bu_g" hand|		:'; do
 		_lmc=${_lm%%|*} _lmr=${_lm#*|}
 		_lmn=${_lmr%%|*} _lmr=${_lmr#*|}
@@ -1618,15 +1618,23 @@ fi
 # the pid). The record is printed, not written.
 #   wait    just after the wait returned (SV_STATUS still empty)
 #   status  just after SV_STATUS=, before SV_PID= (SV_STATUS set)
+#   done    just after SV_PID= (round 2's window, before bench_bounded
+#           has recorded the 126)
 # The events are "spawned" (a group to record), none (no group: a hand
 # record), or "spawned" and "reaped" (the command's own 126: no record).
+# A "term" line says sv_stop would have sent the collected supervisor's
+# pid a TERM and waited for it again: only at "wait", where nothing tells
+# the shell it was collected.
 cat > "$W/svwindow" << 'EOF'
-# svwindow <root> <wait|status> <spawned|none|reaped> <events file>
+# svwindow <root> <wait|status|done> <spawned|none|reaped> <events file>
 r=$1 at=$2 evs=$3
 . "$r/scripts/lib/supervise.sh"
 . "$r/scripts/bench/core/common.sh"
 bench_record_untold() { echo "recorded $2"; }
-sv_term() { sv_pid; }
+sv_term() {
+	sv_pid
+	[ -z "$SV_PID" ] || echo term
+}
 sh -c 'exit 126' &
 SV_PID=$!
 BENCH_BOUNDED_PID=$SV_PID
@@ -1637,22 +1645,20 @@ case $evs in spawned | reaped) echo "spawned pid=$SV_PID pgid=$SV_PID" >> "$BENC
 SV_STATUS=
 _r=0
 wait "$SV_PID" 2> /dev/null || _r=$?
-[ "$at" != status ] || SV_STATUS=$_r
+[ "$at" = wait ] || SV_STATUS=$_r
+[ "$at" != done ] || SV_PID=
 bench_bounded_stop 2> /dev/null
 echo "end"
 EOF
-# sv_window <root>: the four states, each with the record it must give;
-# sets win_why (empty: all held)
+# sv_window <root>: the six states, each with the lines it must give
+# (spaces for newlines); sets win_why (empty: all held)
 sv_window() {
 	win_why=
-	for _wc in wait:spawned:group status:spawned:group wait:none:hand wait:reaped:none; do
+	for _wc in 'wait:spawned:term recorded group' 'status:spawned:recorded group' 'done:spawned:recorded group' \
+		'wait:none:term recorded hand' 'done:none:recorded hand' 'wait:reaped:term'; do
 		_wa=${_wc%%:*} _wr=${_wc#*:}
-		_we=${_wr%%:*} _wx=${_wr#*:}
+		_we=${_wr%%:*} _ww="${_wr#*:} end "
 		_wo=$(/bin/sh "$W/svwindow" "$1" "$_wa" "$_we" "$W/svwindow.ev" 2>&1 | tr '\n' ' ')
-		case $_wx in
-		none) _ww="end " ;;
-		*) _ww="recorded $_wx end " ;;
-		esac
 		[ "$_wo" = "$_ww" ] || win_why="${win_why:+$win_why; }the trap at $_wa with events $_we gave \"$_wo\", not \"$_ww\""
 	done
 	rm -f "$W/svwindow.ev"
@@ -1664,6 +1670,34 @@ if [ -n "$win_why" ]; then
 else
 	echo "$me: ok   sv window: a trap after sv_wait's wait, under /bin/sh, records the 126 by the supervisor's events"
 fi
+# the mutants: the status decided by the wait alone (no events check); a
+# collected status not used (round 2's trap-status-dropped, moved here: the
+# events now record the term case's group without it); the status used only
+# once SV_PID is clear (round 2's order: the collected supervisor is sent a
+# TERM and waited for again). Each is refused only by the state its change
+# breaks, with the lines that change gives (<name>|<state>|<lines>|...).
+for _lm in \
+	'events-unchecked|wait with events spawned|term end |scripts/bench/core/common.sh|	elif ! bench_bounded_said reaped && {|	elif false && {' \
+	'trap-status-dropped|done with events none|end |scripts/bench/core/common.sh|	if [ -n "$SV_STATUS" ]; then|	if false; then' \
+	'status-after-pid|status with events spawned|term recorded group end |scripts/bench/core/common.sh|	if [ -n "$SV_STATUS" ]; then|	if [ -z "$SV_PID" ] && [ -n "$SV_STATUS" ]; then'; do
+	_lmn=${_lm%%|*} _lmr=${_lm#*|}
+	_lmx=${_lmr%%|*} _lmr=${_lmr#*|}
+	_lmx="the trap at $_lmx gave \"${_lmr%%|*}\"" _lmr=${_lmr#*|}
+	_lmf=${_lmr%%|*} _lmr=${_lmr#*|}
+	if sv_stage "$W/stage-$_lmn" "$_lmf" "${_lmr%%|*}" "${_lmr#*|}"; then
+		sv_window "$W/stage-$_lmn"
+		case $win_why in
+		*"$_lmx"*) echo "$me: mutant $_lmn: refused by window ($win_why)" ;;
+		*)
+			echo "$me: FAIL: mutant $_lmn passed the window case: ${win_why:-held}"
+			fails="$fails $_lmn"
+			;;
+		esac
+	else
+		echo "$me: FAIL: mutant $_lmn does not apply"
+		fails="$fails $_lmn"
+	fi
+done
 # A group record whose id a later process group has taken holds nothing
 # (security I2, round 1), as a pid record's does: the group is started
 # first, in a group of its own (its "up" line on a FIFO says so), then
