@@ -257,9 +257,17 @@ typedef struct
 	unsigned long shadowed;     /* pixels with a traced light below full visibility */
 	unsigned long rays;
 	double ms;                  /* the pass's GPU time; below 0 when not measured */
+	unsigned div;               /* TASK126: the view's divisor; above 1 the three counts above are the traced pixels' */
+	unsigned long tw, th;       /* the traced size (the render size at divisor 1) */
+	unsigned long fallbacks;    /* the upsample's fallbacks, in drawn pixels (rm_rts_up), 0 at divisor 1 */
+	unsigned long w, h;         /* TASK126 slice 6: the drawn size, pixels = w x h */
 } rm_rts_stats_t;
 
-/* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
+/*
+ * The r_rt_stats 2 line of a frame's pass, without a newline: 1 when it
+ * fits in len; 0 with buf empty otherwise. Above divisor 1 it ends with
+ * the traced size and the fallbacks, as rm_rtt_traced_format writes them.
+ */
 int rm_rts_stats_format(const rm_rts_stats_t *s, char *buf, size_t len);
 
 /* ---- rmb_rtshadow.m: the Metal back end ---------------------------------------------- */
@@ -294,14 +302,27 @@ void rmb_rts_set_ents(const float *rows, int n);
  * Before the G-buffer raster: the kernel's outputs at the render size w x
  * h. 1 when the view can trace (the frame then leaves the dynamic lights
  * out of the lightmaps); 0 when the pass is not open or they cannot be
- * made.
+ * made. TASK126 slice 4: div is r_rt_shadows_scale's divisor (mtl_rtup_div),
+ * kept for the view's trace. Above 1 also the traced size's packed words
+ * (RG32Uint) and the pipelines of rm_rts_trace_lo, rm_rts_temporal_lo and
+ * rm_rts_up, a failure latched until the pass is closed; at 1 the traced
+ * size's texture is released and the stock kernels run.
  */
-int rmb_rts_prepare(unsigned long w, unsigned long h);
+int rmb_rts_prepare(unsigned long w, unsigned long h, unsigned div);
+
+/*
+ * TASK126: 1 once after a view whose shadow histories reset for
+ * r_rt_shadows_scale (RM_RTT_RESET_SCALE from the take), for the
+ * r_rt_stats 1 line.
+ */
+int rmb_rts_scale_reset(void);
 
 /*
  * RT7 (TASK59 slice 1b): the next traced view accumulates its visibilities
  * with t (copied), at the render size w x h, through rm_rts_temporal in
- * rm_rts_trace's place; its pipeline and the two histories are made at the
+ * rm_rts_trace's place (TASK126: at the traced size w x h, through
+ * rm_rts_temporal_lo in rm_rts_trace_lo's, above divisor 1); its pipeline
+ * and the two histories are made at the
  * first such view, a failure latched. NULL, or t's alpha 0, releases the
  * histories and accumulates nothing. 1 when the view accumulates.
  */

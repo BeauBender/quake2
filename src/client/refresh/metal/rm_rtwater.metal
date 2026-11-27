@@ -228,6 +228,47 @@ rm_rtw_tri_normal(device const float4 *verts, device const uint *idx, constant r
 	return true;
 }
 
+/*
+ * TASK126 slice 5, r_rt_water_scale below 1 (option E): rm_rtwater_lo.metal
+ * compiles this file again with RM_RTW_LO_TU, and the three kernels that
+ * find a pixel's water and trace it become rm_rtw_compact_lo,
+ * rm_rtw_trace_lo and rm_rtw_trace_ws_lo: the same code at the traced
+ * size. There px is a traced pixel, written into the traced size's outputs
+ * (bound where the stock kernels' are); its G-buffer sample is read at its
+ * source pixel (RM_RTW_AT: mtl_rtup_src at the view's divisor, the block
+ * at buffer 17), and so are the marks' nine; the picture, where a hit is
+ * looked for and the lit target is read, stays the render size, in its
+ * own pixels (RM_RTW_PIC, the G-buffer's size); the outputs' bounds are
+ * the traced size's (RM_RTW_OUT). In this file's own unit each macro is
+ * the stock kernels' own token, so their code is the parent's.
+ */
+#ifndef RM_RTW_LO_TU
+#define RM_RTW_PIC(out, gb) out
+#define RM_RTW_OUT(pic, out) pic
+#define RM_RTW_AT(p) p
+#else
+#include "common/mtl_rtd_math.h"
+#include "common/mtl_rtup_math.h"
+
+/* rmb_rtwater.m's rmb_rtw_lo_t: the view's divisor (the view itself has no word to spare) */
+struct rm_rtw_lo
+{
+	uint div;
+	uint pad[3];
+};
+
+/* the render-size pixel traced pixel p takes its G-buffer sample from, of a w x h picture */
+static uint2
+rm_rtw_lo_src(uint2 p, uint div, uint w, uint h)
+{
+	return uint2(mtl_rtup_src(p.x, div, w), mtl_rtup_src(p.y, div, h));
+}
+
+#define RM_RTW_PIC(out, gb) gb
+#define RM_RTW_OUT(pic, out) out
+#define RM_RTW_AT(p) rm_rtw_lo_src(p, lo.div, w, h)
+#endif
+
 /* the frame's counts (rmb_rtwater.m's RMB_RTW_COUNTS) */
 #define RM_RTW_C_OPAQUE 0
 #define RM_RTW_C_TRANS 1
@@ -237,7 +278,8 @@ rm_rtw_tri_normal(device const float4 *verts, device const uint *idx, constant r
 #define RM_RTW_C_MISS 5
 #define RM_RTW_C_WORLD 6    /* TASK158: a face shaded in world space */
 #define RM_RTW_C_SKYBOX 7   /* the sky box's texel in world space */
-#define RM_RTW_C_LISTED 9   /* the compaction's list: its length, then the trace's threadgroups (x, y, z) */
+#define RM_RTW_C_FALLBACK 8 /* TASK126 slice 5: the upsample's fallbacks (rm_rtw_up) */
+#define RM_RTW_C_LISTED 9  /* the compaction's list: its length, then the trace's threadgroups (x, y, z) */
 #define RM_RTW_C_ARGS 10
 
 /* 1 when the pixel is inside the view's viewport and the target */
@@ -265,6 +307,8 @@ struct rm_rtw_cand_v
 	float4 position [[position]];
 };
 
+/* the stock unit's alone: the lo unit (RM_RTW_LO_TU) holds only the kernels it adds and the three it compiles again */
+#ifndef RM_RTW_LO_TU
 vertex rm_rtw_cand_v
 rm_vertex_rtw_cand(uint vid [[vertex_id]],
 		device const uint *wtris [[buffer(0)]],
@@ -321,6 +365,7 @@ rm_fragment_rtw_mark(rm_rtw_cand_v in [[stage_in]])
 	out.normal = float4(0.0f, 0.0f, 0.0f, MTL_RTW_MARK_A);
 	return out;
 }
+#endif /* RM_RTW_LO_TU */
 
 /*
  * TASK158: the compaction, over every pixel of the target: a pixel of the
@@ -330,8 +375,14 @@ rm_fragment_rtw_mark(rm_rtw_cand_v in [[stage_in]])
  * on the list alone and writes every listed pixel of the reflection
  * target, so the compaction writes the others 0 (no water).
  */
+#ifndef RM_RTW_LO_TU
 kernel void
-rm_rtw_compact(texture2d<uint, access::read> mat [[texture(0)]],
+rm_rtw_compact(
+#else
+kernel void
+rm_rtw_compact_lo(constant rm_rtw_lo &lo [[buffer(17)]],
+#endif
+		texture2d<uint, access::read> mat [[texture(0)]],
 		texture2d<float, access::write> refl [[texture(1)]],
 		texture2d<float, access::read> normal [[texture(2)]],
 		constant rm_rtw_view &v [[buffer(0)]],
@@ -340,12 +391,12 @@ rm_rtw_compact(texture2d<uint, access::read> mat [[texture(0)]],
 		constant uint &cap [[buffer(3)]],
 		uint2 px [[thread_position_in_grid]])
 {
-	const uint w = refl.get_width(), h = refl.get_height();
+	const uint w = RM_RTW_PIC(refl, mat).get_width(), h = RM_RTW_PIC(refl, mat).get_height();
 	bool listed = false;
 	uint base = 0, k, total;
 
-	if (rm_rtw_in_view(v, px, w, h) && (px.x < mat.get_width()) && (px.y < mat.get_height()) &&
-		(w <= normal.get_width()) && (h <= normal.get_height()))
+	if (rm_rtw_in_view(v, RM_RTW_AT(px), w, h) && (RM_RTW_AT(px).x < mat.get_width()) &&
+		(RM_RTW_AT(px).y < mat.get_height()) && (w <= normal.get_width()) && (h <= normal.get_height()))
 	{
 		uint marks = 0;
 
@@ -353,7 +404,7 @@ rm_rtw_compact(texture2d<uint, access::read> mat [[texture(0)]],
 		{
 			for (int dx = -1; dx <= 1; dx++)
 			{
-				const int qx = int(px.x) + dx, qy = int(px.y) + dy;
+				const int qx = int(RM_RTW_AT(px).x) + dx, qy = int(RM_RTW_AT(px).y) + dy;
 
 				if ((qx >= 0) && (qy >= 0) && (qx < int(w)) && (qy < int(h)))
 				{
@@ -362,7 +413,7 @@ rm_rtw_compact(texture2d<uint, access::read> mat [[texture(0)]],
 			}
 		}
 
-		listed = mtl_rtw_listed(mat.read(px).r, marks);
+		listed = mtl_rtw_listed(mat.read(RM_RTW_AT(px)).r, marks);
 	}
 
 	k = simd_prefix_exclusive_sum(listed ? 1u : 0u);
@@ -379,13 +430,14 @@ rm_rtw_compact(texture2d<uint, access::read> mat [[texture(0)]],
 	{
 		list[base + k] = mtl_rtw_list_pack(px.x, px.y);
 	}
-	else if ((px.x < w) && (px.y < h))
+	else if ((px.x < RM_RTW_OUT(w, refl.get_width())) && (px.y < RM_RTW_OUT(h, refl.get_height())))
 	{
 		/* not traced: no water, as the cleared target of TASK158's raster read */
 		refl.write(float4(0.0f), px);
 	}
 }
 
+#ifndef RM_RTW_LO_TU
 /* TASK158: the list's length held to its size, and the trace's threadgroups for an indirect dispatch */
 kernel void
 rm_rtw_args(device uint *counts [[buffer(0)]],
@@ -402,6 +454,7 @@ rm_rtw_args(device uint *counts [[buffer(0)]],
 		counts[RM_RTW_C_ARGS + 2] = 1;
 	}
 }
+#endif /* RM_RTW_LO_TU */
 
 /*
  * TASK158: the attributes of a map triangle at a hit: its texture and
@@ -566,8 +619,14 @@ rm_rtw_ss_at(constant rm_rtw_view &v, depth2d<float, access::read> depth, textur
  * not show too (FIX92; at 1 that is shaded). r_rt_water_hits 1 is
  * rm_rtw_trace_ws below.
  */
+#ifndef RM_RTW_LO_TU
 kernel void
-rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
+rm_rtw_trace(
+#else
+kernel void
+rm_rtw_trace_lo(constant rm_rtw_lo &lo [[buffer(17)]],
+#endif
+		depth2d<float, access::read> depth [[texture(0)]],
 		texture2d<float, access::read> normal [[texture(1)]],
 		texture2d<uint, access::read> mat [[texture(2)]],
 		texture2d<float, access::read> lit [[texture(3)]],
@@ -585,9 +644,9 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 		constant rm_rtw_geom &g [[buffer(9)]],
 		uint2 px [[thread_position_in_grid]])
 {
-	const uint w = refl.get_width(), h = refl.get_height();
-	const bool inside = (px.x < w) && (px.y < h);
-	const float2 pc = float2(px) + 0.5f;
+	const uint w = RM_RTW_PIC(refl, depth).get_width(), h = RM_RTW_PIC(refl, depth).get_height();
+	const bool inside = (px.x < RM_RTW_OUT(w, refl.get_width())) && (px.y < RM_RTW_OUT(h, refl.get_height()));
+	const float2 pc = float2(RM_RTW_AT(px)) + 0.5f;
 	const bool in_view = inside && (pc.x >= v.vp.x) && (pc.x < v.vp.x + v.vp.z) && (pc.y >= v.vp.y) &&
 		(pc.y < v.vp.y + v.vp.w);
 	uint m = MTL_GB_MAT_NONE, water = 0, trans = 0, eyes = 0, from = MTL_RTW_MISS;
@@ -596,13 +655,13 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 
 	if (in_view)
 	{
-		const float d = depth.read(px);
+		const float d = depth.read(RM_RTW_AT(px));
 
-		m = mat.read(px).r;
+		m = mat.read(RM_RTW_AT(px)).r;
 
 		if (mtl_rtw_is_water(m))
 		{
-			const float4 nn = normal.read(px);
+			const float4 nn = normal.read(RM_RTW_AT(px));
 
 			if ((d < 1.0f) && (nn.a > 0.5f))
 			{
@@ -839,8 +898,14 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
  * not show (mtl_rtw_choose_ws): an alias model it does not show passed
  * over (mtl_rtw_ws_next), a hidden brush model shaded.
  */
+#ifndef RM_RTW_LO_TU
 kernel void
-rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
+rm_rtw_trace_ws(
+#else
+kernel void
+rm_rtw_trace_ws_lo(constant rm_rtw_lo &lo [[buffer(17)]],
+#endif
+		depth2d<float, access::read> depth [[texture(0)]],
 		texture2d<float, access::read> normal [[texture(1)]],
 		texture2d<uint, access::read> mat [[texture(2)]],
 		texture2d<float, access::read> lit [[texture(3)]],
@@ -864,11 +929,11 @@ rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
 		device const uint *list [[buffer(16)]],
 		uint tid [[thread_position_in_grid]])
 {
-	const uint w = refl.get_width(), h = refl.get_height();
+	const uint w = RM_RTW_PIC(refl, depth).get_width(), h = RM_RTW_PIC(refl, depth).get_height();
 	const bool live = tid < atomic_load_explicit(&counts[RM_RTW_C_LISTED], memory_order_relaxed);
 	const uint2 px = live ? uint2(list[tid] & 0xffffu, list[tid] >> 16) : uint2(0xffffu);
-	const bool inside = live && (px.x < w) && (px.y < h);
-	const float2 pc = float2(px) + 0.5f;
+	const bool inside = live && (px.x < RM_RTW_OUT(w, refl.get_width())) && (px.y < RM_RTW_OUT(h, refl.get_height()));
+	const float2 pc = float2(RM_RTW_AT(px)) + 0.5f;
 	const bool in_view = inside && (pc.x >= v.vp.x) && (pc.x < v.vp.x + v.vp.z) && (pc.y >= v.vp.y) &&
 		(pc.y < v.vp.y + v.vp.w);
 	uint m = MTL_GB_MAT_NONE, water = 0, trans = 0, eyes = 0, from = MTL_RTW_MISS;
@@ -877,13 +942,13 @@ rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
 
 	if (in_view)
 	{
-		const float d = depth.read(px);
+		const float d = depth.read(RM_RTW_AT(px));
 
-		m = mat.read(px).r;
+		m = mat.read(RM_RTW_AT(px)).r;
 
 		if (mtl_rtw_is_water(m))
 		{
-			const float4 nn = normal.read(px);
+			const float4 nn = normal.read(RM_RTW_AT(px));
 
 			if ((d < 1.0f) && (nn.a > 0.5f))
 			{
@@ -1141,6 +1206,7 @@ rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
 	}
 }
 
+#ifndef RM_RTW_LO_TU
 /*
  * The reflection over the opaque water, drawn over the resolved target
  * with the blend (source alpha the weight, the target's alpha not
@@ -1254,3 +1320,238 @@ rm_fragment_rtw_trans(rm_varying3d in [[stage_in]],
 
 	return float4(c.r, c.g, c.b, c.a);
 }
+
+#else /* RM_RTW_LO_TU */
+
+/*
+ * r_rt_water_scale below 1 (TASK126 slice 5), the kernels the lo unit adds
+ * to the three above: the 3 x 3 blur at the traced size, and the upsample
+ * that writes the stock outputs at the render size from the traced ones.
+ */
+
+/* 1 when a traced pixel of class cn holds a reflection the one of class cc takes: rm_rtwdenoise.metal's rm_rtd_rok */
+static int
+rm_rtw_lo_rok(uint cc, uint cn)
+{
+	return (cn & MTL_RTW_CLASS_WATER) && ((cn & MTL_RTW_CLASS_FROM) != MTL_RTW_MISS) &&
+		((cn & MTL_RTW_CLASS_TRANS) == (cc & MTL_RTW_CLASS_TRANS));
+}
+
+/* the distance from the eye of traced pixel q's water: the traced one for translucent water, else its source pixel sq's depth */
+static float
+rm_rtw_lo_dist(constant rm_rtw_view &v, depth2d<float, access::read> depth, texture2d<float, access::read> wdist,
+		uint2 q, uint2 sq, uint cls)
+{
+	if (cls & MTL_RTW_CLASS_TRANS)
+	{
+		return wdist.read(q).r;
+	}
+
+	return distance(rm_rtw_unproject(v, float2(sq) + 0.5f, depth.read(sq)), v.eye.xyz);
+}
+
+/*
+ * RT7's blur of the reflections (rm_rtwdenoise.metal's rm_rtw_denoise) at
+ * the traced size, while r_rt_temporal is above 0: each traced pixel with
+ * a reflection takes the weighted mean of its 3 x 3 traced neighbours that
+ * hold one (mtl_rtd_rweight), each one's distance from its source pixel;
+ * the others are copied. No history: the water has none.
+ */
+kernel void
+rm_rtw_denoise_lo(texture2d<float, access::read> refl [[texture(0)]],
+		depth2d<float, access::read> depth [[texture(1)]],
+		texture2d<float, access::read> wdist [[texture(2)]],
+		texture2d<float, access::write> refl_out [[texture(3)]],
+		constant rm_rtw_view &v [[buffer(0)]],
+		constant rm_rtw_lo &lo [[buffer(17)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint w = min(refl.get_width(), wdist.get_width()), h = min(refl.get_height(), wdist.get_height());
+	const uint fw = depth.get_width(), fh = depth.get_height();
+	mtl_rtd_acc_t ar = mtl_rtd_acc(), ag = mtl_rtd_acc(), ab = mtl_rtd_acc();
+	float4 c;
+	uint cc;
+	float dc;
+
+	if ((px.x >= refl_out.get_width()) || (px.y >= refl_out.get_height()) || (px.x >= refl.get_width()) ||
+		(px.y >= refl.get_height()))
+	{
+		return;
+	}
+
+	c = refl.read(px);
+	cc = rm_rtw_cls(c.a);
+
+	if (!rm_rtw_lo_rok(cc, cc) || (px.x >= w) || (px.y >= h))
+	{
+		refl_out.write(c, px);
+		return;
+	}
+
+	dc = rm_rtw_lo_dist(v, depth, wdist, px, rm_rtw_lo_src(px, lo.div, fw, fh), cc);
+
+	for (int dy = -MTL_RTD_REFL_RADIUS; dy <= MTL_RTD_REFL_RADIUS; dy++)
+	{
+		for (int dx = -MTL_RTD_REFL_RADIUS; dx <= MTL_RTD_REFL_RADIUS; dx++)
+		{
+			const int2 q = int2(px) + int2(dx, dy);
+			float4 n;
+			uint cn;
+			int ok;
+			float dn, wt;
+
+			if ((q.x < 0) || (q.y < 0) || (q.x >= int(w)) || (q.y >= int(h)))
+			{
+				continue;
+			}
+
+			n = refl.read(uint2(q));
+			cn = rm_rtw_cls(n.a);
+			ok = rm_rtw_lo_rok(cc, cn);
+			dn = ok ? rm_rtw_lo_dist(v, depth, wdist, uint2(q), rm_rtw_lo_src(uint2(q), lo.div, fw, fh), cn) : dc;
+			wt = mtl_rtd_rweight(dx, dy, dc, dn, ok);
+			ar = mtl_rtd_add(ar, wt, n.r);
+			ag = mtl_rtd_add(ag, wt, n.g);
+			ab = mtl_rtd_add(ab, wt, n.b);
+		}
+	}
+
+	refl_out.write(float4(mtl_rtd_rresult(ar, c.r), mtl_rtd_rresult(ag, c.g), mtl_rtd_rresult(ab, c.b), c.a), px);
+}
+
+/* a normal as the G-buffer stores it, as a unit vector */
+static mtl_rtao_v3_t
+rm_rtw_lo_normal(float4 nv)
+{
+	const float3 n = normalize(nv.xyz * 2.0f - 1.0f);
+
+	return mtl_rtao_v3(n.x, n.y, n.z);
+}
+
+/*
+ * The upsample at the render size: t_refl and t_wdist as the stock trace
+ * writes them, so the blend and the forward pass read them unchanged.
+ * A drawn pixel in the view with a depth and a normal (any other is
+ * skipped before the rule and written as one without water, the stock
+ * value) is of the water's layer the trace would find there: opaque
+ * water where the raster drew it, else translucent water in front of its
+ * surface. The four traced pixels about it are weighed by the rule
+ * (mtl_rtup_weights: bilinear, RT7's depth and normal guides on the
+ * G-buffer at the drawn pixel and at each tap's source pixel, the same
+ * material), a tap holding a sample only where it found water of that
+ * layer with a reflection (rm_rtw_lo_rok) at a source pixel with a depth
+ * and a normal; where none matches, the one nearest in depth of those of
+ * the pixel's own material (mtl_rtup_own), counted as a fallback, so a
+ * pixel beside water traced over another surface (a pillar standing in
+ * translucent water) takes no tap of it and is neither marked nor
+ * counted. The reflection is the weighted colour, its class the
+ * pixel's layer with the heaviest tap's choice, and translucent water's
+ * distance the weighted distance. Where no tap holds a sample, opaque
+ * water has no reflection (MTL_RTW_MISS, the stock water) and any other
+ * pixel is one without water.
+ */
+kernel void
+rm_rtw_up(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<float, access::write> refl [[texture(4)]],
+		texture2d<float, access::write> wdist [[texture(5)]],
+		texture2d<float, access::read> refl_lo [[texture(7)]],
+		texture2d<float, access::read> wdist_lo [[texture(8)]],
+		constant rm_rtw_view &v [[buffer(0)]],
+		device atomic_uint *counts [[buffer(6)]],
+		constant rm_rtw_lo &lo [[buffer(17)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint fw = refl.get_width(), fh = refl.get_height();
+	const bool inside = (px.x < fw) && (px.y < fh);
+	const float2 pc = float2(px) + 0.5f;
+	const bool in_view = inside && (pc.x >= v.vp.x) && (pc.x < v.vp.x + v.vp.z) && (pc.y >= v.vp.y) &&
+		(pc.y < v.vp.y + v.vp.w);
+	float4 r = float4(0.0f);
+	float wd = 0.0f;
+	uint fb = 0u;
+
+	if (in_view)
+	{
+		const float d = depth.read(px);
+		const float4 nn = normal.read(px);
+		const uint m = mat.read(px).r;
+		const uint own = mtl_rtw_is_water(m) ? MTL_RTW_CLASS_WATER : (MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS);
+
+		if ((d < 1.0f) && (nn.a > 0.5f))
+		{
+			const uint lw = refl_lo.get_width(), lh = refl_lo.get_height();
+			const mtl_rtao_pair_t qx = mtl_rtao_up_pair(px.x, lo.div, lw), qy = mtl_rtao_up_pair(px.y, lo.div, lh);
+			const uint tx[MTL_RTUP_TAPS] = { qx.lo0, qx.lo1, qx.lo0, qx.lo1 };
+			const uint ty[MTL_RTUP_TAPS] = { qy.lo0, qy.lo0, qy.lo1, qy.lo1 };
+			float4 tv[MTL_RTUP_TAPS];
+			float tw[MTL_RTUP_TAPS];
+			mtl_rtup_in_t in;
+			mtl_rtup_out_t o;
+
+			in.d = distance(rm_rtw_unproject(v, pc, d), v.eye.xyz);
+			in.n = rm_rtw_lo_normal(nn);
+			in.m = m;
+			in = mtl_rtup_bilinear(in, qx, qy);
+
+			for (int i = 0; i < MTL_RTUP_TAPS; i++)
+			{
+				const uint2 tp = uint2(tx[i], ty[i]);
+				const uint2 sp = rm_rtw_lo_src(tp, lo.div, fw, fh);
+				const float ds = depth.read(sp);
+				const float4 ns = normal.read(sp);
+
+				tv[i] = refl_lo.read(tp);
+				tw[i] = wdist_lo.read(tp).r;
+				in.mn[i] = mat.read(sp).r;
+				in.ok[i] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv[i].a)) && (ds < 1.0f) && (ns.a > 0.5f)) ? 1 : 0;
+				in.dn[i] = (ds < 1.0f) ? distance(rm_rtw_unproject(v, float2(sp) + 0.5f, ds), v.eye.xyz) : 0.0f;
+				in.nn[i] = rm_rtw_lo_normal(ns);
+			}
+
+			/* the fallback takes only a tap of the pixel's own material: a pixel beside water of another is empty */
+			in = mtl_rtup_own(in);
+			o = mtl_rtup_weights(in, lo.div);
+			fb = o.fallback ? 1u : 0u;
+
+			if (!o.empty)
+			{
+				int k = 0;
+
+				/* the choice of the tap carrying the most weight, the first of equals */
+				for (int i = 1; i < MTL_RTUP_TAPS; i++)
+				{
+					k = (o.w[i] > o.w[k]) ? i : k;
+				}
+
+				r = float4(mtl_rtup_value(o, tv[0].r, tv[1].r, tv[2].r, tv[3].r, 0.0f),
+						mtl_rtup_value(o, tv[0].g, tv[1].g, tv[2].g, tv[3].g, 0.0f),
+						mtl_rtup_value(o, tv[0].b, tv[1].b, tv[2].b, tv[3].b, 0.0f),
+						float(mtl_rtw_class(1, (own & MTL_RTW_CLASS_TRANS) != 0, rm_rtw_cls(tv[k].a))) / 255.0f);
+				wd = (own & MTL_RTW_CLASS_TRANS) ? mtl_rtup_value(o, tw[0], tw[1], tw[2], tw[3], 0.0f) : 0.0f;
+			}
+			else if (!(own & MTL_RTW_CLASS_TRANS))
+			{
+				r = float4(0.0f, 0.0f, 0.0f, float(mtl_rtw_class(1, 0, MTL_RTW_MISS)) / 255.0f);
+			}
+		}
+	}
+
+	if (inside)
+	{
+		refl.write(r, px);
+		wdist.write(float4(wd, 0.0f, 0.0f, 0.0f), px);
+	}
+
+	{
+		const uint c_fb = simd_sum(fb);
+
+		if (simd_is_first())
+		{
+			atomic_fetch_add_explicit(&counts[RM_RTW_C_FALLBACK], c_fb, memory_order_relaxed);
+		}
+	}
+}
+
+#endif /* RM_RTW_LO_TU */

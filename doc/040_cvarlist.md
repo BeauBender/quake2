@@ -1224,7 +1224,8 @@ is.
   "AO trace size" and on the Ray tracing screen as "AO scale", a choice
   of full, 1/2 or 1/3 (the three sizes the renderer tells apart), greyed on other renderers and while `r_rt_ao` is `0`.
   Saved with the configuration; applies from the next frame.
-  Can be set from Video options > Ray tracing (TASK194), live.
+  Can be set from Video options > Ray tracing (TASK194), live. Where the device has no ray tracing it does nothing, and the renderer says so at its start (and again after a `vid_restart`):
+  `ref_metal: ray tracing: none on this device: the effect scales do nothing`.
 
 * **r_rt_ao_seed**: A development setting of the Metal renderer's
   `r_rt_ao`: with `0` (the default) the rays' blue-noise pattern moves on
@@ -1377,7 +1378,9 @@ is.
   out of the ray-traced scene whatever `r_rt_gunshadow` says. Fullbright
   and translucent models, shells, models seen through the IR goggles and
   the other depth-hacked models stay stock-lit. `0`: every model and the
-  view weapon stock-lit, as before. With `r_rt_stats 2`
+  view weapon stock-lit, as before. While `r_rt_temporal` is above `0`
+  the traced model pixels and the weapon's are accumulated over the
+  frames as the world's light is (see `r_rt_temporal`). With `r_rt_stats 2`
   the model pass prints a line a frame (`ref_metal: rt models: ...`, see
   `r_rt_stats`). It does nothing
   outside the Ray traced presentation or on a device without ray
@@ -1539,6 +1542,26 @@ is.
   with the configuration; applies from the next frame.
   Can be set from Video options > Ray tracing (TASK194), live.
 
+* **r_rt_shadows_scale**: The share of the 3D view's width and height
+  that `r_rt_shadows` traces its rays at. `1` (the default) traces every
+  pixel, `0.5` one pixel of each 2 x 2 block, a quarter of the rays, and
+  `0.33` one of each 3 x 3 block. Below `1` each world pixel still works
+  out its own dynamic lights and how much each adds there; only whether a
+  light reaches it comes from the traced pixels next to it on its own
+  surface (the same distance, normal and material) that traced that
+  light, so an edge between two surfaces and the rim of a light's reach
+  stay where they are. A pixel no traced pixel next to it matches takes
+  the nearest in distance, and a light none of them traced is added
+  unshadowed, as with `r_rt_shadows 0`; `r_rt_stats 2` counts the pixels
+  where either happened. It is a share of the size the view is drawn at,
+  so with a MetalFX scaler (`r_metalfx`) it applies to the scaler's
+  input. A value is taken as the nearest of the three (`1` for `0.67` and
+  above, `0.33` below `0.4`); `0`, a negative value or one that is not a
+  finite number counts as `1`. A change resets the shadows' temporal
+  history (`r_rt_temporal`), which `r_rt_stats 1` reports. Saved with the
+  configuration; applies from the next frame. Where the device has no ray tracing it does nothing, and the renderer says so at its start (and again after a `vid_restart`):
+  `ref_metal: ray tracing: none on this device: the effect scales do nothing`.
+
 * **r_rt_shadows_show**: A development view of the Metal renderer's
   ray-traced shadows: with `r_rt_shadows` on, `1` replaces the 3D view by
   white where no dynamic light is in range and black where one is (the
@@ -1567,12 +1590,19 @@ is.
   model, sprites, the view weapon, shells, models it cannot build) and the
   bytes held, and with `r_rt_shadows` on a line for the shadow pass: the
   pixels it ran on, those with a dynamic light in range, those that traced
-  a ray and those shadowed, the rays and the pass's GPU time; with
+  a ray and those shadowed, the rays and the pass's GPU time (below
+  `r_rt_shadows_scale 1` those three counts are of the traced pixels, and
+  the line ends with the traced size and the drawn pixels the upsample
+  fell back on, `, traced at WxH, F upsample fallbacks`); with
   `r_rt_ao` on a line for the occlusion pass: the pixels it ran on, the
   world pixels that took a darkening, those darkened and those darkened to
   `r_rt_ao_min`, the pixels facing up (floors) and of them those darkened,
   the rays (at the size `r_rt_ao_scale` traces at), those that met a
-  surface and the pass's GPU time; with
+  surface and the pass's GPU time (below `r_rt_ao_scale 1`, its default
+  `0.5` among them, the line ends with the traced size and the drawn
+  pixels the upsample fell back to the world pixels' mean or to no
+  darkening on, `, traced at WxH, F upsample fallbacks`, counted only
+  where the four traced pixels about a pixel hold different values); with
   `r_rt_water` on a line for the reflections: the pixels of the view, those
   it traced (with `r_rt_water_hits 1`, the default, the water and the
   pixels next to it; at `0` every pixel), those of opaque and of translucent water, the rays
@@ -1583,7 +1613,10 @@ is.
   (the list of its pixels, the trace) and the time from the first's start
   to the last's end, the pass's time being their sum (the water's marks
   are a draw of the G-buffer raster, timed with it, so there are no
-  raster figures); and under the Ray traced presentation with
+  raster figures; below `r_rt_water_scale 1` the counts from the pixels
+  traced to those from nowhere are of the traced pixels, and the line ends
+  with the traced size and the drawn pixels the upsample fell back on,
+  `, traced at WxH, F upsample fallbacks`); and under the Ray traced presentation with
   `r_rt_temporal` above `0` a line for its accumulation and its 5 x 5
   filter, timed together,
   `ref_metal: rt direct temporal: frame N: X ms` (`- ms` when no time was
@@ -1591,7 +1624,10 @@ is.
   `r_rt_direct_models` on a line for the model pass,
   `ref_metal: rt models: frame N: P model pixels, R shadow rays, O sky, sun and bounce rays, T ms`:
   the model pixels it traced, their shadow rays, their sky, sun and bounce
-  rays, and the pass's GPU time (`- ms` when no time was measured). At
+  rays, and the pass's GPU time (`- ms` when no time was measured),
+  followed, on a frame whose model pixels were accumulated
+  (`r_rt_temporal` above `0`), by `, accumulated: K kept their history`,
+  the model pixels whose history was kept. At
   `1` and above, with a MetalFX scaler on
   (`r_metalfx`), a 3D view that drops the scaler's history or that of
   `r_rt_temporal` (the history RT-primary's accumulation shares with the
@@ -1600,7 +1636,30 @@ is.
   the scaler's as `r_metalfx` lists them, the temporal history's as
   `first` (a map load, a `vid_restart`, a frame that accumulated no view),
   `size`, `rect` and `cut`, and `none` for a history that is kept; with no
-  scaler it prints nothing. Nothing
+  scaler it prints nothing. At any `r_metalfx`, a 3D view that resets
+  the sun's history because `r_rt_sun_scale` changed prints the line
+  `ref_metal: r_rt_stats: reset: sun scale`, and one that resets the
+  shadows' because `r_rt_shadows_scale` changed
+  `ref_metal: r_rt_stats: reset: shadows scale` (the water keeps no
+  history and prints none). At any `r_metalfx`, a frame of an effect
+  traced below the size it is drawn at (`r_rt_shadows_scale`,
+  `r_rt_sun_scale`, `r_rt_ao_scale` or `r_rt_water_scale` below `1`)
+  whose traced size is not that effect's last one prints
+  `ref_metal: r_rt_stats: upsample: <effect> TWxTH of WxH, F fallbacks`:
+  the effect (`shadows`, `sun`, `ao` or `water`), its traced size, the
+  drawn size and that frame's fallbacks; and the map's summary is followed
+  by one line for each such effect,
+  `ref_metal: rt: <map>: upsample: <effect> F fallbacks of P upsampled pixels (S %)`:
+  P the pixels of the frames it drew below that size since the map
+  loaded, every drawn pixel of each such frame (the sky's and the pixels
+  the effect does not apply to among them, so the share is of the
+  frame), F the pixels the upsample fell back on, and S their share.
+  AO's F is a lower bound: it is counted only where the four traced
+  pixels about a pixel hold different values. Under `r_rt_stats 2`, P
+  and F are the sums of the pixels and the upsample fallbacks of that
+  effect's frame lines with a traced size: every frame counted has its
+  line, and the only such lines left out are those of the previous
+  map's last frames, still in flight when the map loaded. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
@@ -1640,6 +1699,25 @@ is.
   (the renderer says so once). Saved with the configuration; applies from
   the next frame.
 
+* **r_rt_sun_scale**: The share of the 3D view's width and height that
+  `r_rt_sun` traces its rays at; not its strength, which is
+  `r_rt_sunscale`. `1` (the default) traces every pixel, `0.5` one pixel
+  of each 2 x 2 block, a quarter of the rays, and `0.33` one of each
+  3 x 3 block. Below `1` each lit world pixel takes whether the sun
+  reaches it from the traced pixels next to it on its own surface (the
+  same distance, normal and material), and its own angle to the sun, so
+  an edge between two surfaces and a shadow's outline on a wall stay
+  where they are; a pixel no traced pixel next to it matches takes the
+  nearest in distance, and `r_rt_stats 2` counts those. It is a share of
+  the size the view is drawn at, so with a MetalFX scaler (`r_metalfx`)
+  it applies to the scaler's input. A value is taken as the nearest of
+  the three (`1` for `0.67` and above, `0.33` below `0.4`); `0`, a
+  negative value or one that is not a finite number counts as `1`. A
+  change resets the sun's temporal history (`r_rt_temporal`), which
+  `r_rt_stats 1` reports. Saved with the configuration; applies from the
+  next frame. Where the device has no ray tracing it does nothing, and the renderer says so at its start (and again after a `vid_restart`):
+  `ref_metal: ray tracing: none on this device: the effect scales do nothing`.
+
 * **r_rt_sun_show**: A development view of the Metal renderer's
   `r_rt_sun`: with it on, `1` replaces the 3D view by a mask, black where
   the sun's light was added and white everywhere else, `2` by the pass's
@@ -1664,8 +1742,9 @@ is.
 * **r_rt_sunscale**: How strong `r_rt_sun`'s light is: the share of the
   sky's colour a pixel facing the sun squarely gets, `0.35` by default. A
   value below `0` counts as `0`, one above `4` as `4`, one that is not a
-  finite number as `0.35`. Saved with the configuration; applies from the
-  next frame.
+  finite number as `0.35`. Not the size the sun is traced at, which is
+  `r_rt_sun_scale`. Saved with the configuration; applies from the next
+  frame.
   Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_temporal**: The Metal renderer's temporal accumulation of the
@@ -1702,7 +1781,16 @@ is.
   light. That light is then denoised by the same 5 x 5 filter, the sum
   rather than each term, each of red, green and blue with its own
   neighbours, by the same guides and the same strength by the sample
-  count (TASK190 slice 2); the history keeps the accumulation alone. The
+  count (TASK190 slice 2); the history keeps the accumulation alone. With
+  `r_rt_direct_models` on, the traced model pixels, the view weapon's
+  among them, are accumulated in the same history (TASK191 slice 4): each
+  model pixel's traced light, before the stock model colour, is read where
+  the G-buffer's motion vector says it was (the weapon's is its own
+  projection's), by the same rejections, under a key of its own, so a
+  model's history never blends with the world's, nor the weapon's with
+  another model's; the glow pulse, the minlight floor, overbright and
+  gamma are applied to each frame's blend, not averaged. The 5 x 5 filter
+  does not run on model pixels. The
   presentation does not set `r_rt_temporal`: the value is the
   user's, and at `0` the presentation's frames are the same as without it.
   `r_rt_ao_show`, `r_rt_shadows_show` and `r_rt_sun_show` show the
@@ -1836,6 +1924,26 @@ is.
   finite number as `0`. In the video menu's renderer options as "water
   reflections" (greyed while `r_rt_water` is off). Saved with the
   configuration; applies from the next frame.
+
+* **r_rt_water_scale**: The share of the 3D view's width and height
+  that `r_rt_water` traces its reflections at. `1` (the default) traces
+  every pixel, `0.5` one pixel of each 2 x 2 block, a quarter of the
+  rays, and `0.33` one of each 3 x 3 block. Below `1` each water pixel
+  takes its reflection from the traced pixels next to it that found
+  water of its own kind (opaque water, or translucent water in front of
+  the surface behind) with a reflection and lie on the same surface (the
+  same distance, normal and material); one that none of them matches
+  takes the nearest in distance of those of its own material, and
+  `r_rt_stats 2` counts those; one with none of its own material is
+  given no reflection and is not counted. A pixel none of them gave a
+  reflection keeps the stock water. The blend over the water and the
+  translucent faces then read the reflection as at `1`. It is a share of
+  the size the view is drawn at, so with a MetalFX scaler (`r_metalfx`)
+  it applies to the scaler's input. A value is taken as the nearest of
+  the three (`1` above 2/3, `0.33` below `0.4`); `0`, a negative value
+  or one that is not a finite number counts as `1`. The reflections keep no history, so a change resets nothing.
+  Saved with the configuration; applies from the next frame. Where the device has no ray tracing it does nothing, and the renderer says so at its start (and again after a `vid_restart`):
+  `ref_metal: ray tracing: none on this device: the effect scales do nothing`.
 
 * **r_rt_water_show**: A development view of the Metal renderer's
   `r_rt_water`: with it on, `1` replaces the picture by a mask, black

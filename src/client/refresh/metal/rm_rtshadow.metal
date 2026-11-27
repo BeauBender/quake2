@@ -881,6 +881,8 @@ struct rm_rtt_view
 	uint seq;
 };
 
+#ifndef RM_RTS_LO_TU
+
 /*
  * RT7's accumulation of the shadows (TASK59 slice 1b): rm_rts_trace, with
  * each of the four visibilities blended with its history before the term
@@ -955,5 +957,498 @@ rm_rts_temporal(depth2d<float, access::read> depth [[texture(0)]],
 
 	rm_rts_finish(s, inside, px, lights, out, term, counts);
 }
+
+#else /* RM_RTS_LO_TU */
+
+/*
+ * r_rt_shadows_scale below 1 (TASK126 slice 4, option E), compiled apart
+ * by rm_rtshadow_lo.metal, so that neither the stock trace's unit nor the
+ * stock temporal kernel's holds a new caller of their helpers. At divisor
+ * d the shadow rays are traced from one pixel of each d x d block
+ * (TASK157's layout, common/mtl_rtup_math.h): rm_rts_trace_lo, or with
+ * RT7's accumulation at that size rm_rts_temporal_lo, writes each traced
+ * pixel's packed words (RT3's layout: the four visibilities, the light
+ * indices and the flags). rm_rts_up then builds, per drawn pixel, the two
+ * outputs the stock trace writes, which rm_fragment_resolve_rts reads
+ * unchanged. The bindings are the stock kernels', with the traced size's
+ * packed words at texture 11 and the divisor at buffer 13.
+ */
+
+#include "common/mtl_rtd_math.h"
+#include "common/mtl_rtup_math.h"
+
+/* rmb_rtshadow.m's rmb_rts_lo_t: the view's divisor (the view itself has no word to spare) */
+struct rm_rts_lo
+{
+	uint div;
+	uint pad[3];
+};
+
+/* the counts' slot of the upsample's fallbacks (rmb_rtshadow.m's RMB_RTS_COUNTS) */
+#define RM_RTS_C_FALLBACK 4
+
+/* the render-size pixel traced pixel px takes its G-buffer sample from */
+static uint2
+rm_rts_lo_src(uint2 px, uint div, uint fw, uint fh)
+{
+	return uint2(mtl_rtup_src(px.x, div, fw), mtl_rtup_src(px.y, div, fh));
+}
+
+/* a normal as the G-buffer stores it, as a unit vector */
+static mtl_rtao_v3_t
+rm_rts_lo_normal(float4 nv)
+{
+	const float3 n = normalize(nv.xyz * 2.0f - 1.0f);
+
+	return mtl_rtao_v3(n.x, n.y, n.z);
+}
+
+/*
+ * A traced pixel's outputs: its packed words, as rm_rts_trace packs them,
+ * and the frame's counts, which below the drawn size are the traced
+ * pixels' (rm_rts_finish's, without the term: rm_rts_up makes it).
+ */
+static void
+rm_rts_lo_finish(thread const rm_rts_px &s, bool inside, uint2 px, texture2d<uint, access::write> out_lo,
+		device atomic_uint *counts)
+{
+	if (inside)
+	{
+		out_lo.write(uint4(mtl_rts_pack_vis(s.vis[0], s.vis[1], s.vis[2], s.vis[3]), mtl_rts_pack_idx(s.top, s.flags), 0, 0), px);
+	}
+
+	{
+		const uint c_in = simd_sum((s.flags & MTL_RTS_IN_RANGE) ? 1u : 0u);
+		const uint c_tr = simd_sum(s.rays ? 1u : 0u);
+		const uint c_sh = simd_sum((s.flags & MTL_RTS_SHADOWED) ? 1u : 0u);
+		const uint c_ry = simd_sum(s.rays + s.primary);
+
+		if (simd_is_first())
+		{
+			atomic_fetch_add_explicit(&counts[0], c_in, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[1], c_tr, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[2], c_sh, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[3], c_ry, memory_order_relaxed);
+		}
+	}
+}
+
+/*
+ * The trace at the traced size: rm_rts_trace's lights and rays
+ * (rm_rts_shade) for each traced pixel, from its source pixel's G-buffer
+ * sample. Out: the packed words alone, and the counts.
+ */
+kernel void
+rm_rts_trace_lo(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<uint, access::write> out_lo [[texture(11)]],
+		constant rm_rts_view &v [[buffer(0)]],
+		constant rm_rts_light *lights [[buffer(1)]],
+		instance_acceleration_structure ias [[buffer(2)]],
+		device const uint *inst [[buffer(3)]],
+		device const uchar *transmit [[buffer(4)]],
+		constant uint &ntris [[buffer(5)]],
+		device atomic_uint *counts [[buffer(6)]],
+		device const uint *tri_surf [[buffer(7)]],
+		device const float4 *vecs [[buffer(8)]],
+		constant rm_rts_mapn &mapn [[buffer(9)]],
+		texture2d<uint, access::read> gsurf [[texture(5)]],
+		device const uint *vert_surf [[buffer(10)]],
+		device const float4 *ents [[buffer(11)]],
+		constant rm_rts_lo &lo [[buffer(13)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const bool inside = (px.x < out_lo.get_width()) && (px.y < out_lo.get_height());
+	const uint2 sp = rm_rts_lo_src(px, lo.div, depth.get_width(), depth.get_height());
+	const rm_rts_px s = rm_rts_shade(inside, sp, depth, normal, mat, v, lights, ias, inst, transmit, ntris, tri_surf, vecs,
+			mapn, gsurf, vert_surf, ents);
+
+	rm_rts_lo_finish(s, inside, px, out_lo, counts);
+}
+
+/*
+ * RT7 at the traced size, fused into the trace as rm_rts_temporal: each
+ * of the four visibilities blended with its history, read where the
+ * render-size motion vector at the traced pixel's source pixel, over the
+ * divisor, says it was (mtl_rtup_reproject), and rejected by
+ * mtl_rtt_reject on the distance, the material and the light set. The
+ * histories are rm_rts_temporal's, at the traced size.
+ */
+kernel void
+rm_rts_temporal_lo(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<uint, access::write> out_lo [[texture(11)]],
+		constant rm_rts_view &v [[buffer(0)]],
+		constant rm_rts_light *lights [[buffer(1)]],
+		instance_acceleration_structure ias [[buffer(2)]],
+		device const uint *inst [[buffer(3)]],
+		device const uchar *transmit [[buffer(4)]],
+		constant uint &ntris [[buffer(5)]],
+		device atomic_uint *counts [[buffer(6)]],
+		device const uint *tri_surf [[buffer(7)]],
+		device const float4 *vecs [[buffer(8)]],
+		constant rm_rts_mapn &mapn [[buffer(9)]],
+		texture2d<uint, access::read> gsurf [[texture(5)]],
+		device const uint *vert_surf [[buffer(10)]],
+		device const float4 *ents [[buffer(11)]],
+		texture2d<float, access::read> motion [[texture(6)]],
+		texture2d<uint, access::read> rec_in [[texture(7)]],
+		texture2d<float, access::read> vis_in [[texture(8)]],
+		texture2d<uint, access::write> rec_out [[texture(9)]],
+		texture2d<float, access::write> vis_out [[texture(10)]],
+		constant rm_rtt_view &t [[buffer(12)]],
+		constant rm_rts_lo &lo [[buffer(13)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint w = out_lo.get_width(), hh = out_lo.get_height();
+	const bool inside = (px.x < w) && (px.y < hh);
+	const uint2 sp = rm_rts_lo_src(px, lo.div, depth.get_width(), depth.get_height());
+	rm_rts_px s = rm_rts_shade(inside, sp, depth, normal, mat, v, lights, ias, inst, transmit, ntris, tri_surf, vecs,
+			mapn, gsurf, vert_surf, ents);
+
+	if (inside)
+	{
+		const uint m = mat.read(sp).r;
+		const float d = depth.read(sp);
+		const float2 mv = motion.read(sp).xy;
+		const mtl_rtt_px_t r = mtl_rtup_reproject(px.x, px.y, mv.x, mv.y, lo.div, w, hh);
+		const uint4 hr = r.ok ? rec_in.read(uint2(r.x, r.y)) : uint4(0u);
+		const float4 hv = r.ok ? vis_in.read(uint2(r.x, r.y)) : float4(1.0f);
+		const float hd = as_type<float>(hr.y), hc = as_type<float>(hr.w);
+		const uint set = mtl_rtt_lights(mtl_rts_pack_idx(s.top, s.flags)), hset = hr.x, hm = hr.z;
+		float dist = 0.0f;
+
+		if (d < 1.0f)
+		{
+			dist = distance(rm_rts_position(v, sp, d), v.eye.xyz);
+		}
+
+		{
+			const uint rej = mtl_rtt_reject(t.reset, r.ok, dist, hd, t.move, m, hm, set, hset, hc);
+
+			for (int k = 0; k < MTL_RTS_CAP; k++)
+			{
+				s.vis[k] = mtl_rtt_blend(rej, s.vis[k], hv[k], hc, t.alpha);
+			}
+
+			rec_out.write(uint4(set, as_type<uint>(dist), m, as_type<uint>(mtl_rtt_count(rej, hc))), px);
+			vis_out.write(float4(s.vis[0], s.vis[1], s.vis[2], s.vis[3]), px);
+		}
+	}
+
+	rm_rts_lo_finish(s, inside, px, out_lo, counts);
+}
+
+/*
+ * The lights of drawn pixel px, for rm_rts_up only: rm_rts_shade without
+ * its shadow rays, copied line for line but for them and the rays' start
+ * (tests/check-ref-metal.sh pins the two alike). So a drawn pixel's light
+ * set, the four lights that add the most at it, and every light's add
+ * are the stock trace's at that pixel; its visibilities stay 1 here.
+ */
+static rm_rts_px
+rm_rts_lit(bool inside, uint2 px, depth2d<float, access::read> depth, texture2d<float, access::read> normal,
+		texture2d<uint, access::read> mat, constant rm_rts_view &v, constant rm_rts_light *lights,
+		instance_acceleration_structure ias, device const uint *inst, device const uchar *transmit, uint ntris,
+		device const uint *tri_surf, device const float4 *vecs, constant rm_rts_mapn &mapn,
+		texture2d<uint, access::read> gsurf, device const uint *vert_surf, device const float4 *ents)
+{
+	rm_rts_px s;
+	mtl_rts_top_t top = mtl_rts_top_init();
+	uint flags = 0, rays = 0, primary = 0;
+	float vis[MTL_RTS_CAP] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+	s.nl = 0;
+
+	if (inside && (v.nlights > 0) && (mat.read(px).r == MTL_GB_MAT_WORLD))
+	{
+		const float d = depth.read(px);
+		const float4 nn = normal.read(px);
+
+		if ((d < 1.0f) && (nn.a > 0.5f))
+		{
+			const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
+			const float3 p = rm_rts_position(v, px, d);
+			const uint nl = min(v.nlights, (uint)MTL_RTS_MAX_LIGHTS);
+			thread float *adds = s.adds;
+			bool slab = false, known = false;
+			uint raw = 0;
+			mtl_rts_xform_t xf;
+			mtl_rts_surf_t sf = mtl_rts_surf_base(rm_rts_v(p), rm_rts_v(n));
+
+			/*
+			 * TASK131: the pixel's surface and its model's space from the
+			 * G-buffer's surface attachment, without a ray: the triangle the
+			 * raster drew there, and the entity that drew it.
+			 */
+			if (v.gsurf && (mapn.nsurf > 0))
+			{
+				known = rm_rts_gb_surface(gsurf.read(px).r, v, mapn, vert_surf, ents, raw, xf);
+			}
+
+			if (known)
+			{
+				const uint sidx = raw & ~MTL_RTS_SURF_UNLIT;
+				const float4 pl = vecs[3 * sidx + 2];
+				const mtl_rts_v3_t pm = mtl_rts_xpoint(xf, rm_rts_v(p));
+
+				/*
+				 * A light whose distance from the surface's own plane, in its
+				 * model's space with the light where it is, leaves it light to
+				 * add (gl1's test); none on a surface without light samples.
+				 */
+				for (uint i = 0; (i < nl) && !(raw & MTL_RTS_SURF_UNLIT); i++)
+				{
+					slab = slab || mtl_rts_near_plane(rm_rts_v4(pl), pm, rm_rts_v(lights[i].origin.xyz), lights[i].origin.w);
+				}
+
+				if (slab)
+				{
+					sf = mtl_rts_surf(rm_rts_v(p), xf, rm_rts_v4(vecs[3 * sidx]), rm_rts_v4(vecs[3 * sidx + 1]),
+							rm_rts_v4(pl), 0);
+				}
+			}
+			else
+			{
+				/*
+				 * Without it (a dynamic draw, a model the raster could not
+				 * name), TASK55's: a light whose plane distance leaves it light
+				 * to add (gl1's surface test), in the world's space; with a
+				 * brush entity moved in the frame (v.moved) every such pixel
+				 * looks for its surface, which may be that entity's, lit in its
+				 * model's space.
+				 */
+				for (uint i = 0; i < nl; i++)
+				{
+					const float3 lp = lights[i].origin.xyz - p;
+
+					slab = slab || mtl_rts_near(dot(lp, n), lights[i].origin.w, length(lp));
+				}
+
+				slab = slab || (v.moved != 0);
+			}
+
+			/*
+			 * The pixel's surface, for its texture axes and its model's space,
+			 * where the G-buffer did not give it: the triangle a ray from the
+			 * eye meets at the depth's point. The ray looks only within the
+			 * depth's error of that point, so a triangle the raster does not
+			 * draw in front of it (a face of the structure the G-buffer leaves
+			 * out) does not hide it.
+			 */
+			if (slab && !known && (mapn.nsurf > 0))
+			{
+				const float3 dv = p - v.eye.xyz;
+				const float dl = length(dv);
+				const float tol = max(2.0f, dl * 0.002f);
+
+				if (dl > tol + 1.0f)
+				{
+					intersector<triangle_data, instancing, world_space_data> isect;
+					intersection_result<triangle_data, instancing, world_space_data> hit;
+
+					isect.assume_geometry_type(geometry_type::triangle);
+					hit = isect.intersect(ray(v.eye.xyz, dv / dl, dl - tol, dl + tol), ias, 0xff);
+					primary = 1;
+
+					if (hit.type == intersection_type::triangle)
+					{
+						const uint b = inst[2 * hit.instance_id];
+
+						if ((b != 0xffffffffu) && (b + hit.primitive_id < mapn.ntris))
+						{
+							const uint raw = tri_surf[b + hit.primitive_id];
+							const uint sidx = raw & ~MTL_RTS_SURF_UNLIT;
+
+							if (sidx < mapn.nsurf)
+							{
+								const float4x3 w = hit.world_to_object_transform;
+								mtl_rts_xform_t xf;
+
+								xf.c0 = rm_rts_v(w[0]);
+								xf.c1 = rm_rts_v(w[1]);
+								xf.c2 = rm_rts_v(w[2]);
+								xf.c3 = rm_rts_v(w[3]);
+								sf = mtl_rts_surf(rm_rts_v(p), xf, rm_rts_v4(vecs[3 * sidx]), rm_rts_v4(vecs[3 * sidx + 1]),
+										rm_rts_v4(vecs[3 * sidx + 2]), (raw & MTL_RTS_SURF_UNLIT) != 0);
+							}
+						}
+					}
+				}
+			}
+
+			for (uint i = 0; i < nl; i++)
+			{
+				mtl_rts_lit_t li;
+
+				adds[i] = 0.0f;
+
+				if (!slab)
+				{
+					continue;
+				}
+
+				li = mtl_rts_surf_light(sf, rm_rts_v(lights[i].origin.xyz), lights[i].origin.w);
+				adds[i] = li.add;
+
+				if (li.in_range)
+				{
+					flags |= MTL_RTS_IN_RANGE;
+				}
+
+				top = mtl_rts_top_add(top, i, adds[i]);
+			}
+
+			s.nl = nl;
+		}
+	}
+
+	s.top = top;
+	s.flags = flags;
+	s.rays = rays;
+	s.primary = primary;
+
+	for (int k = 0; k < MTL_RTS_CAP; k++)
+	{
+		s.vis[k] = vis[k];
+	}
+
+	return s;
+}
+
+/*
+ * The upsample at the render size. Each drawn pixel's own lights and adds
+ * (rm_rts_lit: the falloff at the pixel itself, never a tap's). A pixel
+ * with no normal, or with no light in its set, is skipped before the
+ * rule, so the fallbacks are not inflated. For the others the weights of
+ * the four traced pixels about it (mtl_rtup_weights: bilinear, RT7's
+ * depth and normal guides, the same material, a traced sample; the one
+ * nearest in depth where none matches), and for each light of its set
+ * the visibility of the taps whose packed set holds that light
+ * (mtl_rtup_light); a light no weighted tap traced takes visibility 1.
+ * A pixel where the weights fell back, or where a light took that 1, is
+ * counted once as a fallback. Then the packed words and the term as
+ * rm_rts_trace writes them.
+ */
+kernel void
+rm_rts_up(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<uint, access::write> out [[texture(3)]],
+		texture2d<float, access::write> term [[texture(4)]],
+		texture2d<uint, access::read> out_lo [[texture(11)]],
+		constant rm_rts_view &v [[buffer(0)]],
+		constant rm_rts_light *lights [[buffer(1)]],
+		instance_acceleration_structure ias [[buffer(2)]],
+		device const uint *inst [[buffer(3)]],
+		device const uchar *transmit [[buffer(4)]],
+		constant uint &ntris [[buffer(5)]],
+		device atomic_uint *counts [[buffer(6)]],
+		device const uint *tri_surf [[buffer(7)]],
+		device const float4 *vecs [[buffer(8)]],
+		constant rm_rts_mapn &mapn [[buffer(9)]],
+		texture2d<uint, access::read> gsurf [[texture(5)]],
+		device const uint *vert_surf [[buffer(10)]],
+		device const float4 *ents [[buffer(11)]],
+		constant rm_rts_lo &lo [[buffer(13)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint fw = out.get_width(), fh = out.get_height();
+	const bool inside = (px.x < fw) && (px.y < fh);
+	rm_rts_px s = rm_rts_lit(inside, px, depth, normal, mat, v, lights, ias, inst, transmit, ntris, tri_surf, vecs,
+			mapn, gsurf, vert_surf, ents);
+	uint fb = 0u;
+
+	if (inside && (s.nl > 0) && (s.top.idx[0] != MTL_RTS_NO_LIGHT))
+	{
+		const uint lw = out_lo.get_width(), lh = out_lo.get_height();
+		const mtl_rtao_pair_t qx = mtl_rtao_up_pair(px.x, lo.div, lw), qy = mtl_rtao_up_pair(px.y, lo.div, lh);
+		const uint tx[MTL_RTUP_TAPS] = { qx.lo0, qx.lo1, qx.lo0, qx.lo1 };
+		const uint ty[MTL_RTUP_TAPS] = { qy.lo0, qy.lo0, qy.lo1, qy.lo1 };
+		uint2 tw[MTL_RTUP_TAPS];
+		mtl_rtup_in_t in;
+		mtl_rtup_out_t o;
+
+		in.d = distance(rm_rts_position(v, px, depth.read(px)), v.eye.xyz);
+		in.n = rm_rts_lo_normal(normal.read(px));
+		in.m = MTL_GB_MAT_WORLD;
+		in = mtl_rtup_bilinear(in, qx, qy);
+
+		for (int i = 0; i < MTL_RTUP_TAPS; i++)
+		{
+			const uint2 tp = uint2(tx[i], ty[i]);
+			const uint2 sp = rm_rts_lo_src(tp, lo.div, fw, fh);
+			const float ds = depth.read(sp);
+			const float4 ns = normal.read(sp);
+
+			/* a tap holds a sample where rm_rts_shade traced its source pixel: the world, with a depth and a normal */
+			in.mn[i] = mat.read(sp).r;
+			in.ok[i] = ((in.mn[i] == MTL_GB_MAT_WORLD) && (ds < 1.0f) && (ns.a > 0.5f)) ? 1 : 0;
+			in.dn[i] = (ds < 1.0f) ? distance(rm_rts_position(v, sp, ds), v.eye.xyz) : 0.0f;
+			in.nn[i] = rm_rts_lo_normal(ns);
+			tw[i] = out_lo.read(tp).rg;
+		}
+
+		o = mtl_rtup_weights(in, lo.div);
+		fb = o.fallback ? 1u : 0u;
+
+		for (int k = 0; k < MTL_RTS_CAP; k++)
+		{
+			const uint li = s.top.idx[k];
+			mtl_rtup_light_t l;
+
+			if (li == MTL_RTS_NO_LIGHT)
+			{
+				continue;
+			}
+
+			l = mtl_rtup_light(o, mtl_rts_holds(tw[0].g, li), mtl_rts_holds(tw[1].g, li), mtl_rts_holds(tw[2].g, li),
+					mtl_rts_holds(tw[3].g, li), mtl_rts_light_vis(tw[0].g, tw[0].r, li), mtl_rts_light_vis(tw[1].g, tw[1].r, li),
+					mtl_rts_light_vis(tw[2].g, tw[2].r, li), mtl_rts_light_vis(tw[3].g, tw[3].r, li));
+			s.vis[k] = l.vis;
+			fb |= l.fallback ? 1u : 0u;
+
+			if (s.vis[k] < 1.0f)
+			{
+				s.flags |= MTL_RTS_SHADOWED;
+			}
+		}
+	}
+
+	/* the pixel's outputs, as rm_rts_finish writes them */
+	{
+		const uint pidx = mtl_rts_pack_idx(s.top, s.flags), pvis = mtl_rts_pack_vis(s.vis[0], s.vis[1], s.vis[2], s.vis[3]);
+		float3 t = float3(0.0f);
+
+		for (uint i = 0; i < s.nl; i++)
+		{
+			if (s.adds[i] > 0.0f)
+			{
+				t += mtl_rts_light_vis(pidx, pvis, i) * s.adds[i] * lights[i].color.rgb;
+			}
+		}
+
+		if (inside)
+		{
+			out.write(uint4(pvis, pidx, 0, 0), px);
+			term.write(float4(t, 0.0f), px);
+		}
+	}
+
+	/* the eye rays rm_rts_lit took, with the trace's rays, and the fallbacks: one atomic each per SIMD group */
+	{
+		const uint c_ry = simd_sum(s.primary), c_fb = simd_sum(fb);
+
+		if (simd_is_first())
+		{
+			atomic_fetch_add_explicit(&counts[3], c_ry, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTS_C_FALLBACK], c_fb, memory_order_relaxed);
+		}
+	}
+}
+
+#endif /* RM_RTS_LO_TU */
 
 #endif /* RM_RTS_TEMPORAL_TU */

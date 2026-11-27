@@ -20,7 +20,7 @@
  * The engine side of ref_metal's ray-traced water reflections (RT6,
  * TASK58; header/rm_rtwater.h, header/rm_rtwaterscene.h): the r_rt_water
  * cvars (r_rt_water, r_rt_water_normal, r_rt_water_reflect, TASK158's
- * r_rt_water_hits) and the
+ * r_rt_water_hits, TASK126's r_rt_water_scale, the traced size) and the
  * development view r_rt_water_show, the frame's decision (rm_rtw_on: with
  * it the view takes the G-buffer path), the view handed to the back end
  * before the raster, and the pass's r_rt_stats 2 line. With r_rt_water 0
@@ -37,12 +37,14 @@
 #include "header/rm_rtaoscene.h"
 #include "header/rm_rtgate.h"
 #include "header/rm_gbufscene.h"
+#include "common/mtl_rtup_math.h"
 
 static cvar_t *r_rt_water;
 static cvar_t *r_rt_water_normal;
 static cvar_t *r_rt_water_reflect;
 static cvar_t *r_rt_water_show;
 static cvar_t *r_rt_water_hits;   /* TASK158: 0 TASK58's screen-space hits, 1 world space (rm_rtw_hits) */
+static cvar_t *r_rt_water_scale;  /* TASK126: the traced size, a fraction of the view's width and height */
 static cvar_t *r_rt_stats_ref;
 
 static int rtw_device;      /* rmb_caps_t.raytracing */
@@ -198,6 +200,7 @@ RM_RTW_Init(const rmb_caps_t *caps)
 	r_rt_water_reflect = ri.Cvar_Get("r_rt_water_reflect", "0.5", CVAR_ARCHIVE);
 	r_rt_water_show = ri.Cvar_Get("r_rt_water_show", "0", 0);
 	r_rt_water_hits = ri.Cvar_Get("r_rt_water_hits", "1", CVAR_ARCHIVE);   /* TASK158 */
+	r_rt_water_scale = ri.Cvar_Get("r_rt_water_scale", "1", CVAR_ARCHIVE);   /* TASK126 slice 5 */
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	rtw_device = caps->raytracing != 0;
 	rtw_opened = rtw_refused = rtw_active = rtw_viewed = rtw_ws_told = 0;
@@ -277,6 +280,12 @@ RM_RTW_Frame(const refdef_t *fd, int scene_ready)
 		RM_OptCost_Add(RM_COST_WATER, st[i].ms);
 	}
 
+	/* TASK126 slice 6: the upsample's size-change line (r_rt_stats 1) and the map summary's totals */
+	for (i = 0; i < n; i++)
+	{
+		RM_RT_UpFrame(RM_RT_UP_WATER, st[i].frame, st[i].div, st[i].tw, st[i].th, st[i].w, st[i].h, st[i].fallbacks);
+	}
+
 	for (i = 0; i < n && r_rt_stats_ref && (r_rt_stats_ref->value >= 2); i++)
 	{
 		char line[RM_STATS_LINE];
@@ -319,6 +328,7 @@ RM_RTW_View(const rm_view_t *view)
 	rm_rtw_view_t v;
 	char err[192];
 	int w, h, ws, say;
+	unsigned div;
 
 	rtw_viewed = 0;
 
@@ -353,10 +363,13 @@ RM_RTW_View(const rm_view_t *view)
 		R_Printf(PRINT_ALL, "ref_metal: rt water: %s; r_rt_water_hits 1 refused, its hits shaded as 0's\n", err);
 	}
 
+	/* TASK126 slice 5: the size the reflections trace at, a share of the render size; at 1 the stock trace */
+	div = mtl_rtup_div(RM_Effect(r_rt_water_scale));
+
 	if (!rm_rtw_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value, r_newrefdef.time,
 			rm_rtw_amp(RM_Effect(r_rt_water_normal)), rm_rtw_reflect(RM_Effect(r_rt_water_reflect)),
 			(unsigned)rm_rtw_show(r_rt_water_show->value), &v) ||
-		!rmb_rtw_prepare((unsigned long)w, (unsigned long)h, ws))
+		!rmb_rtw_prepare((unsigned long)w, (unsigned long)h, ws, div))
 	{
 		rmb_rtw_set_view(NULL);
 		return;

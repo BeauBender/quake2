@@ -19,7 +19,8 @@
  *
  * The engine side of ref_metal's ray-traced sun and sky shadow (RT4,
  * TASK56; header/rm_rtsun.h, header/rm_rtsunscene.h): the cvars (r_rt_sun,
- * r_rt_sunscale, r_rt_sunfloor, r_rt_sun_angles) and the development view
+ * r_rt_sunscale, r_rt_sunfloor, r_rt_sun_angles, and TASK126's
+ * r_rt_sun_scale, the traced size) and the development view
  * r_rt_sun_show, the per-map table built in from scripts/rt/sun-angles.txt,
  * the map's sky share (measured once a map from the world's retained
  * buffers, TASK53's material ids), the frame's decision (with it the view
@@ -37,6 +38,8 @@
 #include "header/rm_rtsunscene.h"
 #include "header/rm_rtaoscene.h"
 #include "header/rm_gbufscene.h"
+#include "header/rm_rtscene.h"
+#include "common/mtl_rtup_math.h"
 
 /*
  * scripts/rt/sun-angles.txt, built into the renderer with a 0 after it.
@@ -60,6 +63,7 @@ static cvar_t *r_rt_sunscale;
 static cvar_t *r_rt_sunfloor;
 static cvar_t *r_rt_sun_angles;
 static cvar_t *r_rt_sun_show;
+static cvar_t *r_rt_sun_scale;  /* TASK126: the traced size, a fraction of the view's width and height */
 static cvar_t *r_rt_stats_ref;
 
 static rm_rtsun_entry_t sun_table[RM_RTSUN_TABLE_MAX];
@@ -86,6 +90,7 @@ RM_RTSun_Init(const rmb_caps_t *caps)
 	r_rt_sunfloor = ri.Cvar_Get("r_rt_sunfloor", "0.5", CVAR_ARCHIVE);
 	r_rt_sun_angles = ri.Cvar_Get("r_rt_sun_angles", "55 45", CVAR_ARCHIVE);
 	r_rt_sun_show = ri.Cvar_Get("r_rt_sun_show", "0", 0);
+	r_rt_sun_scale = ri.Cvar_Get("r_rt_sun_scale", "1", CVAR_ARCHIVE);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	sun_device = caps->raytracing != 0;
 	sun_opened = sun_refused = sun_active = sun_viewed = sun_sky_ok = sun_angles_bad = 0;
@@ -264,10 +269,31 @@ RM_RTSun_Frame(const refdef_t *fd, int scene_ready)
 
 	n = rmb_rtsun_stats(st, RMB_FRAMES_IN_FLIGHT);
 
+	/*
+	 * TASK126: a world view whose sun history reset for r_rt_sun_scale (the
+	 * back end's take, rm_rtt_hist_take_at). The model view and a change of
+	 * fov never reach it: the one takes no sun, the other is no divisor.
+	 */
+	if (rmb_rtsun_scale_reset() && r_rt_stats_ref && (r_rt_stats_ref->value >= 1))
+	{
+		char line[RM_STATS_LINE];
+
+		if (rm_rtt_scale_line_format("sun", line, sizeof(line)))
+		{
+			R_Printf(PRINT_ALL, "%s\n", line);
+		}
+	}
+
 	/* the settings optimizer's cost hints (TASK203): kept only during its probe */
 	for (i = 0; i < n; i++)
 	{
 		RM_OptCost_Add(RM_COST_SUN, st[i].ms);
+	}
+
+	/* TASK126 slice 6: the upsample's size-change line (r_rt_stats 1) and the map summary's totals */
+	for (i = 0; i < n; i++)
+	{
+		RM_RT_UpFrame(RM_RT_UP_SUN, st[i].frame, st[i].div, st[i].tw, st[i].th, st[i].w, st[i].h, st[i].fallbacks);
 	}
 
 	for (i = 0; i < n && r_rt_stats_ref && (r_rt_stats_ref->value >= 2); i++)
@@ -324,15 +350,25 @@ RM_RTSun_View(const rm_view_t *view)
 
 	if (!rm_rtsun_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value, dir, sky,
 			rm_rtsun_scale(RM_Effect(r_rt_sunscale)), rm_rtsun_floor(RM_Effect(r_rt_sunfloor)),
-			(unsigned)rm_rtsun_show(r_rt_sun_show->value), &v) ||
-		!rmb_rtsun_prepare((unsigned long)w, (unsigned long)h))
+			(unsigned)rm_rtsun_show(r_rt_sun_show->value), &v))
+	{
+		rmb_rtsun_set_view(NULL);
+		return;
+	}
+
+	/* TASK126: the size the sun traces at, a share of the render size; at 1 the stock trace */
+	v.div = mtl_rtup_div(RM_Effect(r_rt_sun_scale));
+
+	if (!rmb_rtsun_prepare((unsigned long)w, (unsigned long)h, v.div))
 	{
 		rmb_rtsun_set_view(NULL);
 		return;
 	}
 
 	rmb_rtsun_set_view(&v);
-	rmb_rtsun_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (unsigned long)h);
+	/* the histories at the traced size: the render size at divisor 1 */
+	rmb_rtsun_temporal(RM_RTT_ViewFor(view), (unsigned long)mtl_rtup_size((unsigned)w, v.div),
+			(unsigned long)mtl_rtup_size((unsigned)h, v.div));
 	sun_viewed = 1;
 }
 

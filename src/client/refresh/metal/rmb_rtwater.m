@@ -54,6 +54,7 @@
 #include "header/rmb_internal.h"
 #include "common/mtl_rtw_math.h"
 #include "common/mtl_rtd_math.h"
+#include "common/mtl_rtup_math.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_rtwater.m is written for ARC: compile it with -fobjc-arc"
@@ -66,12 +67,21 @@ extern rmb_stats_t rmb_counts;
 
 #define RMB_RTW_GROUP 8         /* the compaction's threadgroup side */
 #define RMB_RTW_SLOT 16         /* uint32s a frame slot of the counts buffer (rm_rtwater.metal's RM_RTW_C_*) */
+#define RMB_RTW_C_FALLBACK 8    /* TASK126 slice 5: the upsample's fallbacks (rm_rtw_up) */
 #define RMB_RTW_C_LISTED 9
 #define RMB_RTW_C_ARGS 10
 #define RMB_RTW_SAMPLES 4       /* per slot (world space): 0 and 1 the compaction's start and end, 2 and 3 the trace's
                                    (TASK58's path writes 0 and 1); FIX98: the 4 TASK158's raster had are gone */
 
+/* rm_rtwater.metal's rm_rtw_lo (TASK126 slice 5): the view's divisor, beside the view, which keeps its 288 bytes */
+typedef struct
+{
+	uint32_t div;
+	uint32_t pad[3];
+} rmb_rtw_lo_t;
+
 _Static_assert(sizeof(rm_rtw_view_t) == 288, "the view is rm_rtwater.metal's 288 bytes");
+_Static_assert(sizeof(rmb_rtw_lo_t) == 16, "the divisor's block is rm_rtwater.metal's 16 bytes");
 _Static_assert(RMB_RTW_C_ARGS * 4 % 4 == 0, "the indirect arguments are 4-byte aligned");
 
 static int rtw_open;
@@ -128,6 +138,22 @@ static int blur_on;                     /* the next view blurs */
 static int blur_bad;                    /* its pipeline or output could not be made: latched until the size changes or the pass closes */
 static NSUInteger blur_bad_w, blur_bad_h; /* the render size blur_bad was latched at */
 static int blurred;                     /* this view's reflection was blurred into t_rblur */
+
+/*
+ * TASK126 slice 5: r_rt_water_scale below 1. The divisor rmb_rtw_prepare
+ * was last given; the traced size's reflection, distance and (while the
+ * blur is on) blurred reflection, made by it and released at divisor 1;
+ * the five pipelines of rm_rtwater_lo.metal, made at the first such view,
+ * a failure latched until the pass is closed. The stock outputs stay at
+ * the render size: rm_rtw_up writes them.
+ */
+static unsigned prep_div = 1;
+static id<MTLTexture> t_refl_lo, t_wdist_lo, t_rblur_lo;
+static id<MTLComputePipelineState> trace_lo_pipe, trace_ws_lo_pipe, compact_lo_pipe, blur_lo_pipe, up_pipe;
+static int lo_refused;
+static unsigned slot_div[RMB_FRAMES_IN_FLIGHT];                 /* the view's divisor */
+static unsigned long slot_tw[RMB_FRAMES_IN_FLIGHT], slot_th[RMB_FRAMES_IN_FLIGHT];  /* its traced size */
+static unsigned long slot_w[RMB_FRAMES_IN_FLIGHT], slot_h[RMB_FRAMES_IN_FLIGHT];    /* TASK126 slice 6: the drawn size */
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTW_SET(slot, obj) \
@@ -479,9 +505,19 @@ rmb_rtw_close(void)
 		RMB_RTW_SET(shade, nil);
 		RMB_RTW_SET(blur_pipe, nil);
 		RMB_RTW_SET(t_rblur, nil);
+		RMB_RTW_SET(t_refl_lo, nil);
+		RMB_RTW_SET(t_wdist_lo, nil);
+		RMB_RTW_SET(t_rblur_lo, nil);
+		RMB_RTW_SET(trace_lo_pipe, nil);
+		RMB_RTW_SET(trace_ws_lo_pipe, nil);
+		RMB_RTW_SET(compact_lo_pipe, nil);
+		RMB_RTW_SET(blur_lo_pipe, nil);
+		RMB_RTW_SET(up_pipe, nil);
 		rmb_rtw_close_ws();
 	}
 
+	prep_div = 1;
+	lo_refused = 0;
 	blur_on = blur_bad = blurred = 0;
 	blur_bad_w = blur_bad_h = 0;
 	rtw_open = 0;
@@ -492,9 +528,121 @@ rmb_rtw_close(void)
 	ndone = 0;
 }
 
-int
-rmb_rtw_prepare(unsigned long w, unsigned long h, int ws)
+/* TASK126 slice 5: a traced-size texture of format f, private and read and written by the kernels */
+static id<MTLTexture>
+rmb_rtw_lo_tex(MTLPixelFormat f, unsigned long w, unsigned long h)
 {
+	MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:f width:w height:h mipmapped:NO];
+
+	d.storageMode = MTLStorageModePrivate;
+	d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+	return [rmb_device newTextureWithDescriptor:d];
+}
+
+/*
+ * TASK126 slice 5: for divisor div above 1, the traced size's outputs at
+ * mtl_rtup_size of the render size w x h (the blurred one while the blur
+ * is on) and the five pipelines; 1 when they are there. At divisor 1 the
+ * textures are released and nothing else is needed: the stock kernels run.
+ */
+static int
+rmb_rtw_prepare_lo(unsigned long w, unsigned long h, unsigned div)
+{
+	const unsigned long tw = mtl_rtup_size((unsigned)w, div), th = mtl_rtup_size((unsigned)h, div);
+
+	prep_div = (div > 1) ? div : 1;
+
+	@autoreleasepool
+	{
+		if ((div <= 1) || !blur_on)
+		{
+			RMB_RTW_SET(t_rblur_lo, nil);
+		}
+
+		if (div <= 1)
+		{
+			RMB_RTW_SET(t_refl_lo, nil);
+			RMB_RTW_SET(t_wdist_lo, nil);
+			return 1;
+		}
+
+		if (lo_refused)
+		{
+			return 0;
+		}
+
+		if (!trace_lo_pipe || !trace_ws_lo_pipe || !compact_lo_pipe || !blur_lo_pipe || !up_pipe)
+		{
+			/* each pipeline its own error, so the latched message names the call that failed */
+			NSError *e0 = nil, *e1 = nil, *e2 = nil, *e3 = nil, *e4 = nil;
+			id<MTLFunction> k[5];
+			NSString *names[5] = { @"rm_rtw_trace_lo", @"rm_rtw_trace_ws_lo", @"rm_rtw_compact_lo", @"rm_rtw_denoise_lo",
+				@"rm_rtw_up" };
+			int i;
+
+			for (i = 0; i < 5; i++)
+			{
+				k[i] = [rmb_library() newFunctionWithName:names[i]];
+			}
+
+			RMB_RTW_SET(trace_lo_pipe, k[0] ? [rmb_device newComputePipelineStateWithFunction:k[0] error:&e0] : nil);
+			RMB_RTW_SET(trace_ws_lo_pipe, k[1] ? [rmb_device newComputePipelineStateWithFunction:k[1] error:&e1] : nil);
+			RMB_RTW_SET(compact_lo_pipe, k[2] ? [rmb_device newComputePipelineStateWithFunction:k[2] error:&e2] : nil);
+			RMB_RTW_SET(blur_lo_pipe, k[3] ? [rmb_device newComputePipelineStateWithFunction:k[3] error:&e3] : nil);
+			RMB_RTW_SET(up_pipe, k[4] ? [rmb_device newComputePipelineStateWithFunction:k[4] error:&e4] : nil);
+
+			if (!trace_lo_pipe || !trace_ws_lo_pipe || !compact_lo_pipe || !blur_lo_pipe || !up_pipe)
+			{
+				/* the first that failed: its function missing, or its pipeline with the error it gave */
+				const int f = !trace_lo_pipe ? 0 : !trace_ws_lo_pipe ? 1 : !compact_lo_pipe ? 2 : !blur_lo_pipe ? 3 : 4;
+				NSError *e = (f == 0) ? e0 : (f == 1) ? e1 : (f == 2) ? e2 : (f == 3) ? e3 : e4;
+
+				RMB_RTW_SET(trace_lo_pipe, nil);
+				RMB_RTW_SET(trace_ws_lo_pipe, nil);
+				RMB_RTW_SET(compact_lo_pipe, nil);
+				RMB_RTW_SET(blur_lo_pipe, nil);
+				RMB_RTW_SET(up_pipe, nil);
+				lo_refused = 1;
+				fprintf(stderr, "ref_metal: rt water: no pipelines for r_rt_water_scale below 1: %s: %s; no water reflections\n",
+						names[f].UTF8String, !k[f] ? "no such function" : e ? e.localizedDescription.UTF8String : "no error given");
+				return 0;
+			}
+		}
+
+		if (!t_refl_lo || (t_refl_lo.width != tw) || (t_refl_lo.height != th) || !t_wdist_lo)
+		{
+			RMB_RTW_SET(t_refl_lo, rmb_rtw_lo_tex(MTLPixelFormatRGBA8Unorm, tw, th));
+			RMB_RTW_SET(t_wdist_lo, rmb_rtw_lo_tex(MTLPixelFormatR32Float, tw, th));
+			RMB_RTW_SET(t_rblur_lo, nil);
+
+			if (!t_refl_lo || !t_wdist_lo)
+			{
+				RMB_RTW_SET(t_refl_lo, nil);
+				RMB_RTW_SET(t_wdist_lo, nil);
+				return 0;
+			}
+
+			fprintf(stderr, "ref_metal: rt water %lux%lu traced at %lux%lu: %lu bytes allocated\n", w, h, tw, th,
+					(unsigned long)(t_refl_lo.allocatedSize + t_wdist_lo.allocatedSize));
+		}
+
+		/* the blur's output; without it the view is not blurred (rmb_rtw_lo_up) */
+		if (blur_on && !t_rblur_lo)
+		{
+			RMB_RTW_SET(t_rblur_lo, rmb_rtw_lo_tex(MTLPixelFormatRGBA8Unorm, tw, th));
+		}
+	}
+
+	return 1;
+}
+
+int
+rmb_rtw_prepare(unsigned long w, unsigned long h, int ws, unsigned div)
+{
+	/* TASK126 slice 5: the list holds the traced pixels, w x h at divisor 1 */
+	const unsigned long ln = (div > 1) ? (unsigned long)mtl_rtup_size((unsigned)w, div) * mtl_rtup_size((unsigned)h, div) :
+		w * h;
+
 	ws = ws != 0;
 
 	if (!rtw_open || !trace_pipe || !counts || (ws && !ws_ok) || (w < 1) || (h < 1) || (w > 0xffffUL) || (h > 0xffffUL))
@@ -504,9 +652,9 @@ rmb_rtw_prepare(unsigned long w, unsigned long h, int ws)
 
 	/* the outputs (and on the world-space path the list) at the render size, made again when it or the path changes */
 	if (t_refl && t_wdist && (t_refl.width == w) && (t_refl.height == h) && (made_ws == ws) &&
-		(!ws || (list && (list_cap == w * h))))
+		(!ws || (list && (list_cap == ln))))
 	{
-		return 1;
+		return rmb_rtw_prepare_lo(w, h, div);
 	}
 
 	@autoreleasepool
@@ -521,9 +669,9 @@ rmb_rtw_prepare(unsigned long w, unsigned long h, int ws)
 		d.pixelFormat = MTLPixelFormatR32Float;
 		d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
 		RMB_RTW_SET(t_wdist, [rmb_device newTextureWithDescriptor:d]);
-		RMB_RTW_SET(list, ws ? [rmb_device newBufferWithLength:w * h * sizeof(uint32_t)
+		RMB_RTW_SET(list, ws ? [rmb_device newBufferWithLength:ln * sizeof(uint32_t)
 				options:MTLResourceStorageModePrivate] : nil);
-		list_cap = list ? w * h : 0;
+		list_cap = list ? ln : 0;
 		made_ws = ws;
 
 		if (!t_refl || !t_wdist || (ws && !list))
@@ -540,7 +688,7 @@ rmb_rtw_prepare(unsigned long w, unsigned long h, int ws)
 				(unsigned long)(t_refl.allocatedSize + t_wdist.allocatedSize + (list ? list.allocatedSize : 0)));
 	}
 
-	return 1;
+	return rmb_rtw_prepare_lo(w, h, div);
 }
 
 void
@@ -655,7 +803,14 @@ rmb_rtw_read(void)
 		s->world = c[6];
 		s->skybox = c[7];
 		s->ws = slot_ws[k];
-		s->listed = slot_ws[k] ? c[RMB_RTW_C_LISTED] : slot_pixels[k];   /* TASK58's path traces every pixel */
+		/* TASK58's path traces every pixel: the render size's, or below divisor 1 the traced size's (TASK126) */
+		s->listed = slot_ws[k] ? c[RMB_RTW_C_LISTED] : slot_tw[k] * slot_th[k];
+		s->div = slot_div[k];
+		s->tw = slot_tw[k];
+		s->th = slot_th[k];
+		s->w = slot_w[k];
+		s->h = slot_h[k];
+		s->fallbacks = c[RMB_RTW_C_FALLBACK];
 		s->ms = s->compact_ms = s->trace_ms = s->span_ms = -1;
 
 		/*
@@ -855,12 +1010,64 @@ rmb_rtw_bind_trace(id<MTLComputeCommandEncoder> ce, unsigned long fno, int slot,
 	return 1;
 }
 
+/*
+ * TASK126 slice 5: below divisor 1, on the trace's encoder ce, the traced
+ * size's outputs where the stock kernels' are (textures 4 and 5) and the
+ * divisor's block (buffer 17), for the trace at the traced size.
+ */
+static void
+rmb_rtw_lo_bind(id<MTLComputeCommandEncoder> ce, const rmb_rtw_lo_t *lov)
+{
+	[ce setTexture:t_refl_lo atIndex:4];
+	[ce setTexture:t_wdist_lo atIndex:5];
+	[ce setBytes:lov length:sizeof(*lov) atIndex:17];
+}
+
+/*
+ * TASK126 slice 5: after the trace at the traced size on ce (a serial
+ * encoder, each dispatch behind a barrier), the 3 x 3 blur at that size
+ * while it is on, then rm_rtw_up at the render size w x h, which writes
+ * t_refl and t_wdist from the traced (or blurred) reflection, so the
+ * blend and the forward pass read them as the stock trace's.
+ */
+static void
+rmb_rtw_lo_up(id<MTLComputeCommandEncoder> ce, id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material,
+		NSUInteger w, NSUInteger h)
+{
+	const MTLSize g = MTLSizeMake(RMB_RTW_GROUP, RMB_RTW_GROUP, 1);
+	const int blur = blur_on && (t_rblur_lo != nil);
+
+	[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+
+	if (blur)
+	{
+		[ce setComputePipelineState:blur_lo_pipe];
+		[ce setTexture:t_refl_lo atIndex:0];
+		[ce setTexture:depth atIndex:1];
+		[ce setTexture:t_wdist_lo atIndex:2];
+		[ce setTexture:t_rblur_lo atIndex:3];
+		[ce dispatchThreads:MTLSizeMake(t_rblur_lo.width, t_rblur_lo.height, 1) threadsPerThreadgroup:g];
+		[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+	}
+
+	[ce setComputePipelineState:up_pipe];
+	[ce setTexture:depth atIndex:0];
+	[ce setTexture:normal atIndex:1];
+	[ce setTexture:material atIndex:2];
+	[ce setTexture:t_refl atIndex:4];
+	[ce setTexture:t_wdist atIndex:5];
+	[ce setTexture:(blur ? t_rblur_lo : t_refl_lo) atIndex:7];
+	[ce setTexture:t_wdist_lo atIndex:8];
+	[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:g];
+}
+
 /* r_rt_water_hits 0: TASK58's pass, one compute encoder, its kernel over every pixel */
 static int
 rmb_rtw_trace_ss(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int timed, id<MTLTexture> target,
 		id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material)
 {
 	const NSUInteger w = depth.width, h = depth.height;
+	const rmb_rtw_lo_t lov = { prep_div, { 0, 0, 0 } };
 	id<MTLComputeCommandEncoder> ce = rmb_rtw_encoder(cmd, timed, slot, 0);
 
 	if (!ce)
@@ -868,14 +1075,26 @@ rmb_rtw_trace_ss(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 		return 0;
 	}
 
-	[ce setComputePipelineState:trace_pipe];
+	[ce setComputePipelineState:((prep_div > 1) ? trace_lo_pipe : trace_pipe)];
 
 	if (!rmb_rtw_bind_trace(ce, fno, slot, target, depth, normal, material))
 	{
 		return 0;
 	}
 
-	[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTW_GROUP, RMB_RTW_GROUP, 1)];
+	if (prep_div > 1)
+	{
+		/* TASK126 slice 5: every traced pixel, then the blur and the upsample */
+		rmb_rtw_lo_bind(ce, &lov);
+		[ce dispatchThreads:MTLSizeMake(t_refl_lo.width, t_refl_lo.height, 1)
+				threadsPerThreadgroup:MTLSizeMake(RMB_RTW_GROUP, RMB_RTW_GROUP, 1)];
+		rmb_rtw_lo_up(ce, depth, normal, material, w, h);
+	}
+	else
+	{
+		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTW_GROUP, RMB_RTW_GROUP, 1)];
+	}
+
 	[ce endEncoding];
 	return 1;
 }
@@ -893,6 +1112,8 @@ rmb_rtw_trace_ws(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 	const NSUInteger w = depth.width, h = depth.height;
 	const uint32_t cap = (uint32_t)list_cap;
 	const uint32_t ns = (uint32_t)shade_n;
+	const int lo = (prep_div > 1);
+	const rmb_rtw_lo_t lov = { prep_div, { 0, 0, 0 } };
 	id<MTLComputeCommandEncoder> ce = rmb_rtw_encoder(cmd, timed, slot, 0);
 
 	if (!ce)
@@ -900,16 +1121,31 @@ rmb_rtw_trace_ws(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 		return 0;
 	}
 
-	/* the compaction over every pixel (the 0s where it lists none), then the list's threadgroups (one serial encoder) */
-	[ce setComputePipelineState:compact_pipe];
+	/*
+	 * The compaction over every pixel (the 0s where it lists none), then the
+	 * list's threadgroups (one serial encoder). TASK126 slice 5: below
+	 * divisor 1 over every traced pixel, into the traced size's list and
+	 * reflection.
+	 */
+	[ce setComputePipelineState:(lo ? compact_lo_pipe : compact_pipe)];
 	[ce setTexture:material atIndex:0];
-	[ce setTexture:t_refl atIndex:1];
+	[ce setTexture:(lo ? t_refl_lo : t_refl) atIndex:1];
 	[ce setTexture:normal atIndex:2];
 	[ce setBytes:&view length:sizeof(view) atIndex:0];
 	[ce setBuffer:list offset:0 atIndex:1];
 	[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTW_SLOT * sizeof(uint32_t) atIndex:2];
 	[ce setBytes:&cap length:sizeof(cap) atIndex:3];
-	[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTW_GROUP, RMB_RTW_GROUP, 1)];
+
+	if (lo)
+	{
+		[ce setBytes:&lov length:sizeof(lov) atIndex:17];
+		[ce dispatchThreads:MTLSizeMake(t_refl_lo.width, t_refl_lo.height, 1)
+				threadsPerThreadgroup:MTLSizeMake(RMB_RTW_GROUP, RMB_RTW_GROUP, 1)];
+	}
+	else
+	{
+		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTW_GROUP, RMB_RTW_GROUP, 1)];
+	}
 
 	[ce setComputePipelineState:args_pipe];
 	[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTW_SLOT * sizeof(uint32_t) atIndex:0];
@@ -925,11 +1161,16 @@ rmb_rtw_trace_ws(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 		return 0;
 	}
 
-	[ce setComputePipelineState:trace_ws_pipe];
+	[ce setComputePipelineState:(lo ? trace_ws_lo_pipe : trace_ws_pipe)];
 
 	if (!rmb_rtw_bind_trace(ce, fno, slot, target, depth, normal, material))
 	{
 		return 0;
+	}
+
+	if (lo)
+	{
+		rmb_rtw_lo_bind(ce, &lov);
 	}
 
 	/* the world-space shading: the texture table and lightmaps, the lights, the triangles' records */
@@ -941,6 +1182,13 @@ rmb_rtw_trace_ws(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 	[ce dispatchThreadgroupsWithIndirectBuffer:counts
 			indirectBufferOffset:((NSUInteger)slot * RMB_RTW_SLOT + RMB_RTW_C_ARGS) * sizeof(uint32_t)
 			threadsPerThreadgroup:MTLSizeMake(MTL_RTW_LIST_GROUP, 1, 1)];
+
+	if (lo)
+	{
+		/* TASK126 slice 5: the blur at the traced size and the upsample, in the trace's encoder */
+		rmb_rtw_lo_up(ce, depth, normal, material, w, h);
+	}
+
 	[ce endEncoding];
 	return 1;
 }
@@ -950,12 +1198,13 @@ rmb_rtw_set_blur(int on)
 {
 	blur_on = (on != 0);
 
-	if (!blur_on && (blur_pipe || t_rblur))
+	if (!blur_on && (blur_pipe || t_rblur || t_rblur_lo))
 	{
 		@autoreleasepool
 		{
 			RMB_RTW_SET(blur_pipe, nil);
 			RMB_RTW_SET(t_rblur, nil);
+			RMB_RTW_SET(t_rblur_lo, nil);
 		}
 	}
 }
@@ -1083,7 +1332,20 @@ rmb_rtw_trace(id<MTLTexture> target, id<MTLTexture> depth, id<MTLTexture> normal
 		return 0;
 	}
 
-	if (ws && (!list || (list_cap != w * h) || !marked || (normal.width < w) || (normal.height < h)))
+	/*
+	 * TASK126 slice 5: below divisor 1, the traced size's outputs and the
+	 * pipelines made by rmb_rtw_prepare at this size, and the list of the
+	 * traced pixels.
+	 */
+	if ((prep_div > 1) && (!trace_lo_pipe || !trace_ws_lo_pipe || !compact_lo_pipe || !blur_lo_pipe || !up_pipe ||
+		!t_refl_lo || !t_wdist_lo || (t_refl_lo.width != mtl_rtup_size((unsigned)w, prep_div)) ||
+		(t_refl_lo.height != mtl_rtup_size((unsigned)h, prep_div))))
+	{
+		return 0;
+	}
+
+	if (ws && (!list || (list_cap != ((prep_div > 1) ? t_refl_lo.width * t_refl_lo.height : w * h)) || !marked ||
+		(normal.width < w) || (normal.height < h)))
 	{
 		return 0;
 	}
@@ -1114,12 +1376,18 @@ rmb_rtw_trace(id<MTLTexture> target, id<MTLTexture> depth, id<MTLTexture> normal
 			return 0;
 		}
 
-		blurred = rmb_rtw_blur(cmd, depth, w, h);
+		/* TASK126 slice 5: below divisor 1 the blur ran at the traced size, before the upsample wrote t_refl */
+		blurred = (prep_div > 1) ? 0 : rmb_rtw_blur(cmd, depth, w, h);
 		slot_pending[slot] = 1;
 		slot_timed[slot] = timed;
 		slot_ws[slot] = ws;
 		slot_frame[slot] = fno;
 		slot_pixels[slot] = (unsigned long)(w * h);
+		slot_div[slot] = prep_div;
+		slot_tw[slot] = (prep_div > 1) ? (unsigned long)t_refl_lo.width : (unsigned long)w;
+		slot_th[slot] = (prep_div > 1) ? (unsigned long)t_refl_lo.height : (unsigned long)h;
+		slot_w[slot] = (unsigned long)w;
+		slot_h[slot] = (unsigned long)h;
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
 			atomic_store(&slot_done[slot], fno);

@@ -40,6 +40,7 @@
 #include "header/rm_rtfx.h"
 #include "header/rm_rtdirscene.h"
 #include "header/rm_rtmodel.h"
+#include "header/rm_rttemporal.h"
 
 #define RT_MAX_AMODELS 512   /* rm_model.c's MAX_MOD_KNOWN */
 #define RT_TIMES 8192        /* the frames whose GPU times the summary spreads */
@@ -76,6 +77,54 @@ static rt_amodel_t rt_amodels[RT_MAX_AMODELS];
 static double rt_alias_ms[RT_TIMES], rt_ias_ms[RT_TIMES];
 static unsigned long rt_ntimes, rt_frames, rt_busy_aliases, rt_busy_tris;
 
+/*
+ * TASK126 slice 6: each scaled effect's upsample (RM_RT_UP_*): its last
+ * traced size and its totals since the map's structures were built
+ */
+static rm_rtt_up_t rt_up[RM_RT_UP_N];
+static const char *const rt_up_name[RM_RT_UP_N] = { "shadows", "sun", "ao", "water" };
+
+/*
+ * the totals start again with the frames' (the traced sizes are kept);
+ * the frames still in flight for the map before are not this map's
+ * (review round 1, N2: each back end hands them over at this map's
+ * first frame, after RM_RT_BuildMap)
+ */
+static void
+RM_RT_UpMap(void)
+{
+	unsigned long from = rmb_frame_next();
+	int k;
+
+	for (k = 0; k < RM_RT_UP_N; k++)
+	{
+		rm_rtt_up_map(&rt_up[k], from);
+	}
+}
+
+void
+RM_RT_UpFrame(int effect, unsigned long frame, unsigned div, unsigned long tw, unsigned long th, unsigned long w,
+		unsigned long h, unsigned long fallbacks)
+{
+	char line[RM_STATS_LINE];
+
+	if ((effect < 0) || (effect >= RM_RT_UP_N))
+	{
+		return;
+	}
+
+	/*
+	 * the size-change line: only when the traced size is not the effect's
+	 * last frame's below divisor 1, judged in frame order (rm_rtt_up_frame)
+	 */
+	if (rm_rtt_up_frame(&rt_up[effect], frame, div, tw, th, w * h, fallbacks) && r_rt_stats &&
+		(r_rt_stats->value >= 1) &&
+		rm_rtt_up_line_format(rt_up_name[effect], tw, th, w, h, fallbacks, line, sizeof(line)))
+	{
+		R_Printf(PRINT_ALL, "%s\n", line);
+	}
+}
+
 void
 RM_RT_Init(const rmb_caps_t *caps)
 {
@@ -90,6 +139,7 @@ RM_RT_Init(const rmb_caps_t *caps)
 	rt_map_ok = 0;
 	memset(rt_amodels, 0, sizeof(rt_amodels));
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
+	memset(rt_up, 0, sizeof(rt_up));
 	rt_scene_ready = 0;
 	rm_rtfx_init(caps);   /* each ray-traced effect's cvars, in the table's order (rm_rtfx.c, TASK179) */
 }
@@ -100,6 +150,7 @@ RM_RT_Summary(void)
 {
 	char line[RM_STATS_LINE];
 	rm_rt_spread_t sa, si;
+	int k;
 
 	if (rt_world_mod && rt_frames)
 	{
@@ -110,9 +161,19 @@ RM_RT_Summary(void)
 		{
 			R_Printf(PRINT_ALL, "%s\n", line);
 		}
+
+		/* TASK126 slice 6, under r_rt_stats 1: each effect that upsampled, its fallbacks and their share */
+		for (k = 0; (k < RM_RT_UP_N) && r_rt_stats && (r_rt_stats->value >= 1); k++)
+		{
+			if (rm_rtt_up_total_format(rt_map, rt_up_name[k], &rt_up[k], line, sizeof(line)))
+			{
+				R_Printf(PRINT_ALL, "%s\n", line);
+			}
+		}
 	}
 
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
+	RM_RT_UpMap();
 }
 
 /* releases every ray-tracing object; the ledger counts them destroyed */
@@ -309,6 +370,7 @@ RM_RT_BuildMap(void)
 	rt_map_ok = 1;
 	RM_RTS_MapBuilt(wm);   /* the last map's shadow tables go; this map's are built when the shadows are on (RT3) */
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
+	RM_RT_UpMap();
 
 	{
 		char line[RM_STATS_LINE];

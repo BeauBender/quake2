@@ -64,7 +64,7 @@ struct rm_rtsun_view
 	float bias_k;
 	float floor_;
 	uint show;
-	uint pad;
+	uint div;           /* TASK126: r_rt_sun_scale's divisor; the stock kernels do not read it (they run at 1) */
 };
 
 /* rm_gbuf.metal's rm_fs_varying (rm_vertex_fullscreen's output) */
@@ -145,6 +145,17 @@ rm_rtsun_hit(ray r, instance_acceleration_structure ias, device const uint *inst
 #define RM_RTSUN_C_FACING 2
 #define RM_RTSUN_C_RAYS 3
 #define RM_RTSUN_C_LIT 4
+
+/* rm_rttemporal.h's rm_rtt_view_t (common/mtl_rtt_math.h's mtl_rtt_view_t) */
+struct rm_rtt_view
+{
+	float alpha;
+	float move;
+	uint reset;
+	uint seq;
+};
+
+#ifndef RM_RTSUN_LO_TU
 
 kernel void
 rm_rtsun_trace(depth2d<float, access::read> depth [[texture(0)]],
@@ -245,15 +256,6 @@ rm_rtsun_trace(depth2d<float, access::read> depth [[texture(0)]],
 		}
 	}
 }
-
-/* rm_rttemporal.h's rm_rtt_view_t (common/mtl_rtt_math.h's mtl_rtt_view_t) */
-struct rm_rtt_view
-{
-	float alpha;
-	float move;
-	uint reset;
-	uint seq;
-};
 
 /*
  * RT7's temporal accumulation of the sun (TASK59 slice 1b), after the
@@ -361,3 +363,377 @@ rm_fragment_rtsun_show(rm_fs_varying in [[stage_in]],
 			return float4(0.0f, 0.0f, 0.0f, 1.0f);
 	}
 }
+
+#else /* RM_RTSUN_LO_TU */
+
+/*
+ * r_rt_sun_scale below 1 (TASK126 slice 3, option E), compiled apart by
+ * rm_rtsun_lo.metal so that the stock kernels' unit holds no new caller
+ * of the helpers above. At divisor d the rays are traced from one pixel
+ * of each d x d block (TASK157's layout, common/mtl_rtup_math.h), RT7
+ * accumulates and denoises the visibility at that size, and rm_rtsun_up
+ * upsamples it to the render size and composes the light per drawn
+ * pixel. The bindings are the stock trace's, with the traced size's class
+ * at texture 10 and visibility at texture 11.
+ */
+
+#include "common/mtl_rtd_math.h"
+#include "common/mtl_rtup_math.h"
+
+/* the counts' slot of the upsample's fallbacks (rmb_rtsun.m's RMB_RTSUN_COUNTS) */
+#define RM_RTSUN_C_FALLBACK 5
+
+/* the render-size pixel traced pixel px takes its G-buffer sample from */
+static uint2
+rm_rtsun_lo_src(uint2 px, uint div, uint fw, uint fh)
+{
+	return uint2(mtl_rtup_src(px.x, div, fw), mtl_rtup_src(px.y, div, fh));
+}
+
+/* a normal as the G-buffer stores it, as a unit vector */
+static mtl_rtao_v3_t
+rm_rtsun_lo_normal(float4 nv)
+{
+	const float3 n = normalize(nv.xyz * 2.0f - 1.0f);
+
+	return mtl_rtao_v3(n.x, n.y, n.z);
+}
+
+/*
+ * The trace at the traced size: rm_rtsun_trace's class and ray for each
+ * traced pixel, from its source pixel's G-buffer sample and lightmap. Out:
+ * the class and the visibility (0 or 1; 0 where no ray was cast), no light;
+ * and the frame's counts, of the traced pixels.
+ */
+kernel void
+rm_rtsun_trace_lo(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<float, access::read> lm [[texture(3)]],
+		texture2d<uint, access::write> cls_lo [[texture(10)]],
+		texture2d<float, access::write> vis_lo [[texture(11)]],
+		constant rm_rtsun_view &v [[buffer(0)]],
+		instance_acceleration_structure ias [[buffer(2)]],
+		device const uint *inst [[buffer(3)]],
+		device const uchar *tmat [[buffer(4)]],
+		constant uint &ntris [[buffer(5)]],
+		device atomic_uint *counts [[buffer(6)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const bool inside = (px.x < cls_lo.get_width()) && (px.y < cls_lo.get_height());
+	uint cls = MTL_RTSUN_C_NONE;
+	float vis = 0.0f;
+
+	if (inside)
+	{
+		const uint2 sp = rm_rtsun_lo_src(px, v.div, depth.get_width(), depth.get_height());
+
+		if (mat.read(sp).r == MTL_GB_MAT_WORLD)
+		{
+			const float d = depth.read(sp);
+			const float4 nn = normal.read(sp);
+
+			if ((d < 1.0f) && (nn.a > 0.5f))
+			{
+				const mtl_rtao_v3_t n = rm_rtsun_lo_normal(nn);
+				const float4 l = lm.read(sp);
+				mtl_rgba_t c;
+
+				c.r = l.r;
+				c.g = l.g;
+				c.b = l.b;
+				c.a = l.a;
+
+				if (!mtl_rtsun_gated(c, v.floor_))
+				{
+					cls = MTL_RTSUN_C_BRIGHT;
+				}
+				else if (!(mtl_rtsun_ndotl(n, mtl_rtao_v3(v.dir.x, v.dir.y, v.dir.z)) > 0.0f))
+				{
+					cls = MTL_RTSUN_C_FACING;
+				}
+				else
+				{
+					const float3 n3 = float3(n.x, n.y, n.z);
+					const float3 p = rm_rtsun_position(v, sp, d);
+					const float3 o = p + n3 * mtl_rtao_bias(distance(p, v.eye.xyz), v.bias_k);
+
+					vis = rm_rtsun_hit(ray(o, v.dir.xyz, 0.0f, MTL_RTSUN_RANGE), ias, inst, tmat, ntris);
+					cls = (vis > 0.0f) ? MTL_RTSUN_C_LIT : MTL_RTSUN_C_SHADOW;
+				}
+			}
+		}
+
+		cls_lo.write(uint4(cls, 0u, 0u, 0u), px);
+		vis_lo.write(float4(vis, 0.0f, 0.0f, 0.0f), px);
+	}
+
+	{
+		const uint world = (cls != MTL_RTSUN_C_NONE) ? 1u : 0u, bright = (cls == MTL_RTSUN_C_BRIGHT) ? 1u : 0u;
+		const uint facing = (cls == MTL_RTSUN_C_FACING) ? 1u : 0u, lit = (cls == MTL_RTSUN_C_LIT) ? 1u : 0u;
+		const uint rays = ((cls == MTL_RTSUN_C_SHADOW) || lit) ? 1u : 0u;
+		const uint c_w = simd_sum(world), c_b = simd_sum(bright), c_f = simd_sum(facing);
+		const uint c_r = simd_sum(rays), c_l = simd_sum(lit);
+
+		if (simd_is_first())
+		{
+			atomic_fetch_add_explicit(&counts[RM_RTSUN_C_WORLD], c_w, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTSUN_C_BRIGHT], c_b, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTSUN_C_FACING], c_f, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTSUN_C_RAYS], c_r, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTSUN_C_LIT], c_l, memory_order_relaxed);
+		}
+	}
+}
+
+/*
+ * RT7 at the traced size, as rm_rtsun_temporal: each traced pixel's
+ * visibility blended with its history, read where the render-size motion
+ * vector at its source pixel, over the divisor, says it was
+ * (mtl_rtup_reproject), rejected by mtl_rtt_reject. The history
+ * (RGBA32Float at the traced size) as rm_rtsun_temporal's; the visibility
+ * written again from the accumulation, no light.
+ */
+kernel void
+rm_rtsun_temporal_lo(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<float, access::read> motion [[texture(7)]],
+		texture2d<float, access::read> hist_in [[texture(8)]],
+		texture2d<float, access::write> hist_out [[texture(9)]],
+		texture2d<uint, access::read> cls_lo [[texture(10)]],
+		texture2d<float, access::write> vis_lo [[texture(11)]],
+		constant rm_rtsun_view &v [[buffer(0)]],
+		constant rm_rtt_view &t [[buffer(9)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint w = hist_out.get_width(), hh = hist_out.get_height();
+
+	if ((px.x >= w) || (px.y >= hh))
+	{
+		return;
+	}
+
+	{
+		const uint2 sp = rm_rtsun_lo_src(px, v.div, depth.get_width(), depth.get_height());
+		const uint m = mat.read(sp).r, cls = cls_lo.read(px).r;
+		const bool traced = (cls == MTL_RTSUN_C_LIT) || (cls == MTL_RTSUN_C_SHADOW);
+		const float a = (cls == MTL_RTSUN_C_LIT) ? 1.0f : 0.0f;
+		const float d = depth.read(sp);
+		const float2 mv = motion.read(sp).xy;
+		const mtl_rtt_px_t r = mtl_rtup_reproject(px.x, px.y, mv.x, mv.y, v.div, w, hh);
+		const float4 h = r.ok ? hist_in.read(uint2(r.x, r.y)) : float4(0.0f);
+		const uint hm = (uint)h.z;
+		float dist = 0.0f;
+
+		if (d < 1.0f)
+		{
+			dist = distance(rm_rtsun_position(v, sp, d), v.eye.xyz);
+		}
+
+		{
+			const uint rej = mtl_rtt_reject(t.reset, r.ok, dist, h.y, t.move, m, hm, 0u, 0u, h.w);
+			const float acc = mtl_rtt_blend(rej, a, h.x, h.w, t.alpha);
+
+			hist_out.write(float4(acc, dist, (float)m, traced ? mtl_rtt_count(rej, h.w) : 0.0f), px);
+
+			if (traced)
+			{
+				vis_lo.write(float4(acc, 0.0f, 0.0f, 0.0f), px);
+			}
+		}
+	}
+}
+
+/*
+ * RT7's 5 x 5 denoiser at the traced size, as rm_rtsun_denoise: on the
+ * traced pixels whose count leaves a strength above 0, the visibility
+ * moved toward its neighbours' (in traced pixels), each weighed by
+ * mtl_rtd_weight against the history's distance and material and the
+ * normal at its source pixel; the visibility written again, no light.
+ */
+kernel void
+rm_rtsun_denoise_lo(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<float, access::read> hist [[texture(8)]],
+		texture2d<float, access::write> vis_lo [[texture(11)]],
+		constant rm_rtsun_view &v [[buffer(0)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint w = hist.get_width(), hh = hist.get_height(), fw = depth.get_width(), fh = depth.get_height();
+
+	if ((px.x >= w) || (px.y >= hh))
+	{
+		return;
+	}
+
+	{
+		const float4 hc = hist.read(px);
+		const float4 nv = normal.read(rm_rtsun_lo_src(px, v.div, fw, fh));
+
+		if (!(mtl_rtd_strength(hc.w) > 0.0f) || !(nv.a > 0.5f))
+		{
+			return;
+		}
+
+		{
+			const mtl_rtao_v3_t nc = rm_rtsun_lo_normal(nv);
+			const uint mc = (uint)hc.z;
+			mtl_rtd_acc_t acc = mtl_rtd_acc();
+
+			for (int dy = -MTL_RTD_RADIUS; dy <= MTL_RTD_RADIUS; dy++)
+			{
+				for (int dx = -MTL_RTD_RADIUS; dx <= MTL_RTD_RADIUS; dx++)
+				{
+					const int sx = (int)px.x + dx, sy = (int)px.y + dy;
+
+					if ((sx < 0) || (sy < 0) || (sx >= (int)w) || (sy >= (int)hh))
+					{
+						continue;
+					}
+
+					{
+						const uint2 sp = uint2((uint)sx, (uint)sy);
+						const float4 hn = hist.read(sp);
+						const float4 nn = normal.read(rm_rtsun_lo_src(sp, v.div, fw, fh));
+						const float wt = (nn.a > 0.5f) ?
+							mtl_rtd_weight(dx, dy, hc.y, hn.y, nc, rm_rtsun_lo_normal(nn), mc, (uint)hn.z, hn.w) : 0.0f;
+
+						acc = mtl_rtd_add(acc, wt, hn.x);
+					}
+				}
+			}
+
+			vis_lo.write(float4(mtl_rtd_result(acc, hc.x, hc.w), 0.0f, 0.0f, 0.0f), px);
+		}
+	}
+}
+
+/*
+ * The upsample at the render size: on each lightmapped world pixel with a
+ * depth and a normal (a pixel without one is skipped before the rule, so
+ * the fallbacks are not inflated), the floor gate and N.L of the pixel
+ * itself, as rm_rtsun_trace; below the floor and facing the sun, the
+ * visibility of the four traced pixels about it under the rule's weights
+ * (mtl_rtup_weights: bilinear, RT7's depth and normal guides, the same
+ * material, a traced sample), the one nearest in depth where none matches,
+ * counted as a fallback. Where no traced pixel about it has a sample, the
+ * sun's neutral value, 0: no term, as with the effect off. Then the class
+ * and the light as rm_rtsun_trace writes them, with the pixel's own
+ * max(0, N.L).
+ */
+kernel void
+rm_rtsun_up(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<float, access::read> lm [[texture(3)]],
+		texture2d<float, access::read> base [[texture(4)]],
+		texture2d<uint, access::write> cls_out [[texture(5)]],
+		texture2d<float, access::write> light_out [[texture(6)]],
+		texture2d<uint, access::read> cls_lo [[texture(10)]],
+		texture2d<float, access::read> vis_lo [[texture(11)]],
+		constant rm_rtsun_view &v [[buffer(0)]],
+		device atomic_uint *counts [[buffer(6)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint fw = light_out.get_width(), fh = light_out.get_height();
+	const bool inside = (px.x < fw) && (px.y < fh);
+	uint m = MTL_GB_MAT_NONE, cls = MTL_RTSUN_C_NONE, fb = 0u;
+	float vis = 0.0f, nl = 0.0f;
+
+	if (inside)
+	{
+		m = mat.read(px).r;
+	}
+
+	if (inside && (m == MTL_GB_MAT_WORLD))
+	{
+		const float d = depth.read(px);
+		const float4 nn = normal.read(px);
+
+		if ((d < 1.0f) && (nn.a > 0.5f))
+		{
+			const mtl_rtao_v3_t n = rm_rtsun_lo_normal(nn);
+			const float4 l = lm.read(px);
+			mtl_rgba_t c;
+
+			c.r = l.r;
+			c.g = l.g;
+			c.b = l.b;
+			c.a = l.a;
+
+			if (!mtl_rtsun_gated(c, v.floor_))
+			{
+				cls = MTL_RTSUN_C_BRIGHT;
+			}
+			else
+			{
+				nl = mtl_rtsun_ndotl(n, mtl_rtao_v3(v.dir.x, v.dir.y, v.dir.z));
+
+				if (!(nl > 0.0f))
+				{
+					cls = MTL_RTSUN_C_FACING;
+				}
+				else
+				{
+					const uint lw = cls_lo.get_width(), lh = cls_lo.get_height();
+					const mtl_rtao_pair_t qx = mtl_rtao_up_pair(px.x, v.div, lw), qy = mtl_rtao_up_pair(px.y, v.div, lh);
+					const uint tx[MTL_RTUP_TAPS] = { qx.lo0, qx.lo1, qx.lo0, qx.lo1 };
+					const uint ty[MTL_RTUP_TAPS] = { qy.lo0, qy.lo0, qy.lo1, qy.lo1 };
+					float tv[MTL_RTUP_TAPS];
+					mtl_rtup_in_t in;
+					mtl_rtup_out_t o;
+
+					in.d = distance(rm_rtsun_position(v, px, d), v.eye.xyz);
+					in.n = n;
+					in.m = m;
+					in = mtl_rtup_bilinear(in, qx, qy);
+
+					for (int i = 0; i < MTL_RTUP_TAPS; i++)
+					{
+						const uint2 tp = uint2(tx[i], ty[i]);
+						const uint2 sp = rm_rtsun_lo_src(tp, v.div, fw, fh);
+						const uint tc = cls_lo.read(tp).r;
+						const float ds = depth.read(sp);
+
+						in.ok[i] = ((tc == MTL_RTSUN_C_LIT) || (tc == MTL_RTSUN_C_SHADOW)) ? 1 : 0;
+						in.dn[i] = (ds < 1.0f) ? distance(rm_rtsun_position(v, sp, ds), v.eye.xyz) : 0.0f;
+						in.nn[i] = rm_rtsun_lo_normal(normal.read(sp));
+						in.mn[i] = mat.read(sp).r;
+						tv[i] = vis_lo.read(tp).r;
+					}
+
+					o = mtl_rtup_weights(in, v.div);
+					vis = mtl_rtup_value(o, tv[0], tv[1], tv[2], tv[3], 0.0f);
+					fb = o.fallback ? 1u : 0u;
+					cls = (vis > 0.0f) ? MTL_RTSUN_C_LIT : MTL_RTSUN_C_SHADOW;
+				}
+			}
+		}
+	}
+
+	if (inside)
+	{
+		const float4 b = base.read(px);
+		mtl_rgba_t c;
+
+		c.r = b.r;
+		c.g = b.g;
+		c.b = b.b;
+		c.a = b.a;
+		c = mtl_rtsun_light(c, m, cls, vis, nl, v.sun.x, v.sun.y, v.sun.z);
+		cls_out.write(uint4(cls, 0u, 0u, 0u), px);
+		light_out.write(float4(c.r, c.g, c.b, c.a), px);
+	}
+
+	/* the upsample's fallbacks, one atomic per SIMD group */
+	{
+		const uint c_fb = simd_sum(fb);
+
+		if (simd_is_first())
+		{
+			atomic_fetch_add_explicit(&counts[RM_RTSUN_C_FALLBACK], c_fb, memory_order_relaxed);
+		}
+	}
+}
+
+#endif /* RM_RTSUN_LO_TU */

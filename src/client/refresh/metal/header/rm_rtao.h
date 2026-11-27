@@ -156,6 +156,18 @@ typedef struct
 	unsigned long rays;
 	unsigned long hits;         /* rays that met an occluder */
 	double ms;                  /* the pass's GPU time; below 0 when not measured */
+
+	/*
+	 * TASK126 slice 6: the view's divisor (r_rt_ao_scale, rm_rtao_div);
+	 * above 1 the traced size, and the upsample's fallbacks
+	 * (mtl_rtao_up_fallback), in drawn pixels, of the pixels whose four
+	 * traced pixels hold different AOs (rm_rtao_upsample reads no surface
+	 * where they are equal, and counts nothing there).
+	 */
+	unsigned div;
+	unsigned long tw, th;       /* the traced size (the render size at divisor 1) */
+	unsigned long fallbacks;    /* 0 at divisor 1 */
+	unsigned long w, h;         /* the drawn size, pixels = w x h */
 } rm_rtao_stats_t;
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */

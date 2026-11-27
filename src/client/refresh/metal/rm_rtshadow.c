@@ -633,7 +633,7 @@ rm_rts_show(float v)
 int
 rm_rts_stats_format(const rm_rts_stats_t *s, char *buf, size_t len)
 {
-	char ms[32];
+	char ms[32], up[96] = "";
 	int n;
 
 	if (!len)
@@ -650,8 +650,18 @@ rm_rts_stats_format(const rm_rts_stats_t *s, char *buf, size_t len)
 		snprintf(ms, sizeof(ms), "-");
 	}
 
+	/*
+	 * TASK126 slice 4: below the drawn size, the traced size and the
+	 * upsample's fallbacks, in rm_rtt_traced_format's words (written here so
+	 * that this file, which many host tests link, needs no rm_rttemporal.c).
+	 */
+	if (s->div > 1)
+	{
+		snprintf(up, sizeof(up), ", traced at %lux%lu, %lu upsample fallbacks", s->tw, s->th, s->fallbacks);
+	}
+
 	n = snprintf(buf, len, "ref_metal: rt shadows: frame %lu: %lu pixels, %lu in range, %lu traced, %lu shadowed, "
-			"%lu rays, %s ms", s->frame, s->pixels, s->inrange, s->traced, s->shadowed, s->rays, ms);
+			"%lu rays, %s ms" "%s", s->frame, s->pixels, s->inrange, s->traced, s->shadowed, s->rays, ms, up);
 
 	if ((n < 0) || ((size_t)n >= len))
 	{

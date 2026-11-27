@@ -24,6 +24,7 @@
  */
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "header/rm_rttemporal.h"
@@ -131,8 +132,9 @@ rm_rtt_hist_reset(rm_rtt_hist_t *h)
 }
 
 unsigned
-rm_rtt_hist_take(rm_rtt_hist_t *h, const rm_rtt_view_t *t)
+rm_rtt_hist_take_at(rm_rtt_hist_t *h, const rm_rtt_view_t *t, unsigned div)
 {
+	const unsigned d = div ? div : 1u;
 	unsigned r = t->reset;
 
 	/* the history took the view before this one, or it is not a history of the views before it */
@@ -141,7 +143,135 @@ rm_rtt_hist_take(rm_rtt_hist_t *h, const rm_rtt_view_t *t)
 		r |= RM_RTT_RESET_FIRST;
 	}
 
+	/* TASK126: the history was taken at another divisor; 0, no take yet, is not one */
+	if (h->div && (h->div != d))
+	{
+		r |= RM_RTT_RESET_SCALE;
+	}
+
 	h->valid = 1;
 	h->seq = t->seq;
+	h->div = d;
 	return r;
+}
+
+unsigned
+rm_rtt_hist_take(rm_rtt_hist_t *h, const rm_rtt_view_t *t)
+{
+	return rm_rtt_hist_take_at(h, t, 1u);
+}
+
+/* buf from the snprintf that returned n: 1 when it fit, 0 with buf emptied otherwise */
+static int
+rm_rtt_fits(int n, char *buf, size_t len)
+{
+	if ((n < 0) || ((size_t)n >= len))
+	{
+		buf[0] = 0;
+		return 0;
+	}
+
+	return 1;
+}
+
+int
+rm_rtt_scale_line_format(const char *effect, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	return rm_rtt_fits(snprintf(buf, len, "ref_metal: r_rt_stats: reset: %s scale", effect), buf, len);
+}
+
+int
+rm_rtt_traced_format(unsigned w, unsigned h, unsigned long fallbacks, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	return rm_rtt_fits(snprintf(buf, len, ", traced at %ux%u, %lu upsample fallbacks", w, h, fallbacks), buf, len);
+}
+
+int
+rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long tw, unsigned long th,
+		unsigned long pixels, unsigned long fallbacks)
+{
+	int changed;
+
+	/* a frame encoded for an earlier map, handed over after this one loaded: not this map's */
+	if (frame < u->from)
+	{
+		return 0;
+	}
+
+	/* a frame older than one handed over already: its totals alone, the traced size is the newer frame's */
+	if (frame < u->frame)
+	{
+		if (div > 1u)
+		{
+			u->fallbacks += fallbacks;
+			u->pixels += pixels;
+		}
+
+		return 0;
+	}
+
+	u->frame = frame;
+
+	if (div <= 1u)
+	{
+		u->tw = u->th = 0;
+		return 0;
+	}
+
+	changed = (tw != u->tw) || (th != u->th);
+	u->tw = tw;
+	u->th = th;
+	u->fallbacks += fallbacks;
+	u->pixels += pixels;
+	return changed;
+}
+
+void
+rm_rtt_up_map(rm_rtt_up_t *u, unsigned long from)
+{
+	u->from = from;
+	u->fallbacks = 0;
+	u->pixels = 0;
+}
+
+int
+rm_rtt_up_line_format(const char *effect, unsigned long tw, unsigned long th, unsigned long w, unsigned long h,
+		unsigned long fallbacks, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	return rm_rtt_fits(snprintf(buf, len, "ref_metal: r_rt_stats: upsample: %s %lux%lu of %lux%lu, %lu fallbacks",
+			effect, tw, th, w, h, fallbacks), buf, len);
+}
+
+int
+rm_rtt_up_total_format(const char *map, const char *effect, const rm_rtt_up_t *u, char *buf, size_t len)
+{
+	if (!len)
+	{
+		return 0;
+	}
+
+	if (!u->pixels)
+	{
+		buf[0] = 0;
+		return 0;
+	}
+
+	return rm_rtt_fits(snprintf(buf, len, "ref_metal: rt: %s: upsample: %s %llu fallbacks of %llu upsampled pixels "
+			"(%.3f %%)", map, effect, u->fallbacks, u->pixels, 100.0 * (double)u->fallbacks / (double)u->pixels),
+			buf, len);
 }
