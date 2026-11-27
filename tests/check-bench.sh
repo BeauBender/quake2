@@ -564,10 +564,16 @@ foreign() {
 		print me ":   " f ": " substr(s, 1, 200); n++
 	} END { exit !n }' "$@"
 }
-# lit <file> <old> <new>: replaces the first occurrence of <old> on each
-# line, as fixed text; fails when there is none.
+# lit <file> <old> <new> [<next>]: replaces the first occurrence of <old>
+# on each line, as fixed text; fails when there is none. With <next>, only
+# on the one line followed by a line holding <next>, and fails unless there
+# is exactly one (one call site of several written alike).
 lit() {
-	awk -v o="$2" -v n="$3" '{ p = index($0, o); if (p) { $0 = substr($0, 1, p - 1) n substr($0, p + length(o)); c++ } print } END { exit !c }' "$1" > "$1.new" &&
+	awk -v o="$2" -v n="$3" -v x="${4:-}" '
+		function put(s,   p) { p = index(s, o); if (p) { s = substr(s, 1, p - 1) n substr(s, p + length(o)); c++ } return s }
+		x == "" { print put($0); next }
+		{ if (h) print (index($0, x) ? put(l) : l); l = $0; h = 1 }
+		END { if (x != "" && h) print l; exit (x == "" ? !c : c != 1) }' "$1" > "$1.new" &&
 		mv "$1.new" "$1"
 }
 
@@ -3822,8 +3828,16 @@ fi
 # mutant <name> <file under scripts/bench> <old> <new> <test> [<old2> <new2>];
 # <old> empty appends <new> as a line; <old2> <new2>, a second change in the
 # same file. A file under ../lib/ is changed in a copy of scripts/lib, which
-# the test then finds through BENCH_SV_LIB.
+# the test then finds through BENCH_SV_LIB. mutant_next <next> <args...>
+# makes the first change only on the line followed by a line holding <next>.
+mutant_next() {
+	_mx=$1
+	shift
+	mutant "$@"
+}
 mutant() {
+	_mn=${_mx:-}
+	_mx=
 	_m=${tmp:?}/mutant.$1
 	rm -rf "${_m:?}" "${_m:?}.lib"
 	cp -R "$REAL" "$_m"
@@ -3837,7 +3851,7 @@ mutant() {
 	*) _mf=$_m/$2 ;;
 	esac
 	if [ -n "$3" ]; then
-		lit "${_mf:?}" "$3" "$4" || { echo "$me: mutant $1 does not apply to $2"; return 1; }
+		lit "${_mf:?}" "$3" "$4" "$_mn" || { echo "$me: mutant $1 does not apply to $2"; return 1; }
 	else
 		printf '%s\n' "$4" >> "${_mf:?}"
 	fi
@@ -3979,7 +3993,14 @@ mutant digit-cap-crc core/common.sh '! bench_is_uint_max "$_bh_a" 10' '! bench_i
 # The TASK221 slice 2 hold (#758): a refused supervisor's reason is said
 # where the bounded command's standard error is sent away.
 mutant sv-reason-host core/host.sh '		bench_sv' '		:' t_sv_path || mfail=1
-mutant sv-reason-snap core/snap.sh '	bench_sv' '	:' t_sv_path || mfail=1
+# Each snap.sh call site alone (review round 5): the line before its
+# bounded call.
+mutant_next 'bench_bounded 15 top' sv-reason-top core/snap.sh 'bench_sv' ':' t_sv_path || mfail=1
+mutant_next 'bench_bounded 15 ioreg' sv-reason-ioreg core/snap.sh 'bench_sv' ':' t_sv_path || mfail=1
+mutant_next 'bench_bounded 30 "$BENCH_SNAP_READER"' sv-reason-reader core/snap.sh 'bench_sv' ':' t_sv_path || mfail=1
+mutant_next 'bench_bounded 120 cc' sv-reason-freqinit core/snap.sh 'bench_sv' ':' t_sv_path || mfail=1
+mutant_next '"$BENCH_FREQ_BIN" dump' sv-reason-freqdump core/snap.sh 'bench_sv' ':' t_sv_path || mfail=1
+mutant_next '"$BENCH_FREQ_BIN" delta' sv-reason-freqwindow core/snap.sh 'bench_sv' ':' t_sv_path || mfail=1
 # Review round 5: the cksum key's refusal never matching, and the cksum key
 # taken with shasum on PATH.
 mutant novalid ../lib/supervise.sh 'if ! sv_crc "$_sv_a" || ! sv_crc "$_sv_b"; then' 'if false; then' t_sv_path || mfail=1
