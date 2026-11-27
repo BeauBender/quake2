@@ -93,6 +93,17 @@ sv_parents() {
 	return 0
 }
 
+# sv_crc <text>: a CRC as cksum prints it: decimal digits, no leading zero
+# but for 0 itself, at most 10 digits (scripts/bench's bench_is_uint_max
+# rule, which this file cannot source) and at most 4294967295, so it is a
+# 32-bit number and %08x prints it in 8 hex digits.
+sv_crc() {
+	case $1 in
+	'' | *[!0-9]* | 0?*) return 1 ;;
+	esac
+	[ "${#1}" -le 10 ] && [ "$1" -le 4294967295 ]
+}
+
 # sv_path: the supervisor's path, built on first use
 sv_path() {
 	_sv_src=$SV_SRC_DIR/supervise.c
@@ -137,12 +148,10 @@ sv_path() {
 		} | cksum) || _sv_b=
 		_sv_a=${_sv_a%% *}
 		_sv_b=${_sv_b%% *}
-		case $_sv_a:$_sv_b in
-		:* | *: | *[!0-9:]* | ???????????*:* | *:???????????*)
+		if ! sv_crc "$_sv_a" || ! sv_crc "$_sv_b"; then
 			echo "supervise: neither shasum nor cksum gave a digest" >&2
 			return 1
-			;;
-		esac
+		fi
 		_sv_name=supervise-crc-$(printf '%08x%08x' "$_sv_a" "$_sv_b")
 	fi
 	if [ ! -d "$_sv_dir" ]; then

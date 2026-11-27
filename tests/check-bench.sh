@@ -3963,8 +3963,11 @@ mutant sv-reason-host core/host.sh '		bench_sv' '		:' t_sv_path || mfail=1
 mutant sv-reason-snap core/snap.sh '	bench_sv' '	:' t_sv_path || mfail=1
 # Review round 5: the cksum key's refusal never matching, and the cksum key
 # taken with shasum on PATH.
-mutant novalid ../lib/supervise.sh ':* | *: | *[!0-9:]* | ???????????*:* | *:???????????*)' 'zzq-never)' t_sv_path || mfail=1
+mutant novalid ../lib/supervise.sh 'if ! sv_crc "$_sv_a" || ! sv_crc "$_sv_b"; then' 'if false; then' t_sv_path || mfail=1
 mutant alwayscrc ../lib/supervise.sh 'if command -v shasum > /dev/null 2>&1; then' 'if false; then' t_sv_path || mfail=1
+# Review round 5: each CRC's range unchecked, so a 10-digit value above
+# 4294967295 names a 9-hex half.
+mutant crc-no-range ../lib/supervise.sh '[ "${#1}" -le 10 ] && [ "$1" -le 4294967295 ]' '[ "${#1}" -le 10 ]' t_sv_path || mfail=1
 # Last: it writes into the throwaway repository's work tree.
 mutant store-in-repo core/store.sh 'bench_outside_repo "$BENCH_STORE_ROOT" "the store (BENCH_STORE)"' ':' t_store_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
