@@ -3976,7 +3976,9 @@ seg 7.88 "; water at its scale $wlo_kpins kernel pins with $wlo_kmut kernel muta
 #   header given included first (its guard keeps the real one out): two mutants, the surface test and the
 #   weight test dropped, each of which must compile and fail it.
 # - the double-count invariant's rule for the sun at any scale (rm_rtsun_test's test_no_double_count, design
-#   section 5): one mutant of common/mtl_rtsun_math.h, a little of the term at visibility 0.
+#   section 5): one mutant of common/mtl_rtsun_math.h, a little of the term at visibility 0. Its upsample's
+#   half (test_up_no_double_count, review round 1): one mutant of common/mtl_rtup_math.h, an empty pixel
+#   taken as visibility 1, which must fail that test with its FAIL line.
 # - rm_rtao_upsample: the fallback taken right after mtl_rtao_up_ao, in the branch that reads the traced
 #   pixels' surfaces; the count at the kernel's end, in word 7; and fell named on those three lines alone,
 #   so nothing the kernel writes can read it. Six mutants, each refused and compiled with xcrun metal:
@@ -4031,6 +4033,22 @@ elif ! $cc $flags -I"$rm_dir/common" -include "$rm_dir/common/mtl_shader_math.h"
 	bad "the sun's double-count mutant does not compile, so it tests nothing"
 elif "${tmp:?}/aofb_s" > "${tmp:?}/out" 2>&1 || ! grep -q 'test_no_double_count\|rm_rtsun_test.c:' "${tmp:?}/out"; then
 	bad "tests/metal/rm_rtsun_test.c passes the sun's double-count mutant"
+else
+	aofb_mut=$((aofb_mut + 1))
+fi
+# the upsample's half (test_up_no_double_count): an empty pixel taken as visibility 1 must compile and fail it
+sed 's/^		return neutral;$/		return neutral + 1.0f;/' "$rm_dir/common/mtl_rtup_math.h" > "${tmp:?}/aofb_up.h"
+# shellcheck disable=SC2086 # flags is a word list
+if cmp -s "$rm_dir/common/mtl_rtup_math.h" "${tmp:?}/aofb_up.h"; then
+	bad "the sun upsample's double-count mutant changed nothing"
+elif ! $cc $flags -I"$rm_dir/common" -include "$rm_dir/common/mtl_shader_math.h" -include "${tmp:?}/aofb_up.h" '-DYQ2OSTYPE="host"' \
+	'-DYQ2ARCH="host"' -o "${tmp:?}/aofb_s" tests/metal/rm_rtsun_test.c "$rm_dir/rm_rtsun.c" "$rm_dir/rm_rtshadow.c" \
+	"$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" \
+	"$rm_dir/rm_rttemporal.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "the sun upsample's double-count mutant does not compile, so it tests nothing"
+elif "${tmp:?}/aofb_s" > "${tmp:?}/out" 2>&1 || ! grep -q '^FAIL tests/metal/rm_rtsun_test\.c:[0-9]*: ok_empty$' "${tmp:?}/out"; then
+	bad "tests/metal/rm_rtsun_test.c passes the sun upsample's double-count mutant (an empty pixel at visibility 1)"
 else
 	aofb_mut=$((aofb_mut + 1))
 fi

@@ -40,6 +40,8 @@
 #include "../../src/client/refresh/metal/header/rm_rt.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
 #include "../../src/client/refresh/metal/common/mtl_gbuf_math.h"
+#include "../../src/client/refresh/metal/common/mtl_shader_math.h"
+#include "../../src/client/refresh/metal/common/mtl_rtup_math.h"
 
 /* src/common/shared/shared.c, linked for rm_pure.c, prints through the engine */
 void
@@ -784,11 +786,10 @@ test_stats(void)
 
 /*
  * TASK126 slice 6, the double-count invariant's rule for the sun at any
- * scale (design section 5): a pixel with no sun visibility takes the
- * incoming light bit for bit. Below divisor 1 rm_rtsun_up gives a pixel
- * no traced pixel lit the visibility 0 (its neutral value), so the light
- * there is the effect off's whatever the scale; every class but lit, any
- * material, any angle.
+ * scale (design section 5), on mtl_rtsun_light alone: a pixel with
+ * visibility 0, of any class, and a pixel of any class but lit, or of
+ * another material than the world, at any visibility, takes the incoming
+ * light bit for bit. test_up_no_double_count holds the upsample's half.
  */
 static void
 test_no_double_count(void)
@@ -827,6 +828,122 @@ test_no_double_count(void)
 	CHECK(ok);
 }
 
+/*
+ * Review round 1 (spec I1): a drawn pixel below divisor 1, composed as
+ * rm_rtsun_up composes it after the floor and the facing test: the
+ * weights at the view's divisor (mtl_rtup_weights), the visibility under
+ * them with the sun's neutral value 0 (mtl_rtup_value), the class from
+ * the visibility, then the light with the pixel's own N.L
+ * (mtl_rtsun_light). check-ref-metal's sun kernel pins hold each of
+ * these calls in the kernel (weights1, neutral1, vis1).
+ */
+static mtl_rgba_t
+sun_up_pixel(mtl_rtup_in_t in, unsigned div, const float *tv, mtl_rgba_t base, float nl, unsigned *cls)
+{
+	const mtl_rtup_out_t o = mtl_rtup_weights(in, div);
+	const float vis = mtl_rtup_value(o, tv[0], tv[1], tv[2], tv[3], 0.0f);
+
+	*cls = (vis > 0.0f) ? MTL_RTSUN_C_LIT : MTL_RTSUN_C_SHADOW;
+	return mtl_rtsun_light(base, in.m, *cls, vis, nl, 0.35f, 0.4f, 0.45f);
+}
+
+static float
+frand(void)
+{
+	return (float)rand() / (float)RAND_MAX;
+}
+
+/*
+ * The sun's half of the double-count invariant on the upsample's path, at
+ * divisors 2 and 3: where every tap's visibility is 0 (each tap with a
+ * sample or not, on the surface or across a depth step, so the weights
+ * or the fallback), the visibility is 0 and the light is unchanged bit
+ * for bit; a pixel no tap has a sample for (or whose own depth is not
+ * finite) is empty, and the light is unchanged too. A tap of visibility 1
+ * on the surface adds the term, so the composition is not vacuous.
+ */
+static void
+test_up_no_double_count(void)
+{
+	unsigned div, k, i, cls;
+	int ok_zero = 1, ok_empty = 1, ok_lit = 1, empties = 0, fallbacks = 0, weighted = 0;
+
+	srand(1261);
+
+	for (div = 2; div <= 3; div++)
+	{
+		for (k = 0; k < 20000; k++)
+		{
+			const unsigned lw = 214, lh = 161, px = (unsigned)rand() % (lw * div), py = (unsigned)rand() % (lh * div);
+			const mtl_rtao_pair_t qx = mtl_rtao_up_pair(px, div, lw), qy = mtl_rtao_up_pair(py, div, lh);
+			const mtl_rgba_t base = rgba(0.9f * frand(), 0.9f * frand(), 0.9f * frand(), frand());
+			const float nl = 0.05f + 0.95f * frand();
+			const float zero[MTL_RTUP_TAPS] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			float one[MTL_RTUP_TAPS];
+			mtl_rtup_in_t in;
+			mtl_rtup_out_t o;
+			mtl_rgba_t c;
+
+			memset(&in, 0, sizeof(in));
+			in.d = 64.0f + 2000.0f * frand();
+			in.n = mtl_rtao_v3(0.0f, 0.0f, 1.0f);
+			in.m = MTL_GB_MAT_WORLD;
+			in = mtl_rtup_bilinear(in, qx, qy);
+
+			for (i = 0; i < MTL_RTUP_TAPS; i++)
+			{
+				in.ok[i] = (rand() % 3) != 0;
+				in.dn[i] = (rand() % 4) ? in.d * (1.0f + 0.001f * frand()) : in.d * 2.0f;   /* a depth step */
+				in.nn[i] = in.n;
+				in.mn[i] = (rand() % 8) ? MTL_GB_MAT_WORLD : 3u;
+				one[i] = 1.0f;
+			}
+
+			/* every tap at 0: visibility 0, the light unchanged */
+			o = mtl_rtup_weights(in, div);
+			empties += o.empty;
+			fallbacks += o.fallback;
+			weighted += !o.empty && !o.fallback;
+			c = sun_up_pixel(in, div, zero, base, nl, &cls);
+			ok_zero &= (cls == MTL_RTSUN_C_SHADOW) && !memcmp(&c, &base, sizeof(c));
+
+			/* no tap with a sample: empty, the light unchanged */
+			for (i = 0; i < MTL_RTUP_TAPS; i++)
+			{
+				in.ok[i] = 0;
+			}
+
+			ok_empty &= mtl_rtup_weights(in, div).empty;
+			c = sun_up_pixel(in, div, one, base, nl, &cls);
+			ok_empty &= (cls == MTL_RTSUN_C_SHADOW) && !memcmp(&c, &base, sizeof(c));
+
+			/* the pixel's own depth not finite: empty whatever its taps hold, the light unchanged */
+			for (i = 0; i < MTL_RTUP_TAPS; i++)
+			{
+				in.ok[i] = 1;
+				in.dn[i] = in.d;
+				in.mn[i] = MTL_GB_MAT_WORLD;
+			}
+
+			in.d = INFINITY;
+			ok_empty &= mtl_rtup_weights(in, div).empty;
+			c = sun_up_pixel(in, div, one, base, nl, &cls);
+			ok_empty &= (cls == MTL_RTSUN_C_SHADOW) && !memcmp(&c, &base, sizeof(c));
+
+			/* every tap at 1 on the surface: lit, the term added */
+			in.d = in.dn[0];
+			c = sun_up_pixel(in, div, one, base, nl, &cls);
+			ok_lit &= (cls == MTL_RTSUN_C_LIT) && (c.r > base.r) && (c.g > base.g) && (c.b > base.b) && (c.a == base.a);
+		}
+	}
+
+	CHECK(ok_zero);
+	CHECK(ok_empty);
+	CHECK(ok_lit);
+	/* the cases all occur among the random pixels with every tap at 0 */
+	CHECK((empties > 0) && (fallbacks > 0) && (weighted > 0));
+}
+
 int
 main(void)
 {
@@ -845,6 +962,7 @@ main(void)
 	test_view();
 	test_stats();
 	test_no_double_count();
+	test_up_no_double_count();
 
 	printf("rm_rtsun_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
