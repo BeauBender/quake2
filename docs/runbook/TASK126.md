@@ -923,3 +923,63 @@ The orchestrator runs the hold script. The base is the parent slice, `task126s5`
 | the invariant in E for the shadows: masked pixels within 1/255 on every frame | to be filled |
 | the invariant in E for the sun (round 1, `r_rt_sun_show 1`'s mask): masked pixels within 1/255 on every frame | to be filled |
 | the live run under the validation layer: each scale changed once, each size-change line printed once; the device line not printed on this host | to be filled |
+
+### Hold, round 2
+
+The first hold ran at `36fc53e6`. The builds and every check passed. So did:
+
+- 35 of 35 stock scenarios and the 20 RT-primary records, byte-identical to the parent;
+- `rt-all-e` and `rt-all-h`, three runs identical on both demos;
+- both invariant footprints, the shadows' and the sun's, with 0 changed pixels.
+
+It found three faults.
+
+- **The sun's and the water's totals counted one 640x480 frame more than their `r_rt_stats 2`
+  lines.** The sun's frame held 670 fallbacks and the water's 0.
+  - Traced: neither side of the engine is wrong. `rt-all-e`'s log holds 688 frame lines of each of
+    the sun, AO and the water, and 329 of the shadows, the totals' frame counts.
+  - The cause is the log. The console's lines go to stdout, block-buffered into `engine.log`. The
+    back end's "bytes allocated" and teardown lines go to stderr, unbuffered, into the same file. So
+    a stderr line written while a console line is half in the buffer lands inside it.
+  - Two lines were torn that way: the sun's frame 705 (`..., 670 ref_metal: teardown: ...`, then
+    `upsample fallbacks`) and the water's frame 34. The hold read each line alone and missed both.
+  - Test: `test_up_lines_sum` in `tests/metal/rm_rtsun_test.c`. It hands the scene's slots to
+    `rm_rtt_up_frame` and `rm_rtsun_stats_format`:
+    - in slot order;
+    - with a frame at divisor 1 in order and one handed over late;
+    - with the previous map's frames in flight.
+
+    It reads the lines back as the hold does, and wants the totals equal to the sums of the lines
+    numbered from the map's first frame. It passes on the engine (726 checks, 0 failed). It fails
+    four mutants:
+    - an old frame at divisor 1 counted: 2 failed;
+    - the map's first frame not kept: 3 failed;
+    - a frame at divisor 1 counted: 2 failed;
+    - the traced part left off the line: 4 failed.
+  - Fix, in the hold: the sums read the log after a rejoin of the torn console lines. A self-test
+    of that reading runs first, and a line naming a traced size that the reading does not parse
+    fails the hold, as a DIFFER does. On the first hold's log the rejoined sums equal the totals for
+    all four effects (the sun 355068 of 211353600, the water 11036 of 211353600).
+  - Doc 040 now says the totals are the sums of the frame lines of the same frames. The only lines
+    left out are the previous map's last frames', still in flight when the map loaded. Every frame
+    counted has its line.
+- **The live run never played its demo.** A console `demomap` stops at `ERROR: CM_InlineModel: bad
+  number`, on the parent's build too. So no event before `map base1` saw a world view.
+  - Fix, in the new hold (`hold-T126s6r2.sh`): every event goes through `map base1`. The shadows'
+    event fires the blaster, because the shadows trace only frames with a dynamic light in range.
+  - The water's event loads base1 a second time with `flushmap 1` and teleports the view to the
+    water demo's spot. A `map` of the map already loaded keeps its world model and prints no
+    summary.
+- **`rt-all-h`'s stats copy passed the engine's argument limit.** It came to 129 of 128 words.
+  - Fix: the copy leaves out `set sw_waterwarp 1`. That is ref_soft's cvar, never read by
+    ref_metal, and 1 is its default anyway.
+  - The copy's frames must equal the record's run 1. `rt-all-e`'s did in the first hold:
+    `cb91a8ec1ade`.
+
+| Check (hold round 2) | Result |
+|---|---|
+| `rm_rtsun_test` with `test_up_lines_sum`, and with ASan and UBSan | 726 checks, 0 failed |
+| the four mutants of `test_up_lines_sum` | 2, 3, 2 and 4 checks failed |
+| the first hold's `rt-all-e` stats log, read line by line | the sun 354398 of 211046400, the water 11036 of 211046400 |
+| the same log, rejoined | each of the four effects equal to its summary total |
+| the second hold | to be filled from `hold-T126s6r2.sh`'s summary |

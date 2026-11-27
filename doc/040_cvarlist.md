@@ -1655,7 +1655,11 @@ is.
   the effect does not apply to among them, so the share is of the
   frame), F the pixels the upsample fell back on, and S their share.
   AO's F is a lower bound: it is counted only where the four traced
-  pixels about a pixel hold different values. Nothing
+  pixels about a pixel hold different values. Under `r_rt_stats 2`, P
+  and F are the sums of the pixels and the upsample fallbacks of that
+  effect's frame lines with a traced size: every frame counted has its
+  line, and the only such lines left out are those of the previous
+  map's last frames, still in flight when the map loaded. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
