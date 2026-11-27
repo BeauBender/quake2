@@ -238,7 +238,6 @@ bounded()
 		echo "ios-sim: timed out after $limit s: $*" >&2
 		return 124
 		;;
-	stopped) echo "ios-sim: stopped by a stop signal, then ended: $*" >&2 ;;
 	esac
 	return $status
 }

@@ -131,7 +131,6 @@ bounded()
 		echo "ios-device: timed out after $limit s: $1 $2" >&2
 		return 124
 		;;
-	stopped) echo "ios-device: stopped by a stop signal, then ended: $1 $2" >&2 ;;
 	esac
 	return $status
 }
