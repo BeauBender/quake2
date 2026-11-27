@@ -200,6 +200,23 @@ rm_rtao_count(device atomic_uint *counts, uint traced, uint occluded, uint floor
 	}
 }
 
+/*
+ * TASK126 slice 6: the upsample's fallbacks (mtl_rtao_up_fallback), in
+ * the word after rm_rtao_count's seven; rm_rtao_upsample alone counts them
+ */
+#define RM_RTAO_C_FALLBACKS 7
+
+static void
+rm_rtao_count_fallbacks(device atomic_uint *counts, uint fell)
+{
+	const uint c_fb = simd_sum(fell);
+
+	if (simd_is_first())
+	{
+		atomic_fetch_add_explicit(&counts[RM_RTAO_C_FALLBACKS], c_fb, memory_order_relaxed);
+	}
+}
+
 /* the AO and light a pixel's 8-bit AO gives (the two kernels that write the render size) */
 static void
 rm_rtao_store(constant rm_rtao_view &v, uint2 px, uint m, float ao, texture2d<float, access::read> light,
@@ -424,7 +441,11 @@ rm_rtao_trace_lo(depth2d<float, access::read> depth [[texture(0)]],
  * world pixel's AO from the four traced pixels about it (mtl_rtao_up_pair
  * on each axis), kept where they lie on its surface (mtl_rtao_up_same),
  * their bilinear mean (mtl_rtao_up_ao), stored at 8 bits; then the AO and
- * light as rm_rtao_trace writes them, and the pixel counts.
+ * light as rm_rtao_trace writes them, and the pixel counts. TASK126 slice
+ * 6: the pixels whose AO fell back to the world pixels' mean or to 1
+ * (mtl_rtao_up_fallback) are counted; where the four traced AOs are equal
+ * no surface is read and nothing is counted. The count reads the taps
+ * and changes no pixel.
  */
 kernel void
 rm_rtao_upsample(depth2d<float, access::read> depth [[texture(0)]],
@@ -441,6 +462,7 @@ rm_rtao_upsample(depth2d<float, access::read> depth [[texture(0)]],
 	const uint w = ao_out.get_width(), h = ao_out.get_height();
 	const bool inside = (px.x < w) && (px.y < h);
 	uint traced = 0, up = 0, m = MTL_GB_MAT_NONE;
+	uint fell = 0;   /* TASK126 slice 6: 1 where the AO fell back, for the count alone */
 	float ao = 1.0f;
 
 	if (inside)
@@ -502,6 +524,7 @@ rm_rtao_upsample(depth2d<float, access::read> depth [[texture(0)]],
 				}
 
 				ao = mtl_rtao_up_ao(u);
+				fell = mtl_rtao_up_fallback(u) ? 1u : 0u;
 			}
 
 			traced = 1;
@@ -517,6 +540,7 @@ rm_rtao_upsample(depth2d<float, access::read> depth [[texture(0)]],
 	}
 
 	rm_rtao_count(counts, traced, (traced && (ao < 1.0f)) ? 1u : 0u, (traced && (ao < v.floor_)) ? 1u : 0u, up, 0, 0);
+	rm_rtao_count_fallbacks(counts, fell);
 }
 
 /* rm_rttemporal.h's rm_rtt_view_t (common/mtl_rtt_math.h's mtl_rtt_view_t) */
