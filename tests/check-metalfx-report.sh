@@ -22,7 +22,8 @@
 #     the engine's 128, plan prints that count, a value that cannot be written into a console line is
 #     refused with its cvar name, and the script is removed with the held config;
 #   - a run split into chunks (one --out each) is combined by report --dir A --dir B: the same rows as
-#     one run, a row two chunks both hold, a chunk of another engine commit or setting refused;
+#     one run, a row two chunks both hold, a chunk of another engine commit or setting refused; the scenario
+#     tables compared with the load note left out, since it measures the host (FIX204);
 #   - the host lock (the real scripts/bench/bench.sh, a private BENCH_STATE, a stub pins.sh that takes it
 #     as scripts/pins.sh does): the generator holds it once for its whole run, so while another job holds
 #     it the generator waits, and no record times out on that wait, and each record and engine run passes
@@ -833,8 +834,11 @@ limit" "$out"
     full=$(cut -f1-5,7-17 "$r0/results.tsv" 2>/dev/null | sed 1d | sort)
     parts=$({ cut -f1-5,7-17 "$r1/results.tsv"; cut -f1-5,7-17 "$r2/results.tsv"; } 2>/dev/null | grep -v '^option	' | sort)
     [ -n "$full" ] && [ "$full" = "$parts" ] || ko chunk-merge "the chunks' rows are not the full run's"
-    # the report of the chunks shows what the full run's own report shows: the scenario tables and every crop
-    sec() { sed -e 's/\[measured under load[^]]*\]//g' "$1" 2>/dev/null | awk 'BEGIN { RS = "<h2>" } /^Scenario / { print }'; }
+    # the report of the chunks shows what the full run's own report shows: the scenario tables and every crop.
+    # The one field left out is the load note, a measurement of the host and not of the run: host_cell appends
+    # it to the fps cell as " [measured under load (...)]", and it goes with the blank before it (FIX204: with
+    # the blank left in, a full run and its chunks read at loads on either side of LOAD_QUIET differed)
+    sec() { sed -e 's/ \[measured under load[^]]*\]//g' "$1" 2>/dev/null | awk 'BEGIN { RS = "<h2>" } /^Scenario / { print }'; }
     [ -n "$(sec "$w/out/chunks.html")" ] && [ "$(sec "$w/out/chunks.html")" = "$(sec "$(ls "$w"/c0/metalfx-t1-*.html | head -1)")" ] || ko chunk-merge "the chunks' scenario tables differ from the full run's"
     nf=$(grep -o '<figure>' "$w/out/chunks.html" | wc -l | tr -d ' '); nf0=$(grep -o '<figure>' "$(ls "$w"/c0/metalfx-t1-*.html | head -1)" | wc -l | tr -d ' ')
     [ "$nf" -gt 0 ] && [ "$nf" = "$nf0" ] || ko chunk-merge "the crops of the chunks ($nf) are not the full run's ($nf0)"
