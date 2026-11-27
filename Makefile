@@ -379,12 +379,14 @@ endif
 #   mostly best practice and not really necessary.
 override CFLAGS += -fno-strict-aliasing -fwrapv -fvisibility=hidden
 
-# -MMD to generate header dependencies. It was once left out
+# -MMD to generate header dependencies, -MP so that a deleted or
+#  renamed header (or a moved SDK, whose SDKSettings.json is in
+#  every .d) does not break the next make. It was once left out
 #  on Darwin ("unsupported by the Clang shipped with OS X", a
 #  2010 note); Apple clang has supported it for years, and
 #  without it an edited header rebuilt no client, server or
 #  game object (FIX217). tests/check-build-deps.sh keeps it.
-override CFLAGS += -MMD
+override CFLAGS += -MMD -MP
 
 # OS X architecture.
 ifeq ($(YQ2_OSTYPE), Darwin)
@@ -1653,6 +1655,7 @@ SERVER_DEPS= $(SERVER_OBJS:.o=.d)
 -include $(REFGL1_DEPS)
 -include $(REFGL3_DEPS)
 -include $(REFMETAL_DEPS)
+-include $(REFSOFT_DEPS)
 -include $(SERVER_DEPS)
 
 # ----------
@@ -1981,7 +1984,8 @@ $(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS)) : tests/unit/test.h
 $(TESTDIR)/tests/unit/test_bspgraph.o : src/client/refresh/files/models.c
 $(TESTDIR)/tests/unit/test_pvs.o : src/client/refresh/files/pvs.c
 
-# test_imgsize.c includes these whole, and Darwin has no .d tracking
+# test_imgsize.c includes these whole, and the .d files of these objects do not list them (-MMD tracks the
+# included headers, not the .c files that are included whole)
 $(TESTDIR)/tests/unit/test_imgsize.o: src/client/refresh/files/pcx.c src/client/refresh/files/wal.c src/client/refresh/files/imgsize.h
 $(TESTDIR)/tests/unit/test_upscale_half.o: src/client/header/upscale_half.h
 
