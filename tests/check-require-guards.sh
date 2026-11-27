@@ -14,7 +14,7 @@
 # For each variable, a case below forces the check's skip condition with a
 # stub ahead of PATH or a stripped PATH (uname printing Linux, an xcrun that
 # refuses one SDK or the Metal compiler, a git whose plain cat-file fails, a
-# PATH without python3 or bash), runs the real check with the variable set
+# PATH without python3, bash or shasum), runs the real check with the variable set
 # and wants a non-zero exit and the guard's own message ("<test>: NAME=1
 # and" for a case that names a test, "NAME=1 and" otherwise), then runs it
 # with the variable unset and wants exit 0. One run proves one guard: a case
@@ -95,6 +95,8 @@ printf '%s\n' \
 	'CHECK_BENCH_REQUIRE|check-bench.sh|linux|1|t_freq' \
 	'CHECK_BENCH_REQUIRE|check-bench.sh|linux|1|t_probe_first' \
 	'CHECK_BENCH_REQUIRE|check-bench.sh|nobash|1|t_snap_argv' \
+	'CHECK_BENCH_REQUIRE|check-bench.sh|noshasum|1|t_sv_path' \
+	'CHECK_BENCH_REQUIRE|check-bench.sh|linux|1|t_sv_path' \
 	'CHECK_CVAR_DOCS_SELFTEST_REQUIRE|check-cvar-docs-selftest.sh|nocatfile|1|' \
 	'CHECK_REF_METAL_REQUIRE|check-ref-metal.sh|linux|1|' \
 	'CHECK_METAL_SHIM_REQUIRE|check-metal-shim.sh|nometal|1|' \
@@ -283,6 +285,7 @@ stripped() { # stripped <dir> <tool>
 }
 stripped "${tmp:?}/path-nopython" python3
 stripped "${tmp:?}/path-nobash" bash
+stripped "${tmp:?}/path-noshasum" shasum
 
 # run <log> <tree> <check> <force> <variable or -> [<test>]: the check's
 # status, 142 when it outlived the wall bound.
@@ -292,7 +295,7 @@ run() {
 	shift 5
 	case $_force in
 	linux | nosim | nometal | nocatfile) _path=${tmp:?}/bin-$_force:$PATH ;;
-	nopython | nobash) _path=${tmp:?}/path-$_force:/usr/sbin:/sbin ;;
+	nopython | nobash | noshasum) _path=${tmp:?}/path-$_force:/usr/sbin:/sbin ;;
 	*) echo "$me: unknown force '$_force'" > "$_log"; return 99 ;;
 	esac
 	n=$((n + 1))
