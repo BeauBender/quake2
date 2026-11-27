@@ -1493,8 +1493,27 @@ st=0; bench_bounded 30 sh -c "read x < \"\$0\"; echo command-ended >> \"\$1\"" "
 			*) l126_why="the lock was not kept for the group the supervisor could not empty: $_ll" ;;
 			esac
 		fi
+		# a hand record is named as one, with its rm -f, wherever the lock
+		# is shown (review round 3, spec I1 and security I1): lock status
+		# and a waiter's line (a lock run that gives up at once)
+		if [ -z "$l126_why" ] && [ "$_l6m" = nospawn ]; then
+			case $_ll in
+			*" hand=$_lf"*"rm -f '"*"/lock/untold.$_lf'"*) ;;
+			*) l126_why="the hand record was not named in lock status: $_ll" ;;
+			esac
+			_lwo=$(env BENCH_STATE="$_ld/state" BENCH_LOCK_WAIT=0 sh "$1/scripts/bench/bench.sh" lock run w126 -- true 2>&1)
+			case $_lwo in
+			*"hand record $_lf"*"rm -f '"*"/lock/untold.$_lf'"*) ;;
+			*) l126_why="${l126_why:+$l126_why; }the hand record was not named in a waiter's line: $_lwo" ;;
+			esac
+		fi
 		if [ -z "$l126_why" ] && ! proc_await 'bench: keeping the lock while recorded pid*'; then
 			l126_why="the lock shell did not say it kept the lock"
+		elif [ -z "$l126_why" ] && [ "$_l6m" = nospawn ]; then
+			case $PROC_LINE in
+			*"hand record $_lf"*"rm -f '"*"/lock/untold.$_lf'"*) ;;
+			*) l126_why="the hand record was not named in the keep note: $PROC_LINE" ;;
+			esac
 		fi
 	fi
 	# the command may end now: the lock shell frees the lock once its group
