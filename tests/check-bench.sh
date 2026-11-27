@@ -2697,6 +2697,63 @@ t_inputs() {
 	[ "$fails" -eq 0 ]
 }
 
+# The bounded path's supervisor (TASK221 slice 2) under a minimal PATH and
+# a supervisor that cannot be had. With no shasum on PATH, sv_path keys its
+# cache with cksum (as bench_hash does), so a bounded command still runs.
+# A refused supervisor exits 2 with its reason on standard error, also
+# where the core's caller sends the bounded command's standard error away
+# (host.sh, snap.sh): the reason was lost there (the hold of #758).
+t_sv_path() {
+	fresh svpath
+	fast_profiler
+	mkdir "${E:?}/nosha"
+	for _d in /bin /usr/bin /usr/sbin /sbin; do
+		ln -s "$_d"/* "${E:?}/nosha/" 2> /dev/null || true
+	done
+	rm -f "${E:?}/nosha/shasum" "${E:?}/nosha/system_profiler"
+	ln -s "${E:?}/sp/system_profiler" "${E:?}/nosha/system_profiler"
+	_st=0
+	env PATH="${E:?}/nosha" SUPERVISE_CACHE="${E:?}/svcache" sh -c '. "$1/supervise.sh" && SV_SRC_DIR=$1 && p=$(sv_path) && "$p" --timeout 5 -- true' \
+		sh "$BENCH_SV_LIB" > "${E:?}/sv.out" 2> "${E:?}/sv.err" || _st=$?
+	[ "$_st" -eq 0 ] || bad "sv path: with no shasum, sv_path and its supervisor exited $_st: $(tr '\n' ' ' < "${E:?}/sv.err")"
+	if [ "$(uname -s)" != Darwin ]; then
+		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || { bad "t_sv_path: CHECK_BENCH_REQUIRE=1 and this is not macOS"; return 1; }
+		echo "$me: t_sv_path: the bounded host and snapshot parts skipped: not macOS"
+		[ "$fails" -eq 0 ]
+		return
+	fi
+	_st=0
+	env PATH="${E:?}/nosha" SUPERVISE_CACHE="${E:?}/svcache" sh "$R/bench.sh" host --facts > "${E:?}/host.out" 2> "${E:?}/host.err" || _st=$?
+	[ "$_st" -eq 0 ] || bad "sv path: with no shasum, host exited $_st: $(tr '\n' ' ' < "${E:?}/host.err")"
+	grep -qx 'gpu=Zzq GPU' "${E:?}/host.out" || bad "sv path: with no shasum, host did not read the GPU through the bounded path: $(tr '\n' ' ' < "${E:?}/host.out")"
+	# A refused supervisor (a cache that is not an absolute path): exit 2,
+	# and both lines said, at each core call that sends the bounded
+	# command's standard error away.
+	printf 'freq=1\n' > "${E:?}/f.a"
+	for _c in host system reader freqinit freqdump freqwindow; do
+		_st=0
+		env SUPERVISE_CACHE=relative/cache sh -c '
+			R=$1
+			BENCH_ROOT=$R
+			. "$R/core/common.sh" && . "$R/core/host.sh" && . "$R/core/snap.sh" || exit 9
+			bench_tmp
+			case $2 in
+			host) bench_host_init ;;
+			system) BENCH_SNAP_READER=; bench_snap gate "$BENCH_TMP/g" ;;
+			reader) bench_snap gate "$BENCH_TMP/g" ;;
+			freqinit) BENCH_FREQ_PROBE=; bench_freq_init ;;
+			freqdump) bench_freq_dump "$BENCH_TMP/d" ;;
+			freqwindow) BENCH_FREQ_BIN=$BENCH_FREQ_PROBE; bench_freq_window "$3" "$3" freq ;;
+			esac
+			exit 0' sh "$R" "$_c" "${E:?}/f.a" > "${E:?}/r.out" 2> "${E:?}/r.err" || _st=$?
+		[ "$_st" -eq 2 ] || bad "sv path: $_c with a refused supervisor exited $_st, not 2: $(tr '\n' ' ' < "${E:?}/r.err")"
+		grep -qx 'supervise: SUPERVISE_CACHE is not an absolute path' "${E:?}/r.err" &&
+			grep -qx 'bench: cannot build the process supervisor' "${E:?}/r.err" ||
+			bad "sv path: $_c with a refused supervisor did not say why: [$(tr '\n' '|' < "${E:?}/r.err")]"
+	done
+	[ "$fails" -eq 0 ]
+}
+
 t_case() {
 	fresh case
 	_base='adapter=null\nruns=3\nmetric=ms\nabs_tol=0.5\nrel_tol=0.02\n'
@@ -3637,7 +3694,7 @@ t_poll_end_reaped() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_core_id t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle t_cant_tell t_poll_end_reaped"
+all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_core_id t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_sv_path t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle t_cant_tell t_poll_end_reaped"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
