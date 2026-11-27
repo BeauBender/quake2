@@ -24,7 +24,9 @@ at 1:1, as temporal anti-aliasing.
   upsample before its reader. AO already traces at `r_rt_ao_scale` (default 0.5, TASK157) and
   upsamples with its own surface test; its RT7 runs after the upsample, at the render size.
 - **The cvars.** `r_rt_shadows_scale`, `r_rt_sun_scale` and `r_rt_water_scale`, archived, default
-  `1`, the values of `r_rt_ao_scale` (1, 1/2, 1/3; a bad value is 1). Each lands with the slice that
+  `1`, the values of `r_rt_ao_scale` (1, 1/2, 1/3). A bad value of the new scales (zero, negative, not finite) is 1, the
+  effect at the drawn size; a bad `r_rt_ao_scale` is not: `rm_rtao_div` sends it to its default, 0.5,
+  divisor 2. Each lands with the slice that
   wires its effect, with its entry in `doc/040_cvarlist.md`, so no cvar is documented before it does
   anything. AO keeps `r_rt_ao_scale` and its upsample.
 - **Not scaled.** RT-primary and its bounce stay at the render size: their output is the whole lit
