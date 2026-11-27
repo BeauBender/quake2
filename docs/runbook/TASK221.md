@@ -273,21 +273,27 @@ Each case waits on the supervisor's events (`BENCH_BOUNDED_TAP`) and on end of f
 | `own 124`, `own 125`, `own 126` | `sh -c 'exit N'`: status N, `HOW=exit`, and nothing said of a wall time or of an untold stop | (round 1) FAIL: `124 how wall`, `127 how exit`, `125 how untold` | ok |
 | `tap` | with `BENCH_BOUNDED_TAP`, a wall time is still `124 how wall`, the tap has the `deadline` line, and TMPDIR is empty | (round 1) FAIL: `124 how exit` | ok |
 | `poll-end` | `bench_poll_end` leaves a sibling's `bench-sv.<pid>.*` file | (round 1) FAIL: removed | ok |
+| `sv window` | under `/bin/sh`, the state a trap sees just after `sv_wait`'s `wait` collected a 126 (`wait`: `SV_STATUS` empty; `status`: just after `SV_STATUS=`; `done`: just after `SV_PID=`), with `bench_bounded_stop` called there and the record printed: a group record after `spawned`, a hand record with no events, none after `reaped`, and a TERM to the collected pid only at `wait` | (round 3) FAIL on adeee98e: `wait` and `status` gave no record | ok |
+| `hand quote` | the printed `rm -f` of a hand record reads back, through `sh`, as its path, a `'` in the lock directory included | (round 3) | ok |
+| `sv endgroup order` | on the four line streams a `sv-no-term` run can give (`trap 130` before and after `group-empty`), the mutant's verdict is the one refusal | (round 3) the in-order read gave "no line trap 130" on two | ok |
 
 The 126 stand-in is planted in a tool cache of its own, under the name `sv_path` gives the
 real binary, as slice 1's `sv126` case does.
 
 | Mutant | Case | Refused because |
 |---|---|---|
-| `sv-no-term` | `spawned`, `endgroup` | `sv_stop` sends no TERM: the caller outlives the INT by the bound, and in `endgroup` no `signal name=TERM` comes before the stop's end |
+| `sv-no-term` | `spawned`, `endgroup` | `sv_stop` sends no TERM: the caller outlives the INT by the bound, and in `endgroup` no `signal name=TERM` comes before end of file, in any order (round 3; it was "before the stop's end", which an early `group-empty` could cut) |
 | `lock-freed-on-126` | `126` | no group record on a 126: lock status shows no `untold=` |
 | `record-not-written` | `126` | the record's `mv` fails (moved from `check-bench`) |
 | `release-no-wait` | `126` | the release does not wait: "freeing the lock" comes before `command-ended` (moved from `check-bench`) |
 | `watch-leader-note` | `lock note` | the watch's leader note is never said (round 1: restored) |
 | `group-reuse-unchecked` | `group reuse` | a group record is live by `kill -0` alone (round 1) |
 | `status-only` | `own 124` to `own 126` | the status alone decides again: each is taken for the supervisor's (round 1) |
-| `trap-status-dropped` | `126 term` | the trap's stop takes `sv_stop`'s 0 again: lock status shows no `untold=` (round 2) |
+| `trap-status-dropped` | `sv window` (round 3; was `126 term`) | the trap's stop takes `sv_stop`'s status again: at `done` with no events nothing is recorded (round 2). The `126 term` case no longer refuses it, since its `spawned` event now records the group without the collected status |
 | `hand-not-recorded` | `126 nospawn` | a 126 with no group named records nothing again: no line names a release by hand (round 2) |
+| `events-unchecked` | `sv window` | the trap's status decided by the wait alone: at `wait`, no record (round 3) |
+| `status-after-pid` | `sv window` | `SV_STATUS` used only once `SV_PID` is clear (round 2's order): at `status`, the collected pid is sent TERM and waited for again (round 3) |
+| `status-hand-unmarked` | `126 nospawn` | lock status does not mark the hand record: no `hand=` and no `rm -f` there (round 3) |
 
 In `tests/check-supervise.sh` (round 1), `sv_refusals` runs five cases. Each has a cache of
 its own under the check's TMPDIR, seeded with the built binary, and ACLs are set with
@@ -473,6 +479,99 @@ handler, which it installs only for an INT inherited at its default:
 
 So TERM reaches the caller's trap in every shape, the merge gate's SIGINT-ignored one
 included. The case sends TERM, not INT.
+
+### Review round 3
+
+The last round. Each finding's case or demonstration was red on adeee98e first:
+
+- **Correctness I1 and security I2** (the re-wait under `/bin/sh`). A trap that lands
+  after `sv_wait`'s `wait` has reaped the supervisor and before `SV_PID=` waited again,
+  and under `/bin/sh` that wait gives 127, so the 126 was lost and the lock freed. The
+  window ran up to `SV_PID=`, `SV_STATUS=` included (round 2's note, corrected above).
+  Fixed in `bench_bounded_stop`:
+  - `SV_STATUS` is tested first. `sv_wait` sets it before it clears `SV_PID`, and
+    `bench_bounded` empties it before each run, so from `SV_STATUS=` on the collected
+    status is used, and the collected supervisor is not sent a TERM or waited for again.
+    A trap anywhere in `sv_wait` sees a consistent pair.
+  - Before `SV_STATUS=`, a status the shell cannot attribute is decided by the
+    supervisor's events, never by the wait alone. With no `reaped` event, a 127, or any
+    status after a `spawned` event, is taken as the supervisor's 126: a group record when
+    `spawned` names one, else a hand record. The supervisor never returns 127 itself, and
+    a command's own status always comes with `reaped`.
+  - Case `sv window` (red: `wait` and `status` with `spawned`, and `wait` with no events,
+    gave no record). Mutants `events-unchecked`, `status-after-pid`, and
+    `trap-status-dropped` (moved from `126 term`).
+  - What is left: a trap before `SV_STATUS=` still sends the collected supervisor's pid a
+    TERM (security N3), since nothing tells the shell it was collected there. The window
+    is a few builtins with no fork, and the status no longer depends on it.
+- **Spec I1 and security I1** (a hand record's `rm -f` printed once). Fixed:
+  `bench_lock_untold_live` sets `BENCH_LOCK_HAND`, and the keep note, the waiters' line
+  and `lock status` name each hand record with its `rm -f` (see `bench_bounded` above).
+  `bench_lock_hand_rm` writes a `'` in the path as `'\''` (security N2 and correctness
+  N3). Case `126 nospawn`, extended (red: neither `lock status` nor a waiter's line named
+  it); mutant `status-hand-unmarked`. Case `hand quote`.
+- **The `endgroup` flake** (security N4 and correctness N4). By trace: the member set its
+  TERM ignore itself, `(trap "" TERM; exec sleep 30) &`, racing the supervisor's TERM to
+  the group at `exited`. A member that lost the race ended at once, so `group-empty` came
+  before the caller's `trap 130`, and the in-order read stopped there with the line the
+  reviewers saw. Fixed:
+  - The member ignores TERM from its fork on: `trap "" TERM; sleep 30 & exit 0`, the ignore
+    set before the `&` and inherited.
+  - The mutant is judged only by what it changes: whether the supervisor got a TERM. With
+    `sv_any`, `sv_case` reads every line to end of file (`sv_seen`, bound plus grace) and
+    wants `signal name=TERM` among them, in any order; no line ends the read early.
+  - By construction: in the mutant `sv_term` sends nothing, the case's INT goes to the
+    caller's pid alone and its KILLs come after the verdict, so no `signal name=TERM`
+    line can be written, and `sv_seen`'s verdict is a function of the set of lines read,
+    not their order. Case `sv endgroup order` runs `sv_seen` on the four streams a mutant
+    run can give, `trap 130` before and after `group-empty`: one refusal on each. Round
+    1's in-order read gave "no line trap 130 (the last line read: group-empty)" on the
+    two with `group-empty` first, which is the reviewers' line.
+  - The real case keeps its in-order check (FIX195: the trap runs at once, before the
+    supervisor's stop ends). With the ignore inherited, `group-empty` can come only after
+    the 12 s grace.
+  - Runs, with no added load: the case and its mutant 10 times in a row, alternating.
+    `endgroup` passed 10 of 10 ("exit 130 in 12 s, nothing left" each time), and
+    `sv-no-term` was refused by it 10 of 10, each for "no line signal name=TERM after the
+    INT, in any order, before end of file".
+- **Not addressed.** Correctness N2 and spec N4 (a reused id replacing a hand record
+  through `mv -f`), security N1 (lost events taking a command's own 126 for the
+  supervisor's; fails closed) and the confirmations were notes.
+
+**The disposition probe** (round 3; the `endgroup` command's `trap "" TERM` moved from the
+member's subshell to the command's shell, and no `trap`, `set -m` or process-group change
+in `scripts/`). A member started as each form starts it is sent TERM as soon as its pid is
+read, as the supervisor sends its group TERM at `exited`, and is alive 0.3 s later only if
+it ignored TERM by then; 20 runs each, under `/bin/bash` 3.2 and `/bin/sh`, directly and
+under `sh -c "trap '' INT; exec ..."`:
+
+```
+bash-plain old: member alive after an immediate TERM in 20 of 20 runs
+bash-plain new: member alive after an immediate TERM in 20 of 20 runs
+sh-plain old: member alive after an immediate TERM in 20 of 20 runs
+sh-plain new: member alive after an immediate TERM in 20 of 20 runs
+bash-int-ignored old: member alive after an immediate TERM in 20 of 20 runs
+bash-int-ignored new: member alive after an immediate TERM in 20 of 20 runs
+sh-int-ignored old: member alive after an immediate TERM in 20 of 20 runs
+sh-int-ignored new: member alive after an immediate TERM in 20 of 20 runs
+```
+
+The new form ignores TERM in every shape. The old form did too on this quiet host,
+because the probe reads the pid only after the command's shell has exited, which gives the
+subshell time to set its ignore; under the supervisor, `exited` comes at once, so the old
+form's ignore depended on the subshell being scheduled first. The new form's does not.
+
+The counts: 18 supervisor cases (three new: `sv window`, `hand quote`, `sv endgroup order`)
+and 12 supervisor mutants (three new: `events-unchecked`, `status-after-pid`,
+`status-hand-unmarked`). The summary line is "ok (guard, 65 mutants refused, probe, the
+supervisor cases and their 12 mutants, pyprobe and its 10 mutants)".
+
+Checks run in round 3, standalone from the worktree: `sh -n` and `bash -n` on
+`common.sh`, `lock.sh`, `supervise.sh` and `check-bounded-run.sh` (clean);
+`tests/check-bounded-run.sh` (the summary line above); `tests/check-supervise.sh` ("ok
+(5 s)"); `tests/check-bench-entry.sh` (ok); `scripts/ios-device.sh --selftest` ("ok (65
+cases)"); `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
+`tests/check-bench.sh` and the gate go to the orchestrator's hold.
 
 ## What remains
 
