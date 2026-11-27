@@ -73,6 +73,7 @@ void RM_RTS_MapBuilt(const model_t *world);
 void RM_RTS_Frame(const refdef_t *fd, int scene_ready);
 int RM_RTS_Active(void);
 int RM_RTS_ShowOnly(void);
+int RM_RTS_ShowAsked(void);   /* TASK190 slice 3: Wanted and the _show cvar on, known before Frame and View (rm_rtfx_show_asked) */
 void RM_RTS_View(const rm_view_t *view);
 
 #endif /* RM_RTSCENE_H */

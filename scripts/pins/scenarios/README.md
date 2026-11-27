@@ -50,9 +50,18 @@ scenario through it. The cases each of them is held to are in
 | `rtprimary-sky` | `rtprimary-world` with `r_rt_direct_show 5`: the sky light's term alone, one cosine-weighted ray a pixel that returns the sky's colour where it reaches a sky face, on white albedo; a pin as `rtprimary-world` (TASK189) |
 | `rtprimary-sun` | `rtprimary-world` with `r_rt_direct_show 6`: the sun's term alone, one ray a pixel toward TASK56's direction times N.L, on white albedo; a pin as `rtprimary-world` (TASK189) |
 | `rtprimary-bounce` | `rtprimary-world` with `r_rt_direct_show 7`: the bounce alone, one cosine-weighted closest-hit ray a pixel that reads the stock lightmap at its hit times the hit face's albedo, on white albedo; a pin as `rtprimary-world` (TASK189 slice 2) |
+| `rtprimary-denoise` | `rtprimary-world` with `r_rt_temporal 0.9`: RT-primary's light accumulated over the views (TASK190 slice 1) and then filtered by the 5 x 5 edge-aware filter, the summed light and not each term, full at one sample and none from 16 (slice 2), and the water reflections' 3 x 3 blur where water is in view; the sky ray's noise fixed by `r_rt_direct_seed 1`, so the frames are the same run to run; also recorded with `PINS_DEMO=water.dm2`, the pool of `base1`, where the blur runs (the warp follows the client clock, as in `skywater`); a pin as `rtprimary-world` (TASK190) |
 | `rtprimary-dlights` | `rtprimary-world` with `cl_lights 1`: the dynamic lights as a term of RT-primary's light, each in range with one shadow ray, by gl1's radius rule; recorded with `PINS_SEED` (the engine PRNG sets a muzzle flash's radius, as in `dlights`), at the default demo and with `PINS_DEMO=demo2.dm2 PINS_EVERY=7`; seeded, a pin as `rtprimary-world`, provisional until the owner accepts the look (TASK188 slice 3b, PM11) |
+| `rtprimary-models` | `rtprimary-world` with `cl_entities 1` (no view weapon, `cl_gun 0`): the rastered alias models lit by RT-primary's traced light at their own point and normal, the world's terms (direct light with its shadow rays, dynamic lights, sky, sun and bounce) in gl1's model colour under the world's exposure, `r_rt_direct_models 1` (the default); glowing and minlight models are traced too, their glow pulse and minlight floor carried by their tag (slice 3); fullbright and depth-hacked models stay stock-lit; recorded with `PINS_SEED` (entities, as `models`); seeded, a pin as `rtprimary-world`, provisional until the owner accepts the look (TASK191 slice 2, PM9, PM11) |
+| `rtprimary-models-off` | `rtprimary-models` with `r_rt_direct_models 0`: every model stock-lit, the self-check that 0 is the stock split and light (its frames equal a build without the model pass running the same scene); seeded (TASK191 slice 2) |
+| `rtprimary-models-vis` | `rtprimary-models` with `r_rt_direct_show 1`: the direct term alone on white albedo, the traced models' pixels in it in gl1's model colour (overbright, the minlight and gamma tables) while the world pixels show the linear term, so the two are not directly comparable; seeded (TASK191 slice 2) |
+| `rtprimary-weapon` | `rtprimary-models` with the view weapon (`cl_gun 1`): the weapon rastered under RT-primary with its depth hack and lit per pixel by traced light at its own point and normal, in the traced shadows and the light along the demo's walk, and at the pull-back point (`MTL_RTM_PULLBACK` before the wall) in a frame where it pokes into a wall, which the walk may not show, so the host test holds that rule; the weapon casts no shadow; recorded with `PINS_SEED`; seeded, provisional as `rtprimary-models`; with `r_rt_direct_models 0` the weapon is stock-lit (TASK191 slice 3) |
+| `rtprimary-weapon-gunshadow` | `rtprimary-weapon` with `r_rt_gunshadow 1`: the view weapon still left out of the ray-traced scene while `r_rt_direct_models` traces the models (`rm_rtm_gunshadow`), so it casts no shadow and no ray from its own pixels meets it; its frames equal `rtprimary-weapon`'s byte for byte, which the hold checks; recorded with `PINS_SEED`; seeded (TASK191 slice 3, its review) |
 | `hdr` | `world` with `r_hdr 1`: `ref_metal`'s float16 frame target, read back as its SDR fallback (each channel clamped to white, in 8 bits); its own reference, not compared with `world`, since float16 blends round once where 8-bit ones round at each layer; other renderers ignore the cvar and draw it as `world` (TASK196, HD2); `r_hdr_peak 1` holds HD3's tone map to that clamp on any display, so the frames do not follow a display's headroom |
 | `hdr-metalfx2` | `hdr` with `r_metalfx 2` at `r_metalfx_scale 0.5`: `MTLFXTemporalScaler` on `ref_metal`'s float16 view and frame, before the tone map; its own reference, not compared with `hdr` or `world-metalfx2`; where the device lacks the scaler `r_metalfx` reads the best supported mode below; other renderers ignore the cvars and draw it as `world` (TASK196, HD4) |
+| `rt-all-metalfx2` | `dlights` with every ray-traced effect of `ref_metal` on, each at its `rt-*` scenario's values (`r_rt_shadows`, `r_rt_ao`, `r_rt_sun`, `r_rt_water`), `r_rt_temporal 0` (explicit, so a later default cannot move this pin; the `rt-*` pins rely on the default of 0), and `r_metalfx 2` at the default `r_metalfx_scale 0`: the effects traced at the scaler's internal size and upscaled by `MTLFXTemporalScaler`; at the harness's 480 lines the default scale is the view's own size (the GPU family's default rows are 720 or 1080), so `r_metalfx_scale 0.5` is recorded from a scratch copy; recorded with `PINS_SEED`, as `dlights`; `demo1.dm2` shows no warped water, so `r_rt_water` is exercised by recording it a second time on `skywater`'s camera path (`PINS_DEMO=water.dm2`), as `rt-water`; where the device lacks the temporal scaler `r_metalfx` reads the best supported mode below; other renderers ignore the cvars and draw it as `dlights` (TASK109) |
+| `rtprimary-metalfx2` | `rtprimary-world` with `r_metalfx 2` at the default `r_metalfx_scale 0`: RT-primary traced at the scaler's internal size and upscaled by `MTLFXTemporalScaler`, `r_rt_temporal 0`; the default scale as `rt-all-metalfx2`; provisional as `rtprimary-world`; other renderers ignore the cvars and draw it as `world` (TASK109) |
+| `rtprimary-overlayfx` | `rtprimary-world` at `r_metalfx_scale 0.5` with the player's `r_metalfx 0`: the mode's overlay reads `r_metalfx` as 2, so RT-primary is traced at half the view's size and upscaled by `MTLFXTemporalScaler` with no scaler setting of the player's; at the default scale the harness's 480 lines are the view's own size and the mode runs no scaler of its own, so every other `rtprimary-*` pin is unchanged; where the device lacks the temporal scaler the overlay reads off; provisional as `rtprimary-world`; other renderers ignore the cvars and draw it as `world` (TASK190 slice 3) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the GL renderers' screen blend off (`gl_polyblend 0`, TASK82) |
@@ -164,7 +173,13 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `rtprimary-sky` | world | `models` |
 | `rtprimary-sun` | world | `models` |
 | `rtprimary-bounce` | world | `models` |
+| `rtprimary-denoise` | world | `models` |
 | `rtprimary-dlights` | world,dynamic-lights | `particles` |
+| `rtprimary-models` | world,entities,alias-models | `-` |
+| `rtprimary-models-off` | world,entities,alias-models | `-` |
+| `rtprimary-models-vis` | world,entities,alias-models | `-` |
+| `rtprimary-weapon` | world,entities,alias-models | `-` |
+| `rtprimary-weapon-gunshadow` | world,entities,alias-models | `-` |
 | `hdr` | world | `models` |
 | `hdr-metalfx2` | world | `models` |
 | `dlights` | world,dynamic-lights | `particles` |
@@ -184,6 +199,9 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `rt-water` | world | `rt-water-entities` |
 | `rt-water-entities` | world,entities,alias-models | `-` |
 | `rt-sun` | world | `models` |
+| `rt-all-metalfx2` | world,dynamic-lights | `particles` |
+| `rtprimary-metalfx2` | world | `models` |
+| `rtprimary-overlayfx` | world | `models` |
 
 TASK55 adds `rt-shadows` (tags `world`, `dynamic-lights`; companion
 `rt-shadows-entities`) and `rt-shadows-entities` (tags `world`, `entities`,

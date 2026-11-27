@@ -40,7 +40,22 @@
 #     given runs every check of tests/ci-checks.txt. Then two runs through
 #     scripts/gate-checks.sh on stub checks (a push, and the pull request)
 #     pass, with the long checks named first.
-# Then each mutant below must be refused by (a) to (d).
+# (e) scripts/test.sh (TASK227), in scratch repositories with a stub
+#     scheduler: a change under src/ alone, a staged, an unstaged and an
+#     untracked change each with a committed src/ change, and untracked
+#     names with a blank, a newline or a leading "-" leave out exactly
+#     the harness checks the selector does not choose, from the checks and
+#     from gate_first, on one line that names them and no path; a changed
+#     harness path leaves out none; a path a commit since the merge base
+#     changed and the lane set back (a stale origin/main) still counts;
+#     neither a GLOBIGNORE from the environment nor the gate's own (under
+#     SHELLOPTS=allexport) reaches the scheduler's environment; a serial
+#     check left out is left out of gate_serial;
+#     GATE_ALL=1, no origin/main, no merge base, a git error, a change for
+#     which the selector chooses no harness check, a selector that fails or
+#     prints a name it was not given, a name twice or none, and an empty or
+#     missing map run every check, on one line that says why.
+# Then each mutant below must be refused by (a) to (e).
 #
 # Needs bash, awk, git and ruby (its yaml).
 # Usage: tests/check-ci-map.sh
@@ -337,6 +352,12 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TEMPLATE_DIR=$tmp/tpl
 export HOME=$tmp/home XDG_CONFIG_HOME=$tmp/home/.config
 mkdir -p "$HOME" "$GIT_TEMPLATE_DIR"
+# The scheduler runs each check under the process supervisor beside it
+# (scripts/lib/, TASK221): built once here, with the cc on PATH, into a tool
+# cache of this check's own, which every scratch repository's run shares.
+SUPERVISE_CACHE=$tmp/svcache
+export SUPERVISE_CACHE
+(. scripts/lib/supervise.sh && sv_path > /dev/null) || bad "cannot build the process supervisor"
 
 # repo <dir> <ci-checks.sh> <ci-select.sh>: a scratch repository whose HEAD
 # is a merge commit: main adds .github/x after the base, the branch pr adds
@@ -348,8 +369,9 @@ repo() {
 	cp "$2" "$d/scripts/ci-checks.sh"
 	cp "$3" "$d/scripts/ci-select.sh"
 	cp scripts/gate-checks.sh "$d/scripts/"
-	mkdir -p "$d/scripts/bench/core"
+	mkdir -p "$d/scripts/bench/core" "$d/scripts/lib"
 	cp scripts/bench/core/common.sh "$d/scripts/bench/core/"
+	cp scripts/lib/supervise.sh scripts/lib/supervise.c "$d/scripts/lib/"
 	cp tests/ci-checks.txt "$MAP" "$d/tests/"
 	for n in $CI_NAMES; do
 		printf '#!/bin/sh\nexit 0\n' > "$d/tests/$n"
@@ -426,6 +448,303 @@ if ! command -v git > /dev/null 2>&1; then
 	bad "no git on PATH; the end-to-end cases were not run"
 elif ! e2e_cases scripts/ci-checks.sh "$SEL" > "$tmp/e2e.out" 2>&1; then
 	sed "s/^/$me: ci-checks.sh: /" "$tmp/e2e.out"
+	fail=1
+fi
+
+# ---- (e) scripts/test.sh selects the harness checks as CI does -------------
+# Each case is a scratch repository with a copy of scripts/test.sh, the real
+# selector and map, an empty tests/check-*.sh for every name of
+# tests/ci-checks.txt, of the gate's long-check list and check-zz-local.sh
+# (a check the map does not name, as tests/ci-local-only.txt's are), a stub
+# scheduler that records what test.sh gives it, and a make that does
+# nothing; its main is its own origin/main and HEAD is the branch work.
+GFIRST=$(sed -n 's/^gate_first="\(.*\)"$/\1/p' scripts/test.sh)
+[ -n "$GFIRST" ] || bad "scripts/test.sh has no gate_first line"
+# shellcheck disable=SC2086 # the names have no blank
+GNAMES=$(printf '%s\n' $CI_NAMES $GFIRST check-zz-local.sh | sort -u | tr '\n' ' ')
+GNAMES=${GNAMES% }
+REALGIT=$(command -v git)
+mkdir -p "$tmp/gbin" "$tmp/gitbad"
+printf '#!/bin/sh\nexit 0\n' > "$tmp/gbin/make"
+# a git that fails to list the untracked files and works otherwise
+printf '#!/bin/sh\ncase " $* " in *" ls-files "*) exit 128 ;; esac\nexec "%s" "$@"\n' "$REALGIT" > "$tmp/gitbad/git"
+cat > "$tmp/gstub" << 'EOF'
+#!/bin/sh
+# records what scripts/test.sh gives the scheduler; refuses a serial or
+# long-check word it is not given, as scripts/gate-checks.sh does
+serial=$1
+first=$2
+shift 2
+for w in $serial $first; do
+	case " $* " in *" tests/$w "*) ;; *) echo "stub scheduler: $w names no check" >&2; exit 2 ;; esac
+done
+{
+	printf 'serial %s\n' "$serial"
+	printf 'first %s\n' "$first"
+	printf 'globignore %s\n' "${GLOBIGNORE-(unset)}"
+	for t; do printf '%s\n' "${t#tests/}"; done
+} > "$GATE_REC"
+EOF
+chmod +x "$tmp/gbin/make" "$tmp/gitbad/git" "$tmp/gstub"
+
+# minus <list> <words>: the words of <list> that are not in <words>, in order
+minus() {
+	local n o=""
+	for n in $1; do
+		case " $2 " in *" $n "*) ;; *) o="$o $n" ;; esac
+	done
+	printf '%s' "${o# }"
+}
+
+# gt_repo <dir> <test.sh>: the scratch repository of a case
+gt_repo() {
+	local d=$1 n
+	rm -rf "${d:?}" "$d.rec" "$d.out"
+	mkdir -p "$d/scripts" "$d/tests" "$d/src"
+	cp "$2" "$d/scripts/test.sh"
+	cp "$SEL" "$d/scripts/ci-select.sh"
+	cp "$MAP" "$d/tests/ci-map.txt"
+	cp "$tmp/gstub" "$d/scripts/gate-checks.sh"
+	for n in $GNAMES; do : > "$d/tests/$n"; done
+	echo base > "$d/README.md"
+	echo base > "$d/src/a.c"
+	echo 'scratch/' > "$d/.gitignore"
+	echo base > "$d/scripts/coverage.sh"
+	g "$d" init -q -b main && g "$d" add -A && g "$d" commit -q -m base &&
+		g "$d" update-ref refs/remotes/origin/main HEAD && g "$d" checkout -q -b work
+}
+
+# gt_run <dir> [<env>...]: runs that test.sh there; GR is what the scheduler
+# was given (the checks on one line), GF its long checks, GS its serial
+# checks, GI the
+# GLOBIGNORE of its environment, GO the output
+gt_run() {
+	local d=$1 st=0
+	shift
+	mkdir -p "$tmp/gtd"
+	(cd "$d" && env -u GATE_ALL -u BENCH_LOCK_ENTRY -u BENCH_LOCK_TOKEN PATH="$tmp/gbin:$PATH" BENCH_LOCK=0 \
+		TMPDIR="$tmp/gtd" GATE_REC="$d.rec" "$@" sh scripts/test.sh) > "$d.out" 2>&1 || st=$?
+	GO=$(cat "$d.out")
+	if [ "$st" -ne 0 ] || [ ! -f "$d.rec" ]; then
+		GR="STATUS$st" GF="" GS="" GI=""
+		return
+	fi
+	GF=$(sed -n 's/^first //p' "$d.rec")
+	GI=$(sed -n 's/^globignore //p' "$d.rec")
+	GS=$(sed -n 's/^serial //p' "$d.rec")
+	GR=$(grep -v -e '^first ' -e '^serial ' -e '^globignore ' "$d.rec" | tr '\n' ' ' | sed 's/ $//')
+}
+
+# gt_left <label> <dir> <left out>: the run left out those harness checks
+# and no other, gave the scheduler only the long checks that run, and said
+# so on one line that names each one left out and no scratch path
+gt_left() {
+	local c=0 n line
+	expect "$1" "$(minus "$GNAMES" "$3")" "$GR" || c=1
+	expect "$1:first" "$(minus "$GFIRST" "$3")" "$GF" || c=1
+	line=$(printf '%s\n' "$GO" | grep '^test\.sh: .*left out')
+	if [ "$(printf '%s\n' "$GO" | grep -c '^test\.sh: .*left out')" -ne 1 ]; then
+		echo "case $1: not one 'left out' line: $(printf '%s' "$GO" | tr '\n' ' ')"
+		c=1
+	fi
+	for n in $3; do
+		case " $line " in *" $n"[\ ,.]*) ;; *) echo "case $1: the line does not name $n: $line"; c=1 ;; esac
+	done
+	case $GO in *"$tmp"*) echo "case $1: the output holds a scratch path"; c=1 ;; esac
+	gt_clean "$1" || c=1
+	return $c
+}
+
+# gt_all <label> <dir> <reason>: the run ran every check, gave the scheduler
+# every long check, and said why on one line, with no scratch path
+gt_all() {
+	local c=0
+	expect "$1" "$GNAMES" "$GR" || c=1
+	expect "$1:first" "$GFIRST" "$GF" || c=1
+	if [ "$(printf '%s\n' "$GO" | grep -c "^test\\.sh: every check runs: .*$3")" -ne 1 ]; then
+		echo "case $1: not one 'every check runs: ...$3' line: $(printf '%s' "$GO" | tr '\n' ' ')"
+		c=1
+	fi
+	case $GO in *"$tmp"*) echo "case $1: the output holds a scratch path"; c=1 ;; esac
+	gt_clean "$1" || c=1
+	return $c
+}
+
+# gt_clean <label>: the run left nothing in its TMPDIR
+gt_clean() {
+	if [ -n "$(ls -A "$tmp/gtd")" ]; then
+		echo "case $1: test.sh left its scratch directory"
+		rm -rf "${tmp:?}/gtd"
+		return 1
+	fi
+}
+
+# gt_cases <test.sh> [<case>]: every case of (e), or the one named
+gt_cases() {
+	local t=$1 only=${2-} d=$tmp/gt cf=0 rg=check-require-guards.sh
+	want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
+	mk() { gt_repo "$d" "$t" || { echo "case $1: cannot make the repository"; return 1; }; }
+	# a change under src/ alone: the harness checks that read nothing
+	# there are left out
+	if want src-only; then
+		mk src-only && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d"
+		gt_left src-only "$d" "$(minus "$HALL" $rg)" || cf=1
+	fi
+	# each of the other three sources with a committed src/ change (which
+	# selects check-require-guards alone), so that a source not read leaves
+	# out a check it selects: a staged change (.gitignore, read by
+	# check-metalfx-report only), an unstaged one (scripts/coverage.sh:
+	# check-bench-entry, and scripts/* of check-bounded-run) and an
+	# untracked file (scripts/coverage-floor: the same two)
+	if want staged; then
+		mk staged && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			echo y >> "$d/.gitignore" && g "$d" add .gitignore || return 1
+		gt_run "$d"
+		gt_left staged "$d" "$(minus "$HALL" "check-metalfx-report.sh $rg")" || cf=1
+	fi
+	if want unstaged; then
+		mk unstaged && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			echo y >> "$d/scripts/coverage.sh" || return 1
+		gt_run "$d"
+		gt_left unstaged "$d" "$(minus "$HALL" "check-bench-entry.sh check-bounded-run.sh $rg")" || cf=1
+	fi
+	if want untracked; then
+		mk untracked && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			echo y > "$d/scripts/coverage-floor" || return 1
+		gt_run "$d"
+		gt_left untracked "$d" "$(minus "$HALL" "check-bench-entry.sh check-bounded-run.sh $rg")" || cf=1
+	fi
+	# one untracked name each: a blank, a newline (whose second line, split
+	# off, would be a .github/ path that runs every check), a leading "-"
+	if want name-blank; then
+		mk name-blank && echo y > "$d/src/a b.c" || return 1
+		gt_run "$d"
+		gt_left name-blank "$d" "$(minus "$HALL" $rg)" || cf=1
+	fi
+	if want name-newline; then
+		mk name-newline && echo y > "$d/src/x
+.github" || return 1
+		gt_run "$d"
+		gt_left name-newline "$d" "$(minus "$HALL" $rg)" || cf=1
+	fi
+	if want name-dash; then
+		mk name-dash && echo y > "$d/src/-n" && echo y > "$d/src/--output=.github" || return 1
+		gt_run "$d"
+		gt_left name-dash "$d" "$(minus "$HALL" $rg)" || cf=1
+	fi
+	# a harness path changed: every check
+	if want harness-path; then
+		mk harness-path && echo y > "$d/src/a.c" && echo '# y' >> "$d/tests/check-bench.sh" &&
+			g "$d" commit -q -am harness || return 1
+		gt_run "$d"
+		# (the selector chooses every harness check: none is left out)
+		expect harness-path "$GNAMES" "$GR" || cf=1
+		expect harness-path:first "$GFIRST" "$GF" || cf=1
+		printf '%s\n' "$GO" | grep -q '^test\.sh: no harness check is left out' ||
+			{ echo "case harness-path: no 'no harness check is left out' line"; cf=1; }
+		gt_clean harness-path || cf=1
+	fi
+	# a stale origin/main: main changed scripts/coverage.sh after it, and
+	# the lane holds that commit, sets the path back and changes src/; CI
+	# sees both paths, so the checks that read scripts/coverage.sh run
+	if want stale-base; then
+		mk stale-base && g "$d" checkout -q main && echo B > "$d/scripts/coverage.sh" &&
+			g "$d" commit -q -am main && g "$d" checkout -q work && g "$d" merge -q --ff-only main &&
+			echo base > "$d/scripts/coverage.sh" && echo y > "$d/src/a.c" &&
+			g "$d" commit -q -am lane || return 1
+		gt_run "$d"
+		gt_left stale-base "$d" "$(minus "$HALL" "check-bench-entry.sh check-bounded-run.sh $rg")" || cf=1
+	fi
+	# GLOBIGNORE: one from the environment is dropped (this host's bash 3.2
+	# does not filter a glob by it, but would pass it on to the scheduler),
+	# and the gate's own is not exported, even under allexport
+	if want env-globignore; then
+		mk env-globignore && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d" GLOBIGNORE=tests/check-pins.sh:tests/check-require-guards.sh
+		gt_left env-globignore "$d" "$(minus "$HALL" $rg)" || cf=1
+		expect env-globignore:env "(unset)" "$GI" || cf=1
+	fi
+	if want allexport; then
+		mk allexport && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d" SHELLOPTS=allexport
+		gt_left allexport "$d" "$(minus "$HALL" $rg)" || cf=1
+		expect allexport:env "(unset)" "$GI" || cf=1
+	fi
+	# a serial check that is left out is left out of gate_serial too (the
+	# gate's list is empty today: the case sets one in its copy)
+	if want serial-filtered; then
+		sed 's/^gate_serial=""$/gate_serial="check-bench.sh check-pins.sh"/' "$t" > "$tmp/test-serial.sh" &&
+			gt_repo "$d" "$tmp/test-serial.sh" && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d"
+		gt_left serial-filtered "$d" "$(minus "$HALL" $rg)" || cf=1
+		expect serial-filtered:serial check-pins.sh "$GS" || cf=1
+	fi
+	# fail closed
+	if want gate-all; then
+		mk gate-all && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d" GATE_ALL=1
+		gt_all gate-all "$d" "GATE_ALL=1" || cf=1
+	fi
+	if want no-origin; then
+		mk no-origin && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			g "$d" update-ref -d refs/remotes/origin/main || return 1
+		gt_run "$d"
+		gt_all no-origin "$d" "no origin/main" || cf=1
+	fi
+	if want no-base; then
+		# origin/main an orphan: HEAD and it share no commit
+		mk no-base && echo y > "$d/src/a.c" && g "$d" commit -q -am src &&
+			g "$d" update-ref refs/remotes/origin/main "$(printf 'orphan\n' | g "$d" commit-tree "$(g "$d" mktree < /dev/null)")" || return 1
+		gt_run "$d"
+		gt_all no-base "$d" "no merge base" || cf=1
+	fi
+	if want git-error; then
+		mk git-error && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		gt_run "$d" PATH="$tmp/gitbad:$tmp/gbin:$PATH"
+		gt_all git-error "$d" "git failed" || cf=1
+	fi
+	if want top-md; then
+		# the selector chooses no harness check: every check, as a selector
+		# that prints nothing never means none
+		mk top-md && echo y > "$d/README.md" && g "$d" commit -q -am md || return 1
+		gt_run "$d"
+		gt_all top-md "$d" "chose no harness check" || cf=1
+	fi
+	# a selector that fails on the map, and one that on the changed paths
+	# fails, prints a name it was not given, a name twice, or none
+	local s
+	for s in fails-map fails stranger twice none; do
+		want "sel-$s" || continue
+		mk "sel-$s" && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		mv "$d/scripts/ci-select.sh" "$d/scripts/ci-select-real.sh"
+		{
+			printf '#!/bin/bash\n'
+			[ "$s" = fails-map ] || printf '[ "$3" != - ] || exec bash "${0%%/*}/ci-select-real.sh" "$@"\n'
+			case $s in
+				fails*) printf 'exit 2\n' ;;
+				stranger) printf 'echo check-nope.sh\n' ;;
+				twice) printf 'echo check-bench.sh\necho check-bench.sh\n' ;;
+				none) printf 'exit 0\n' ;;
+			esac
+		} > "$d/scripts/ci-select.sh"
+		gt_run "$d"
+		gt_all "sel-$s" "$d" "the selector" || cf=1
+	done
+	for s in empty missing; do
+		want "map-$s" || continue
+		mk "map-$s" && echo y > "$d/src/a.c" && g "$d" commit -q -am src || return 1
+		if [ "$s" = empty ]; then : > "$d/tests/ci-map.txt"; else rm "$d/tests/ci-map.txt"; fi
+		gt_run "$d"
+		gt_all "map-$s" "$d" "map" || cf=1
+	done
+	return $cf
+}
+
+if ! command -v git > /dev/null 2>&1; then
+	:
+elif ! gt_cases scripts/test.sh > "$tmp/gtcases.out" 2>&1; then
+	sed "s/^/$me: test.sh: /" "$tmp/gtcases.out"
 	fail=1
 fi
 
@@ -521,6 +840,44 @@ mut .github/workflows/macos.yml '        CI_CHECKS_GROUP: ${{ matrix.group }}' '
 refused group-env static "CI_CHECKS_GROUP is not"
 mut .github/workflows/macos.yml '      fail-fast: false # a failing group stops no other' '      fail-fast: true'
 refused fail-fast static "fail-fast is not false"
+
+# scripts/test.sh (e): tmut <name> <case> <old line> <new line>: the gate
+# with that one line swapped must fail the case
+tmut() {
+	local o st=0
+	mutants=$((mutants + 1))
+	cp scripts/test.sh "$tmp/test-mut.sh"
+	if ! swap "$tmp/test-mut.sh" "$3" "$4"; then
+		bad "mutant $1: no single line '$3' in scripts/test.sh"
+		return
+	fi
+	o=$(gt_cases "$tmp/test-mut.sh" "$2" 2>&1) || st=1
+	if [ "$st" -eq 0 ]; then
+		bad "mutant $1 passed"
+	else
+		case $o in
+			*"case $2"*) ;;
+			*) bad "mutant $1 refused, but not by case $2: $(printf '%s' "$o" | head -n 3 | tr '\n' ' ')" ;;
+		esac
+	fi
+}
+if command -v git > /dev/null 2>&1; then
+	# fail open: a missing merge base runs no harness check
+	tmut no-base-open no-base '	gate_why="no merge base of HEAD and origin/main"' '	gate_skip=$gate_hall'
+	tmut gate-all-ignored gate-all 'if [ "${GATE_ALL:-}" = 1 ]; then' 'if false; then'
+	tmut git-error-ignored git-error '	gate_why="git failed to list the changed paths"' '	:'
+	tmut none-trusted top-md '	gate_why="the selector chose no harness check"' '	:'
+	tmut stranger-trusted sel-stranger '	! gate_hsel=$(gate_list "$gate_tmp/sel" "$gate_hall"); then' '	! gate_hsel=$(cat "$gate_tmp/sel"); then'
+	tmut no-log stale-base '		git log --format= --name-only -z --no-renames --no-relative --no-ext-diff --no-color --cc "$1..HEAD" -- &&' '		: &&'
+	tmut no-untracked untracked '		git ls-files -z --others --exclude-standard --full-name' '		:'
+	tmut no-staged staged '		git diff --cached --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&' '		: &&'
+	tmut no-unstaged unstaged '		git diff --no-renames --no-relative --no-ext-diff --no-color --name-only -z -- &&' '		: &&'
+	tmut newline-delimited name-newline '		git ls-files -z --others --exclude-standard --full-name' '		git ls-files --others --exclude-standard --full-name | tr "\n" "\0"'
+	tmut first-unfiltered src-only 'gate_first=$gate_keep' ':'
+	tmut env-globignore-kept env-globignore 'unset GLOBIGNORE' ':'
+	tmut serial-unfiltered serial-filtered 'gate_serial=$gate_keep' ':'
+	tmut allexport-kept allexport '	set +a' '	:'
+fi
 
 if [ "$fail" -ne 0 ]; then
 	echo "$me: FAILED"

@@ -37,7 +37,9 @@
 #     tests/metal/rm_rttab_test.c, r_rt_temporal through the A/B layer
 #     (slice 2b): the real text of RM_Effect, RM_RTT_On and RM_RTT_ViewFor's
 #     alpha over the real rm_ab_value and rm_rtt_alpha, with mutants that
-#     read r_rt_temporal->value directly,
+#     read r_rt_temporal->value directly, and RM_PresBelow's view size
+#     (TASK190 slice 3) with a mutant that drops its early return for the
+#     menu's player model,
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
 #     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
@@ -50,6 +52,12 @@
 #     (common/mtl_rtp_math.h, TASK190 slice 1), with five mutants of the
 #     header it must fail and four pins of rm_rtptemporal.metal with seven
 #     mutants, compiled with xcrun metal where it is there,
+#     tests/metal/rm_rtpdenoise_test.c, RT-primary's 5 x 5 filter of that
+#     light (common/mtl_rtpd_math.h, TASK190 slice 2), with five mutants of
+#     the header and five pins of rm_rtpdenoise.metal with six mutants,
+#     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
+#     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eighteen
+#     scratch mutants of the two must fail it, and all eighteen must),
 #     tests/metal/rm_rtlights_test.c, the ray-traced presentation's data
 #     (rm_rtlights.c alone: the entity-lump parser, an asset loader, on
 #     generated lumps, TASK187), and
@@ -315,11 +323,10 @@ fi
 # the mutants: a rejection reason dropped (material, lights, depth, off screen), the view's reset
 # ignored, the frame without an accumulated view not resetting, a map load not resetting; slice 1b's:
 # the light set's flags not masked, a history that skipped a view still read (the early return), a
-# history made again still read, the views' number restarting on a map load; slice 2b's: the water
-# reflections' blur run under RT-primary (rm_rtt_wblur's gate dropped). Each must compile (a
+# history made again still read, the views' number restarting on a map load. Each must compile (a
 # mutant the compiler refuses tests nothing, review TASK59 slice 1, I1) and fail the test.
 rtt_mutants=0
-for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep wblur; do
+for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep; do
 	rtt_tree "${tmp:?}/rttm"
 	h=${tmp:?}/rttm/src/client/refresh/metal/common/mtl_rtt_math.h
 	c=${tmp:?}/rttm/src/client/refresh/metal/rm_rttemporal.c
@@ -338,7 +345,6 @@ for m in mat lights depth off reset frameend mapload lightsmask histgap histrese
 			"$rm_dir/rm_rttemporal.c" > "$c" ;;
 		histreset) sed 's/	h->valid = 0;/	h->valid = h->valid;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		seqkeep) sed 's/	st->seq = seq;/	st->seq = seq \& 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
-		wblur) sed 's/return on \&\& !rtprimary;/return on || (rtprimary \& 0);/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 	esac
 	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$h" && cmp -s "$rm_dir/rm_rttemporal.c" "$c"; then
 		bad "the temporal mutant ($m) changed nothing"
@@ -688,6 +694,117 @@ if [ -n "$rtdir" ]; then
 fi
 seg 7.6 ", $rtdir_mutants fit mutants, $rtdir_sky sky mutants and $rtdir_bounce bounce mutants refused"
 
+# RT-primary's light on alias models (TASK191 slice 1, PM9): rm_rtmodel.c and common/mtl_rtm_math.h, held
+# to gl1's model colour (rm_pure.c) and to the G-buffer's split (rm_gbuf.c), with rm_rtshadow.c for the
+# weapon's view and rm_rt.c, which it needs
+rtm_tree() { # <dir>: the test, rm_rtmodel.c and the headers, laid out as the test includes them
+	rm -rf "${1:?}"
+	mkdir -p "$1/src/client/refresh/metal" "$1/tests/metal"
+	cp -R "$rm_dir/header" "$rm_dir/common" "$1/src/client/refresh/metal/"
+	cp "$rm_dir/rm_rtmodel.c" "$1/src/client/refresh/metal/"
+	cp tests/metal/rm_rtmodel_test.c "$1/tests/metal/"
+}
+rtm_run() { # <tree>: 0 when the tree's test builds (1 when not) and passes (2 when not)
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "$1/t" "$1/tests/metal/rm_rtmodel_test.c" \
+		"$1/src/client/refresh/metal/rm_rtmodel.c" "$rm_dir/rm_gbuf.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" \
+		"$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" src/common/shared/shared.c \
+		-lm > "${tmp:?}/cc.out" 2>&1 || return 1
+	UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1 || return 2
+}
+rtm=""
+rtm_tree "${tmp:?}/rtm"
+r=0
+rtm_run "${tmp:?}/rtm" || r=$?
+case $r in
+	0)
+		rtm=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtmodel_test: //')
+		case $rtm in *", 0 failed") ;; *) bad "tests/metal/rm_rtmodel_test.c printed no result line"; rtm="";; esac ;;
+	1) cat "${tmp:?}/cc.out"; bad "tests/metal/rm_rtmodel_test.c does not compile" ;;
+	*) cat "${tmp:?}/out"; bad "tests/metal/rm_rtmodel_test.c failed" ;;
+esac
+# the mutants, each of which must compile and fail the test: the shadedot applied twice, the minlight floor
+# skipped, the glow pulse's sign flipped, the split with a fullbright model traced, the tag's decode dropping
+# a bit, the weapon unprojected with the view's projection; slice 2's: the weapon's depth hack read as the
+# crosshair's, a model tagged without its normals, the colour index's NaN and sign guard on the bit pattern
+# dropped; slice 3's: the weapon sent forward again (weapon-forward), a glowing or minlight model sent forward
+# again (flagged-forward), a weapon without its depth hack traced (weapon-nohack), a model without a flag
+# tagged (tag-unflagged), the weapon kept in the ray-traced scene under the traced models (gunshadow-kept), a
+# model read as a wall by the pull-back ray (wall-alias), the weapon view's flag set when there is none
+# (weapon-flag); its review's: the models wanted traced with the model pass refused (wants-refused), the
+# tag written over the stock colour as a grey (tag-grey)
+rtm_mutants=0
+if [ -n "$rtm" ]; then
+	for m in shadedot-twice minlight-skipped glow-sign fullbright-traced tag-bit weapon-view-inv \
+		depthhack-weapon tag-no-normals nan-guard weapon-forward flagged-forward weapon-nohack tag-unflagged \
+		gunshadow-kept wall-alias weapon-flag wants-refused tag-grey; do
+		rtm_tree "${tmp:?}/rtmm"
+		h=${tmp:?}/rtmm/src/client/refresh/metal/common/mtl_rtm_math.h
+		c=${tmp:?}/rtmm/src/client/refresh/metal/rm_rtmodel.c
+		case $m in
+			shadedot-twice) sed 's/const float f = dot \* s \* 255.0f;/const float f = dot * dot * s * 255.0f;/' \
+				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			minlight-skipped) sed 's/if (f & MTL_RTM_MINLIGHT)/if ((f \& MTL_RTM_MINLIGHT) \&\& 0)/' \
+				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			glow-sign) sed 's/const float g = s + scale;/const float g = s - scale;/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			fullbright-traced) sed 's/return rm_rtm_stock_light(flags, rdflags) || /return (rm_rtm_stock_light(flags, rdflags) \&\& !(flags \& RM_RF_FULLBRIGHT)) || /' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			depthhack-weapon) sed 's/(((flags & RM_RF_DEPTHHACK) != 0) != ((flags & RM_RF_WEAPONMODEL) != 0))/(flags \& RM_RF_DEPTHHACK)/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			weapon-forward) sed 's/if ((flags & RM_RF_WEAPONMODEL) && (kind != RM_GB_KIND_ALIAS))$/if (flags \& RM_RF_WEAPONMODEL)/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			flagged-forward) sed 's/!= ((flags & RM_RF_WEAPONMODEL) != 0));$/!= ((flags \& RM_RF_WEAPONMODEL) != 0)) || (flags \& (RM_RF_GLOW | RM_RF_MINLIGHT));/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			weapon-nohack) sed 's/(((flags & RM_RF_DEPTHHACK) != 0) != ((flags & RM_RF_WEAPONMODEL) != 0))/((flags \& RM_RF_DEPTHHACK) \&\& !(flags \& RM_RF_WEAPONMODEL))/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			tag-unflagged) sed 's/ || (rm_rtm_flags(flags) == 0u))$/)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			wants-refused) sed 's/return device \&\& !refused \&\& /return device \&\& (refused >= 0) \&\& /' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			tag-grey) sed 's/v\[i\].color\[3\] = mtl_rtm_tag(c, f).a;/v[i].color[0] = v[i].color[1] = v[i].color[2] = 128 \/ 255.0f; v[i].color[3] = mtl_rtm_tag(c, f).a;/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			gunshadow-kept) sed 's/return gunshadow && !models;/return gunshadow \&\& (models >= 0);/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			weapon-flag) sed 's/p->weapon = (unsigned)rm_rtm_weapon_view(/p->weapon = 1u | (unsigned)rm_rtm_weapon_view(/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			wall-alias) sed 's/return !alias && (mat != MTL_GB_MAT_WATER)/return (alias >= 0) \&\& (mat != MTL_GB_MAT_WATER)/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			tag-no-normals) sed 's/if (!extra_ok)$/if (!extra_ok \&\& 0)/' "$rm_dir/rm_rtmodel.c" > "$c" ;;
+			tag-bit) sed 's/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) & MTL_RTM_FLAGS;/(mtl_rtm_byte(c.a) - MTL_RTM_TAG_BASE) \& 3u;/' \
+				"$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+			weapon-view-inv) sed 's/rm_weapon_projection(p, w->fovy, w->gunfov, w->hand, w->width/rm_projection(p, w->fovy, w->width/' \
+				"$rm_dir/rm_rtmodel.c" > "$c" ;;
+			nan-guard) sed 's/if (u > MTL_RTM_BITS_INF)$/if (0)/' "$rm_dir/common/mtl_rtm_math.h" > "$h" ;;
+		esac
+		r=0
+		rtm_run "${tmp:?}/rtmm" || r=$?
+		if cmp -s "$rm_dir/common/mtl_rtm_math.h" "$h" && cmp -s "$rm_dir/rm_rtmodel.c" "$c"; then
+			bad "the model-light mutant ($m) changed nothing"
+		elif [ "$r" -eq 1 ]; then
+			cat "${tmp:?}/cc.out"
+			bad "the model-light mutant ($m) does not compile, so it tests nothing"
+		elif [ "$r" -eq 0 ]; then
+			bad "tests/metal/rm_rtmodel_test.c passes the model-light mutant ($m)"
+		else
+			rtm_mutants=$((rtm_mutants + 1))
+		fi
+	done
+	[ "$rtm_mutants" -eq 18 ] || bad "tests/metal/rm_rtmodel_test.c refused $rtm_mutants of the 18 model-light mutants"
+fi
+# slice 2's review: under Metal the colour index's guard reads the bit pattern by as_type, which fast math
+# does not fold (the host test sees only the host's union); the index tests the pattern, not the float
+if [ "$(grep -cxF '#define MTL_RTM_BITS(f) as_type<uint>(f)' "$rm_dir/common/mtl_rtm_math.h")" != 1 ] ||
+	! awk '/^#ifdef __METAL_VERSION__$/ { m = 1; next } m && /^#define MTL_RTM_BITS\(/ { print; exit }' \
+		"$rm_dir/common/mtl_rtm_math.h" | grep -qF 'as_type<uint>(f)' ||
+	[ "$(grep -cxF '	const unsigned u = MTL_RTM_BITS(f);' "$rm_dir/common/mtl_rtm_math.h")" != 1 ]; then
+	bad "common/mtl_rtm_math.h: the colour index under Metal does not test the bit pattern (as_type<uint>)"
+fi
+# slice 2: under Metal the minlight floor's test is s >= 0.1f, gl1's double test s > 0.1 (the host test holds
+# the two the same for every float near 0.1); the host keeps the double test
+if [ "$(grep -cxF '#define MTL_RTM_ABOVE(s) ((s) >= MTL_RTM_FLOOR)' "$rm_dir/common/mtl_rtm_math.h")" != 1 ] ||
+	[ "$(grep -cxF '#define MTL_RTM_ABOVE(s) ((s) > MTL_RTM_FLOOR)' "$rm_dir/common/mtl_rtm_math.h")" != 1 ] ||
+	! awk '/^#ifdef __METAL_VERSION__$/ { m = 1; next } m && /^#define MTL_RTM_ABOVE/ { print; exit }' \
+		"$rm_dir/common/mtl_rtm_math.h" | grep -qF '>= MTL_RTM_FLOOR'; then
+	bad "common/mtl_rtm_math.h: the minlight floor's test under Metal is not s >= 0.1f"
+fi
+seg 7.9 "; model light ${rtm:-host test}, $rtm_mutants of 18 mutants refused"
+
 # the ray-traced presentation's data (TASK187, PM5): rm_rtlights.c alone, the entity-lump parser
 # (an asset loader: every malformed case runs under the sanitizers when the compiler has them)
 rtl=""
@@ -788,6 +905,59 @@ else
 fi
 seg 10 "; ray-tracing gate ${rtg:-host test}"
 
+# TASK190 slice 3: the menu's copy of RT-primary's scaler row (vidrules.c) against the renderer's (rm_rtgate.c,
+# with rm_metalfx.c's view size), one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must
+# refuse: the renderer's row dropped; the renderer's, then the menu's, capability rule dropped; the renderer's,
+# then the menu's, size rule dropped; the menu's debug-view rule dropped (round 2, N2)
+pmbuild() {
+	# shellcheck disable=SC2086 # flags and fxhost are word lists
+	# (vidrules.c's control tables leave their trailing fields to zero, which -Wextra names)
+	$cc $flags $fxhost -Wno-missing-field-initializers -I"$rm_dir" -Isrc/client/menu -o "$3" tests/metal/rm_pres_menu_test.c "$1/rm_rtgate.c" \
+		"$rm_dir/rm_rtfx.c" "$rm_dir/rm_metalfx.c" "$2" -lm
+}
+pm=""
+pm_mutants=0
+if ! pmbuild "$rm_dir" src/client/menu/vidrules.c "${tmp:?}/rm_pres_menu_test" > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_pres_menu_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_pres_menu_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_pres_menu_test.c failed: the menu and the renderer disagree on RT-primary's scaler"
+else
+	pm=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_pres_menu_test: //')
+	case $pm in *", 0 failed") ;; *) bad "tests/metal/rm_pres_menu_test.c printed no result line"; pm="";; esac
+fi
+if [ -n "$pm" ]; then
+	mkdir "${tmp:?}/pmm"
+	for pmm in row rcaps mcaps rsize msize mshow; do
+		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c "${tmp:?}/pmm/"
+		case $pmm in
+			row) sed '/{ "r_metalfx", 2\.0f },/d' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			# each keeps its parameter read, so -Werror's unused-parameter does not refuse it before the test runs
+			rcaps) sed 's/(!temporal || show))/((void)temporal, show))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			mcaps) sed 's/if (!(modemask \& VIDMFX_TEMPORAL))/if (!(modemask | VIDMFX_TEMPORAL))/' src/client/menu/vidrules.c \
+				> "${tmp:?}/pmm/vidrules.c" ;;
+			rsize) sed 's/\&\& !below)/\&\& ((void)below, 0))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			msize) sed 's/else if (!(isfinite(scale) \&\& (scale >= 1.0f)))/else if (!(isfinite(scale) \&\& (scale >= 1.0f)) || 1)/' \
+				src/client/menu/vidrules.c > "${tmp:?}/pmm/vidrules.c" ;;
+			mshow) sed 's/else if ((e >= 0) \&\& VidRules_RTEffective/else if ((e >= 0) \&\& 0 \&\& VidRules_RTEffective/' \
+				src/client/menu/vidrules.c > "${tmp:?}/pmm/vidrules.c" ;;
+		esac
+		if cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/pmm/rm_rtgate.c" && cmp -s src/client/menu/vidrules.c "${tmp:?}/pmm/vidrules.c"; then
+			bad "the menu-parity mutant ($pmm) changed nothing"
+		elif ! pmbuild "${tmp:?}/pmm" "${tmp:?}/pmm/vidrules.c" "${tmp:?}/pmm/t" > "${tmp:?}/pmm.out" 2>&1; then
+			cat "${tmp:?}/pmm.out"
+			bad "the menu-parity mutant ($pmm) does not compile"
+		elif "${tmp:?}/pmm/t" > "${tmp:?}/pmm.out" 2>&1; then
+			bad "tests/metal/rm_pres_menu_test.c passes the menu-parity mutant ($pmm)"
+		else
+			pm_mutants=$((pm_mutants + 1))
+		fi
+	done
+	[ "$pm_mutants" = 6 ] || bad "tests/metal/rm_pres_menu_test.c refuses $pm_mutants of its 6 mutants"
+fi
+seg 10.2 "; menu and renderer scaler rule ${pm:-host test}, $pm_mutants parity mutants refused"
+
 # the effect table (TASK179): tests/metal/rm_rtfx_test.c over rm_rtfx.c and rm_rtgate.c, the order every walk
 # takes, each row's switch against the gate's table, and the pipeline rule of rmb_gbuf_pipe3d. fxbuild <dir>
 # <out>: the test built over rm_rtfx.c and rm_rtgate.c of <dir> (a scratch copy finds the headers by -I)
@@ -818,7 +988,7 @@ if [ -n "$rtfx" ]; then
 	for fxm in order tablesw gatesw surf forward aoswap wframe postempty resolvego wantedgo; do
 		cp "$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtgate.c" "${tmp:?}/fxm/"
 		case $fxm in
-			order) sed 's/{ RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER }/{ RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER }/' \
+			order) sed 's/RM_RTFX_DIRECT, RM_RTFX_MODELS, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER/RM_RTFX_DIRECT, RM_RTFX_MODELS, RM_RTFX_SHADOWS, RM_RTFX_SUN, RM_RTFX_AO, RM_RTFX_WATER/' \
 				"$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 			tablesw) sed 's/"ao", "r_rt_ao"/"ao", "r_rt_ambient"/' "$rm_dir/rm_rtfx.c" > "${tmp:?}/fxm/rm_rtfx.c" ;;
 			gatesw) sed 's/^	"r_rt_ao",$/	"r_rt_ambient",/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/fxm/rm_rtgate.c" ;;
@@ -1561,59 +1731,64 @@ for p in rdepth rdist histread histwrite rlayer rmiss; do
 		rtd_kmut=$((rtd_kmut + 1))
 	fi
 done
-# slice 2b, round 1: the water scene hands the blur the rule (rm_rtt_wblur) with RT-primary's mode, so
-# the blur never runs under r_presentation 3, whose denoising is PM8's (TASK190). Mutants: the gate
-# dropped (the blur on with r_rt_temporal alone), the mode compared with stock's, the call commented out.
+# TASK190 slice 2 (PM8, the card's default 10): the water scene turns the blur on with r_rt_temporal
+# alone, so it runs under r_presentation 3 too (slice 2b's RT-primary gate, rm_rtt_wblur, is gone).
+# Mutants: the RT-primary gate put back, the call commented out.
 wsc=$rm_dir/rm_rtwaterscene.c
-wsc_call='rmb_rtw_set_blur(rm_rtt_wblur(RM_RTT_On(), RM_PresentationMode() == RM_PRES_RTPRIMARY));'
-wsc_pin() { # <file>: 0 when the scene gates the blur off under RT-primary
-	strip "$1" | grep -qF "$wsc_call"
+wsc_call='rmb_rtw_set_blur(RM_RTT_On());'
+wsc_pin() { # <file>: 0 when the scene runs the blur with r_rt_temporal alone, under every presentation
+	[ "$(strip "$1" | grep -cF "$wsc_call")" = 1 ] && ! strip "$1" | grep -q 'rmb_rtw_set_blur(.*RM_PRES_'
 }
 wsc_mut=0
-if ! wsc_pin "$wsc"; then
-	bad "rm_rtwaterscene.c does not gate the reflections' blur off under RT-primary ($wsc_call)"
+if ! wsc_pin "$wsc" || grep -rqw 'rm_rtt_wblur' "$rm_dir"; then
+	bad "rm_rtwaterscene.c does not run the reflections' blur under every presentation ($wsc_call)"
 else
-	for m in nogate stock commented; do
+	for m in gate commented; do
 		case $m in
-			nogate) sed 's/rmb_rtw_set_blur(rm_rtt_wblur(RM_RTT_On(), RM_PresentationMode() == RM_PRES_RTPRIMARY));/rmb_rtw_set_blur(RM_RTT_On());/' "$wsc" ;;
-			stock) sed 's/RM_PresentationMode() == RM_PRES_RTPRIMARY));/RM_PresentationMode() == RM_PRES_STOCK));/' "$wsc" ;;
-			commented) sed 's|^\(	rmb_rtw_set_blur(rm_rtt_wblur(.*\)$|	/* \1 */|' "$wsc" ;;
+			gate) sed 's/rmb_rtw_set_blur(RM_RTT_On());/rmb_rtw_set_blur(RM_RTT_On() \&\& (RM_PresentationMode() != RM_PRES_RTPRIMARY));/' "$wsc" ;;
+			commented) sed 's|^\(	rmb_rtw_set_blur(RM_RTT_On.*\)$|	/* \1 */|' "$wsc" ;;
 		esac > "${tmp:?}/rtw-scene.c"
 		if cmp -s "$wsc" "${tmp:?}/rtw-scene.c"; then
-			bad "the reflections' blur's RT-primary gate mutant ($m) changed nothing"
+			bad "the reflections' blur's presentation mutant ($m) changed nothing"
 		elif wsc_pin "${tmp:?}/rtw-scene.c"; then
-			bad "the reflections' blur's RT-primary gate pin passes its mutant ($m)"
+			bad "the reflections' blur's presentation pin passes its mutant ($m)"
 		else
 			wsc_mut=$((wsc_mut + 1))
 		fi
 	done
 fi
-seg 5.6 "; denoiser ${rtd:-host test}, $rtd_mutants rule mutants, $rtd_kpins kernel pins with $rtd_kmut kernel mutants refused${rtd_metal:+ and compiled}, the blur's RT-primary gate pinned with $wsc_mut mutants refused"
+[ "$wsc_mut" = 2 ] || bad "the reflections' blur's presentation pin refused $wsc_mut of its 2 mutants"
+seg 5.6 "; denoiser ${rtd:-host test}, $rtd_mutants rule mutants, $rtd_kpins kernel pins with $rtd_kmut kernel mutants refused${rtd_metal:+ and compiled}, the blur under every presentation pinned with $wsc_mut mutants refused"
 # slice 2b, round 3: r_rt_temporal through the A/B layer. It is a tuning row, so r_rt_ab's B side carries
 # it, and both of its sites in rm_rtaoscene.c, the gate (RM_RTT_On) and the view's step (RM_RTT_ViewFor's
 # alpha), must read it through RM_Effect. tests/metal/rm_rttab_test.c runs the real text of RM_Effect
 # (rm_main.c), RM_RTT_On and the alpha line, copied into its rttab_body.c, over the real rm_ab_value and
 # rm_rtt_alpha: a B side holding 0 turns the accumulation off, one holding 0.9 with A at 0 turns it on.
 # Mutants: either site restored to the direct read of r_rt_temporal->value; each must build and fail it.
+# TASK190 slice 3 adds RM_PresBelow (rm_main.c) and rm_view_rect (rm_pure.c) to rttab_body.c, over the real
+# rm_fx_scale (rm_metalfx.c), and a third mutant: RM_PresBelow without its early return for RDF_NOWORLDMODEL.
 rttab_fn() { # <file> <function>: the function's definition, its return type's line to the "}" in column 0
 	awk -v fn="$2" 'b { print; if (/^}/) exit } $0 ~ "^" fn "\\(" { print prev; print; b = 1 } { prev = $0 }' "$1"
 }
-rttab_tree() { # <dir> <rm_rtaoscene.c>: rttab_body.c in <dir> from rm_main.c and the scene file given
+rttab_tree() { # <dir> <rm_rtaoscene.c> [<rm_main.c>]: rttab_body.c in <dir> from rm_main.c and the scene file given
 	rm -rf "${1:?}"
 	mkdir -p "$1"
 	al=$(awk '/^RM_RTT_ViewFor\(/ { b = 1 } b && /^}/ { b = 0 } b && /^\talpha = / { print }' "$2")
 	[ -n "$al" ] && [ "$(printf '%s\n' "$al" | wc -l | tr -d ' ')" = 1 ] || return 1
 	{
-		rttab_fn "$rm_dir/rm_main.c" RM_Effect
+		rttab_fn "${3:-$rm_dir/rm_main.c}" RM_Effect
+		rttab_fn "${3:-$rm_dir/rm_main.c}" RM_PresBelow
+		rttab_fn "$rm_dir/rm_pure.c" rm_view_rect
 		rttab_fn "$2" RM_RTT_On
 		printf '%s\n' '' 'static float' 'rttab_view_alpha(void)' '{' '	float alpha;' '' "$al" '	return alpha;' '}'
 	} > "$1/rttab_body.c"
-	grep -q '^RM_Effect(' "$1/rttab_body.c" && grep -q '^RM_RTT_On(' "$1/rttab_body.c"
+	grep -q '^RM_Effect(' "$1/rttab_body.c" && grep -q '^RM_PresBelow(' "$1/rttab_body.c" &&
+		grep -q '^rm_view_rect(' "$1/rttab_body.c" && grep -q '^RM_RTT_On(' "$1/rttab_body.c"
 }
 rttab_build() { # <dir>: 0 when the test builds over the dir's rttab_body.c
 	# shellcheck disable=SC2086 # flags and fxhost are word lists
 	$cc $flags $fxhost -I"$1" -o "$1/t" tests/metal/rm_rttab_test.c "$rm_dir/rm_rtgate.c" "$rm_dir/rm_rtfx.c" \
-		"$rm_dir/rm_rttemporal.c" -lm > "${tmp:?}/cc.out" 2>&1
+		"$rm_dir/rm_rttemporal.c" "$rm_dir/rm_metalfx.c" -lm > "${tmp:?}/cc.out" 2>&1
 }
 rttab_run() { # <dir>: 0 when the test builds and passes
 	rttab_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
@@ -1644,6 +1819,23 @@ else
 			rttab_mut=$((rttab_mut + 1))
 		fi
 	done
+	# TASK190 slice 3, I1: RM_PresBelow without its early return for the menu's player model (RDF_NOWORLDMODEL),
+	# which then reads r_metalfx 0 between two world views reading 2; it must build and fail the two-view case
+	sed '/^RM_PresBelow(/,/^}/s/if (fd->rdflags & RDF_NOWORLDMODEL)/if (0)/' "$rm_dir/rm_main.c" > "${tmp:?}/rttab-main.c"
+	if cmp -s "$rm_dir/rm_main.c" "${tmp:?}/rttab-main.c"; then
+		bad "the two-view mutant of RM_PresBelow changed nothing"
+	elif ! rttab_tree "${tmp:?}/rttabm" "$aos" "${tmp:?}/rttab-main.c" || ! rttab_build "${tmp:?}/rttabm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the two-view mutant of RM_PresBelow does not build, so it tests nothing"
+	elif rttab_run "${tmp:?}/rttabm"; then
+		bad "tests/metal/rm_rttab_test.c passes the two-view mutant of RM_PresBelow"
+	elif ! grep -q '^FAIL .*model_view' "${tmp:?}/out"; then
+		cat "${tmp:?}/out"
+		bad "tests/metal/rm_rttab_test.c refuses the two-view mutant of RM_PresBelow, but not on the two-view case"
+	else
+		rttab_mut=$((rttab_mut + 1))
+	fi
+	[ "$rttab_mut" = 3 ] || bad "tests/metal/rm_rttab_test.c refuses $rttab_mut of its 3 mutants"
 fi
 seg 5.65 "; temporal through A/B ${rttab:-host test}, $rttab_mut mutants refused"
 
@@ -2397,6 +2589,332 @@ if [ "$(grep -cF 'rmb_rtdir_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (un
 	bad "the RT-primary accumulation is not stepped by rm_rtdirscene.c or not linked into ref_metal.metallib"
 fi
 seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, $rtp_kpins kernel pins with $rtp_kmut kernel mutants refused${rtp_metal:+ and compiled}"
+
+# RT-primary's light on rastered alias models (TASK191 slice 2): rm_rtmodel.metal pinned as text, each
+# pin with its mutants, each of which must compile with the Metal compiler where it is there and be refused.
+# The file includes rm_rtdir.metal for its helpers with exactly its two entry points renamed (rename-extra:
+# a third #define); the kernel lights material-2 pixels with a normal only (model-writes-world: world
+# pixels; no-normal-traced: the normal's test dropped); the light attachment gives the tag alone
+# (model-from-base: its colour added to the light); no lightmap (model-reads-lm); no fit sum
+# (model-fit-leak); the traced light in place of the shadedot (shadedot-back: a shadedot-like factor); the
+# tag decoded at material 2 only (tag-no-material). Slice 3: a weapon pixel's point is its own view's at the
+# depth hack's depth, the world's unprojection called once, for the other models (weapon-world-view: the
+# view's inverse; weapon-depth-raw: the stored depth read as the clip depth; weapon-world-point: the trace
+# shades every model at the world's unprojection), pulled back before the first wall, a model no wall
+# (no-pullback: the hit distance not used; wall-models: a model read as a wall), a ray that meets no wall
+# past the weapon's distance, finite (miss-len: the distance itself, which fast math may put an ulp short). The back end binds the view with no own-light table
+# (model-own-ray: nself left as the trace's) and exactly its seven textures (bind-extra), each mutant
+# compiled where the compiler is there.
+rtk_metal=""
+if [ "$(uname -s)" = Darwin ] && command -v xcrun >/dev/null 2>&1 && xcrun -f metal >/dev/null 2>&1; then
+	rtk_metal=1
+fi
+rtk_compile() { # <file.metal>: 0 when it compiles as the Makefile compiles rm_rtmodel.metal
+	xcrun -sdk macosx metal -c -I"$rm_dir" "$1" -o "${tmp:?}/rtk.air" > "${tmp:?}/metal.out" 2>&1
+}
+rtk_body() { # <file>: rm_rtm_trace's code, comments and literals blanked, whitespace squeezed
+	strip "$1" | awk '/^rm_rtm_trace\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' | tr -s ' \t' '  '
+}
+rtk_pin() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		rename) [ "$(grep -cE '^[[:space:]]*#[[:space:]]*define' "$1")" = 2 ] &&
+			grep -qxF '#define rm_rtdir_trace rm_rtm_unused_trace' "$1" &&
+			grep -qxF '#define rm_fragment_rtdir_show rm_rtm_unused_show' "$1" && grep -qxF '#include "rm_rtdir.metal"' "$1" ;;
+		gate) rtk_body "$1" | grep -qF 'if (inside && (m == MTL_GB_MAT_ALIAS))' &&
+			rtk_body "$1" | grep -qF 'model = ((d < 1.0f) && (nn.a > 0.5f)) ? 1u : 0u;' &&
+			[ "$(strip "$1" | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.write\(' | sort | tr -d '\n')" = 'light_out.write(vis_out.write(' ] &&
+			[ "$(rtk_body "$1" | awk '/^ if \(model\)$/ { b = 1 } b && /^ }$/ { b = 0 } b' | grep -cE '(light_out|vis_out)\.write\(')" = 2 ] ;;
+		base) [ "$(strip "$1" | grep -oF 'gbl.' | wc -l | tr -d ' ')" = 1 ] &&
+			rtk_body "$1" | grep -qF 'const uint f = rm_rtm_px_flags(m, gbl.read(px));' ;;
+		nolm) ! strip "$1" | grep -qwE 'lm|lightmap|lms' ;;
+		fit) ! strip "$1" | grep -qE 'RM_RTDIR_C_|rm_rtdir_fit_|rm_rtdir_add64' ;;
+		dot) [ "$(strip "$1" | grep -oF 'mtl_rtm_color(' | wc -l | tr -d ' ')" = 1 ] &&
+			strip "$1" | grep -qF 'mtl_rtm_color(mtl_rtm_v3(l.r, l.g, l.b), MTL_RTM_DOT_TRACED, f, p.glow, p.overbright);' ;;
+		tagmat) strip "$1" | grep -qF 'return (m == MTL_GB_MAT_ALIAS) ? mtl_rtm_tag_flags(t) : 0u;' ;;
+		weapon) rtk_body "$1" | grep -qF 'const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);' &&
+			[ "$(strip "$1" | grep -oF 'rm_rtdir_position(' | wc -l | tr -d ' ')" = 1 ] &&
+			strip "$1" | grep -qF 'const float4 h = p.winv * float4(cx, cy, mtl_rtm_weapon_ndc(d), 1.0f);' ;;
+		pullback) strip "$1" | grep -qF 'const float t = rm_rtm_wall_t(v.eye.xyz, w, ias, inst, tmat, ntris);' &&
+			strip "$1" | grep -qF 'mtl_rtm_v3(w.x, w.y, w.z), t);' &&
+			strip "$1" | grep -qF 'if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))' &&
+			strip "$1" | grep -qF 'const float none = 2.0f * len + 1.0f;' &&
+			[ "$(strip "$1" | grep -cxF '			return none;')" = 2 ] && [ "$(strip "$1" | grep -cxF '	return none;')" = 1 ] &&
+			[ "$(strip "$1" | grep -cxF '		return len;')" = 1 ] ;;
+	esac
+}
+rtk_kpins=0 rtk_kmut=0
+rtk_k=$rm_dir/rm_rtmodel.metal
+if [ -n "$rtk_metal" ] && ! rtk_compile "$rtk_k"; then
+	cat "${tmp:?}/metal.out"
+	bad "rm_rtmodel.metal does not compile"
+fi
+for p in rename gate base nolm fit dot tagmat weapon pullback; do
+	if ! rtk_pin "$rtk_k" "$p"; then
+		bad "rm_rtmodel.metal does not hold the model pass's $p pin"
+		continue
+	fi
+	rtk_kpins=$((rtk_kpins + 1))
+	case $p in
+		rename) kms="rename-extra" ;;
+		gate) kms="model-writes-world no-normal-traced" ;;
+		base) kms="model-from-base" ;;
+		nolm) kms="model-reads-lm" ;;
+		fit) kms="model-fit-leak" ;;
+		dot) kms="shadedot-back" ;;
+		tagmat) kms="tag-no-material" ;;
+		weapon) kms="weapon-world-view weapon-depth-raw weapon-world-point" ;;
+		*) kms="no-pullback wall-models miss-len" ;;
+	esac
+	for m in $kms; do
+		case $m in
+			rename-extra) awk '{ print } /^#define rm_fragment_rtdir_show / { print "#define rm_rtdir_own rm_rtm_own" }' ;;
+			model-writes-world) sed 's/if (inside && (m == MTL_GB_MAT_ALIAS))/if (inside \&\& (m == MTL_GB_MAT_WORLD))/' ;;
+			no-normal-traced) sed 's/model = ((d < 1.0f) && (nn.a > 0.5f)) ? 1u : 0u;/model = (d < 1.0f) ? 1u : 0u;/' ;;
+			model-from-base) sed 's/light_out.write(rm_rtm_out(l.rgb, f, p, tabs), px);/light_out.write(rm_rtm_out(l.rgb + gbl.read(px).rgb, f, p, tabs), px);/' ;;
+			model-reads-lm) awk '/texture\(3\)\]\],$/ { print; print "\t\ttexture2d<float, access::read> lm [[texture(4)]],"; next }
+				/light_out\.write\(rm_rtm_out\(/ { sub(/l\.rgb,/, "l.rgb + lm.read(px).rgb,") } { print }' ;;
+			model-fit-leak) awk '{ print } /counts\[RM_RTM_C_OPEN\], c_o,/ { print "\t\t\tatomic_fetch_add_explicit(&counts[RM_RTDIR_C_FIT_N], c_m, memory_order_relaxed);" }' ;;
+			shadedot-back) sed 's/MTL_RTM_DOT_TRACED, f, p.glow/max(l.r, 0.5f), f, p.glow/' ;;
+			tag-no-material) sed 's/return (m == MTL_GB_MAT_ALIAS) ? mtl_rtm_tag_flags(t) : 0u;/return mtl_rtm_tag_flags(t);/' ;;
+			weapon-world-view) sed 's/const float4 h = p.winv \* float4(/const float4 h = v.inv * float4(/' ;;
+			weapon-depth-raw) sed 's/float4(cx, cy, mtl_rtm_weapon_ndc(d), 1.0f)/float4(cx, cy, d * 2.0f - 1.0f, 1.0f)/' ;;
+			weapon-world-point) sed 's/const float3 pt = rm_rtm_point(v, p, px, d, f, ias, inst, tmat, ntris);/const float3 pt = rm_rtdir_position(v, px, d);/' ;;
+			no-pullback) sed 's/mtl_rtm_v3(w.x, w.y, w.z), t);/mtl_rtm_v3(w.x, w.y, w.z), INFINITY);/' ;;
+			wall-models) sed 's/if (mtl_rtm_wall(m, (b == 0xffffffffu) ? 1 : 0))/if (mtl_rtm_wall(m, 0))/' ;;
+			miss-len) sed 's/^			return none;$/			return len;/' ;;
+		esac < "$rtk_k" > "${tmp:?}/rtk-kernel.metal"
+		if cmp -s "$rtk_k" "${tmp:?}/rtk-kernel.metal"; then
+			bad "the model pass's kernel mutant ($m) changed nothing"
+		elif [ -n "$rtk_metal" ] && ! rtk_compile "${tmp:?}/rtk-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the model pass's kernel mutant ($m) does not compile, so it tests nothing"
+		elif rtk_pin "${tmp:?}/rtk-kernel.metal" "$p"; then
+			bad "the model pass's $p pin passes its mutant ($m)"
+		else
+			rtk_kmut=$((rtk_kmut + 1))
+		fi
+	done
+done
+[ "$rtk_kpins" = 9 ] && [ "$rtk_kmut" = 14 ] ||
+	bad "rm_rtmodel.metal holds $rtk_kpins of its 9 pins and refuses $rtk_kmut of its 14 mutants"
+# the back end: the view bound with no own-light table (model-own-ray), and exactly the kernel's seven textures
+rtk_bpins=0 rtk_bmut=0
+rtk_b=$rm_dir/rmb_rtmodel.m
+rtk_bind() { # <file> <pin>: 0 when the file (rmb_rtmodel.m) holds the pin
+	case $2 in
+		own) awk '/^\t\tmv\.nself = 0u;$/ { s = NR } /^\t\t\[ce setBytes:&mv length:sizeof\(mv\) atIndex:0\];$/ { b = NR; c++ }
+			END { exit !(s && b && (s < b) && (c == 1)) }' "$1" ;;
+		bind) [ "$(grep -c 'setTexture' "$1")" = 7 ] &&
+			grep -qxF '		[ce setTexture:depth atIndex:0];' "$1" && grep -qxF '		[ce setTexture:normal atIndex:1];' "$1" &&
+			grep -qxF '		[ce setTexture:material atIndex:2];' "$1" && grep -qxF '		[ce setTexture:gbl atIndex:3];' "$1" &&
+			grep -qxF '		[ce setTexture:f.vis atIndex:5];' "$1" && grep -qxF '		[ce setTexture:light atIndex:6];' "$1" &&
+			grep -qxF '		[ce setTexture:f.atlas atIndex:7];' "$1" ;;
+	esac
+}
+for p in own bind; do
+	if ! rtk_bind "$rtk_b" "$p"; then
+		bad "rmb_rtmodel.m does not hold the model pass's $p pin"
+		continue
+	fi
+	rtk_bpins=$((rtk_bpins + 1))
+	case $p in
+		own) sed '/^		mv\.nself = 0u;$/d' ;;
+		*) awk '{ print } /^\t\t\[ce setTexture:gbl atIndex:3\];$/ { print "\t\t[ce setTexture:gbl atIndex:4];" }' ;;
+	esac < "$rtk_b" > "${tmp:?}/rtk-back.m"
+	if cmp -s "$rtk_b" "${tmp:?}/rtk-back.m"; then
+		bad "the model pass's back-end mutant ($p) changed nothing"
+	elif [ -n "$rtk_metal" ] && ! $cc -fsyntax-only -fobjc-arc -I"$rm_dir" -Ithird_party/SDL3/include '-DYQ2OSTYPE="Darwin"' \
+		'-DYQ2ARCH="arm64"' "${tmp:?}/rtk-back.m" > "${tmp:?}/cc.out" 2>&1; then
+		cat "${tmp:?}/cc.out"
+		bad "the model pass's back-end mutant ($p) does not compile, so it tests nothing"
+	elif rtk_bind "${tmp:?}/rtk-back.m" "$p"; then
+		bad "the model pass's back-end $p pin passes its mutant"
+	else
+		rtk_bmut=$((rtk_bmut + 1))
+	fi
+done
+[ "$rtk_bpins" = 2 ] && [ "$rtk_bmut" = 2 ] ||
+	bad "rmb_rtmodel.m holds $rtk_bpins of its 2 pins and refuses $rtk_bmut of its 2 mutants"
+# the wiring: the kernel linked into ref_metal.metallib, the back end and the scene built
+if [ "$(grep -cF 'ref_metal/rm_rtmodel.air' Makefile)" != 2 ] || ! grep -qF 'src/client/refresh/metal/rmb_rtmodel.o' Makefile ||
+	! grep -qF 'src/client/refresh/metal/rm_rtmodelscene.o' Makefile || ! grep -qF 'src/client/refresh/metal/rm_rtmodel.o' Makefile; then
+	bad "the model pass is not linked into ref_metal.metallib or ref_metal"
+fi
+# slice 3's review: the scene's wiring, which no recorded frame of the default tells apart (r_rt_gunshadow
+# defaults to 0): the view weapon left out of the ray-traced scene while the models are traced
+# (rm_rtscene.c's rm_rtm_gunshadow; its mutant is main's form, r_rt_gunshadow alone), and the models wanted
+# traced by what this frame's passes will decide (rm_rtmodelscene.c's rm_rtm_wants with the model pass's
+# refusal and RM_RTDir_Will; its mutant: the direct light only wanted, RM_RTDir_Wanted)
+rtk_wpins=0 rtk_wmut=0
+rtk_wire() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		gun) [ "$(grep -cE '^[[:space:]]*gun = ' "$1")" = 1 ] &&
+			grep -qxF '	gun = rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants(fd));' "$1" ;;
+		wants) awk '/^RM_RTModel_Wants\(const refdef_t \*fd\)$/ { b = 1 } b && /^}/ { b = 0 } b' "$1" | tr -d '\n\t' |
+			grep -qF 'return rm_rtm_wants(rtm_device, rtm_refused, r_rt_direct_models ? RM_Effect(r_rt_direct_models) : 0.0f,RM_RTDir_Will(fd));' ;;
+	esac
+}
+for p in gun wants; do
+	case $p in
+		gun) rtk_s=$rm_dir/rm_rtscene.c ;;
+		*) rtk_s=$rm_dir/rm_rtmodelscene.c ;;
+	esac
+	if ! rtk_wire "$rtk_s" "$p"; then
+		bad "${rtk_s##*/} does not hold the model pass's $p wiring pin"
+		continue
+	fi
+	rtk_wpins=$((rtk_wpins + 1))
+	case $p in
+		gun) sed 's/^	gun = rm_rtm_gunshadow(RM_Effect(r_rt_gunshadow) != 0, RM_RTModel_Wants(fd));$/	gun = RM_Effect(r_rt_gunshadow) != 0;/' ;;
+		*) sed 's/^		RM_RTDir_Will(fd));$/		RM_RTDir_Wanted());/' ;;
+	esac < "$rtk_s" > "${tmp:?}/rtk-scene.c"
+	if cmp -s "$rtk_s" "${tmp:?}/rtk-scene.c"; then
+		bad "the model pass's wiring mutant ($p) changed nothing"
+	elif rtk_wire "${tmp:?}/rtk-scene.c" "$p"; then
+		bad "the model pass's $p wiring pin passes its mutant"
+	else
+		rtk_wmut=$((rtk_wmut + 1))
+	fi
+done
+[ "$rtk_wpins" = 2 ] && [ "$rtk_wmut" = 2 ] ||
+	bad "the scene holds $rtk_wpins of the model pass's 2 wiring pins and refuses $rtk_wmut of their 2 mutants"
+seg 7.95 "; model pass $rtk_kpins kernel pins with $rtk_kmut kernel mutants${rtk_metal:+ compiled and} refused, $rtk_bpins back-end pins with $rtk_bmut mutants refused, $rtk_wpins wiring pins with $rtk_wmut mutants refused"
+
+# RT-primary's 5 x 5 filter of its accumulated light (TASK190 slice 2, PM8): tests/metal/rm_rtpdenoise_test.c
+# holds common/mtl_rtpd_math.h over RT7's weights (mtl_rtd_math.h): the pixels it writes, a neighbour's
+# weight, each channel with its own neighbours, the strength by the count, the trace's alpha, the clamp,
+# and an image across a material and a depth edge. Header mutants, each of which must compile and fail it:
+# green summed from red, the count ignored, a neighbour without a normal weighed, the history's count
+# kept as the alpha, the clamp dropped.
+rtpd=""
+rtpd_tree() { # <dir>: a copy of the test and the headers, laid out as the test includes them
+	rm -rf "${1:?}"
+	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
+	cp "$rm_dir/common/mtl_rtpd_math.h" "$rm_dir/common/mtl_rtp_math.h" "$rm_dir/common/mtl_rtd_math.h" \
+		"$rm_dir/common/mtl_rtao_math.h" "$rm_dir/common/mtl_rtt_math.h" "$rm_dir/common/mtl_shader_math.h" \
+		"$rm_dir/common/mtl_gbuf_math.h" "$1/src/client/refresh/metal/common/"
+	cp tests/metal/rm_rtpdenoise_test.c "$1/tests/metal/"
+}
+rtpd_build() { # <tree>: 0 when the tree's test builds
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags -o "$1/t" "$1/tests/metal/rm_rtpdenoise_test.c" -lm > "${tmp:?}/cc.out" 2>&1
+}
+rtpd_run() { # <tree>: 0 when the tree's test builds and passes
+	rtpd_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
+}
+rtpd_tree "${tmp:?}/rtpd"
+if ! rtpd_run "${tmp:?}/rtpd"; then
+	cat "${tmp:?}/cc.out" "${tmp:?}/out"
+	bad "tests/metal/rm_rtpdenoise_test.c fails on the real files"
+else
+	rtpd=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtpdenoise_test: //')
+	case $rtpd in *", 0 failed") ;; *) bad "tests/metal/rm_rtpdenoise_test.c printed no result line"; rtpd="";; esac
+fi
+rtpd_mutants=0
+rtpd_h=$rm_dir/common/mtl_rtpd_math.h
+for m in mix count nonormal alpha clamp; do
+	rtpd_tree "${tmp:?}/rtpdm"
+	h=${tmp:?}/rtpdm/src/client/refresh/metal/common/mtl_rtpd_math.h
+	case $m in
+		mix) sed 's/a\.g = mtl_rtd_add(a\.g, w, h\.g);/a.g = mtl_rtd_add(a.g, w, h.r);/' ;;
+		count) sed 's/return world \&\& (mtl_rtd_strength(n) > 0\.0f);/return world \&\& (n == n);/' ;;
+		nonormal) sed 's/if (!(nn_a > 0\.5f))/if (!(nn_a > 0.5f) \&\& 0)/' ;;
+		alpha) sed 's/r\.a = a;/r.a = h.a + 0.0f * a;/' ;;
+		clamp) sed 's/r\.r = mtl_rtp_clamp(mtl_rtd_result(s\.r, h\.r, h\.a));/r.r = mtl_rtd_result(s.r, h.r, h.a);/' ;;
+	esac < "$rtpd_h" > "$h"
+	if cmp -s "$rtpd_h" "$h"; then
+		bad "the RT-primary filter mutant ($m) changed nothing"
+	elif ! rtpd_build "${tmp:?}/rtpdm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the RT-primary filter mutant ($m) does not compile, so it tests nothing"
+	elif rtpd_run "${tmp:?}/rtpdm"; then
+		bad "tests/metal/rm_rtpdenoise_test.c passes the RT-primary filter mutant ($m)"
+	else
+		rtpd_mutants=$((rtpd_mutants + 1))
+	fi
+done
+[ "$rtpd_mutants" = 5 ] || bad "the RT-primary filter test refused $rtpd_mutants of its 5 header mutants"
+# The kernel, rm_rtpdenoise.metal, pinned as text: the pixel's and each neighbour's distance and material
+# from the history's key, the neighbour's count and normal reaching the weight (mutants: the material
+# compared with itself, the count not passed), the history read for the values (mutant: the trace's light
+# read in its place), the neighbours bounded on all four sides (mutant: the right and bottom bounds
+# dropped), the pixel's history filtered and not the raw trace (mutant: the trace's light in its place),
+# and only the light written (mutant: the history written). Where the Metal compiler
+# is there, the kernel and every mutant must compile. The back end dispatches it in the accumulation's
+# encoder after rm_rtp_temporal, behind a texture barrier and before the histories swap; the Makefile
+# compiles and links the unit.
+rtpd_body() { # <file>: rm_rtp_denoise's code, comments and literals blanked, whitespace squeezed
+	strip "$1" | awk '/^rm_rtp_denoise\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' | tr -s ' \t' '  '
+}
+rtpd_pin() { # <file> <pin>: 0 when the file holds the pin
+	case $2 in
+		weight) rtpd_body "$1" | grep -qF 'mtl_rtpd_weight(dx, dy, d, as_type<float>(kn.x), nc, nn, m, kn.y, hn.a, nv.a)' &&
+			rtpd_body "$1" | grep -qF 'const uint m = kc.y;' ;;
+		hist) rtpd_body "$1" | grep -qF 'acc = mtl_rtpd_add(acc, wt, mtl_rtpd_rgba(hn));' &&
+			rtpd_body "$1" | grep -qF 'const float4 hn = hist.read(sp);' ;;
+		bounds) rtpd_body "$1" | grep -qF 'if ((sx < 0) || (sy < 0) || (sx >= (int)w) || (sy >= (int)hh))' ;;
+		result) rtpd_body "$1" | grep -qF 'mtl_rtpd_result(acc, mtl_rtpd_rgba(hc), light_in.read(px).a)' ;;
+		writes) [ "$(strip "$1" | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.write\(' | tr -d '\n')" = 'light_out.write(' ] &&
+			! strip "$1" | grep -E 'access::(read_)?write>' | grep -vqE ' light_out \[\[texture' ;;
+	esac
+}
+rtpd_kpins=0 rtpd_kmut=0
+rtpd_k=$rm_dir/rm_rtpdenoise.metal
+if [ ! -f "$rtpd_k" ]; then
+	bad "rm_rtpdenoise.metal is missing"
+elif [ -n "$rtp_metal" ] && ! rtp_compile "$rtpd_k"; then
+	cat "${tmp:?}/metal.out"
+	bad "rm_rtpdenoise.metal does not compile"
+fi
+for p in weight hist bounds result writes; do
+	if [ ! -f "$rtpd_k" ] || ! rtpd_pin "$rtpd_k" "$p"; then
+		bad "rm_rtpdenoise.metal does not hold the filter's $p pin"
+		continue
+	fi
+	rtpd_kpins=$((rtpd_kpins + 1))
+	case $p in
+		weight) kms="samemat nocount" ;;
+		hist) kms="trace" ;;
+		bounds) kms="halfbound" ;;
+		result) kms="rawtrace" ;;
+		*) kms="histw" ;;
+	esac
+	for m in $kms; do
+		case $m in
+			samemat) sed 's/nc, nn, m, kn\.y, hn\.a, nv\.a)/nc, nn, m, m, hn.a, nv.a)/' ;;
+			nocount) sed 's/nc, nn, m, kn\.y, hn\.a, nv\.a)/nc, nn, m, kn.y, 1.0f, nv.a)/' ;;
+			trace) sed 's/const float4 hn = hist\.read(sp);/const float4 hn = float4(light_in.read(sp).rgb, hist.read(sp).a);/' ;;
+			halfbound) sed 's/if ((sx < 0) || (sy < 0) || (sx >= (int)w) || (sy >= (int)hh))/if ((sx < 0) || (sy < 0))/' ;;
+			rawtrace) sed 's/mtl_rtpd_result(acc, mtl_rtpd_rgba(hc), /mtl_rtpd_result(acc, mtl_rtpd_rgba(light_in.read(px)), /' ;;
+			histw) awk '/texture\(8\)/ { sub(/access::read> hist/, "access::read_write> hist") }
+				/light_out\.write\(/ { print; print "\t\thist.write(float4(0.0f), px);"; next } { print }' ;;
+		esac < "$rtpd_k" > "${tmp:?}/rtpd-kernel.metal"
+		if cmp -s "$rtpd_k" "${tmp:?}/rtpd-kernel.metal"; then
+			bad "the RT-primary filter kernel mutant ($m) changed nothing"
+		elif [ -n "$rtp_metal" ] && ! rtp_compile "${tmp:?}/rtpd-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the RT-primary filter kernel mutant ($m) does not compile, so it tests nothing"
+		elif rtpd_pin "${tmp:?}/rtpd-kernel.metal" "$p"; then
+			bad "the filter's $p pin passes its mutant ($m)"
+		else
+			rtpd_kmut=$((rtpd_kmut + 1))
+		fi
+	done
+done
+[ "$rtpd_kpins" = 5 ] && [ "$rtpd_kmut" = 6 ] ||
+	bad "rm_rtpdenoise.metal holds $rtpd_kpins of its 5 pins and refuses $rtpd_kmut of its 6 mutants"
+# the back end: in rmb_rtdir_accumulate, the temporal dispatch, then a texture barrier, the filter's
+# pipeline and its dispatch, then the swap of the histories, in that order
+if ! awk '/^rmb_rtdir_accumulate\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$rm_dir/rmb_rtdir.m" |
+	grep -oE 'setComputePipelineState:tmp_pipe|memoryBarrierWithScope:MTLBarrierScopeTextures|setComputePipelineState:dn_pipe|dispatchThreads|hist_cur = 1 - hist_cur' |
+	tr '\n' ' ' | grep -qF 'setComputePipelineState:tmp_pipe dispatchThreads memoryBarrierWithScope:MTLBarrierScopeTextures setComputePipelineState:dn_pipe dispatchThreads hist_cur = 1 - hist_cur'; then
+	bad "rmb_rtdir.m: rmb_rtdir_accumulate does not dispatch the filter after the accumulation, behind a barrier, before the swap"
+fi
+if [ "$(grep -cF 'ref_metal/rm_rtpdenoise.air' Makefile)" != 2 ] ||
+	[ "$(grep -cF '@"rm_rtp_denoise"' "$rm_dir/rmb_rtdir.m")" != 1 ]; then
+	bad "the RT-primary filter is not linked into ref_metal.metallib or its pipeline is not made by rmb_rtdir.m"
+fi
+seg 7.8 "; RT-primary filter ${rtpd:-host test}, $rtpd_mutants rule mutants, $rtpd_kpins kernel pins with $rtpd_kmut kernel mutants refused${rtp_metal:+ and compiled}"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"

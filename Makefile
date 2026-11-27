@@ -501,7 +501,7 @@ INCLUDE ?= -I/usr/local/include
 else ifeq ($(YQ2_OSTYPE),Windows)
 INCLUDE ?= -I/usr/include
 else ifeq ($(YQ2_OSTYPE),Darwin)
-# Nothing from /usr/local or Homebrew: SDL3 is vendored.
+# Nothing from /usr/local or a package manager: SDL3 is vendored.
 INCLUDE ?=
 endif
 
@@ -519,7 +519,7 @@ LDFLAGS ?= -L/usr/local/lib
 else ifeq ($(YQ2_OSTYPE),Windows)
 LDFLAGS ?= -L/usr/lib
 else ifeq ($(YQ2_OSTYPE),Darwin)
-# Nothing from /usr/local or Homebrew: SDL3 is vendored.
+# Nothing from /usr/local or a package manager: SDL3 is vendored.
 LDFLAGS ?=
 endif
 
@@ -1073,6 +1073,8 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_rtwater.metal \
 		src/client/refresh/metal/rm_rtdir.metal \
 		src/client/refresh/metal/rm_rtptemporal.metal \
+		src/client/refresh/metal/rm_rtpdenoise.metal \
+		src/client/refresh/metal/rm_rtmodel.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h \
 		src/client/refresh/metal/common/mtl_gbuf_math.h \
 		src/client/refresh/metal/common/mtl_rts_math.h \
@@ -1080,10 +1082,12 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/common/mtl_rtt_math.h \
 		src/client/refresh/metal/common/mtl_rtd_math.h \
 		src/client/refresh/metal/common/mtl_rtp_math.h \
+		src/client/refresh/metal/common/mtl_rtpd_math.h \
 		src/client/refresh/metal/common/mtl_rtsun_math.h \
 		src/client/refresh/metal/common/mtl_rtw_math.h \
 		src/client/refresh/metal/common/mtl_rtdir_math.h \
 		src/client/refresh/metal/common/mtl_rtsky_math.h \
+		src/client/refresh/metal/common/mtl_rtm_math.h \
 		src/client/refresh/metal/common/mtl_retro_math.h \
 		src/client/refresh/metal/common/mtl_hdr_math.h
 	@echo "===> METAL $<"
@@ -1102,12 +1106,15 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtwater.metal -o $(BUILDDIR)/ref_metal/rm_rtwater.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtdir.metal -o $(BUILDDIR)/ref_metal/rm_rtdir.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtptemporal.metal -o $(BUILDDIR)/ref_metal/rm_rtptemporal.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtpdenoise.metal -o $(BUILDDIR)/ref_metal/rm_rtpdenoise.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtmodel.metal -o $(BUILDDIR)/ref_metal/rm_rtmodel.air
 	${Q}xcrun -sdk $(METAL_SDK) metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
 		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air \
 		$(BUILDDIR)/ref_metal/rm_rtshadow_temporal.air \
 		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtsun.air $(BUILDDIR)/ref_metal/rm_rtdenoise.air \
 		$(BUILDDIR)/ref_metal/rm_rtwdenoise.air $(BUILDDIR)/ref_metal/rm_rtwater.air \
-		$(BUILDDIR)/ref_metal/rm_rtdir.air $(BUILDDIR)/ref_metal/rm_rtptemporal.air -o $@
+		$(BUILDDIR)/ref_metal/rm_rtdir.air $(BUILDDIR)/ref_metal/rm_rtptemporal.air \
+		$(BUILDDIR)/ref_metal/rm_rtpdenoise.air $(BUILDDIR)/ref_metal/rm_rtmodel.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
@@ -1503,6 +1510,8 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_rtsunscene.o \
 	src/client/refresh/metal/rm_rtdir.o \
 	src/client/refresh/metal/rm_rtdirscene.o \
+	src/client/refresh/metal/rm_rtmodel.o \
+	src/client/refresh/metal/rm_rtmodelscene.o \
 	src/client/refresh/metal/rm_rtwater.o \
 	src/client/refresh/metal/rm_rtwaterscene.o \
 	src/client/refresh/metal/rm_scrap.o \
@@ -1519,6 +1528,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rmb_rtao.o \
 	src/client/refresh/metal/rmb_rtsun.o \
 	src/client/refresh/metal/rmb_rtdir.o \
+	src/client/refresh/metal/rmb_rtmodel.o \
 	src/client/refresh/metal/rmb_rtwater.o \
 	src/client/refresh/metal/common/mtl_matrix.o \
 	src/client/refresh/metal/common/mtl_ring.o \

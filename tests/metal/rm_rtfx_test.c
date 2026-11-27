@@ -57,7 +57,9 @@ static int checks, failures;
 static void
 test_order(void)
 {
-	static const int want[RM_RTFX_COUNT] = { RM_RTFX_DIRECT, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER };
+	static const int want[RM_RTFX_COUNT] = {
+		RM_RTFX_DIRECT, RM_RTFX_MODELS, RM_RTFX_SHADOWS, RM_RTFX_AO, RM_RTFX_SUN, RM_RTFX_WATER
+	};
 	int seen[RM_RTFX_COUNT];
 	int k;
 
@@ -84,8 +86,10 @@ test_order(void)
 static void
 test_rows(void)
 {
-	static const char *const name[RM_RTFX_COUNT] = { "shadows", "ao", "sun", "water", "direct" };
-	static const char *const sw[RM_RTFX_COUNT] = { "r_rt_shadows", "r_rt_ao", "r_rt_sun", "r_rt_water", "r_rt_direct" };
+	static const char *const name[RM_RTFX_COUNT] = { "shadows", "ao", "sun", "water", "direct", "models" };
+	static const char *const sw[RM_RTFX_COUNT] = {
+		"r_rt_shadows", "r_rt_ao", "r_rt_sun", "r_rt_water", "r_rt_direct", "r_rt_direct"
+	};
 	int id;
 
 	for (id = 0; id < RM_RTFX_COUNT; id++)
@@ -103,14 +107,36 @@ test_rows(void)
 	CHECK(!rm_rtfx_is_switch(""));
 	CHECK(!rm_rtfx_is_switch("r_rt_ao_show"));
 	CHECK(!rm_rtfx_is_switch("r_rt_gbuffer"));
+	/* TASK191 slice 2: the models' setting is no switch: they run under the direct light's */
+	CHECK(!rm_rtfx_is_switch("r_rt_direct_models"));
 }
 
-/* the gate's effect switches are the table's, row for row: one changed without the other fails here */
+/*
+ * the gate's effect switches are the table's distinct switches (a row may share another's, TASK191's
+ * models the direct light's): one changed without the other fails here
+ */
 static void
 test_gate(void)
 {
-	int id, i, effect, n = 0;
+	int id, j, i, effect, n = 0, distinct = 0;
 	const char *name;
+
+	for (id = 0; id < RM_RTFX_COUNT; id++)
+	{
+		for (j = 0; (j < id) && strcmp(rm_rtfx_switch(j), rm_rtfx_switch(id)); j++)
+		{
+		}
+
+		distinct += (j == id);
+	}
+
+	CHECK(distinct == RM_RTFX_COUNT - 1);
+
+	/* TASK191 slice 2: the models' row shares the direct light's switch, and their own cvar is a setting */
+	CHECK(!strcmp(rm_rtfx_switch(RM_RTFX_MODELS), rm_rtfx_switch(RM_RTFX_DIRECT)));
+	i = rm_rtg_find("r_rt_direct_models");
+	effect = 1;
+	CHECK((i >= 0) && rm_rtg_cvar(i, &effect) && (effect == 0));
 
 	for (id = 0; id < RM_RTFX_COUNT; id++)
 	{
@@ -127,14 +153,14 @@ test_gate(void)
 		n += effect;
 	}
 
-	CHECK(n == RM_RTFX_COUNT);
+	CHECK(n == distinct);
 
 	for (i = 0; (name = rm_rtg_effect(i)) != NULL; i++)
 	{
 		CHECK(rm_rtfx_is_switch(name));
 	}
 
-	CHECK(i == RM_RTFX_COUNT);
+	CHECK(i == distinct);
 }
 
 static int fw_calls, fw_have;
@@ -210,11 +236,11 @@ called(int line, const char *want)
 	}
 }
 
-/* a walk that asks (wanted, active, show_only): every row while none says yes, up to the first that does */
+/* a walk that asks (wanted, active, show_only, show_asked): every row while none says yes, up to the first that does */
 static void
 asks(const char *entry, int (*walk)(void))
 {
-	static const char *const name[RM_RTFX_COUNT] = { "direct", "shadows", "ao", "sun", "water" };
+	static const char *const name[RM_RTFX_COUNT] = { "direct", "models", "shadows", "ao", "sun", "water" };
 	char want[256], yes[96];
 	int k, i;
 
@@ -234,7 +260,8 @@ asks(const char *entry, int (*walk)(void))
 	}
 
 	/* every row says yes: the first only */
-	snprintf(yes, sizeof(yes), "direct:%s shadows:%s ao:%s sun:%s water:%s", entry, entry, entry, entry, entry);
+	snprintf(yes, sizeof(yes), "direct:%s models:%s shadows:%s ao:%s sun:%s water:%s", entry, entry, entry, entry, entry,
+			entry);
 	snprintf(want, sizeof(want), "direct:%s", entry);
 	said(yes);
 	CHECK(walk() == 1);
@@ -242,7 +269,7 @@ asks(const char *entry, int (*walk)(void))
 }
 
 /*
- * Every walk calls the rows' entries in the order (direct, shadows, AO, sun,
+ * Every walk calls the rows' entries in the order (direct, models, shadows, AO, sun,
  * water) and never one the table leaves NULL: the log holds exactly the
  * entries the table names. resolve and forward stop at the first entry
  * that draws; when none does they say no, and the caller takes the stock
@@ -258,7 +285,7 @@ test_walks(void)
 
 	said("");
 	rm_rtfx_trace(NULL);
-	CALLED("direct:trace shadows:trace ao:trace sun:trace");
+	CALLED("direct:trace models:trace shadows:trace ao:trace sun:trace");
 
 	said("");
 	CHECK(rm_rtfx_resolve(NULL) == 0);
@@ -295,23 +322,24 @@ test_walks(void)
 	/* the scene's */
 	said("");
 	rm_rtfx_init(NULL);
-	CALLED("direct:init shadows:init ao:init sun:init water:init");
+	CALLED("direct:init models:init shadows:init ao:init sun:init water:init");
 
 	said("");
 	rm_rtfx_shutdown();
-	CALLED("direct:shutdown shadows:shutdown ao:shutdown sun:shutdown water:shutdown");
+	CALLED("direct:shutdown models:shutdown shadows:shutdown ao:shutdown sun:shutdown water:shutdown");
 
 	said("");
 	rm_rtfx_frame(NULL, 0);
-	CALLED("direct:frame shadows:frame ao:frame sun:frame water:frame");
+	CALLED("direct:frame models:frame shadows:frame ao:frame sun:frame water:frame");
 
 	said("");
 	rm_rtfx_view(NULL);
-	CALLED("direct:view shadows:view ao:view sun:view water:view");
+	CALLED("direct:view models:view shadows:view ao:view sun:view water:view");
 
 	asks("wanted", rm_rtfx_wanted);
 	asks("active", rm_rtfx_active);
 	asks("show_only", rm_rtfx_show_only);
+	asks("show_asked", rm_rtfx_show_asked);
 
 	/* the pipeline rule over the forward walk: the water's forward decides the blended world face */
 	said("water:forward");

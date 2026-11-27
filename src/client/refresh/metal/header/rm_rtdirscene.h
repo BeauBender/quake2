@@ -38,9 +38,11 @@
 void RM_RTDir_Init(const rmb_caps_t *caps);
 void RM_RTDir_Shutdown(void);
 int RM_RTDir_Wanted(void);
+int RM_RTDir_Will(const refdef_t *fd);   /* TASK191 slice 3: Frame traces fd once its scene is built (Frame's own test) */
 void RM_RTDir_Frame(const refdef_t *fd, int scene_ready);
 int RM_RTDir_Active(void);
 int RM_RTDir_ShowOnly(void);
+int RM_RTDir_ShowAsked(void);   /* TASK190 slice 3: Wanted and the _show cvar on, known before Frame and View (rm_rtfx_show_asked) */
 void RM_RTDir_View(const rm_view_t *view);
 
 #endif /* RM_RTDIRSCENE_H */

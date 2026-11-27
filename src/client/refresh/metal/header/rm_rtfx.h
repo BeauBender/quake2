@@ -53,19 +53,25 @@ enum
 	RM_RTFX_SUN,       /* RT4 (TASK56): the sun and sky shadow */
 	RM_RTFX_WATER,     /* RT6 (TASK58): the water reflections */
 	RM_RTFX_DIRECT,    /* TASK188 (PM6): RT-primary's direct light, in the lightmap's place */
+	RM_RTFX_MODELS,    /* TASK191 (PM9): RT-primary's light on rastered alias models, the direct light's switch */
 	RM_RTFX_COUNT
 };
 
 /*
  * The order every walk takes, each id once: the direct light, the
- * shadows, the AO, the sun, the water. RT-primary's direct light goes
- * first, since it replaces the lightmap the others' light starts from;
+ * models, the shadows, the AO, the sun, the water. RT-primary's direct
+ * light goes first, since it replaces the lightmap the others' light
+ * starts from, and its models after it, since they read its trace;
  * the AO goes before the sun, which adds its term to the lightmap x AO
  * light; the water's reflections go last, from the resolve's lit result.
  */
 extern const int rm_rtfx_order[RM_RTFX_COUNT];
 
-/* The effect's name ("shadows") and its switch ("r_rt_shadows"); NULL for an id out of range. */
+/*
+ * The effect's name ("shadows") and its switch ("r_rt_shadows"); NULL for an id out of range. A row may
+ * share another's switch (the models, TASK191: r_rt_direct), so the gate's effect switches are the
+ * table's distinct switches.
+ */
 const char *rm_rtfx_name(int id);
 const char *rm_rtfx_switch(int id);
 
@@ -127,5 +133,15 @@ int rm_rtfx_active(void);
 int rm_rtfx_show_only(void);
 void rm_rtfx_view(const rm_view_t *view);
 #endif
+
+/*
+ * TASK190 slice 3: 1 when any effect's development view is asked for:
+ * the effect is wanted (_Wanted) and its _show cvar names a view, each
+ * row's _ShowAsked. Unlike rm_rtfx_show_only it holds before the frame's
+ * _Frame and _View, so what is sized before them can read it: rm_main.c's
+ * r_metalfx under RT-primary, which draws a development view unscaled
+ * (rm_pres_fx). It takes no type of local.h.
+ */
+int rm_rtfx_show_asked(void);
 
 #endif /* RM_RTFX_H */

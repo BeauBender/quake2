@@ -109,4 +109,7 @@ const rm_gb_ent_t *RM_GB_Prev(const entity_t *e);
 /* a projection the view draws with: jittered as the view's (in place), the unjittered one into unjit */
 void RM_GB_JitterProj(float *proj, float *unjit);
 
+/* the view's jitter in pixels (RM_GB_JitterProj's), 0 0 on the forward path (TASK191 slice 3) */
+void RM_GB_Jitter(float *jx, float *jy);
+
 #endif
