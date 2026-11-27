@@ -696,6 +696,54 @@ cases)"); `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
     INT for the whole run, which the case needs at their defaults. Standalone,
     `tests/check-bench.sh t_lock_tokens` passes, and fails the same way under `nohup`. So
     a detached run of this check starts with HUP and INT at their defaults.
+- **Review round 5: the cksum key tested and checked per CRC.** This item replaces what
+  the fix and the case above say about the `cksum` answer check, `bench_snap_system`'s
+  `bench_sv` and the `sv-reason-snap` mutant.
+  - **The mutant helper.** `mutant` can change a file under `../lib/` (a copy of
+    `scripts/lib`, which the test finds through `BENCH_SV_LIB`). `mutant_next <next>`
+    changes only the one line followed by a line holding `<next>` (`lit`'s new fourth
+    argument, which fails unless exactly one line matches).
+  - **The fallback tested** (correctness I1). `t_sv_path` runs `sv_path` with a stub
+    `cksum` first on a `PATH` without `shasum`: an empty answer must exit 1 with "neither
+    shasum nor cksum gave a digest", and with `shasum` on `PATH` the name must be
+    `supervise-` and 16 hex digits. The mutants `novalid` (the refusal never taken) and
+    `alwayscrc` (`if command -v shasum` made `if false`) were not caught at `48275ba7`;
+    each is now caught for its own reason: "a cksum answer [] was not refused: exit 0" (the
+    name `supervise-crc-0000000000000000`), and "with shasum on PATH the supervisor is not
+    named supervise- and 16 hex digits".
+  - **Each CRC a 32-bit number** (security N2, correctness N4). `sv_crc` checks one CRC:
+    digits only, no leading zero, at most 10 digits (`bench_is_uint_max`'s rule, which
+    `supervise.sh` cannot source) and at most 4294967295. The answers `1:2 5` and
+    `4294967296 5` passed the old joined check (the first with "printf: 1:2: invalid
+    number", the second naming `supervise-crc-100000000100000000`); both are refused now,
+    and `4294967295 5` still names `supervise-crc-ffffffffffffffff`. The mutant
+    `crc-no-range` drops the range test and fails on the second answer.
+  - **`bench_snap_system`** (correctness N2, security N3). `bench_sv` runs inside the
+    `command -v top` and `command -v ioreg` branches. `t_sv_path` adds two runs of the
+    system snapshot with a refused supervisor: `notop` (no `top` on `PATH`: the `ioreg`
+    call's `bench_sv` must say why) and `neither` (no `top`, no `ioreg`: exit 0, readings
+    `cpu.busy=unknown` and `gpu.device=unknown`, no "supervise:" line). `neither` failed
+    before the move (exit 2).
+  - **One mutant per call site** (correctness N3). `sv-reason-snap` changed every
+    `snap.sh` line holding a tab and `bench_sv`, so all of them at once. It is replaced by
+    `sv-reason-top`, `-ioreg`, `-reader`, `-freqinit`, `-freqdump` and `-freqwindow`, each
+    taking out the one `bench_sv` before its bounded call; each fails `t_sv_path` with
+    "<site> with a refused supervisor did not say why: []" (the site `system` for `top`,
+    `notop` for `ioreg`).
+  - **The key's comment** (correctness N1, security N1). `sv_path` says the `cksum` key
+    detects a change and is not a 64-bit identity: the two CRCs of one text are not
+    independent. The scheme is unchanged.
+  - Each new mutant was also applied by hand to a `git archive` copy of the branch, and
+    `tests/check-bench.sh t_sv_path` failed with the line above. No `trap`, `set -m` or
+    process-group line is touched, so no disposition probe was needed.
+  - **Checks run:** `tests/check-bench.sh t_sv_path t_core_id t_inputs t_probe_first`
+    ("ok (t_sv_path t_core_id t_inputs t_probe_first; no mutants)"); the whole
+    `tests/check-bench.sh` under the host lock, at `cd128334`: every case passed, 96
+    mutants were caught (88 before, less `sv-reason-snap`, plus the nine above), and it
+    ended "check-bench: ok"; `tests/check-bounded-run.sh` ("ok (guard, 65 mutants
+    refused, probe, the supervisor cases and their 12 mutants, pyprobe and its 10
+    mutants)"); `tests/check-supervise.sh` ("ok (6 s)"); `tests/check-bench-entry.sh`,
+    `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
 
 ## What remains
 
