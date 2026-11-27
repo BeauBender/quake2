@@ -698,13 +698,18 @@ Slice 6 closes the `r_rt_stats 1` parts that slices 3 to 5 deferred, for the sun
 the water, and adds AO's to them.
 
 - **The upsample's state** (`rm_rttemporal.c`, pure). `rm_rtt_up_t` keeps an effect's traced size
-  of its last frame below divisor 1 and its totals since the map loaded: the fallbacks and the drawn
-  pixels upsampled.
+  of its last frame below divisor 1 and its totals since the map loaded: the fallbacks and every
+  drawn pixel of those frames.
   - `rm_rtt_up_frame` adds a frame below divisor 1 and returns 1 when its traced size is not the
     last one's. At divisor 1 it forgets the size and adds nothing, so the next frame below is new
     again.
   - `rm_rtt_up_map` starts the totals again and keeps the size, so a new map at the same size
     prints no line.
+  - Each frame comes with its number (`rmb_frame_compute`'s). A back end hands its completed stats
+    slots over in slot order, not frame order, so a frame older than the newest one handed over adds
+    to the totals and nothing else (review round 1, I1).
+  - The map keeps its first frame's number (`rmb_frame_next` at `RM_RT_UpMap`). A frame numbered
+    below it was encoded for the map before and is not added (review round 1, N2).
   - `rm_rtt_up_line_format` writes
     `ref_metal: r_rt_stats: upsample: <effect> TWxTH of WxH, F fallbacks`, F that frame's.
   - `rm_rtt_up_total_format` writes the summary's line,
@@ -764,9 +769,12 @@ the water, and adds AO's to them.
 - **The double-count invariant** (design section 5), checked in two places:
   - **The rule, on the host,** for both effects it concerns.
     - The sun: `rm_rtsun_test`'s `test_no_double_count`. A pixel with no sun visibility, or of any
-      class but lit, takes the incoming light bit for bit. The upsample's neutral value is 0, so a
-      pixel that no traced pixel lit takes no term at any scale. Segment 7.89 holds it with a mutant
-      that adds a little of the term at visibility 0.
+      class but lit, takes the incoming light bit for bit. Segment 7.89 holds it with a mutant that
+      adds a little of the term at visibility 0.
+    - The sun's upsample: `test_up_no_double_count` (review round 1). It composes a drawn pixel as
+      `rm_rtsun_up` does, at divisors 2 and 3. Where every tap is 0 the visibility is 0 and the
+      light is unchanged; a pixel with no sample is empty and the light is unchanged. Segment 7.89
+      holds it with a mutant of `mtl_rtup_value` that takes an empty pixel as visibility 1.
     - The shadows: `rm_rts_up` takes each drawn pixel's own light set, the stock trace's, and skips
       a pixel with no light in it before the rule. Segment 7.87 pins that skip with its mutant.
   - **The pixels, in the hold, in E for the shadows.** Three seeded records on `demo1.dm2`:
@@ -778,17 +786,23 @@ the water, and adds AO's to them.
     `scripts/pins.sh footprint` compares off and on under the mask at `--delta 1`, with the band
     `changed 0..0`. So no masked pixel may differ by more than 1/255. The two scratch scenarios are
     removed after.
+  - **The pixels, in the hold, in E for the sun** (review round 1). The same three records of
+    `rt-sun-half` (`r_rt_sun_scale 0.5`): "off" with `r_rt_sun 0` and `r_rt_gbuffer 1`, and "mask"
+    with `r_rt_sun_show 1`. That view reads the class `rm_rtsun_up` writes at the drawn size, and is
+    white wherever the sun added nothing: visibility 0, or any class but lit. The same footprint
+    comparison follows.
   - **What is not checked at pixels.** `rt-all-e` itself is not: AO darkens the pixels that have no
     light in range, so the invariant, which is about the shadows and the sun, is not a property of
-    that frame. The sun's half is held by its rule, since no show view masks the pixels with no sun
-    visibility.
+    that frame.
 - **The check** (`tests/check-ref-metal.sh`):
   - Segment 5.5 gains five mutants of the upsample's state: the size change judged on the width
     alone, the size not forgotten at divisor 1, a frame's pixels not added, a map load forgetting
-    the size, and the empty total printed. That makes 19.
-  - Segment 7.89 (new) holds 4 pins with 17 mutants, each compiled (with `xcrun metal` for the
+    the size, and the empty total printed. Review round 1 adds three: the frame-order test dropped,
+    the map's first frame not kept, and its test dropped. That makes 22.
+  - Segment 7.89 (new) holds 4 pins with 18 mutants, each compiled (with `xcrun metal` for the
     kernel's) and refused:
-    - `mtl_rtao_up_fallback`'s surface and weight tests dropped (2), and the sun's rule (1);
+    - `mtl_rtao_up_fallback`'s surface and weight tests dropped (2), the sun's rule (1), and the
+      sun's upsample with an empty pixel at visibility 1 (1, review round 1);
     - the kernel: counted in the fast path too, inverted, never counted, the word moved, the sum not
       taken, and the AO reading the count (6);
     - the back end: the old word count, the word read, and the divisor dropped (3);
@@ -834,6 +848,65 @@ the result is the extraction's, not the branch's. The hold runs the whole check.
 `make`, `make test`, the pins and the whole of `tests/check-ref-metal.sh` were not run here. The
 hold runs them.
 
+### Review round 1
+
+The panel at `77ce7242`: correctness ACCEPT-WITH-FINDINGS (I1, N1 to N5), security CLEAN (N1, N2),
+spec ACCEPT-WITH-FINDINGS (I1, N1 to N4).
+
+- **Correctness I1: one size change could print its line three times.** Each back end hands its
+  completed stats slots over in slot order. So a read can hand frame 6 (the new size) over before
+  frame 5 (the old one), and `rm_rtt_up_frame` compared each frame only with the call before it.
+  - Fix: `rm_rtt_up_t` keeps the newest frame's number, and an older frame adds to the totals alone.
+    One place covers the four effects.
+  - Test: `test_up_order` hands frames at two sizes over in six orders, (new, old, new) among them,
+    and wants one line. At the red commit (`81c7c11d`) 18 of 229 checks failed.
+  - Mutant: `uporder`, the frame-order test dropped, refused.
+- **Correctness N2 and spec N3: the frames in flight at a map change.** Traced, and they did land in
+  the new map's totals.
+  - No back end clears its stats slots at a map change; each close is at shutdown or when the
+    effect is turned off. No world view is drawn while a map loads.
+  - So the old map's last frames are read at the new map's first frame, in `rm_rtfx_frame`. That is
+    after `RM_RT_BuildMap`'s `RM_RT_UpMap`, which runs in `RM_RT_Frame` first.
+  - Fix: `rmb_frame_next` (`rmb_encode.m`) gives the smallest number a frame encoded from then on can
+    carry. `RM_RT_UpMap` keeps it in each effect's state, and a frame numbered below it is dropped.
+    Those frames are lost from the old map's summary too, which has printed by then.
+  - Test: `test_up_map`. At the red commit (`e5cb33a2`) 7 of 245 checks failed.
+  - Mutants: `upfrom` (the test dropped) and `upfromkeep` (the first frame not kept), refused.
+- **Spec I1 and correctness N4: the sun's half of the invariant on its kernel path.**
+  - Test: `test_up_no_double_count`, as the double-count bullet above says.
+  - Mutant: `mtl_rtup_value` taking an empty pixel as visibility 1 (`return neutral + 1.0f;`). It
+    passes the old test (717 checks, 0 failed) and fails the new one (`ok_zero`, `ok_empty`).
+    Segment 7.89 wants the `ok_empty` FAIL line.
+  - `test_no_double_count`'s comment now claims only what it tests.
+  - The pixels: `r_rt_sun_show 1` masks them, so the hold gains a footprint check of the sun beside
+    the shadows'. No cvar was added. The text this replaces, "no show view masks the pixels with no
+    sun visibility", was wrong.
+- **Correctness N1, spec N2: the share's denominator.** Doc 040 now says it is every drawn pixel of
+  the frames drawn below the traced size, sky included, so the share is of the frame.
+- **Correctness N3, spec N1: AO's lower bound.** Doc 040 says it on the `r_rt_stats 1` summary entry
+  too.
+- **Spec N4: the device line.** Doc 040 says it prints at the renderer's start and again after a
+  `vid_restart`.
+- **Correctness N5: the argument count.** `check-scenario-parsers.sh` reports `the most is 126 of 128
+  (rt-all-h), headroom 2`, the review's hand count. The same dry run gives `rt-all-e` 120. The
+  scenarios README says so beside `rt-all-h`.
+- Not changed: security N1 (the bench adapter reads console text, a local timedemo's) and N2 (a
+  crash counts as a refusal for some mutants). Both are outside the threat model or older than this
+  slice. The new sun mutant wants its FAIL line.
+
+| Check (round 1) | Result |
+|---|---|
+| `rm_rttemporal_test` at the red commits | `81c7c11d`: 229 checks, 18 failed; `e5cb33a2`: 245 checks, 7 failed |
+| `rm_rttemporal_test` with the change | 245 checks, 0 failed |
+| `rm_rtsun_test`, the old test against the empty-at-1 mutant | 717 checks, 0 failed (the gap) |
+| `rm_rtsun_test`, the new test against that mutant | 721 checks, 2 failed (`ok_zero`, `ok_empty`) |
+| `rm_rtsun_test` with ASan and UBSan | 721 checks, 0 failed |
+| segment 5.5, extracted | `temporal 245 checks, 0 failed`, 22 rule mutants |
+| segment 7.89, extracted | `AO's fallback count and the upsample lines 4 pins with 18 mutants compiled and refused` |
+| `cc -fsyntax-only -Wall -Wextra -Werror` of `rm_rtscene.c`, `rm_rttemporal.c` and the four scenes; with `-fobjc-arc` of `rmb_encode.m` | no diagnostic |
+| the record's argument words, by the dry run | `rt-all-h` 126, `rt-all-e` 120, `rt-all-metalfx2` 111, of 128 |
+| `tests/check-cvar-docs.sh`, `check-doc-links.sh`, `check-runbook-index.sh`, `check-scenario-parsers.sh`, `check-pin-chars.sh`; `pins.sh check-content` | ok, each |
+
 ### The hold of slice 6 (M6, under the timing lock)
 
 The orchestrator runs the hold script. The base is the parent slice, `task126s5` at `81066ff2`.
@@ -842,10 +915,11 @@ The orchestrator runs the hold script. The base is the parent slice, `task126s5`
 |---|---|
 | base and branch | to be filled from the hold's summary |
 | `make ref_metal`, `make`, `make test` | to be filled |
-| `tests/check-ref-metal.sh`, with segments 5.5, 7.89 and 20's counts | to be filled |
+| `tests/check-ref-metal.sh`, with segments 5.5, 7.89 and 20's counts (round 1: 245 checks and 22 rule mutants, 18 mutants, the sun's 721 checks) | to be filled |
 | every stock scenario outside `rtprimary-*`, `rt-all-e` and `rt-all-h` (every `rt-ao*` among them), byte-identical to the parent | to be filled |
 | the 20 RT-primary records, byte-identical to the parent | to be filled |
 | `rt-all-e` and `rt-all-h`, three runs each on `demo1.dm2` and on `water.dm2`, each identical to itself | to be filled |
 | the `r_rt_stats 1` lines of `rt-all-e` and `rt-all-h`: each size-change line once per effect, and the summary's totals equal to the sum of the `r_rt_stats 2` lines' | to be filled |
 | the invariant in E for the shadows: masked pixels within 1/255 on every frame | to be filled |
+| the invariant in E for the sun (round 1, `r_rt_sun_show 1`'s mask): masked pixels within 1/255 on every frame | to be filled |
 | the live run under the validation layer: each scale changed once, each size-change line printed once; the device line not printed on this host | to be filled |
