@@ -277,8 +277,14 @@ void rmb_rtw_close(void);
  * world-space path, which also makes the compaction's list (the marks are
  * in the G-buffer's normal attachment, TASK162, so no render target is
  * made); 0 TASK58's path, whose outputs are TASK58's and which has no list.
+ * TASK126 slice 5: div is r_rt_water_scale's divisor (mtl_rtup_div), kept
+ * for the view's trace. Above 1 the list holds the traced pixels, and the
+ * traced size's outputs (and the blurred one while the blur is on) and
+ * the pipelines of rm_rtwater_lo.metal are made too, a pipeline failure
+ * latched until the pass is closed; at 1 the traced size's textures are
+ * released and the stock kernels run.
  */
-int rmb_rtw_prepare(unsigned long w, unsigned long h, int ws);
+int rmb_rtw_prepare(unsigned long w, unsigned long h, int ws, unsigned div);
 
 /* the view the next G-buffer view traces with (copied); NULL turns the pass off for that view */
 void rmb_rtw_set_view(const rm_rtw_view_t *v);

@@ -239,6 +239,8 @@ static const char *const rtg_cvars[] = {
 	"r_rt_water_hits",
 	"r_rt_water_normal",
 	"r_rt_water_reflect",
+	/* TASK126: the size the reflections trace at, a setting (its effect is off without ray tracing) */
+	"r_rt_water_scale",
 	"r_rt_water_show",
 };
 
