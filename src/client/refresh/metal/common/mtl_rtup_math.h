@@ -280,7 +280,7 @@ typedef struct
 static inline mtl_rtup_light_t
 mtl_rtup_light(mtl_rtup_out_t o, int h0, int h1, int h2, int h3, float v0, float v1, float v2, float v3)
 {
-	mtl_rtup_light_t r;
+	mtl_rtup_light_t l;
 	float ws = 0.0f, s = 0.0f;
 
 	if (!o.empty)
@@ -313,14 +313,14 @@ mtl_rtup_light(mtl_rtup_out_t o, int h0, int h1, int h2, int h3, float v0, float
 	/* written so that a NaN fails */
 	if (!(ws > 0.0f))
 	{
-		r.vis = 1.0f;
-		r.fallback = 1;
-		return r;
+		l.vis = 1.0f;
+		l.fallback = 1;
+		return l;
 	}
 
-	r.vis = s / ws;
-	r.fallback = 0;
-	return r;
+	l.vis = s / ws;
+	l.fallback = 0;
+	return l;
 }
 
 #endif
