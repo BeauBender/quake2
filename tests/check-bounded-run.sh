@@ -1535,6 +1535,77 @@ else
 	fails="$fails sv-no-term"
 fi
 
+# The lock run's watch, with ps silent (correctness I2, round 1): the
+# command leads its own group, so the watch says a stop goes to that group
+# while it has a member (bench_watch's leader note), and a TERM to the lock
+# shell stops the command before the lock is free. ps is a stand-in that
+# exits 1 and prints nothing; the lock state is the case's own. The lock
+# shell's lines and the command's "cmd <pid>" go to a FIFO. Sets ln_why.
+sv_leadnote() {
+	_nd=$W/sv-note-$(basename "$1")
+	ln_why=
+	rm -rf "$_nd"
+	mkdir -p "$_nd/shim" "$_nd/state" && mkfifo "$_nd/fifo" || return 1
+	printf '#!/bin/sh\nexit 1\n' > "$_nd/shim/ps" && chmod +x "$_nd/shim/ps" || return 1
+	proc_open "$_nd/fifo"
+	env PATH="$_nd/shim:$PATH" BENCH_STATE="$_nd/state" sh "$1/scripts/bench/bench.sh" lock run tnote -- sh -c 'echo "cmd $$"; exec sleep 30' < /dev/null > "$_nd/fifo" 2>&1 &
+	_np=$!
+	_ng=
+	if ! proc_await 'cmd *'; then
+		ln_why="the command did not start"
+	else
+		_ng=${PROC_LINE#cmd }
+		proc_alone
+		if ! proc_await '*cannot tell whether pid*'; then
+			ln_why="the watch said nothing of a silent ps"
+		else
+			case $PROC_LINE in
+			*'a stop goes to its process group while that has a member'*) ;;
+			*) ln_why="the watch did not say the stop goes to the command's group: $PROC_LINE" ;;
+			esac
+		fi
+	fi
+	kill -s TERM "$_np" 2> /dev/null
+	proc_eof || {
+		ln_why=${ln_why:-"the lock shell or its command outlived the TERM by $PROC_BOUND s"}
+		kill -s KILL "$_np" 2> /dev/null
+	}
+	case $_ng in '' | *[!0-9]*) ;; *)
+		if kill -0 -- "-$_ng" 2> /dev/null; then
+			ln_why=${ln_why:-"the command's group outlived the lock shell"}
+			kill -s KILL -- "-$_ng" 2> /dev/null
+		fi
+		;;
+	esac
+	wait "$_np" 2> /dev/null
+	proc_close
+	if [ -z "$ln_why" ]; then
+		_nl=$(env BENCH_STATE="$_nd/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
+		[ "$_nl" = lock=free ] || ln_why="the lock was not freed: $_nl"
+	fi
+}
+sv_leadnote "$here"
+if [ -n "$ln_why" ]; then
+	echo "$me: FAIL: lock note: $ln_why"
+	fails="$fails lock-note"
+else
+	echo "$me: ok   lock note: ps silent, the watch says the stop goes to the group, and TERM stops it"
+fi
+# the mutant: the watch never says the stop goes to the group
+if sv_stage "$W/stage-note" scripts/bench/core/common.sh 'if [ "$BENCH_ID_GROUP" = "$_bw_p" ]; then' 'if false; then'; then
+	sv_leadnote "$W/stage-note"
+	case $ln_why in
+	'the watch did not say'*) echo "$me: mutant watch-leader-note: refused ($ln_why)" ;;
+	*)
+		echo "$me: FAIL: mutant watch-leader-note passed the lock note case: ${ln_why:-held}"
+		fails="$fails watch-leader-note"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant watch-leader-note does not apply"
+	fails="$fails watch-leader-note"
+fi
+
 # A command's own 124, 125 and 126 are its own (correctness B1, round 1):
 # the supervisor passes the command's status through, so bench_bounded
 # tells its own 124 (the wall time), 125 (cannot run) and 126 (cannot empty
