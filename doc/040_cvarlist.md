@@ -1640,6 +1640,24 @@ is.
   (the renderer says so once). Saved with the configuration; applies from
   the next frame.
 
+* **r_rt_sun_scale**: The share of the 3D view's width and height that
+  `r_rt_sun` traces its rays at; not its strength, which is
+  `r_rt_sunscale`. `1` (the default) traces every pixel, `0.5` one pixel
+  of each 2 x 2 block, a quarter of the rays, and `0.33` one of each
+  3 x 3 block. Below `1` each lit world pixel takes whether the sun
+  reaches it from the traced pixels next to it on its own surface (the
+  same distance, normal and material), and its own angle to the sun, so
+  an edge between two surfaces and a shadow's outline on a wall stay
+  where they are; a pixel no traced pixel next to it matches takes the
+  nearest in distance, and `r_rt_stats 2` counts those. It is a share of
+  the size the view is drawn at, so with a MetalFX scaler (`r_metalfx`)
+  it applies to the scaler's input. A value is taken as the nearest of
+  the three (`1` for `0.67` and above, `0.33` below `0.4`); `0`, a
+  negative value or one that is not a finite number counts as `1`. A
+  change resets the sun's temporal history (`r_rt_temporal`), which
+  `r_rt_stats 1` reports. Saved with the configuration; applies from the
+  next frame.
+
 * **r_rt_sun_show**: A development view of the Metal renderer's
   `r_rt_sun`: with it on, `1` replaces the 3D view by a mask, black where
   the sun's light was added and white everywhere else, `2` by the pass's
@@ -1664,8 +1682,9 @@ is.
 * **r_rt_sunscale**: How strong `r_rt_sun`'s light is: the share of the
   sky's colour a pixel facing the sun squarely gets, `0.35` by default. A
   value below `0` counts as `0`, one above `4` as `4`, one that is not a
-  finite number as `0.35`. Saved with the configuration; applies from the
-  next frame.
+  finite number as `0.35`. Not the size the sun is traced at, which is
+  `r_rt_sun_scale`. Saved with the configuration; applies from the next
+  frame.
   Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_temporal**: The Metal renderer's temporal accumulation of the

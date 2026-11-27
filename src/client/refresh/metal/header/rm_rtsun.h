@@ -237,14 +237,25 @@ void rmb_rtsun_close(void);
  * Before the G-buffer raster: the kernel's outputs at the render size w x
  * h (the class, R8Uint, and the light the resolve reads, RGBA16Unorm). 1
  * when the view can trace; 0 when the pass is not open or they cannot be
- * made.
+ * made. TASK126: above divisor 1 (r_rt_sun_scale, the view's div) also the
+ * traced size's class and visibility (R8Uint, R32Float) and the pipelines
+ * of rm_rtsun_trace_lo, rm_rtsun_temporal_lo, rm_rtsun_denoise_lo and
+ * rm_rtsun_up, a failure latched until the pass is closed; at divisor 1
+ * the traced size's textures are released.
  */
-int rmb_rtsun_prepare(unsigned long w, unsigned long h);
+int rmb_rtsun_prepare(unsigned long w, unsigned long h, unsigned div);
+
+/*
+ * TASK126: 1 once after a view whose sun history reset for r_rt_sun_scale
+ * (RM_RTT_RESET_SCALE from the take), for the r_rt_stats 1 line.
+ */
+int rmb_rtsun_scale_reset(void);
 
 /*
  * RT7 (TASK59 slice 1b): the next traced view accumulates its visibility
  * with t (copied), at the render size w x h, through rm_rtsun_temporal
- * after the trace; its pipeline and the two histories are made at the
+ * after the trace (TASK126: at the traced size, through
+ * rm_rtsun_temporal_lo, above divisor 1); its pipeline and the two histories are made at the
  * first such view, a failure latched. NULL, or t's alpha 0, releases the
  * histories and accumulates nothing. 1 when the view accumulates.
  */
