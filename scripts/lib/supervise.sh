@@ -5,9 +5,10 @@
 #   sv=$(sv_path) || exit 1
 #   "$sv" --timeout 60 --events 9 -- cmd args... 9> events.log
 #
-# sv_path prints the path of the binary built from supervise.c beside this
-# file, building it when it is not there. The binary lives in the tool cache,
-# $SUPERVISE_CACHE, else $XDG_CACHE_HOME/quake2-tools, else
+# sv_path prints the physical path of the binary built from supervise.c
+# beside this file (no symbolic link in it), building it when it is not
+# there. The binary lives in the tool cache, $SUPERVISE_CACHE, else
+# $XDG_CACHE_HOME/quake2-tools, else
 # $HOME/.cache/quake2-tools, under a name keyed by the SHA-256 of the
 # compiler's version line, the flags and the source: a changed source or
 # compiler builds a new binary, and an unchanged one is never built again.
@@ -17,11 +18,13 @@
 # the XDG spec says. The directory is made with mode 0700. The directory and
 # the binary must be owned by this user and not writable by group or others,
 # and the binary must be a regular file, not a symbolic link; neither may
-# have an ACL, and every directory above the cache must be owned by this
-# user or root and not writable by group or others unless sticky; else
-# sv_path refuses it. The build runs cc directly, unsupervised, into a temporary name
-# that is moved into place, so a concurrent first use never runs a
-# half-written binary; its log is a temporary file too.
+# have an ACL, and every directory above the cache's physical path must be
+# owned by this user or root and not writable by group or others unless
+# sticky; else sv_path refuses it. The cache is resolved to its physical
+# path first, and only that path is checked, built in and printed. The
+# build runs cc directly, unsupervised, into a temporary name that is
+# moved into place, so a concurrent first use never runs a half-written
+# binary; its log is a temporary file too.
 #
 # Any failure is a failure: sv_path prints no path, says why on standard
 # error (lines starting "supervise: ", which name no path) and returns 1.
@@ -126,11 +129,23 @@ sv_path() {
 			return 1
 		}
 	fi
+	# from here on only the physical path is used, checked, built in and
+	# printed: a symbolic link on the way (in a directory others may write)
+	# could be swapped once it was checked (security I1, round 1)
+	_sv_real=$(cd "$_sv_dir" 2> /dev/null && pwd -P) || _sv_real=
+	case $_sv_real in
+	/*) ;;
+	*)
+		echo "supervise: the tool cache is refused: its physical path cannot be read" >&2
+		return 1
+		;;
+	esac
+	_sv_dir=$_sv_real
 	sv_safe "$_sv_dir/." || {
 		echo "supervise: the tool cache is refused: not a directory owned by this user, writable by group or others, or with an ACL" >&2
 		return 1
 	}
-	_sv_real=$(cd "$_sv_dir" 2> /dev/null && pwd -P) && sv_parents "$_sv_real" || {
+	sv_parents "$_sv_dir" || {
 		echo "supervise: the tool cache is refused: a directory above it is owned by another user, or writable by group or others and not sticky" >&2
 		return 1
 	}

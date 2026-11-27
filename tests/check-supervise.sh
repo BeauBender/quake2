@@ -12,6 +12,11 @@
 #             (SUPERVISE_CACHE here, a scratch directory), keyed by the
 #             source's hash; a second call builds nothing, and a source that
 #             does not build is a failure with no path printed.
+#   refusals  a parent of the cache writable by others (refused unless
+#             sticky), an allow ACL on the cache or the binary (refused),
+#             and a cache named through a symbolic link (the path printed
+#             is the physical one); then two one-line mutants of a copy of
+#             supervise.sh, each failing its own case.
 #   cases     tests/supervise/supervise_test.c runs every case against the
 #             test build, with /bin/bash (3.2) and then /bin/sh as the
 #             caller shell, the cases that need no test clock against the
@@ -48,6 +53,8 @@ for f in "$src" "$helper" "$tdir/supervise_test.c" "$tdir/fake.c"; do
 done
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/check-supervise.XXXXXX") || fail "cannot make a temporary directory"
 trap 'rm -rf "${tmp:?}"' EXIT
+# its physical path: sv_path prints the physical path of the binary
+rtmp=$(cd "$tmp" && pwd -P) || fail "cannot read the temporary directory's physical path"
 
 W="-Wall -Wextra -Werror"
 SAN="-g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined"
@@ -78,7 +85,7 @@ echo "check-supervise: builds clean with $W"
 	. "$helper"
 	p=$(sv_path) || exit 1
 	[ -x "$p" ] || { echo "sv_path printed $p, which is no program" >&2; exit 1; }
-	case $p in "$tmp/cache/"*) ;; *) echo "sv_path built outside the cache: $p" >&2; exit 1 ;; esac
+	case $p in "$rtmp/cache/"*) ;; *) echo "sv_path built outside the cache: $p" >&2; exit 1 ;; esac
 	i1=$(ls -i "$p") || exit 1
 	q=$(sv_path) || exit 1
 	[ "$q" = "$p" ] || { echo "a second sv_path named another binary: $q" >&2; exit 1; }
@@ -95,7 +102,7 @@ echo "check-supervise: builds clean with $W"
 		[ "$st" -ne 0 ] || { echo "sv_path accepted $1: $out" >&2; return 1; }
 		[ -z "$out" ] || { echo "sv_path printed a path for $1: $out" >&2; return 1; }
 		grep -q '^supervise: ' "$tmp/refused.err" || { echo "sv_path said nothing for $1" >&2; return 1; }
-		if grep -v '^supervise: ' "$tmp/refused.err" | grep -q . || grep -qF "$tmp" "$tmp/refused.err"; then
+		if grep -v '^supervise: ' "$tmp/refused.err" | grep -q . || grep -qF -e "$tmp" -e "$rtmp" "$tmp/refused.err"; then
 			echo "sv_path printed a line that is not its own, or a path, for $1" >&2
 			return 1
 		fi
@@ -125,7 +132,7 @@ echo "check-supervise: builds clean with $W"
 		XDG_CACHE_HOME=rel HOME=$tmp/home
 		export XDG_CACHE_HOME HOME
 		px=$(sv_path) || exit 1
-		case $px in "$tmp/home/.cache/quake2-tools/"*) ;; *) echo "a relative XDG_CACHE_HOME gave $px" >&2; exit 1 ;; esac
+		case $px in "$rtmp/home/.cache/quake2-tools/"*) ;; *) echo "a relative XDG_CACHE_HOME gave $px" >&2; exit 1 ;; esac
 	) || exit 1
 	[ -z "$(ls "$tmp/cwd")" ] || { echo "a relative cache path made a directory" >&2; exit 1; }
 	SUPERVISE_CACHE=$tmp/cache
