@@ -183,25 +183,36 @@ TEST(cl_demo_first_frame_loads_collision_map)
 }
 
 /* The map is loaded already (a live connection, or a demo whose
-   precache ran first): it is the cached one, not loaded again. */
+   precache ran first): it is the cached one, not loaded again. With
+   flushmap set and the map file cut short, any load that is not a
+   client load (a reload, or the cached path that closes the area
+   portals a listen server's game opened) ERR_DROPs, and the runner
+   fails the test on it. */
 TEST(cl_first_frame_keeps_loaded_map)
 {
 	unsigned checksum;
 	const char *map;
-	cmodel_t *world;
+	char rel[MAX_OSPATH];
 
 	map = write_map();
 	reset_demo_client(map);
 	cl.attractloop = false;
-	world = CM_LoadMap(map, true, &checksum);
+	CM_LoadMap(map, true, &checksum);
 	T_EQ_INT(CM_NumInlineModels(), 2);
+
+	Com_sprintf(rel, sizeof(rel), "data/baseq2/%s", map);
+	t_write_file(rel, "x", 1);
+	Cvar_Get("flushmap", "0", 0);
+	Cvar_Set("flushmap", "1");
 
 	build_frame();
 	CL_ParseServerMessage();
 
+	Cvar_Set("flushmap", "0");
 	T_EQ_INT(cls.state, ca_active);
-	T_CHECK(CM_LoadMap(map, true, &checksum) == world);
 	T_EQ_INT(CM_NumInlineModels(), 2);
+	T_EQ_STR(CM_EntityString(), "{\n\"classname\" \"worldspawn\"\n}\n"
+		"{\n\"classname\" \"func_door\"\n\"model\" \"*1\"\n}\n");
 	T_CHECK(strstr(t_console(), "ERROR") == NULL);
 }
 
