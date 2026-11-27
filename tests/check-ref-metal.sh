@@ -334,10 +334,13 @@ fi
 # the light set's flags not masked, a history that skipped a view still read (the early return), a
 # history made again still read, the views' number restarting on a map load; TASK126 slice 2's: the
 # scale reason dropped, the divisor not compared, the divisor forgotten when a history is made again
-# (so the history remade at an effect's new size no longer says why). Each must compile (a
+# (so the history remade at an effect's new size no longer says why); TASK126 slice 6's: the
+# upsample's size change judged on the width alone, the size not forgotten at divisor 1, a frame's
+# pixels not added, a map load forgetting the size, the empty total printed. Each must compile (a
 # mutant the compiler refuses tests nothing, review TASK59 slice 1, I1) and fail the test.
 rtt_mutants=0
-for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep scalereason scalecmp scalekeep; do
+for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep scalereason scalecmp scalekeep \
+	upcmp upforget upadd upmapsize upempty; do
 	rtt_tree "${tmp:?}/rttm"
 	h=${tmp:?}/rttm/src/client/refresh/metal/common/mtl_rtt_math.h
 	c=${tmp:?}/rttm/src/client/refresh/metal/rm_rttemporal.c
@@ -359,6 +362,12 @@ for m in mat lights depth off reset frameend mapload lightsmask histgap histrese
 		scalereason) sed 's/r |= RM_RTT_RESET_SCALE;/r |= 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		scalecmp) sed 's/(h->div != d)/((h->div != d) \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		scalekeep) sed 's/	h->valid = 0;/	h->valid = 0; h->div = 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upcmp) sed 's/changed = (tw != u->tw) || (th != u->th);/changed = (tw != u->tw);/' "$rm_dir/rm_rttemporal.c" \
+			> "$c" ;;
+		upforget) sed 's/		u->tw = u->th = 0;/		(void)0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upadd) sed 's/	u->pixels += pixels;/	(void)pixels;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upmapsize) sed 's/^	u->pixels = 0;$/	u->pixels = 0; u->tw = 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upempty) sed 's/	if (!u->pixels)$/	if (!u->pixels \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 	esac
 	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$h" && cmp -s "$rm_dir/rm_rttemporal.c" "$c"; then
 		bad "the temporal mutant ($m) changed nothing"

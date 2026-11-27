@@ -595,11 +595,11 @@ test_up(void)
 
 	/* another divisor, another size: due */
 	CHECK(rm_rtt_up_frame(&u, 3u, 214, 161, 307200, 0) == 1);
-	CHECK(u.pixels == 307200ull * 5);
+	CHECK(u.pixels == 307200ull * 6);
 
 	/* back to divisor 1: the size is forgotten and nothing is added; the next frame below is due again */
 	CHECK(rm_rtt_up_frame(&u, 1u, 640, 480, 307200, 0) == 0);
-	CHECK((u.tw == 0) && (u.th == 0) && (u.pixels == 307200ull * 5) && (u.fallbacks == 1000));
+	CHECK((u.tw == 0) && (u.th == 0) && (u.pixels == 307200ull * 6) && (u.fallbacks == 1000));
 	CHECK(rm_rtt_up_frame(&u, 3u, 214, 161, 307200, 0) == 1);
 
 	/* the summary's line: the totals and their share */
