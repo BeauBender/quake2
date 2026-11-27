@@ -42,6 +42,7 @@ bench_snap_system() {
 	# utilization lags (on the M6 it read 100 right after an engine at full
 	# load exited and 0 from 0.2 s on, TASK166), so a snapshot after a run
 	# reads the GPU past the measured workload's tail.
+	bench_sv
 	if command -v top > /dev/null 2>&1; then
 		bench_bounded 15 top -l 2 -n 0 -s 1 > "$_sy_t.top" 2> /dev/null || : > "$_sy_t.top"
 	fi
@@ -113,6 +114,7 @@ bench_snap_system() {
 bench_snap() {
 	if [ -n "${BENCH_SNAP_READER:-}" ]; then
 		_sn_st=0
+		bench_sv
 		bench_bounded 30 "$BENCH_SNAP_READER" "$1" > "$2" 2> /dev/null || _sn_st=$?
 		[ "$_sn_st" -eq 0 ] || bench_die 3 "the snapshot reader failed (status $_sn_st)"
 	else
@@ -150,6 +152,7 @@ bench_freq_init() {
 		return 0
 	fi
 	_fi_st=0
+	bench_sv
 	bench_bounded 120 cc -O1 -o "${BENCH_TMP:?}/freq" "$BENCH_ROOT/core/freq.c" -framework CoreFoundation -framework IOKit \
 		> "${BENCH_TMP:?}/freq.cc" 2>&1 || _fi_st=$?
 	if [ "$_fi_st" -eq 0 ]; then
@@ -165,6 +168,7 @@ bench_freq_dump() {
 	bench_freq_init
 	: > "$1"
 	[ -n "$BENCH_FREQ_BIN" ] || return 0
+	bench_sv
 	bench_bounded 30 "$BENCH_FREQ_BIN" dump > "$1" 2> /dev/null || : > "$1"
 }
 
@@ -187,6 +191,7 @@ bench_freq_window() {
 		return 0
 	fi
 	if [ -n "$BENCH_FREQ_BIN" ]; then
+		bench_sv
 		bench_bounded 30 "$BENCH_FREQ_BIN" delta "$1" "$2" > "$_fw_o" 2> /dev/null || : > "$_fw_o"
 	fi
 	awk -v p="$3" '

@@ -12,6 +12,8 @@
 # $HOME/.cache/quake2-tools, under a name keyed by the SHA-256 of the
 # compiler's version line, the flags and the source: a changed source or
 # compiler builds a new binary, and an unchanged one is never built again.
+# With no shasum on PATH the key is two POSIX cksum CRCs of the same text
+# (as scripts/bench's hash falls back), under the name supervise-crc-<key>.
 #
 # The cache is trusted only when it is safe. A SUPERVISE_CACHE that is not an
 # absolute path is refused; an XDG_CACHE_HOME that is not one is ignored, as
@@ -102,27 +104,47 @@ sv_path() {
 		echo "supervise: cc is not on PATH" >&2
 		return 1
 	}
-	command -v shasum > /dev/null 2>&1 || {
-		echo "supervise: shasum is not on PATH" >&2
-		return 1
-	}
 	_sv_dir=$(sv_cache) || return 1
 	_sv_cc=$(cc --version 2> /dev/null | sed -n 1p) || _sv_cc=
 	[ -n "$_sv_cc" ] || {
 		echo "supervise: cc --version printed nothing" >&2
 		return 1
 	}
-	_sv_key=$( {
-		printf '%s\n%s\n' "$_sv_cc" "$SV_CFLAGS"
-		cat "$_sv_src"
-	} | shasum -a 256) || _sv_key=
-	_sv_key=${_sv_key%% *}
-	case $_sv_key in
-	*[!0-9a-f]* | '')
-		echo "supervise: shasum -a 256 gave no digest" >&2
-		return 1
-		;;
-	esac
+	if command -v shasum > /dev/null 2>&1; then
+		_sv_key=$( {
+			printf '%s\n%s\n' "$_sv_cc" "$SV_CFLAGS"
+			cat "$_sv_src"
+		} | shasum -a 256) || _sv_key=
+		_sv_key=${_sv_key%% *}
+		case $_sv_key in
+		*[!0-9a-f]* | '')
+			echo "supervise: shasum -a 256 gave no digest" >&2
+			return 1
+			;;
+		esac
+		_sv_name=supervise-$(printf '%s\n' "$_sv_key" | cut -c1-16)
+	else
+		# no shasum (a minimal PATH, #758): POSIX cksum, as bench_hash does,
+		# two CRCs of the same text with two prefixes; the name says so, so
+		# a cksum key never names a shasum key's binary
+		_sv_a=$( {
+			printf '%s\n%s\n' "$_sv_cc" "$SV_CFLAGS"
+			cat "$_sv_src"
+		} | cksum) || _sv_a=
+		_sv_b=$( {
+			printf 'supervise\n%s\n%s\n' "$_sv_cc" "$SV_CFLAGS"
+			cat "$_sv_src"
+		} | cksum) || _sv_b=
+		_sv_a=${_sv_a%% *}
+		_sv_b=${_sv_b%% *}
+		case $_sv_a:$_sv_b in
+		:* | *: | *[!0-9:]* | ???????????*:* | *:???????????*)
+			echo "supervise: neither shasum nor cksum gave a digest" >&2
+			return 1
+			;;
+		esac
+		_sv_name=supervise-crc-$(printf '%08x%08x' "$_sv_a" "$_sv_b")
+	fi
 	if [ ! -d "$_sv_dir" ]; then
 		(umask 077 && mkdir -p "$_sv_dir") || {
 			echo "supervise: cannot make the tool cache" >&2
@@ -149,7 +171,7 @@ sv_path() {
 		echo "supervise: the tool cache is refused: a directory above it is owned by another user, or writable by group or others and not sticky" >&2
 		return 1
 	}
-	_sv_bin=$_sv_dir/supervise-$(printf '%s\n' "$_sv_key" | cut -c1-16)
+	_sv_bin=$_sv_dir/$_sv_name
 	if [ -h "$_sv_bin" ] || { [ -e "$_sv_bin" ] && [ ! -f "$_sv_bin" ]; }; then
 		echo "supervise: the cached supervisor is refused: not a regular file" >&2
 		return 1

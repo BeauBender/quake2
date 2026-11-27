@@ -931,7 +931,10 @@ if [ ! -r "$BENCH_SV_DIR/supervise.sh" ] && [ -n "${BENCH_ROOT:-}" ]; then BENCH
 if [ ! -r "$BENCH_SV_DIR/supervise.sh" ]; then BENCH_SV_DIR=${BENCH_SV_LIB:-}; fi
 
 # bench_sv: sources the supervisor's library and builds the supervisor
-# (sv_path), once per shell: BENCH_SV is its path. Exits 2 when it cannot.
+# (sv_path), once per shell: BENCH_SV is its path. Exits 2 when it cannot,
+# with sv_path's reason and its own line on standard error. bench_bounded
+# calls it, so a caller that sends the bounded command's standard error
+# away (host.sh, snap.sh) calls it first, or the reason is lost (#758).
 bench_sv() {
 	[ -z "$BENCH_SV" ] || return 0
 	case $BENCH_SV_DIR in
