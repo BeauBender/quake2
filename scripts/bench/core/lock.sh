@@ -110,6 +110,19 @@
 # process that took the pid after the record was written), holds nothing:
 # the release, or a reclaim, removes it with the lock. Nothing signals a
 # recorded pid but the shell that started it.
+#
+# A group record (TASK221) is written the same way for a bounded command
+# whose supervisor could not empty its process group (its 126), under the
+# group's id <pgid>, as <state>/lock/untold.<pgid>:
+#   pid=<pgid> start=- written=<when the record is written>
+#   token=<the hold> group=<pgid>
+# It holds the lock while kill -0 -- -<pgid> answers (no process takes a
+# group's id while the group has a member, so no ps is asked), unless ps
+# shows a process with the pid <pgid> that started later than written=
+# (bench_lock_untold_reused): the group emptied, and a process that took
+# the id after the record was written leads a new group under it, which
+# then holds nothing (security I2, round 1). A ps that gives no answer, or
+# a group with no leader left, keeps the lock.
 
 BENCH_STATE_DIR=
 BENCH_LOCK_DIR=
@@ -639,6 +652,9 @@ bench_lock_untold_live() {
 		# group has a member, so no ps is asked
 		if [ "$(bench_kv "$_lu_h" group)" = "$_lu_p" ]; then
 			kill -0 -- "-$_lu_p" 2> /dev/null || continue # bounded-run: allowed: the lock: a recorded group still has a member; it signals none
+			# a later group under the same id: its leader started after the
+			# record was written (security I2, round 1)
+			if bench_lock_untold_reused "$_lu_p" "$(bench_kv "$_lu_h" written)"; then continue; fi
 			BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"
 			continue
 		fi

@@ -1548,6 +1548,21 @@ if [ -n "$gr_why" ]; then
 else
 	echo "$me: ok   group reuse: a group id taken after the record was written holds nothing"
 fi
+# the mutant: a group record is live by kill -0 alone again
+if sv_stage "$W/stage-reuse" scripts/bench/core/lock.sh '			if bench_lock_untold_reused "$_lu_p" "$(bench_kv "$_lu_h" written)"; then continue; fi
+			BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"' '			BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"'; then
+	sv_reuse "$W/stage-reuse"
+	case $gr_why in
+	'a record written before its group started holds the lock'*) echo "$me: mutant group-reuse-unchecked: refused ($gr_why)" ;;
+	*)
+		echo "$me: FAIL: mutant group-reuse-unchecked passed the group reuse case: ${gr_why:-held}"
+		fails="$fails group-reuse-unchecked"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant group-reuse-unchecked does not apply"
+	fails="$fails group-reuse-unchecked"
+fi
 
 # the mutant: sv_stop sends the supervisor no TERM, so a caller's INT
 # waits for the command to the wall time (30 s, past the 10 s bound), and
