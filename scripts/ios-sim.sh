@@ -307,7 +307,23 @@ list)
 		case $sc in
 		hang) hang 30 ;;
 		hangdecoy) [ -e "$st/decoy.pid" ] || { decoy; echo "sleep 30.$$" > "$st/hang.cmd"; cat "$st/decoy.pid" > "$st/hang.pid"; } ;;
-		samename) grep -q '^55555555-' "$st/devices" || printf '%s\n' "55555555-5555-5555-5555-555555555555 yq2-ios-sim-$PPID" >> "$st/devices" ;;
+		samename)
+			# the run's device is yq2-ios-sim-<the pid of the ios-sim.sh under test>: this call runs
+			# under bench_bounded's supervisor (TASK221), so that is the first ancestor whose command
+			# runs ios-sim.sh, not always the parent; none within five steps fails the call
+			if ! grep -q '^55555555-' "$st/devices"; then
+				p=$PPID i=0
+				until ps -o command= -p "$p" 2>/dev/null | grep -q 'ios-sim\.sh'; do
+					i=$((i + 1))
+					p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+					if [ "$i" -ge 5 ] || [ -z "$p" ] || [ "$p" -le 1 ]; then
+						echo "fake xcrun: samename: no ios-sim.sh among this call's ancestors" >&2
+						exit 1
+					fi
+				done
+				printf '%s\n' "55555555-5555-5555-5555-555555555555 yq2-ios-sim-$p" >> "$st/devices"
+			fi
+			;;
 		empty) exit 0 ;;
 		listfail) echo "fake xcrun: CoreSimulatorService is not running" >&2; exit 1 ;;
 		esac
