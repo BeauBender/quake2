@@ -231,8 +231,9 @@ rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long
 }
 
 void
-rm_rtt_up_map(rm_rtt_up_t *u)
+rm_rtt_up_map(rm_rtt_up_t *u, unsigned long from)
 {
+	(void)from;
 	u->fallbacks = 0;
 	u->pixels = 0;
 }

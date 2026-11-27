@@ -619,7 +619,7 @@ test_up(void)
 			"(50.000 %)") == 0);
 
 	/* a map load: the totals start again, the size is kept, so the same size is not due */
-	rm_rtt_up_map(&u);
+	rm_rtt_up_map(&u, f + 1);
 	CHECK((u.fallbacks == 0) && (u.pixels == 0) && (u.tw == 320) && (u.th == 240));
 	CHECK(rm_rtt_up_frame(&u, ++f, 2u, 320, 240, 100, 1) == 0);
 	CHECK(rm_rtt_up_total_format("base2", "ao", &u, buf, sizeof(buf)));
@@ -710,6 +710,47 @@ test_up_order(void)
 	CHECK(u.pixels == 4000);
 }
 
+/*
+ * Review round 1, N2: the frames still in flight when a map loads are
+ * handed over at the new map's first frame, after its rm_rtt_up_map.
+ * They are not added to the new map's totals, and their size prints no
+ * line; the new map's own frames are added, in any order.
+ */
+static void
+test_up_map(void)
+{
+	rm_rtt_up_t u;
+	char buf[256];
+
+	memset(&u, 0, sizeof(u));
+	CHECK(rm_rtt_up_frame(&u, 10, 2u, 320, 240, 1000, 7) == 1);
+	CHECK(rm_rtt_up_frame(&u, 11, 2u, 320, 240, 1000, 7) == 0);
+
+	/* the old map's frames 12 to 14 are in flight; the new map's first frame is 15 */
+	rm_rtt_up_map(&u, 15);
+	CHECK((u.pixels == 0) && (u.fallbacks == 0) && (u.tw == 320));
+
+	/* its first read hands over the new frame 15 and the old 13 and 14, at another size */
+	CHECK(rm_rtt_up_frame(&u, 13, 2u, 214, 161, 1000, 50) == 0);
+	CHECK(rm_rtt_up_frame(&u, 15, 2u, 320, 240, 2000, 3) == 0);
+	CHECK(rm_rtt_up_frame(&u, 14, 2u, 214, 161, 1000, 50) == 0);
+	CHECK((u.pixels == 2000) && (u.fallbacks == 3) && (u.tw == 320) && (u.th == 240));
+
+	/* then the old 12, and the new 16 and 17 out of order */
+	CHECK(rm_rtt_up_frame(&u, 12, 2u, 214, 161, 1000, 50) == 0);
+	CHECK(rm_rtt_up_frame(&u, 17, 2u, 320, 240, 2000, 1) == 0);
+	CHECK(rm_rtt_up_frame(&u, 16, 2u, 320, 240, 2000, 1) == 0);
+	CHECK((u.pixels == 6000) && (u.fallbacks == 5));
+	CHECK(rm_rtt_up_total_format("base2", "sun", &u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt: base2: upsample: sun 5 fallbacks of 6000 upsampled pixels (0.083 %)") == 0);
+
+	/* an old frame at divisor 1 does not forget the size either */
+	rm_rtt_up_map(&u, 20);
+	CHECK(rm_rtt_up_frame(&u, 19, 1u, 640, 480, 307200, 0) == 0);
+	CHECK(u.tw == 320);
+	CHECK(rm_rtt_up_frame(&u, 20, 2u, 320, 240, 2000, 0) == 0);
+}
+
 int
 main(void)
 {
@@ -724,6 +765,7 @@ main(void)
 	test_scale();
 	test_up();
 	test_up_order();
+	test_up_map();
 
 	printf("rm_rttemporal_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

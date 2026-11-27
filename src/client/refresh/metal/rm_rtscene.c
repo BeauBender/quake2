@@ -84,15 +84,21 @@ static unsigned long rt_ntimes, rt_frames, rt_busy_aliases, rt_busy_tris;
 static rm_rtt_up_t rt_up[RM_RT_UP_N];
 static const char *const rt_up_name[RM_RT_UP_N] = { "shadows", "sun", "ao", "water" };
 
-/* the totals start again with the frames' (the traced sizes are kept) */
+/*
+ * the totals start again with the frames' (the traced sizes are kept);
+ * the frames still in flight for the map before are not this map's
+ * (review round 1, N2: each back end hands them over at this map's
+ * first frame, after RM_RT_BuildMap)
+ */
 static void
 RM_RT_UpMap(void)
 {
+	unsigned long from = rmb_frame_next();
 	int k;
 
 	for (k = 0; k < RM_RT_UP_N; k++)
 	{
-		rm_rtt_up_map(&rt_up[k]);
+		rm_rtt_up_map(&rt_up[k], from);
 	}
 }
 

@@ -160,13 +160,16 @@ int rm_rtt_traced_format(unsigned w, unsigned h, unsigned long fallbacks, char *
  * pixels it wrote. frame is the number of the newest frame handed over
  * (0 before one): a back end hands its completed frames over in slot
  * order, not frame order, so a frame older than it is judged for the
- * totals alone. Zeroed, it is an effect that has upsampled nothing.
+ * totals alone. from is the number of the map's first frame: a frame
+ * numbered below it was encoded for an earlier map and still in flight
+ * when this one loaded, and is not this map's. Zeroed, it is an effect
+ * that has upsampled nothing.
  */
 typedef struct
 {
 	unsigned long tw, th;
 	unsigned long long fallbacks, pixels;
-	unsigned long frame;
+	unsigned long frame, from;
 } rm_rtt_up_t;
 
 /*
@@ -182,8 +185,12 @@ typedef struct
 int rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long tw, unsigned long th,
 		unsigned long pixels, unsigned long fallbacks);
 
-/* A map loaded: the totals start again; the traced size is kept, so the line is not printed again for it. */
-void rm_rtt_up_map(rm_rtt_up_t *u);
+/*
+ * A map loaded, its first frame numbered from (rmb_frame_next): the totals
+ * start again and a frame numbered below from is not added to them; the
+ * traced size is kept, so the line is not printed again for it.
+ */
+void rm_rtt_up_map(rm_rtt_up_t *u, unsigned long from);
 
 /*
  * The lines, without a newline; each 1 when it fits in len, 0 with buf
