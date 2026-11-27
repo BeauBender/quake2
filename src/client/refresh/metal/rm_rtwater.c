@@ -349,7 +349,7 @@ rm_rtw_ms(double v, char *out, size_t len)
 int
 rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len)
 {
-	char ms[32], split[200], t[4][32];
+	char ms[32], split[200], t[4][32], up[96] = "";
 	int n;
 
 	if (!len)
@@ -369,10 +369,20 @@ rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len)
 		snprintf(split, sizeof(split), ", world space: compaction %s, trace %s, span %s ms", t[0], t[1], t[2]);
 	}
 
+	/*
+	 * TASK126 slice 5: below the drawn size, the traced size and the
+	 * upsample's fallbacks, in rm_rtt_traced_format's words (written here, as
+	 * rm_rtshadow.c writes them, so the host tests need no rm_rttemporal.c)
+	 */
+	if (s->div > 1)
+	{
+		snprintf(up, sizeof(up), ", traced at %lux%lu, %lu upsample fallbacks", s->tw, s->th, s->fallbacks);
+	}
+
 	n = snprintf(buf, len, "ref_metal: rt water: frame %lu: %lu pixels, %lu listed, %lu opaque water, "
-			"%lu translucent water, %lu eye rays, %lu lit, %lu world, %lu sky, %lu sky box, %lu none, %s ms%s",
+			"%lu translucent water, %lu eye rays, %lu lit, %lu world, %lu sky, %lu sky box, %lu none, %s ms%s%s",
 			s->frame, s->pixels, s->listed, s->opaque, s->trans, s->eye, s->lit, s->world, s->sky, s->skybox, s->miss,
-			ms, split);
+			ms, split, up);
 
 	if ((n < 0) || ((size_t)n >= len))
 	{

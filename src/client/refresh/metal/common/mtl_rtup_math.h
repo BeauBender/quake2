@@ -29,8 +29,10 @@
  * depth is taken, and the caller counts it for r_rt_stats 1. The block
  * layout is r_rt_ao_scale's (TASK157, common/mtl_rtao_math.h), which this
  * reuses. Slice 2 adds RT7's reprojection at the effect size
- * (mtl_rtup_reproject). Plain C99 and Metal Shading Language alike, as
- * common/mtl_rtd_math.h; the host test is tests/metal/rm_rtup_test.c.
+ * (mtl_rtup_reproject), slice 5 the water's fallback to a traced pixel of
+ * the pixel's own material only (mtl_rtup_own). Plain C99 and Metal
+ * Shading Language alike, as common/mtl_rtd_math.h; the host test is
+ * tests/metal/rm_rtup_test.c.
  *
  * =======================================================================
  */
@@ -216,6 +218,26 @@ mtl_rtup_weights(mtl_rtup_in_t in, unsigned d)
 	r.w[k] = 1.0f;
 	r.fallback = 1;
 	return r;
+}
+
+/*
+ * in with every tap of another material than the drawn pixel's taken as
+ * holding no sample, for an effect whose fallback must take only a tap of
+ * the pixel's own material (the water's, TASK126 slice 5): a pixel with no
+ * such tap is then empty, the effect's neutral value, and not a fallback.
+ * The weights are unchanged, mtl_rtup_tap_w giving such a tap 0 already.
+ */
+static inline mtl_rtup_in_t
+mtl_rtup_own(mtl_rtup_in_t in)
+{
+	int i;
+
+	for (i = 0; i < MTL_RTUP_TAPS; i++)
+	{
+		in.ok[i] = (in.ok[i] && (in.mn[i] == in.m)) ? 1 : 0;
+	}
+
+	return in;
 }
 
 /*

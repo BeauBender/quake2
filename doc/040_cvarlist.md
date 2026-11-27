@@ -1607,7 +1607,10 @@ is.
   (the list of its pixels, the trace) and the time from the first's start
   to the last's end, the pass's time being their sum (the water's marks
   are a draw of the G-buffer raster, timed with it, so there are no
-  raster figures); and under the Ray traced presentation with
+  raster figures; below `r_rt_water_scale 1` the counts from the pixels
+  traced to those from nowhere are of the traced pixels, and the line ends
+  with the traced size and the drawn pixels the upsample fell back on,
+  `, traced at WxH, F upsample fallbacks`); and under the Ray traced presentation with
   `r_rt_temporal` above `0` a line for its accumulation and its 5 x 5
   filter, timed together,
   `ref_metal: rt direct temporal: frame N: X ms` (`- ms` when no time was
@@ -1895,6 +1898,25 @@ is.
   finite number as `0`. In the video menu's renderer options as "water
   reflections" (greyed while `r_rt_water` is off). Saved with the
   configuration; applies from the next frame.
+
+* **r_rt_water_scale**: The share of the 3D view's width and height
+  that `r_rt_water` traces its reflections at. `1` (the default) traces
+  every pixel, `0.5` one pixel of each 2 x 2 block, a quarter of the
+  rays, and `0.33` one of each 3 x 3 block. Below `1` each water pixel
+  takes its reflection from the traced pixels next to it that found
+  water of its own kind (opaque water, or translucent water in front of
+  the surface behind) with a reflection and lie on the same surface (the
+  same distance, normal and material); one that none of them matches
+  takes the nearest in distance of those of its own material, and
+  `r_rt_stats 2` counts those; one with none of its own material is
+  given no reflection and is not counted. A pixel none of them gave a
+  reflection keeps the stock water. The blend over the water and the
+  translucent faces then read the reflection as at `1`. It is a share of
+  the size the view is drawn at, so with a MetalFX scaler (`r_metalfx`)
+  it applies to the scaler's input. A value is taken as the nearest of
+  the three (`1` above 2/3, `0.33` below `0.4`); `0`, a negative value
+  or one that is not a finite number counts as `1`. The reflections keep no history, so a change resets nothing.
+  Saved with the configuration; applies from the next frame.
 
 * **r_rt_water_show**: A development view of the Metal renderer's
   `r_rt_water`: with it on, `1` replaces the picture by a mask, black

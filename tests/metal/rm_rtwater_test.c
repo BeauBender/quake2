@@ -796,6 +796,34 @@ test_stats(void)
 	CHECK(strstr(buf, "world space: compaction -, trace -, span - ms") != NULL);
 	s.ws = 0;
 
+	/*
+	 * TASK126 slice 5: below divisor 1 the line ends with the traced size and
+	 * the upsample's fallbacks, after the world-space split; at 1 it is as
+	 * before, whatever the other fields hold.
+	 */
+	s.div = 1;
+	s.tw = 960;
+	s.th = 540;
+	s.fallbacks = 77;
+	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, "traced at") == NULL);
+	CHECK(strstr(buf, "fallbacks") == NULL);
+	s.div = 2;
+	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, ", 200 none, 0.875 ms, traced at 960x540, 77 upsample fallbacks") != NULL);
+	CHECK(strchr(buf, '\n') == NULL);
+	s.ws = 1;
+	s.compact_ms = 0.125;
+	s.trace_ms = 0.5;
+	s.span_ms = 1.5;
+	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, "span 1.500 ms, traced at 960x540, 77 upsample fallbacks") != NULL);
+	CHECK(strlen(buf) < RM_STATS_LINE);
+	s.ws = 0;
+	s.div = 0;
+	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, "traced at") == NULL);
+
 	s.ms = -1;
 	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
 	CHECK(strstr(buf, ", - ms") != NULL);
