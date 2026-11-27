@@ -1602,19 +1602,23 @@ else
 	else
 		echo "$me: ok   sv 126 nospawn: a 126 with no group named keeps the lock until it is released by hand"
 	fi
-	# the mutant, today's behaviour back: a 126 with no group named records
-	# nothing (round 1's note only). Round 2's trap-status-dropped is judged
-	# by the window case below (review round 3): the term case's "spawned"
-	# event records the group without the collected status.
+	# the mutants, each with the reason it must be refused for: a 126 with
+	# no group named records nothing (round 1's note only); lock status does
+	# not mark the hand record (review round 3). Round 2's
+	# trap-status-dropped is judged by the window case below (review round
+	# 3): the term case's "spawned" event records the group without the
+	# collected status.
 	for _lm in \
-		'nospawn|hand-not-recorded|scripts/bench/core/common.sh|		bench_record_untold "$_bu_g" hand|		:'; do
+		'nospawn|the lock was not kept|hand-not-recorded|scripts/bench/core/common.sh|		bench_record_untold "$_bu_g" hand|		:' \
+		'nospawn|the hand record was not named in lock status|status-hand-unmarked|scripts/bench/core/lock.sh|		_ls_k=$BENCH_LOCK_HAND|		_ls_k='; do
 		_lmc=${_lm%%|*} _lmr=${_lm#*|}
+		_lmx=${_lmr%%|*} _lmr=${_lmr#*|}
 		_lmn=${_lmr%%|*} _lmr=${_lmr#*|}
 		_lmf=${_lmr%%|*} _lmr=${_lmr#*|}
 		if sv_stage "$W/stage-$_lmn" "$_lmf" "${_lmr%%|*}" "${_lmr#*|}"; then
 			sv_lock126 "$W/stage-$_lmn" "$_lmc"
 			case $l126_why in
-			'the lock was not kept'*) echo "$me: mutant $_lmn: refused by $_lmc ($l126_why)" ;;
+			"$_lmx"*) echo "$me: mutant $_lmn: refused by $_lmc ($l126_why)" ;;
 			*)
 				echo "$me: FAIL: mutant $_lmn passed the 126 $_lmc case: ${l126_why:-held}"
 				fails="$fails $_lmn"
@@ -1717,6 +1721,21 @@ for _lm in \
 		fails="$fails $_lmn"
 	fi
 done
+# A hand record's printed rm -f reads back as its path, a ' in the lock
+# directory included (review round 3, security N2): the line, with its
+# "rm -f" read as printf, is run by sh, and must print the path
+_hq_d="$W/hand'q/lock"
+_hq_l=$(sh -c '. "$1/scripts/bench/core/common.sh"; . "$1/scripts/bench/core/lock.sh"; BENCH_LOCK_DIR=$2; bench_lock_hand_rm 42' sh "$here" "$_hq_d" 2>&1)
+case $_hq_l in
+"rm -f "*) _hq_o=$(sh -c "printf %s ${_hq_l#rm -f }" 2>&1) ;;
+*) _hq_o="no rm -f: $_hq_l" ;;
+esac
+if [ "$_hq_o" = "$_hq_d/untold.42" ]; then
+	echo "$me: ok   hand quote: the printed rm -f names the record's path, a ' in it included"
+else
+	echo "$me: FAIL: hand quote: the printed \"$_hq_l\" reads back as \"$_hq_o\", not \"$_hq_d/untold.42\""
+	fails="$fails hand-quote"
+fi
 # A group record whose id a later process group has taken holds nothing
 # (security I2, round 1), as a pid record's does: the group is started
 # first, in a group of its own (its "up" line on a FIFO says so), then

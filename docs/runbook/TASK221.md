@@ -205,8 +205,14 @@ prefix to tell it from a second one.
   - **A 126 with no group named** (no `spawned` event: a failed events write, or the
     supervisor's "cannot watch the command") writes a hand record instead:
     `untold.<id>` with `hand=<id>`, under the supervisor's pid (the bounding shell's when
-    there is none). It holds the lock until a person removes it, and one line names the
-    command: `rm -f '<state>/lock/untold.<id>'` (review round 2, security I1).
+    there is none). It holds the lock until a person removes it, with
+    `rm -f '<state>/lock/untold.<id>'` (review round 2, security I1). Every line that shows
+    the lock names a hand record as one, with that `rm -f`, because the record's own line
+    goes to the bounded caller's standard error, which `snap.sh` and `host.sh` send to
+    `/dev/null`: the line `bench_lock_record` prints, the lock shell's keep note, the
+    waiters' line, and `lock status` (`hand=<ids>` on the lock line, then
+    `hand=<id> rm -f '<path>'` for each). The path is in single quotes, a `'` in it written
+    `'\''` (`bench_lock_hand_rm`), so a copied line cannot break (review round 3).
   - **A trap after the 126 is collected.** `bench_bounded` empties `SV_STATUS` before the
     supervisor starts. Once `sv_wait` has collected the status, `bench_bounded_stop` acts on
     `SV_STATUS` rather than on `sv_stop`'s 0, so a trap that comes before `bench_bounded`
