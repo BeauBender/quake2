@@ -838,6 +838,14 @@ limit" "$out"
     [ -n "$(sec "$w/out/chunks.html")" ] && [ "$(sec "$w/out/chunks.html")" = "$(sec "$(ls "$w"/c0/metalfx-t1-*.html | head -1)")" ] || ko chunk-merge "the chunks' scenario tables differ from the full run's"
     nf=$(grep -o '<figure>' "$w/out/chunks.html" | wc -l | tr -d ' '); nf0=$(grep -o '<figure>' "$(ls "$w"/c0/metalfx-t1-*.html | head -1)" | wc -l | tr -d ' ')
     [ "$nf" -gt 0 ] && [ "$nf" = "$nf0" ] || ko chunk-merge "the crops of the chunks ($nf) are not the full run's ($nf0)"
+    # (FIX204) the load readings are the host's, not the run's: the same rows read under a 1-minute load over
+    # LOAD_QUIET (8.0) carry a load note that the same rows read on a quiet host do not, and the scenario tables
+    # of the two are the same once that note is left out. Forced here: the full run's rows with every load at 20
+    q0="$w/c0load"; cp -R "$r0" "$q0"
+    awk -F'\t' 'BEGIN { OFS = "\t" } NR > 1 && $3 == "ok" { $6 = "20.00" } { print }' "$r0/results.tsv" > "$q0/results.tsv"
+    out=$($py report --dir "$q0" --html "$w/out/c0load.html" 2>&1); want_rc chunk-load 0 $?
+    want_has chunk-load "[measured under load (1-minute load up to 20.0" "$(cat "$w/out/c0load.html" 2>/dev/null)"
+    [ -n "$(sec "$w/out/c0load.html")" ] && [ "$(sec "$w/out/chunks.html")" = "$(sec "$w/out/c0load.html")" ] || ko chunk-load "the chunks' scenario tables differ from those of the full run read under load"
     cp -R "$r1" "$w/c1dup"
     out=$($py report --dir "$r1" --dir "$w/c1dup" --html "$w/out/dup.html" 2>&1); want_rc chunk-dup 3 $?
     want_has chunk-dup "is in both" "$out"
