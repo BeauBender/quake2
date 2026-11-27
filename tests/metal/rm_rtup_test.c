@@ -24,8 +24,10 @@
  * pixel holds); a traced pixel across a depth step, across a material-id
  * change, across a crease or with no sample gets no weight; where none
  * matches, the one nearest in depth is taken and counted, and where none
- * has a sample the neutral value; and a small image upsampled as a kernel
- * would, with a depth step and a thin line no traced pixel lies on. Built
+ * has a sample the neutral value; the water's fallback to a tap of the
+ * pixel's own material only (mtl_rtup_own, slice 5); and a small image
+ * upsampled as a kernel would, with a depth step and a thin line no
+ * traced pixel lies on. Built
  * and run by tests/check-ref-metal.sh, which also builds it against
  * mutants of the header that it must fail.
  *

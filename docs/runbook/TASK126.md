@@ -493,8 +493,8 @@ Slice 5 follows slices 3 and 4: a separate low-scale unit, a stock path that is 
   at the render size, as at scale 1. Only the traced pixel's own sample moves to its source pixel.
 - **The upsample's rule on the water's class.**
   - A drawn pixel in the view with a depth and a normal is of the layer the trace would find there:
-    opaque water where the raster drew water, else translucent water in front of its surface. Any
-    other pixel is skipped before the rule, so the fallbacks are not inflated.
+    opaque water where the raster drew water, else translucent water in front of its surface. A
+    pixel with no depth or no normal is skipped before the rule and is not counted.
   - The four traced pixels about it are weighed by `mtl_rtup_weights`. The guides are the G-buffer's,
     at the drawn pixel and at each tap's source pixel. For translucent water those are the surface
     behind it, since a drawn pixel's own water is known only to a ray.
@@ -504,14 +504,29 @@ Slice 5 follows slices 3 and 4: a separate low-scale unit, a stock path that is 
   - The reflection is the weighted colour. The class is the drawn pixel's layer with the choice of
     the tap carrying the most weight (the first of equals). Translucent water's distance is the
     weighted distance, which the forward pass tests against the fragment's within TASK55's tolerance.
-- **A drawn water pixel with no matching tap.** It takes the rule's fallback: the tap with a sample
-  nearest in depth, whole, counted in the counts' slot 8, once per drawn pixel.
+- **A drawn pixel with no matching tap.** Before the weights, `mtl_rtup_own` takes every tap of
+  another material than the drawn pixel's as holding no sample. The pixel then takes the rule's
+  fallback: of the taps of its own material with a sample, the one nearest in depth, whole, counted in
+  the counts' slot 8, once per drawn pixel. Where no tap of its own material has a sample, it is
+  empty: the stock value below, and not counted. So a pixel of another material than the water's
+  surface, such as a pillar standing in translucent water that was traced over the floor, takes no
+  tap of that water, and is neither marked nor counted.
 - **A drawn pixel no tap gave a reflection.** Opaque water there keeps the stock water: the class is
   water with `MTL_RTW_MISS`, which the blend discards, as where the stock trace finds no reflection.
-- **A non-water pixel.** It gets exactly what the stock path writes there: `t_refl` 0 (no colour,
-  class 0) and `t_wdist` 0. That covers a pixel skipped before the rule and a translucent candidate no
-  tap gave translucent water. On the world-space path the stock trace leaves `t_wdist` unwritten at a
-  pixel it does not list, and nothing reads it there: every reader tests the class first.
+- **A pixel the upsample gives no water.** It gets exactly what the stock path writes at a pixel
+  with no water: `t_refl` 0 (no colour, class 0) and `t_wdist` 0, and it is not counted. That covers a
+  pixel skipped before the rule, a translucent candidate with no tap of its own material holding a
+  sample, and one whose taps of its own material gave no translucent water. On the world-space path
+  the stock trace leaves `t_wdist` unwritten at a pixel it does not list, and nothing reads it there:
+  every reader tests the class first.
+- **A non-water pixel of the same material as the surface under translucent water.** Next to that
+  water, such as dry floor at the shore beside the wet floor, it can take the wet floor's taps, by
+  weight or as a fallback. It is then marked as translucent water, and a fallback there is counted.
+  The upsample casts no ray, so it cannot tell the two floors apart. The blend applies only where the
+  G-buffer's material is water, and the translucent pass reads `t_refl` only under a translucent
+  water fragment, whose distance it tests within TASK55's tolerance; neither is drawn at a dry pixel.
+  So only the `r_rt_water_show` mask and the fallback count can include such a pixel, at most `div`
+  pixels from the water's edge.
 - **The blur and the reset.** The 3 x 3 blur runs at the traced size, in the trace's encoder, before
   the upsample, which then reads the blurred reflection. The stock blur is not dispatched below
   divisor 1. The water has no history, so there is no `scale` reset to take. Under the plan's reset
@@ -576,6 +591,9 @@ Slice 5 follows slices 3 and 4: a separate low-scale unit, a stock path that is 
   it takes no reflection below scale 1. The stock trace finds it with an eye ray; the upsample casts
   no ray.
 - The upsample's class rule has no host test of its own. It is pinned as text, and the hold runs it.
+  Its material part, `mtl_rtup_own`, is held by `rm_rtup_test` (`test_own`).
+- A non-water pixel of the same material as the surface under translucent water, next to it, can be
+  marked and counted (above). Telling it apart needs a ray.
 - The low path has never run on a GPU on this branch. The host checks compile it and pin its text.
   The hold below is its first run.
 

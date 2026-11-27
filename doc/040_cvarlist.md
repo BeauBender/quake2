@@ -1907,14 +1907,15 @@ is.
   water of its own kind (opaque water, or translucent water in front of
   the surface behind) with a reflection and lie on the same surface (the
   same distance, normal and material); one that none of them matches
-  takes the nearest in distance, and `r_rt_stats 2` counts those. A pixel
-  none of them gave a reflection keeps the stock water. The blend over
-  the water and the translucent faces then read the reflection as at `1`.
-  It is a share of the size the view is drawn at, so with a MetalFX
-  scaler (`r_metalfx`) it applies to the scaler's input. A value is taken
-  as the nearest of the three (`1` for `0.67` and above, `0.33` below
-  `0.4`); `0`, a negative value or one that is not a finite number counts
-  as `1`. The reflections keep no history, so a change resets nothing.
+  takes the nearest in distance of those of its own material, and
+  `r_rt_stats 2` counts those; one with none of its own material is
+  given no reflection and is not counted. A pixel none of them gave a
+  reflection keeps the stock water. The blend over the water and the
+  translucent faces then read the reflection as at `1`. It is a share of
+  the size the view is drawn at, so with a MetalFX scaler (`r_metalfx`)
+  it applies to the scaler's input. A value is taken as the nearest of
+  the three (`1` above 2/3, `0.33` below `0.4`); `0`, a negative value
+  or one that is not a finite number counts as `1`. The reflections keep no history, so a change resets nothing.
   Saved with the configuration; applies from the next frame.
 
 * **r_rt_water_show**: A development view of the Metal renderer's
