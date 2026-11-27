@@ -55,6 +55,10 @@
 #     tests/metal/rm_rtpdenoise_test.c, RT-primary's 5 x 5 filter of that
 #     light (common/mtl_rtpd_math.h, TASK190 slice 2), with five mutants of
 #     the header and five pins of rm_rtpdenoise.metal with six mutants,
+#     tests/metal/rm_rtup_test.c, the joint bilateral upsample of an effect
+#     traced below the drawn size (common/mtl_rtup_math.h, option E, TASK126
+#     slice 1), with eight mutants of the header it must fail, the header
+#     compiled as Metal where xcrun metal is there,
 #     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
 #     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eighteen
 #     scratch mutants of the two must fail it, and all eighteen must),
@@ -2915,6 +2919,112 @@ if [ "$(grep -cF 'ref_metal/rm_rtpdenoise.air' Makefile)" != 2 ] ||
 	bad "the RT-primary filter is not linked into ref_metal.metallib or its pipeline is not made by rmb_rtdir.m"
 fi
 seg 7.8 "; RT-primary filter ${rtpd:-host test}, $rtpd_mutants rule mutants, $rtpd_kpins kernel pins with $rtpd_kmut kernel mutants refused${rtp_metal:+ and compiled}"
+
+# The joint bilateral upsample of an effect traced below the drawn size (option E, RT13, TASK126 slice 1):
+# tests/metal/rm_rtup_test.c holds common/mtl_rtup_math.h: the scale's divisor, a scale of 1 the identity,
+# no weight across a depth step, a material-id change, a crease or for a tap with no sample, the fallback
+# to the tap nearest in depth, counted, and an image with a depth step and a thin line. Header mutants,
+# each of which must compile and fail it with a FAIL line (a crash or a sanitizer trip is an error, not a
+# refusal): the depth guide, the material test, the normal guide and the
+# sample test dropped, the fallback taking the first tap, the fallback not counted, and the identity
+# dropped at a scale of 1, and the two cross weights of the bilinear taps swapped. Where the Metal
+# compiler is there, a kernel that calls every function of the header must compile.
+rtup=""
+rtup_tree() { # <dir>: a copy of the test and the headers, laid out as the test includes them
+	rm -rf "${1:?}"
+	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
+	cp "$rm_dir/common/mtl_rtup_math.h" "$rm_dir/common/mtl_rtd_math.h" "$rm_dir/common/mtl_rtao_math.h" \
+		"$rm_dir/common/mtl_shader_math.h" "$1/src/client/refresh/metal/common/"
+	cp tests/metal/rm_rtup_test.c "$1/tests/metal/"
+}
+rtup_build() { # <tree>: 0 when the tree's test builds
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags -o "$1/t" "$1/tests/metal/rm_rtup_test.c" -lm > "${tmp:?}/cc.out" 2>&1
+}
+rtup_run() { # <tree>: 0 when the tree's test builds and passes
+	rtup_build "$1" && UBSAN_OPTIONS=print_stacktrace=1 "$1/t" > "${tmp:?}/out" 2>&1
+}
+if [ ! -f "$rm_dir/common/mtl_rtup_math.h" ]; then
+	bad "common/mtl_rtup_math.h is missing"
+else
+	rtup_tree "${tmp:?}/rtup"
+	if ! rtup_run "${tmp:?}/rtup"; then
+		cat "${tmp:?}/cc.out" "${tmp:?}/out"
+		bad "tests/metal/rm_rtup_test.c fails on the real files"
+	else
+		rtup=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtup_test: //')
+		case $rtup in *", 0 failed") ;; *) bad "tests/metal/rm_rtup_test.c printed no result line"; rtup="";; esac
+	fi
+fi
+rtup_mutants=0
+rtup_h=$rm_dir/common/mtl_rtup_math.h
+for m in depth material normal sample first count identity bilinear; do
+	[ -f "$rtup_h" ] || break
+	rtup_tree "${tmp:?}/rtupm"
+	h=${tmp:?}/rtupm/src/client/refresh/metal/common/mtl_rtup_math.h
+	case $m in
+		depth) sed 's/mtl_rtd_depth_w(in\.d, in\.dn\[i\])/mtl_rtd_depth_w(in.d, in.d)/' ;;
+		material) sed 's/(in\.mn\[i\] != in\.m)/((in.mn[i] != in.m) \&\& 0)/' ;;
+		normal) sed 's/mtl_rtd_normal_w(in\.n, in\.nn\[i\])/mtl_rtd_normal_w(in.n, in.n)/' ;;
+		sample) sed 's/if (!in\.ok\[i\] ||/if ((!in.ok[i] \&\& 0) ||/' ;;
+		first) sed 's/((k < 0) || (e < best))/((k < 0) || ((e < best) \&\& 0))/' ;;
+		count) sed 's/r\.fallback = 1;/r.fallback = 0;/' ;;
+		identity) sed 's/if (d <= 1u)$/if (d < 1u)/' ;;
+		bilinear) sed -e 's/in\.b\[1\] = qx\.f \* (1\.0f - qy\.f);/in.b[1] = (1.0f - qx.f) * qy.f;/' \
+			-e 's/in\.b\[2\] = (1\.0f - qx\.f) \* qy\.f;/in.b[2] = qx.f * (1.0f - qy.f);/' ;;
+	esac < "$rtup_h" > "$h"
+	if cmp -s "$rtup_h" "$h"; then
+		bad "the upsample mutant ($m) changed nothing"
+	elif ! rtup_build "${tmp:?}/rtupm"; then
+		cat "${tmp:?}/cc.out"
+		bad "the upsample mutant ($m) does not compile, so it tests nothing"
+	elif rtup_run "${tmp:?}/rtupm"; then
+		bad "tests/metal/rm_rtup_test.c passes the upsample mutant ($m)"
+	elif ! grep -q '^FAIL ' "${tmp:?}/out"; then
+		# a non-zero exit with no FAIL line is a crash or a sanitizer trip, not a refusal
+		cat "${tmp:?}/out"
+		bad "tests/metal/rm_rtup_test.c errors on the upsample mutant ($m) without a FAIL line, so it is not refused"
+	else
+		rtup_mutants=$((rtup_mutants + 1))
+	fi
+done
+[ "$rtup_mutants" = 8 ] || bad "the upsample test refused $rtup_mutants of its 8 header mutants"
+rtup_metal=""
+if [ -n "$rtp_metal" ] && [ -f "$rtup_h" ]; then
+	cat > "${tmp:?}/rtup-probe.metal" <<'EOF'
+#include <metal_stdlib>
+using namespace metal;
+#include "common/mtl_shader_math.h"
+#include "common/mtl_rtup_math.h"
+kernel void rtup_probe(device float *o [[buffer(0)]], uint2 px [[thread_position_in_grid]])
+{
+	const unsigned d = mtl_rtup_div(0.5f), n = mtl_rtup_size(16u, d);
+	mtl_rtup_in_t in;
+
+	in.d = 100.0f;
+	in.n = mtl_rtao_v3(0.0f, 0.0f, 1.0f);
+	in.m = 1u;
+	for (int i = 0; i < MTL_RTUP_TAPS; i++)
+	{
+		in.dn[i] = 100.0f;
+		in.nn[i] = in.n;
+		in.mn[i] = 1u;
+		in.ok[i] = 1;
+	}
+	in = mtl_rtup_bilinear(in, mtl_rtao_up_pair(px.x, d, n), mtl_rtao_up_pair(px.y, d, n));
+	const mtl_rtup_out_t r = mtl_rtup_weights(in, d);
+	o[px.y * 16u + px.x] = mtl_rtup_value(r, 0.1f, 0.2f, 0.3f, 0.4f, 1.0f) + mtl_rtup_tap_w(in, 0) +
+		(float)mtl_rtup_src(px.x, d, 16u);
+}
+EOF
+	if rtp_compile "${tmp:?}/rtup-probe.metal"; then
+		rtup_metal=1
+	else
+		cat "${tmp:?}/metal.out"
+		bad "common/mtl_rtup_math.h does not compile as Metal"
+	fi
+fi
+seg 7.85 "; upsample ${rtup:-host test}, $rtup_mutants rule mutants refused${rtup_metal:+, compiled}"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"
