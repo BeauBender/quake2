@@ -151,4 +151,44 @@ unsigned rm_rtt_hist_take_at(rm_rtt_hist_t *h, const rm_rtt_view_t *t, unsigned 
 int rm_rtt_scale_line_format(const char *effect, char *buf, size_t len);
 int rm_rtt_traced_format(unsigned w, unsigned h, unsigned long fallbacks, char *buf, size_t len);
 
+/*
+ * TASK126 slice 6: one effect's upsample, as its r_rt_stats lines report
+ * it. tw x th is the traced size of the effect's last frame below divisor
+ * 1 (0 x 0 before one, and after a frame at divisor 1, which upsamples
+ * nothing); fallbacks and pixels are the totals of the frames below
+ * divisor 1 since the map loaded: the upsample's fallbacks and the drawn
+ * pixels it wrote. Zeroed, it is an effect that has upsampled nothing.
+ */
+typedef struct
+{
+	unsigned long tw, th;
+	unsigned long long fallbacks, pixels;
+} rm_rtt_up_t;
+
+/*
+ * One frame's stats of the effect: its divisor (0 is 1), traced size,
+ * drawn pixels and fallbacks. Below divisor 1 the frame is added to the
+ * totals; 1 when its traced size is not the last frame's (the size-change
+ * line is due), else 0. At divisor 1 the traced size is forgotten and
+ * nothing is added: 0.
+ */
+int rm_rtt_up_frame(rm_rtt_up_t *u, unsigned div, unsigned long tw, unsigned long th, unsigned long pixels,
+		unsigned long fallbacks);
+
+/* A map loaded: the totals start again; the traced size is kept, so the line is not printed again for it. */
+void rm_rtt_up_map(rm_rtt_up_t *u);
+
+/*
+ * The lines, without a newline; each 1 when it fits in len, 0 with buf
+ * empty otherwise. The r_rt_stats 1 line of a frame whose traced size
+ * changed: "ref_metal: r_rt_stats: upsample: <effect> TWxTH of WxH, F
+ * fallbacks", F that frame's. The effect's line of the r_rt_stats 1 map
+ * summary: "ref_metal: rt: <map>: upsample: <effect> F fallbacks of P
+ * upsampled pixels (S %)", S F over P in percent, to three places; 0,
+ * buf empty, for an effect that upsampled no pixel.
+ */
+int rm_rtt_up_line_format(const char *effect, unsigned long tw, unsigned long th, unsigned long w, unsigned long h,
+		unsigned long fallbacks, char *buf, size_t len);
+int rm_rtt_up_total_format(const char *map, const char *effect, const rm_rtt_up_t *u, char *buf, size_t len);
+
 #endif /* RM_RTTEMPORAL_H */

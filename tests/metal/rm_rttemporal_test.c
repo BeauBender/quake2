@@ -564,6 +564,79 @@ test_scale(void)
 	CHECK(buf[0] == 0);
 }
 
+/* TASK126 slice 6: an effect's upsample totals and the size-change line */
+static void
+test_up(void)
+{
+	rm_rtt_up_t u;
+	char buf[256];
+
+	memset(&u, 0, sizeof(u));
+
+	/* divisor 1 (and 0, which is 1) upsamples nothing: no line, no total */
+	CHECK(rm_rtt_up_frame(&u, 1u, 640, 480, 307200, 0) == 0);
+	CHECK(rm_rtt_up_frame(&u, 0u, 640, 480, 307200, 5) == 0);
+	CHECK((u.tw == 0) && (u.th == 0) && (u.fallbacks == 0) && (u.pixels == 0));
+	CHECK(!rm_rtt_up_total_format("base1", "sun", &u, buf, sizeof(buf)));
+	CHECK(buf[0] == 0);
+
+	/* the first frame below divisor 1: the line is due, and the frame is in the totals */
+	CHECK(rm_rtt_up_frame(&u, 2u, 320, 240, 307200, 933) == 1);
+	CHECK((u.tw == 320) && (u.th == 240) && (u.fallbacks == 933) && (u.pixels == 307200));
+
+	/* the same size again: not due, the totals grow */
+	CHECK(rm_rtt_up_frame(&u, 2u, 320, 240, 307200, 67) == 0);
+	CHECK((u.fallbacks == 1000) && (u.pixels == 614400));
+
+	/* a width or a height alone changed: due */
+	CHECK(rm_rtt_up_frame(&u, 2u, 321, 240, 307200, 0) == 1);
+	CHECK(rm_rtt_up_frame(&u, 2u, 321, 241, 307200, 0) == 1);
+	CHECK(rm_rtt_up_frame(&u, 2u, 321, 241, 307200, 0) == 0);
+
+	/* another divisor, another size: due */
+	CHECK(rm_rtt_up_frame(&u, 3u, 214, 161, 307200, 0) == 1);
+	CHECK(u.pixels == 307200ull * 5);
+
+	/* back to divisor 1: the size is forgotten and nothing is added; the next frame below is due again */
+	CHECK(rm_rtt_up_frame(&u, 1u, 640, 480, 307200, 0) == 0);
+	CHECK((u.tw == 0) && (u.th == 0) && (u.pixels == 307200ull * 5) && (u.fallbacks == 1000));
+	CHECK(rm_rtt_up_frame(&u, 3u, 214, 161, 307200, 0) == 1);
+
+	/* the summary's line: the totals and their share */
+	memset(&u, 0, sizeof(u));
+	CHECK(rm_rtt_up_frame(&u, 2u, 320, 240, 211046400ul, 354398) == 1);
+	CHECK(rm_rtt_up_total_format("base1", "sun", &u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt: base1: upsample: sun 354398 fallbacks of 211046400 upsampled pixels (0.168 %)") == 0);
+	CHECK(!rm_rtt_up_total_format("base1", "sun", &u, buf, 20));
+	CHECK(buf[0] == 0);
+
+	/* totals past 32 bits */
+	u.fallbacks = 5000000000ull;
+	u.pixels = 10000000000ull;
+	CHECK(rm_rtt_up_total_format("q2dm1", "water", &u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt: q2dm1: upsample: water 5000000000 fallbacks of 10000000000 upsampled pixels "
+			"(50.000 %)") == 0);
+
+	/* a map load: the totals start again, the size is kept, so the same size is not due */
+	rm_rtt_up_map(&u);
+	CHECK((u.fallbacks == 0) && (u.pixels == 0) && (u.tw == 320) && (u.th == 240));
+	CHECK(rm_rtt_up_frame(&u, 2u, 320, 240, 100, 1) == 0);
+	CHECK(rm_rtt_up_total_format("base2", "ao", &u, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: rt: base2: upsample: ao 1 fallbacks of 100 upsampled pixels (1.000 %)") == 0);
+
+	/* the size-change line */
+	CHECK(rm_rtt_up_line_format("shadows", 320, 240, 640, 480, 597, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: upsample: shadows 320x240 of 640x480, 597 fallbacks") == 0);
+	CHECK(rm_rtt_up_line_format("water", 427, 240, 1280, 720, 0, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: r_rt_stats: upsample: water 427x240 of 1280x720, 0 fallbacks") == 0);
+	CHECK(!rm_rtt_up_line_format("water", 427, 240, 1280, 720, 0, buf, 30));
+	CHECK(buf[0] == 0);
+	buf[0] = 'x';
+	CHECK(!rm_rtt_up_line_format("water", 427, 240, 1280, 720, 0, buf, 0));
+	CHECK(!rm_rtt_up_total_format("base2", "ao", &u, buf, 0));
+	CHECK(buf[0] == 'x');
+}
+
 int
 main(void)
 {
@@ -576,6 +649,7 @@ main(void)
 	test_lights();
 	test_hist();
 	test_scale();
+	test_up();
 
 	printf("rm_rttemporal_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
