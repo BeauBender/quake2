@@ -151,6 +151,46 @@ test_format(void)
 	CHECK(rm_rtg_format(&g, buf, strlen("ref_metal: ray tracing: compute path (apple7, supportsRaytracing)")) == 0);
 }
 
+/*
+ * TASK126 slice 6: the line where the device has no ray tracing, the
+ * effect scales doing nothing there; none on a device that traces
+ */
+static void
+test_scales_line(void)
+{
+	static const char want[] = "ref_metal: ray tracing: none on this device: the effect scales do nothing";
+	char buf[256];
+	rm_rtg_t g;
+
+	/* every reason for no path: the line */
+	g = rm_rtg_decide(UPTO(5), 0, 0);
+	CHECK(rm_rtg_scales_format(&g, buf, sizeof(buf)) == 1 && !strcmp(buf, want));
+	g = rm_rtg_decide(0, 0, 0);
+	CHECK(rm_rtg_scales_format(&g, buf, sizeof(buf)) == 1 && !strcmp(buf, want));
+	g = rm_rtg_decide(UPTO(5), 1, 0);    /* supportsRaytracing below apple6 */
+	CHECK(rm_rtg_scales_format(&g, buf, sizeof(buf)) == 1 && !strcmp(buf, want));
+	g = rm_rtg_decide(UPTO(9), 0, 1);    /* supportsRaytracingFromRender alone */
+	CHECK(rm_rtg_scales_format(&g, buf, sizeof(buf)) == 1 && !strcmp(buf, want));
+
+	/* a device that traces, on either path: no line, the buffer empty */
+	g = rm_rtg_decide(UPTO(7), 1, 0);
+	memset(buf, 'x', sizeof(buf));
+	CHECK(rm_rtg_scales_format(&g, buf, sizeof(buf)) == 0 && buf[0] == '\0');
+	g = rm_rtg_decide(UPTO(9), 1, 1);
+	memset(buf, 'x', sizeof(buf));
+	CHECK(rm_rtg_scales_format(&g, buf, sizeof(buf)) == 0 && buf[0] == '\0');
+	g = rm_rtg_decide(UPTO(9), 1, 0);
+	CHECK(rm_rtg_scales_format(&g, buf, sizeof(buf)) == 0 && buf[0] == '\0');
+
+	/* the exact size fits, one less does not; no room: nothing written */
+	g = rm_rtg_decide(UPTO(5), 0, 0);
+	CHECK(rm_rtg_scales_format(&g, buf, sizeof(want)) == 1 && !strcmp(buf, want));
+	memset(buf, 'x', sizeof(buf));
+	CHECK(rm_rtg_scales_format(&g, buf, sizeof(want) - 1) == 0 && buf[0] == '\0');
+	memset(buf, 'x', sizeof(buf));
+	CHECK(rm_rtg_scales_format(&g, buf, 0) == 0 && buf[0] == 'x');
+}
+
 /* the effect switches of the table, in its order, as one string */
 static void
 effects(char *buf, size_t len)
@@ -796,6 +836,7 @@ main(int argc, char **argv)
 		return check_names(argc, argv);
 	}
 
+	test_scales_line();
 	test_pres_decide();
 	test_pres_overlay();
 	test_pres_rtprimary_fx();

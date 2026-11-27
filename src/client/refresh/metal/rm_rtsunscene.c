@@ -38,6 +38,7 @@
 #include "header/rm_rtsunscene.h"
 #include "header/rm_rtaoscene.h"
 #include "header/rm_gbufscene.h"
+#include "header/rm_rtscene.h"
 #include "common/mtl_rtup_math.h"
 
 /*
@@ -287,6 +288,12 @@ RM_RTSun_Frame(const refdef_t *fd, int scene_ready)
 	for (i = 0; i < n; i++)
 	{
 		RM_OptCost_Add(RM_COST_SUN, st[i].ms);
+	}
+
+	/* TASK126 slice 6: the upsample's size-change line (r_rt_stats 1) and the map summary's totals */
+	for (i = 0; i < n; i++)
+	{
+		RM_RT_UpFrame(RM_RT_UP_SUN, st[i].frame, st[i].div, st[i].tw, st[i].th, st[i].w, st[i].h, st[i].fallbacks);
 	}
 
 	for (i = 0; i < n && r_rt_stats_ref && (r_rt_stats_ref->value >= 2); i++)

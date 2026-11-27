@@ -156,6 +156,24 @@ rm_rtg_reset_format(const char *name, const rm_rtg_t *g, char *buf, size_t len)
 			rm_rtg_why_text(g->why)), buf, len);
 }
 
+int
+rm_rtg_scales_format(const rm_rtg_t *g, char *buf, size_t len)
+{
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	if (rm_rtg_traces(g))
+	{
+		buf[0] = '\0';
+		return 0;
+	}
+
+	return rtg_put(snprintf(buf, len, "ref_metal: ray tracing: none on this device: the effect scales do nothing"),
+			buf, len);
+}
+
 /*
  * Every r_rt_* cvar of ref_metal, sorted by name. An effect switch (the
  * switch of a row of the effect table, rm_rtfx_is_switch: TASK179 keeps

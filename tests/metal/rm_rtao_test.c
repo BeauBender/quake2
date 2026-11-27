@@ -795,6 +795,25 @@ test_stats(void)
 	CHECK(rm_rtao_stats_format(&s, small, sizeof(small)) == 0);
 	CHECK(small[0] == 0);
 	CHECK(rm_rtao_stats_format(&s, buf, 0) == 0);
+
+	/* TASK126 slice 6: below divisor 1 the line ends with the traced size and the fallbacks, in the other effects' words */
+	s.ms = 1.25;
+	s.div = 2;
+	s.tw = 960;
+	s.th = 540;
+	s.fallbacks = 4321;
+	CHECK(rm_rtao_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strcmp(buf, "ref_metal: rt ao: frame 12: 2073600 pixels, 1500000 traced, 400000 occluded, 3000 at the floor, "
+			"600000 up (90000 occluded), 3000000 rays, 500000 hits, 1.250 ms, traced at 960x540, 4321 upsample "
+			"fallbacks") == 0);
+
+	/* at divisor 1 (and 0) it is the line above, whatever the other fields hold */
+	s.div = 1;
+	CHECK(rm_rtao_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, "traced at") == NULL);
+	s.div = 0;
+	CHECK(rm_rtao_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, "traced at") == NULL);
 }
 
 /* TASK157: r_rt_ao_scale and r_rt_ao_rays as the pass takes them, and their defaults */
@@ -1019,6 +1038,77 @@ test_up(void)
 	CHECK(ok);
 }
 
+/*
+ * TASK126 slice 6: mtl_rtao_up_fallback, 1 exactly where mtl_rtao_up_ao
+ * takes the world pixels' mean or 1 (no world pixel on the surface with a
+ * weight above 0), and the AO the same either way
+ */
+static void
+test_up_fallback(void)
+{
+	mtl_rtao_up_t u;
+	int i, k, ok = 1, fell = 0;
+
+	for (i = 0; i < 4; i++)
+	{
+		u.ao[i] = 0.25f * (float)(i + 1);
+		u.w[i] = 0.25f;
+		u.same[i] = 1;
+		u.world[i] = 1;
+	}
+
+	CHECK(mtl_rtao_up_fallback(u) == 0);
+	u.same[3] = 0;
+	CHECK(mtl_rtao_up_fallback(u) == 0);
+	u.same[0] = u.same[1] = u.same[2] = 0;   /* none on the surface: the world pixels' mean */
+	CHECK(mtl_rtao_up_fallback(u) == 1);
+	u.same[2] = 1;
+	u.world[2] = 0;                          /* on the surface but no world pixel: it does not count */
+	CHECK(mtl_rtao_up_fallback(u) == 1);
+	u.world[2] = 1;
+	u.w[2] = 0.0f;                           /* on the surface with no weight: it does not count */
+	CHECK(mtl_rtao_up_fallback(u) == 1);
+	u.w[2] = -0.5f;
+	CHECK(mtl_rtao_up_fallback(u) == 1);
+	u.w[2] = 0.0f / 0.0f;                    /* a NaN weight counts as none, as in mtl_rtao_up_ao */
+	CHECK(mtl_rtao_up_fallback(u) == 1);
+	u.w[2] = 1e-30f;                         /* the least weight counts */
+	CHECK(mtl_rtao_up_fallback(u) == 0);
+
+	for (i = 0; i < 4; i++)
+	{
+		u.world[i] = 0;
+	}
+
+	CHECK(mtl_rtao_up_fallback(u) == 1);     /* no world pixel: 1 */
+	CHECK(mtl_rtao_up_ao(u) == 1.0f);
+
+	/* against an oracle of mtl_rtao_up_ao's own sum, and the AO unchanged by the count */
+	for (k = 0; k < 20000; k++)
+	{
+		float ws = 0.0f, a;
+		mtl_rtao_up_t c;
+
+		for (i = 0; i < 4; i++)
+		{
+			u.ao[i] = frand(0, 1);
+			u.w[i] = frand(-0.2f, 1);
+			u.same[i] = frand(0, 1) < 0.3f;
+			u.world[i] = frand(0, 1) < 0.8f;
+			ws += (u.world[i] && u.same[i] && (u.w[i] > 0.0f)) ? u.w[i] : 0.0f;
+		}
+
+		c = u;
+		a = mtl_rtao_up_ao(u);
+		ok &= (mtl_rtao_up_fallback(u) == !(ws > 0.0f));
+		ok &= (mtl_rtao_up_ao(u) == a) && !memcmp(&c, &u, sizeof(u));
+		fell += mtl_rtao_up_fallback(u);
+	}
+
+	CHECK(ok);
+	CHECK((fell > 1000) && (fell < 19000));  /* both sides were tried */
+}
+
 /* TASK157: one ray's AO, and its direction over the whole circle */
 static void
 test_one_ray(void)
@@ -1063,6 +1153,7 @@ main(void)
 	test_cvars157();
 	test_lo();
 	test_up();
+	test_up_fallback();
 	test_one_ray();
 
 	printf("rm_rtao_test: %d checks, %d failed\n", checks, failures);
