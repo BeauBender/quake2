@@ -1600,7 +1600,9 @@ is.
   the scaler's as `r_metalfx` lists them, the temporal history's as
   `first` (a map load, a `vid_restart`, a frame that accumulated no view),
   `size`, `rect` and `cut`, and `none` for a history that is kept; with no
-  scaler it prints nothing. Nothing
+  scaler it prints nothing. At any `r_metalfx`, a 3D view that resets
+  the sun's history because `r_rt_sun_scale` changed prints the line
+  `ref_metal: r_rt_stats: reset: sun scale`. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
