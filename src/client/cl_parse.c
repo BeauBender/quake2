@@ -892,10 +892,16 @@ CL_ParseFrame(void)
 			   client, and that text can still wait in the command
 			   buffer behind a script's `wait`s while the demo's
 			   frames come in: load it now, as that precache does
-			   (FIX215). A map already loaded (every live connection,
-			   where frames only come after "begin") is the cached
-			   one. */
-			if (cl.configstrings[CS_MODELS + 1][0])
+			   (FIX215). Only when no map is loaded, as a demo server
+			   leaves the collision map: a live connection's frames
+			   only come after "begin", with its map loaded, and a
+			   `gamemap` while a demo plays sends one more demo chunk
+			   before the new map spawns into the collision map a
+			   listen server shares with this client. That stale
+			   frame, with attractloop still set, must not load the
+			   demo's map over the new one. */
+			if (cl.configstrings[CS_MODELS + 1][0]
+				&& (CM_NumInlineModels() == 0))
 			{
 				unsigned map_checksum;
 

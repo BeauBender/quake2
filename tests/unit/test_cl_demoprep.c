@@ -23,8 +23,10 @@
  *
  * CL_ParseFrame in src/client/cl_parse.c now loads the map the
  * client's configstrings name when the client becomes active, as the
- * old demos' precache does; a map already loaded (every live
- * connection) is the cached one, unchanged. The tests reach it through
+ * old demos' precache does, but only while the collision map is empty,
+ * as a demo server leaves it: a map already loaded (every live
+ * connection, or a listen server's map spawned under a stale demo
+ * frame) is left alone. The tests reach it through
  * CL_ParseServerMessage with a real svc_frame message.
  *
  * =======================================================================
@@ -192,7 +194,7 @@ TEST(cl_demo_first_frame_loads_collision_map)
 }
 
 /* The map is loaded already (a live connection, or a demo whose
-   precache ran first): it is the cached one, not loaded again. With
+   precache ran first): it is not loaded again. With
    flushmap set and the map file cut short, any load that is not a
    client load (a reload, or the cached path that closes the area
    portals a listen server's game opened) ERR_DROPs, and the runner
