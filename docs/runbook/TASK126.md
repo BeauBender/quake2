@@ -580,7 +580,14 @@ Slice 5 follows slices 3 and 4: a separate low-scale unit, a stock path that is 
   - `rt-water-half`: `rt-water` plus `r_rt_water_scale 0.5`.
   - `rt-water-entities-half`: `rt-water-entities` plus `r_rt_water_scale 0.5`. The plan's hold
     names both `rt-water` and `rt-water-entities` (`water.dm2`).
-  - Each is in the scenarios README (both tables) and `doc/100_renderpins.md`. Neither declares a
+  - `rt-water-ss-third` (review round 1): `rt-water` plus `r_rt_water_hits 0`,
+    `r_rt_water_scale 0.33` and `r_rt_temporal 0.9`. It pins the screen-space trace at the traced
+    size (`rm_rtw_trace_lo`), the blur at that size (`rm_rtw_denoise_lo`) and divisor 3, which the
+    two above leave to the live run. `r_rt_temporal` above 0 keeps the frames stateless here: the
+    water keeps no history, no other ray-traced effect is on, and the blur reads only the frame's
+    own reflections. If the hold finds its three runs differ, the scenario sets `r_rt_temporal 0`
+    instead, and the blur is left to the live run.
+  - Each is in the scenarios README (both tables) and `doc/100_renderpins.md`. None declares a
     band of its own.
 
 ### What slice 5 leaves

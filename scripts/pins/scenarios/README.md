@@ -38,6 +38,7 @@ scenario through it. The cases each of them is held to are in
 | `rt-water-entities` | `rt-water` with `cl_entities 1`: the brush entities and the alias models, which the reflection rays meet and the pass never reflects on; recorded with `PINS_SEED` on `skywater`'s camera path (`PINS_DEMO=water.dm2`), as `models` (TASK58) |
 | `rt-water-half` | `rt-water` with `r_rt_water_scale 0.5`: the reflection rays traced at one pixel of each 2 x 2 block and upsampled to every drawn pixel by the joint bilateral rule on the water's class, each water pixel taking the reflection of the traced pixels next to it that found water of its own kind with a reflection, on its own surface (TASK126, option E); stateless as `rt-water`, on `skywater`'s camera path (`PINS_DEMO=water.dm2`), its frames differ from `rt-water`'s; no band of its own, so its companion is nominal, `models` |
 | `rt-water-entities-half` | `rt-water-entities` with `r_rt_water_scale 0.5`, as `rt-water-half`: the models and brush entities the reflection rays meet, at the traced size (TASK126); recorded with `PINS_SEED` on `skywater`'s camera path (`PINS_DEMO=water.dm2`); no band of its own |
+| `rt-water-ss-third` | `rt-water` with `r_rt_water_hits 0`, `r_rt_water_scale 0.33` and `r_rt_temporal 0.9`: the screen-space path traced at one pixel of each 3 x 3 block, the water's 3 x 3 blur at the traced size, and the upsample to every drawn pixel, as `rt-water-half` (TASK126, option E); the water keeps no history and no other ray-traced effect is on, so its frames are stateless; on `skywater`'s camera path (`PINS_DEMO=water.dm2`), its frames differ from `rt-water`'s; no band of its own, so its companion is nominal, `models` |
 | `dlights-lmcubic` | `dlights` with `metal_lightmap_filter 1`; not deterministic unseeded, recorded with `PINS_SEED` (TASK120) |
 | `hud2d-sharp` | `hud2d` with `metal_2d_sharp 1`: the sharp-bilinear sample of the 2D pictures of `ref_metal`; other renderers ignore the cvar (TASK119). At the harness's default 640x480 the 2D scale is 1, so it draws exactly `hud2d`; it tests the switch only at another size: `PINS_WIDTH=2560 PINS_HEIGHT=1440 scripts/pins.sh record metal hud2d-sharp`, judged against `hud2d` at that size, from which it must differ |
 | `hud2d-scale8` | `hud2d` with `r_scale8bittextures 1`; the HUD pictures are in the scrap, which is smoothed but not scaled (TASK119) |
@@ -207,6 +208,7 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `rt-water-entities` | world,entities,alias-models | `-` |
 | `rt-water-half` | world | `models` |
 | `rt-water-entities-half` | world,entities,alias-models | `-` |
+| `rt-water-ss-third` | world | `models` |
 | `rt-sun` | world | `models` |
 | `rt-sun-half` | world | `models` |
 | `rt-all-metalfx2` | world,dynamic-lights | `particles` |
