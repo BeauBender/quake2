@@ -658,7 +658,36 @@ cases)"); `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
   `t_core_id` lost the cases that reached them through the old bounded path in `ebb35264`
   ("bench_bounded runs its command under the supervisor"). Each needs a case on today's
   path (the lock run's spawn table; the 126 record's `written=`), or the mutant moved to
-  the check that covers it. That is open.
+  the check that covers it.
+- **The two mutants, caught again.** Both lines are still reached on today's path, so
+  neither is removed, and both mutants stay in `check-bench.sh` under `t_core_id`:
+  - **`forget-none`.** `bench_spawn_forget` is called by `bench_spawn_id` (to replace an
+    entry), by the lock run
+    (`bench_lock_stop_child`, and `bench_lock_run` once its child is reaped), by
+    `bench_await` and by `scripts/ios-sim.sh`'s `stop_spawned`, as `git grep -n
+    bench_spawn_forget scripts` shows. `t_core_id`'s "own" part now puts an entry before
+    the lock's child and one after it in the spawn table (pids above any the system gives,
+    never signalled), and after `bench_lock_stop_child` checks that `bench_spawned` no
+    longer knows the child and that the table is exactly the two other entries. Under the
+    mutant it fails with "lock: own: the stopped child's entry was left in the spawn
+    table".
+  - **`record-no-written`.** `bench_lock_record` is called only through
+    `bench_record_untold`, which only `bench_bounded_untold` calls, after a supervisor's
+    126 (`git grep -n 'bench_record_untold\|bench_lock_record' scripts`). A new "record:
+    written" part of `t_core_id` gives `bench_bounded_untold` an events file whose
+    "spawned" line names the first decoy's group, under this shell's own lock, and checks
+    the group record it writes: `group=` names the group, `written=` is in a start time's
+    form and not before the call, and the reader (`bench_lock_untold_live`) holds the live
+    group. Then, with `bench_lock_now` giving 2000 in a subshell, the record must carry
+    that time, and the reader must take the group's leader, which started later, as
+    another group under the id, so the record holds nothing. Under the mutant it fails
+    with "record: written: the group record holds no written time in the form of a start
+    time: ''".
+  - Each was proved by hand on a scratch copy of `scripts` and `tests`:
+    `tests/check-bench.sh t_core_id` fails under each mutant with the lines above (and no
+    other part fails), and passes on the real code ("ok (t_core_id; no mutants)").
+  - No `trap`, `set -m` or process-group line is touched, so no disposition probe was
+    needed.
 
 ## What remains
 
