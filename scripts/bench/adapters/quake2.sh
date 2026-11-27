@@ -858,7 +858,7 @@ adapter_metrics() {
 		{ s = from("ref_metal: rt ao: frame ") }
 		s ~ /^ref_metal: rt ao: frame [0-9]+: / {
 			n = split(s, f, " ")
-			if (++ra > skip + 0 && f[5] + 0 > after + 0 && n == 25 && num(f[24])) print f[24] > (d "/rtao_ms")
+			if (++ra > skip + 0 && f[5] + 0 > after + 0 && (n == 25 || (n == 31 && f[26] == "traced")) && num(f[24])) print f[24] > (d "/rtao_ms")
 		}
 		END {
 			if (td && num(tdf) && num(tds) && num(tdfps))

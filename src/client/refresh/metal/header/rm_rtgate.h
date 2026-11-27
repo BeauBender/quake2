@@ -95,6 +95,17 @@ int rm_rtg_format(const rm_rtg_t *g, char *buf, size_t len);
 int rm_rtg_reset_format(const char *name, const rm_rtg_t *g, char *buf, size_t len);
 
 /*
+ * TASK126 slice 6: the line printed beside rm_rtg_format's where the
+ * device traces no rays (RM_RTG_NONE), since an effect scale
+ * (r_rt_shadows_scale, r_rt_sun_scale, r_rt_ao_scale, r_rt_water_scale)
+ * is a setting the gate leaves alone and does nothing there:
+ *   ref_metal: ray tracing: none on this device: the effect scales do nothing
+ * 1 when the line is due and fits; 0 with buf empty where the device
+ * traces (no line) or it does not fit (len 0: 0, nothing written).
+ */
+int rm_rtg_scales_format(const rm_rtg_t *g, char *buf, size_t len);
+
+/*
  * The table of the r_rt_* cvars (rm_rtgate.c gives the reason of each
  * row): every name a Cvar_Get of src/client/refresh/metal creates, each an
  * effect switch (1: forced to 0 without ray tracing; its default is "0")
