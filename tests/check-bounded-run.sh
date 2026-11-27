@@ -1399,9 +1399,24 @@ open(p, "w").write(s.replace(old, new))' "$1/$2" "$3" "$4"
 # records the group in the lock state, and the lock shell's release waits
 # for it. The supervisor is a stand-in, planted in a tool cache of its own
 # under the name sv_path gives the real one: it starts the command in a
-# process group of its own, writes its "spawned" event (also to the case's
-# FIFO, FAKE_TAP) and exits 126 at once. The command reads a FIFO, so it
-# runs until the case writes there. Sets l126_why (empty: it held).
+# process group of its own, says so on the case's FIFO (FAKE_TAP, "fake
+# pid=<its pid> pgid=<the group>"), writes its "spawned" event (also to
+# the FIFO) and exits 126 at once. The command reads a FIFO, so it runs
+# until the case writes there.
+# sv_lock126 <root> [<mode>]: the case; <mode> (review round 2) is one of
+#   term     the caller's TERM comes after the supervisor's 126 is
+#            collected and before the group is recorded: an awk stand-in
+#            first on the caller's PATH sends its parent TERM when it is
+#            asked for the "reaped" event (bench_bounded_said reaped, the
+#            first fork after the collect), and the caller's trap stops the
+#            bounded run as bench.sh's does (correctness I1)
+#   nospawn  the stand-in writes no "spawned" event (a failed events write,
+#            or the supervisor's "cannot watch the command"), so there is
+#            no group to record: the lock is held by a record that names
+#            its release by hand, also once the command has ended, until
+#            the case removes it (security I1)
+# Sets l126_why (empty: it held). What the case started is killed by its
+# group id, which the stand-in said.
 sv_bin=$(SV_SRC_DIR=$here/scripts/lib && . "$here/scripts/lib/supervise.sh" && SV_SRC_DIR=$here/scripts/lib && sv_path) || sv_bin=
 cat > "$W/fake126" << 'EOF'
 #!/bin/sh
@@ -1410,39 +1425,71 @@ shift
 python3 -I -c 'import os, sys
 os.setpgid(0, 0)
 os.execvp(sys.argv[1], sys.argv[1:])' "$@" < /dev/null > /dev/null 2>&1 9>&- &
-echo "spawned pid=$! pgid=$!" >&9
-echo "spawned pid=$! pgid=$!" >> "$FAKE_TAP"
+echo "fake pid=$$ pgid=$!" >> "$FAKE_TAP"
+if [ -z "${FAKE_NOSPAWN:-}" ]; then
+	echo "spawned pid=$! pgid=$!" >&9
+	echo "spawned pid=$! pgid=$!" >> "$FAKE_TAP"
+fi
 echo "group-left count=1" >&9
 exit 126
 EOF
+mkdir -p "$W/awkshim" || exit 1
+printf '#!/bin/sh\nfor a; do if [ "$a" = e=reaped ]; then kill -s TERM "$PPID"; break; fi; done\nexec %s "$@"\n' "$(command -v awk)" > "$W/awkshim/awk" && chmod 700 "$W/awkshim/awk" || exit 1
 sv_lock126() {
-	_ld=$W/sv-126-$(basename "$1")
+	_l6m=${2:-plain}
+	_ld=$W/sv-126-$_l6m-$(basename "$1")
 	l126_why=
 	rm -rf "$_ld"
 	mkdir -p "$_ld/cache" "$_ld/state" "$_ld/tmp" && chmod 700 "$_ld/cache" && mkfifo "$_ld/fifo" "$_ld/hold" || return 1
 	cp "$W/fake126" "$_ld/cache/${sv_bin##*/}" && chmod 700 "$_ld/cache/${sv_bin##*/}" || return 1
+	_lpath=$PATH _lns=
+	case $_l6m in
+	term) _lpath=$W/awkshim:$PATH ;;
+	nospawn) _lns=1 ;;
+	esac
 	proc_open "$_ld/fifo"
 	# the lock shell's lines go to the FIFO too; the command says
 	# "command-ended" there as it ends, so the lock shell's last line
 	# ("... have ended ...; freeing the lock") must come after it
-	env TMPDIR="$_ld/tmp" SUPERVISE_CACHE="$_ld/cache" BENCH_STATE="$_ld/state" FAKE_TAP="$_ld/fifo" \
-		sh "$1/scripts/bench/bench.sh" lock run t126 -- sh -c '. "$1/scripts/bench/core/common.sh"; . "$1/scripts/bench/core/lock.sh"
-st=0; bench_bounded 30 sh -c "read x < \"\$0\"; echo command-ended >> \"\$1\"" "$2" "$3" || st=$?; echo "bounded $st $BENCH_BOUNDED_HOW"' x "$1" "$_ld/hold" "$_ld/fifo" < /dev/null > "$_ld/fifo" 2>&1 &
+	env TMPDIR="$_ld/tmp" SUPERVISE_CACHE="$_ld/cache" BENCH_STATE="$_ld/state" FAKE_TAP="$_ld/fifo" FAKE_NOSPAWN="$_lns" \
+		sh "$1/scripts/bench/bench.sh" lock run t126 -- env PATH="$_lpath" sh -c '. "$1/scripts/bench/core/common.sh"; . "$1/scripts/bench/core/lock.sh"
+trap '\''trap "" TERM; bench_stop_group "$BENCH_BOUNDED_PID" || :; echo "caller trapped 143"; exit 143'\'' TERM
+st=0; bench_bounded 30 sh -c "read x < \"\$0\"; echo command-ended >> \"\$1\"" "$2" "$3" || st=$?; echo "caller bounded $st $BENCH_BOUNDED_HOW"' x "$1" "$_ld/hold" "$_ld/fifo" < /dev/null > "$_ld/fifo" 2>&1 &
 	_lp=$!
-	_lg=
-	if ! proc_await 'spawned *'; then
-		l126_why="no spawned event from the supervisor"
+	_lg= _lf=
+	_lw="caller bounded 125 untold"
+	[ "$_l6m" != term ] || _lw="caller trapped 143"
+	if ! proc_await 'fake *'; then
+		l126_why="the stand-in supervisor did not start"
 	else
 		_lg=${PROC_LINE##*pgid=}
+		_lf=${PROC_LINE#fake pid=}
+		_lf=${_lf%% *}
 		proc_alone
-		if ! proc_await 'bounded *'; then
+		_lk=$_lg
+		if [ "$_l6m" = nospawn ]; then
+			_lk=$_lf
+			if ! proc_await '*by hand*'; then
+				l126_why="the lock was not kept: no line names the record's release by hand"
+			else
+				case $PROC_LINE in
+				*"rm -f '"*"/lock/untold.$_lf'") ;;
+				*) l126_why="the lock was not kept by a record named to be removed by hand: $PROC_LINE" ;;
+				esac
+			fi
+		elif ! proc_await 'spawned *'; then
+			l126_why="no spawned event from the stand-in"
+		fi
+		if [ -n "$l126_why" ]; then
+			:
+		elif ! proc_await 'caller *'; then
 			l126_why="the bounded call did not return"
-		elif [ "$PROC_LINE" != "bounded 125 untold" ]; then
-			l126_why="the bounded call said \"$PROC_LINE\", not \"bounded 125 untold\""
+		elif [ "$PROC_LINE" != "$_lw" ]; then
+			l126_why="the caller said \"$PROC_LINE\", not \"$_lw\""
 		else
 			_ll=$(env BENCH_STATE="$_ld/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
 			case $_ll in
-			lock=held*" untold=$_lg"*) ;;
+			lock=held*" untold=$_lk"*) ;;
 			*) l126_why="the lock was not kept for the group the supervisor could not empty: $_ll" ;;
 			esac
 		fi
@@ -1450,7 +1497,8 @@ st=0; bench_bounded 30 sh -c "read x < \"\$0\"; echo command-ended >> \"\$1\"" "
 			l126_why="the lock shell did not say it kept the lock"
 		fi
 	fi
-	# the command may end now: the lock shell frees the lock once its group is gone
+	# the command may end now: the lock shell frees the lock once its group
+	# is gone, or, for a record kept by hand, once the case removes it
 	exec 7<> "$_ld/hold"
 	echo go >&7
 	exec 7>&-
@@ -1461,6 +1509,17 @@ st=0; bench_bounded 30 sh -c "read x < \"\$0\"; echo command-ended >> \"\$1\"" "
 			l126_why="the lock was not kept until the group was gone: \"$PROC_LINE\" came first"
 		fi
 	fi
+	if [ -z "$l126_why" ] && [ "$_l6m" = nospawn ]; then
+		# the record holds by itself, not by the group: still held, then
+		# removed by hand as its line says
+		_ll=$(env BENCH_STATE="$_ld/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
+		case $_ll in
+		lock=held*" untold=$_lf"*) ;;
+		*) l126_why="the lock was not kept by hand once the command ended: $_ll" ;;
+		esac
+	fi
+	# the release by hand (a case that held no record removes nothing)
+	if [ "$_l6m" = nospawn ] && [ -n "$_lf" ]; then rm -f "$_ld/state/lock/untold.$_lf"; fi
 	if ! proc_eof; then
 		l126_why=${l126_why:-"the lock shell did not exit once the group was gone"}
 		kill -s KILL "$_lp" 2> /dev/null
@@ -1507,6 +1566,23 @@ else
 			fails="$fails $_lmn"
 		fi
 	done
+	# review round 2: a 126 frees the lock only on positive evidence, so a
+	# TERM between the collected 126 and its record, and a 126 that named
+	# no group, both keep it
+	sv_lock126 "$here" term
+	if [ -n "$l126_why" ]; then
+		echo "$me: FAIL: sv 126 term: $l126_why"
+		fails="$fails sv-126-term"
+	else
+		echo "$me: ok   sv 126 term: a TERM after the 126 is collected keeps the lock while the group runs"
+	fi
+	sv_lock126 "$here" nospawn
+	if [ -n "$l126_why" ]; then
+		echo "$me: FAIL: sv 126 nospawn: $l126_why"
+		fails="$fails sv-126-nospawn"
+	else
+		echo "$me: ok   sv 126 nospawn: a 126 with no group named keeps the lock until it is released by hand"
+	fi
 fi
 # A group record whose id a later process group has taken holds nothing
 # (security I2, round 1), as a pid record's does: the group is started
