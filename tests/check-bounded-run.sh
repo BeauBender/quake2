@@ -1542,6 +1542,18 @@ else
 	echo "$me: FAIL: mutant status-only does not apply"
 	fails="$fails status-only"
 fi
+# With BENCH_BOUNDED_TAP the events reach the events file too (round 1,
+# N2), so a wall time is still told by its "deadline" event, and the tap
+# has them as well; no scratch file is left in TMPDIR
+_td=$W/tap
+mkdir -p "$_td/tmp" || exit 1
+_to=$(env TMPDIR="$_td/tmp" BENCH_BOUNDED_TAP="$_td/tap" BENCH_STOP_GRACE=1 sh -c '. "$1/scripts/bench/core/common.sh"; st=0; bench_bounded 1 sleep 30 2> /dev/null || st=$?; echo "status $st how $BENCH_BOUNDED_HOW"' sh "$here" 2>&1)
+if [ "$_to" = "status 124 how wall" ] && grep -qx deadline "$_td/tap" && [ -z "$(ls -A "$_td/tmp")" ]; then
+	echo "$me: ok   tap: the events reach the file and the tap"
+else
+	echo "$me: FAIL: tap: wanted \"status 124 how wall\", a deadline line in the tap and an empty TMPDIR; got \"$_to\", tap [$(tr '\n' '|' < "$_td/tap" 2> /dev/null)], TMPDIR [$(ls -A "$_td/tmp" | tr '\n' ' ')]"
+	fails="$fails tap"
+fi
 
 # a trap that runs in a bare nap prints its lines (FIX192, round 2): with fd
 # 8 closed, a TERM in bench_nap runs the caller's trap and its EXIT trap,
