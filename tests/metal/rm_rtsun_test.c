@@ -782,6 +782,51 @@ test_stats(void)
 	CHECK(rm_rtsun_map_format("base1", 1, 2, 0, 55, 45, small, sizeof(small)) == 0 && (small[0] == 0));
 }
 
+/*
+ * TASK126 slice 6, the double-count invariant's rule for the sun at any
+ * scale (design section 5): a pixel with no sun visibility takes the
+ * incoming light bit for bit. Below divisor 1 rm_rtsun_up gives a pixel
+ * no traced pixel lit the visibility 0 (its neutral value), so the light
+ * there is the effect off's whatever the scale; every class but lit, any
+ * material, any angle.
+ */
+static void
+test_no_double_count(void)
+{
+	unsigned k, cls, m;
+	int ok = 1;
+
+	srand(126);
+
+	for (k = 0; k < 20000; k++)
+	{
+		const mtl_rgba_t base = rgba((float)rand() / (float)RAND_MAX, (float)rand() / (float)RAND_MAX,
+				(float)rand() / (float)RAND_MAX, (float)rand() / (float)RAND_MAX);
+		const float nl = (float)rand() / (float)RAND_MAX, vis = (float)rand() / (float)RAND_MAX;
+		mtl_rgba_t c;
+
+		/* lit, but no visibility: nothing added */
+		c = mtl_rtsun_light(base, 1u, MTL_RTSUN_C_LIT, 0.0f, nl, 0.35f, 0.4f, 0.45f);
+		ok &= !memcmp(&c, &base, sizeof(c));
+
+		/* any visibility, any material, every class but lit: nothing added */
+		for (cls = MTL_RTSUN_C_NONE; cls < MTL_RTSUN_C_LIT; cls++)
+		{
+			for (m = 0; m < 6; m++)
+			{
+				c = mtl_rtsun_light(base, m, cls, vis, nl, 0.35f, 0.4f, 0.45f);
+				ok &= !memcmp(&c, &base, sizeof(c));
+			}
+		}
+
+		/* lit with a visibility, of another material than the world: nothing added */
+		c = mtl_rtsun_light(base, 3u, MTL_RTSUN_C_LIT, vis, nl, 0.35f, 0.4f, 0.45f);
+		ok &= !memcmp(&c, &base, sizeof(c));
+	}
+
+	CHECK(ok);
+}
+
 int
 main(void)
 {
@@ -799,6 +844,7 @@ main(void)
 	test_term();
 	test_view();
 	test_stats();
+	test_no_double_count();
 
 	printf("rm_rtsun_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

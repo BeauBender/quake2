@@ -3969,6 +3969,8 @@ seg 7.88 "; water at its scale $wlo_kpins kernel pins with $wlo_kmut kernel muta
 # - mtl_rtao_up_fallback (common/mtl_rtao_math.h) against rm_rtao_test's test_up_fallback, built with the
 #   header given included first (its guard keeps the real one out): two mutants, the surface test and the
 #   weight test dropped, each of which must compile and fail it.
+# - the double-count invariant's rule for the sun at any scale (rm_rtsun_test's test_no_double_count, design
+#   section 5): one mutant of common/mtl_rtsun_math.h, a little of the term at visibility 0.
 # - rm_rtao_upsample: the fallback taken right after mtl_rtao_up_ao, in the branch that reads the traced
 #   pixels' surfaces; the count at the kernel's end, in word 7; and fell named on those three lines alone,
 #   so nothing the kernel writes can read it. Six mutants, each refused and compiled with xcrun metal:
@@ -4008,6 +4010,24 @@ for m in fbsame fbweight; do
 		aofb_mut=$((aofb_mut + 1))
 	fi
 done
+# the double-count invariant's rule for the sun (rm_rtsun_test's test_no_double_count): a mutant that adds a
+# little of the term at visibility 0 must compile and fail it
+sed 's/const float k = vis \* ndotl;/const float k = (vis + 0.001f) * ndotl;/' "$rm_dir/common/mtl_rtsun_math.h" \
+	> "${tmp:?}/aofb_sun.h"
+# shellcheck disable=SC2086 # flags is a word list
+if cmp -s "$rm_dir/common/mtl_rtsun_math.h" "${tmp:?}/aofb_sun.h"; then
+	bad "the sun's double-count mutant changed nothing"
+elif ! $cc $flags -I"$rm_dir/common" -include "$rm_dir/common/mtl_shader_math.h" -include "${tmp:?}/aofb_sun.h" '-DYQ2OSTYPE="host"' \
+	'-DYQ2ARCH="host"' -o "${tmp:?}/aofb_s" tests/metal/rm_rtsun_test.c "$rm_dir/rm_rtsun.c" "$rm_dir/rm_rtshadow.c" \
+	"$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" \
+	"$rm_dir/rm_rttemporal.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "the sun's double-count mutant does not compile, so it tests nothing"
+elif "${tmp:?}/aofb_s" > "${tmp:?}/out" 2>&1 || ! grep -q 'test_no_double_count\|rm_rtsun_test.c:' "${tmp:?}/out"; then
+	bad "tests/metal/rm_rtsun_test.c passes the sun's double-count mutant"
+else
+	aofb_mut=$((aofb_mut + 1))
+fi
 aofb_k=$rm_dir/rm_rtao.metal
 aofb_kernel() { # <rm_rtao.metal>: 0 when rm_rtao_upsample takes, counts and isolates the fallback as pinned
 	awk '/^rm_rtao_upsample\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$1" > "${tmp:?}/aofb_body"
