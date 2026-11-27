@@ -1224,7 +1224,7 @@ is.
   "AO trace size" and on the Ray tracing screen as "AO scale", a choice
   of full, 1/2 or 1/3 (the three sizes the renderer tells apart), greyed on other renderers and while `r_rt_ao` is `0`.
   Saved with the configuration; applies from the next frame.
-  Can be set from Video options > Ray tracing (TASK194), live. Where the device has no ray tracing it does nothing, and the renderer says so once at its start:
+  Can be set from Video options > Ray tracing (TASK194), live. Where the device has no ray tracing it does nothing, and the renderer says so at its start (and again after a `vid_restart`):
   `ref_metal: ray tracing: none on this device: the effect scales do nothing`.
 
 * **r_rt_ao_seed**: A development setting of the Metal renderer's
@@ -1559,7 +1559,7 @@ is.
   above, `0.33` below `0.4`); `0`, a negative value or one that is not a
   finite number counts as `1`. A change resets the shadows' temporal
   history (`r_rt_temporal`), which `r_rt_stats 1` reports. Saved with the
-  configuration; applies from the next frame. Where the device has no ray tracing it does nothing, and the renderer says so once at its start:
+  configuration; applies from the next frame. Where the device has no ray tracing it does nothing, and the renderer says so at its start (and again after a `vid_restart`):
   `ref_metal: ray tracing: none on this device: the effect scales do nothing`.
 
 * **r_rt_shadows_show**: A development view of the Metal renderer's
@@ -1649,9 +1649,13 @@ is.
   the effect (`shadows`, `sun`, `ao` or `water`), its traced size, the
   drawn size and that frame's fallbacks; and the map's summary is followed
   by one line for each such effect,
-  `ref_metal: rt: <map>: upsample: <effect> F fallbacks of P upsampled pixels (S %)`,
-  the drawn pixels it upsampled since the map loaded, those it fell back
-  on and their share. Nothing
+  `ref_metal: rt: <map>: upsample: <effect> F fallbacks of P upsampled pixels (S %)`:
+  P the pixels of the frames it drew below that size since the map
+  loaded, every drawn pixel of each such frame (the sky's and the pixels
+  the effect does not apply to among them, so the share is of the
+  frame), F the pixels the upsample fell back on, and S their share.
+  AO's F is a lower bound: it is counted only where the four traced
+  pixels about a pixel hold different values. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
@@ -1707,7 +1711,7 @@ is.
   negative value or one that is not a finite number counts as `1`. A
   change resets the sun's temporal history (`r_rt_temporal`), which
   `r_rt_stats 1` reports. Saved with the configuration; applies from the
-  next frame. Where the device has no ray tracing it does nothing, and the renderer says so once at its start:
+  next frame. Where the device has no ray tracing it does nothing, and the renderer says so at its start (and again after a `vid_restart`):
   `ref_metal: ray tracing: none on this device: the effect scales do nothing`.
 
 * **r_rt_sun_show**: A development view of the Metal renderer's
@@ -1934,7 +1938,7 @@ is.
   it applies to the scaler's input. A value is taken as the nearest of
   the three (`1` above 2/3, `0.33` below `0.4`); `0`, a negative value
   or one that is not a finite number counts as `1`. The reflections keep no history, so a change resets nothing.
-  Saved with the configuration; applies from the next frame. Where the device has no ray tracing it does nothing, and the renderer says so once at its start:
+  Saved with the configuration; applies from the next frame. Where the device has no ray tracing it does nothing, and the renderer says so at its start (and again after a `vid_restart`):
   `ref_metal: ray tracing: none on this device: the effect scales do nothing`.
 
 * **r_rt_water_show**: A development view of the Metal renderer's
