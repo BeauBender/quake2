@@ -3,8 +3,10 @@
  * (src/client/menu/vidrules.c, VidRules_MetalFXDecided) against the
  * renderer's (rm_rtgate.c: rm_pres_decide, then rm_pres_fx, with the
  * view sized by rm_metalfx.c's rm_fx_scale), linked into one host binary
- * by tests/check-ref-metal.sh. Until TASK237 makes the two one table,
- * this test is what holds them in step for r_metalfx: for every
+ * by tests/check-ref-metal.sh. The scaler's rule is still two copies
+ * after TASK237 (which made the switches' overlay one table,
+ * tests/metal/rm_pres_parity_test.c), so this test is what holds them in
+ * step for r_metalfx: for every
  * presentation value, with and without ray tracing, every mode mask
  * r_metalfx_modes can hold, every r_metalfx_scale and every user value,
  * the scaler the menu shows is the one the renderer reads, with no

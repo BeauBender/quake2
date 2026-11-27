@@ -17,6 +17,7 @@
 
 #include "../../common/header/common.h"
 #include "header/vidrules.h"
+#include "../refresh/metal/common/rm_pres_table.h"
 
 #define ARRSIZE(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
@@ -572,65 +573,60 @@ VidRules_RTItem(int i, const char *renderer, int available, int effect_on)
 }
 
 /*
- * TASK188: whether Ray traced (RT-primary) is run. The renderer runs it
- * wherever the device traces rays (decision 0014), although its menu item
- * is greyed "awaiting review" (the console sets it), so this is not
- * VidRules_PresentationMode's rule. Its overlay (rm_rtgate.c's
- * pres_rtprimary) reads shadows, sun and AO as 0 and the water as 1.
+ * TASK237: whether the presentation pres (VidRules_PresentationIndex's,
+ * which is r_presentation's value) is the one the renderer runs, as its
+ * rm_pres_decide has it: on Metal, and for a mode that needs ray tracing
+ * (rm_pres_needs_rt: Enhanced and Ray traced) only where the device
+ * traces rays. Retro runs on every device. Ray traced's menu item is greyed
+ * "awaiting review" but the console sets it and the renderer runs it
+ * (decision 0014), so this is not VidRules_PresentationMode's rule.
  */
+static int
+PresInForce(int pres, const char *renderer, int available)
+{
+	return (VidRules_Renderer(renderer) == VIDREF_METAL) && (available || !rm_pres_needs_rt(pres));
+}
+
+/* TASK188: whether Ray traced (RT-primary) is run */
 static int
 RTPrimaryInForce(const char *renderer, int available, float presentation)
 {
-	return (VidRules_PresentationIndex(presentation) == VIDPRES_RTPRIMARY) &&
-		(VidRules_Renderer(renderer) == VIDREF_METAL) && available;
+	const int pres = VidRules_PresentationIndex(presentation);
+
+	return (pres == VIDPRES_RTPRIMARY) && PresInForce(pres, renderer, available);
 }
 
 /*
- * TASK183: the switches the presentation in use decides. Enhanced reads
- * rows 0 to 3 (shadows, sun, ambient occlusion, water) as on, as the
- * renderer's RM_Effect does; the rows are the first four of rt_controls.
- * TASK197 (plan call P8): Retro reads those four and the gun shadow as
- * off, and runs on every device, so it needs only the Metal renderer.
+ * TASK183, TASK237: whether the presentation in use decides row i, and
+ * the value it reads it as in *value: a row of the mode's table in
+ * common/rm_pres_table.h, the renderer's own (Enhanced: shadows, sun,
+ * ambient occlusion and water on; Retro, TASK197: those four and the gun
+ * shadow off; Ray traced: shadows, sun and AO off, the water on).
  */
-int
-VidRules_RTOverridden(int i, const char *renderer, int available, float presentation)
+static int
+PresDecides(int i, const char *renderer, int available, float presentation, float *value)
 {
 	const vidrt_control_t *c = VidRules_RTControl(i);
 	const int pres = VidRules_PresentationIndex(presentation);
 
-	if (!c || (c->effect >= 0))
-	{
-		return 0;
-	}
-	if (pres == VIDPRES_RETRO)
-	{
-		return (i <= RT_GUNSHADOW) && (VidRules_Renderer(renderer) == VIDREF_METAL);
-	}
-	if (pres == VIDPRES_RTPRIMARY)
-	{
-		return (i < 4) && RTPrimaryInForce(renderer, available, presentation);
-	}
-	return (i < 4) && (pres == VIDPRES_ENHANCED) &&
-		VidRules_PresentationMode(VIDPRES_ENHANCED, renderer, available).enabled;
+	return c && PresInForce(pres, renderer, available) && rm_pres_row(pres, c->cvar, value);
 }
 
-/*
- * The value of a switch as the renderer runs it: the mode's when it
- * decides it (Enhanced on, Retro off, Ray traced the water on and the
- * rest off), else the cvar's.
- */
+int
+VidRules_RTOverridden(int i, const char *renderer, int available, float presentation)
+{
+	return PresDecides(i, renderer, available, presentation, NULL);
+}
+
+/* The value of a switch as the renderer runs it: the mode's when it decides it, else the cvar's. */
 int
 VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user)
 {
-	if (VidRules_RTOverridden(i, renderer, available, presentation))
-	{
-		const int pres = VidRules_PresentationIndex(presentation);
+	float v;
 
-		if (pres == VIDPRES_RTPRIMARY)
-		{
-			return i == RT_WATER;
-		}
-		return pres != VIDPRES_RETRO;
+	if (PresDecides(i, renderer, available, presentation, &v))
+	{
+		return v != 0.0f;
 	}
 	return user != 0.0f;
 }
@@ -639,8 +635,9 @@ VidRules_RTEffective(int i, const char *renderer, int available, float presentat
 static int
 RTRetroInForce(const char *renderer, float presentation)
 {
-	return (VidRules_PresentationIndex(presentation) == VIDPRES_RETRO) &&
-		(VidRules_Renderer(renderer) == VIDREF_METAL);
+	const int pres = VidRules_PresentationIndex(presentation);
+
+	return (pres == VIDPRES_RETRO) && PresInForce(pres, renderer, 0);
 }
 
 vidrule_t
@@ -686,7 +683,10 @@ VidRules_MetalFXOverridden(const char *renderer, float presentation)
 
 /*
  * TASK190 slice 3: a copy of rm_rtgate.c's rm_pres_fx for the menu
- * (tests/metal/rm_pres_menu_test.c holds the two in step until TASK237).
+ * (tests/metal/rm_pres_menu_test.c holds the two in step). It stays a
+ * copy after TASK237: the rule reads the device's scalers and the view's
+ * size and debug view, which the menu sees otherwise than the renderer,
+ * not only the table both read.
  * Ray traced's row is the temporal scaler where the view is scaled down;
  * the menu does not see the window's height, so the default scale (0, or
  * any value that is not a finite one from 1 up) counts as scaled down.

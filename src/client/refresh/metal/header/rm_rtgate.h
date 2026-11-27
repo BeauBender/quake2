@@ -150,12 +150,12 @@ int rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t
  * vid_restart. A mode is an overlay: rm_pres_value gives the value the
  * renderer uses for a cvar in place of the user's, and no cvar is
  * written, so the user's own values come back when the mode is 0 again.
- * The values are never renumbered (config.cfg stores them).
+ * The values (RM_PRES_STOCK to RM_PRES_RTPRIMARY) are never renumbered
+ * (config.cfg stores them). They and each mode's table of overlaid cvars
+ * are in common/rm_pres_table.h (TASK237), which the client's video menu
+ * reads too, so the menu shows what the renderer runs.
  */
-#define RM_PRES_STOCK 0
-#define RM_PRES_ENHANCED 1
-#define RM_PRES_RETRO 2
-#define RM_PRES_RTPRIMARY 3
+#include "../common/rm_pres_table.h"
 
 #define RM_PRES_WHY_OK 0
 #define RM_PRES_WHY_NORT 1      /* the mode needs ray tracing; the path is none */
@@ -164,17 +164,23 @@ int rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t
 /*
  * The mode the renderer runs for the requested value (r_presentation, a
  * fraction truncated) on a device whose gate gave path: the value itself
- * when this build has the mode and the device runs it, else stock, with
+ * when this build has the mode and the device runs it (a mode that
+ * rm_pres_needs_rt only where path is not RM_RTG_NONE), else stock, with
  * the reason in *why (which may be NULL).
  */
 int rm_pres_decide(float requested, int path, int *why);
 
 /*
  * The value the renderer uses for the cvar name whose user value is user:
- * the mode's own value for a cvar the mode decides, else user. Stock
- * decides none. Enhanced turns on r_rt_shadows, r_rt_sun, r_rt_ao and
- * r_rt_water (1), and leaves every other setting the user's. Retro
- * (TASK184) decides none: its post-process is the mode itself.
+ * the mode's own value for a cvar the mode decides (a row of its table in
+ * common/rm_pres_table.h), else user. Stock decides none. Enhanced reads
+ * r_rt_shadows, r_rt_sun, r_rt_ao and r_rt_water as 1, and leaves every
+ * other setting the user's. Retro (TASK184; TASK197, plan call P8) decides
+ * six cvars: it reads r_rt_shadows, r_rt_sun, r_rt_ao, r_rt_water,
+ * r_rt_gunshadow and r_metalfx as 0, so no ray-traced layer or scaler runs
+ * under its post-process. RT-primary (TASK188) reads r_rt_direct and
+ * r_rt_water as 1, r_rt_shadows, r_rt_sun and r_rt_ao as 0, and r_metalfx
+ * as 2 (rm_pres_fx refines that row).
  */
 float rm_pres_value(int mode, const char *name, float user);
 

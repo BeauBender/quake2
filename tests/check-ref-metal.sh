@@ -922,8 +922,8 @@ else
 fi
 seg 10 "; ray-tracing gate ${rtg:-host test}"
 
-# TASK190 slice 3: the menu's copy of RT-primary's scaler row (vidrules.c) against the renderer's (rm_rtgate.c,
-# with rm_metalfx.c's view size), one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must
+# TASK190 slice 3: the menu's copy of RT-primary's scaler rule (vidrules.c) against the renderer's (rm_rtgate.c,
+# with rm_metalfx.c's view size and the row of common/rm_pres_table.h), one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must
 # refuse: the renderer's row dropped; the renderer's, then the menu's, capability rule dropped; the renderer's,
 # then the menu's, size rule dropped; the menu's debug-view rule dropped (round 2, N2)
 pmbuild() {
@@ -949,7 +949,13 @@ if [ -n "$pm" ]; then
 	for pmm in row rcaps mcaps rsize msize mshow; do
 		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c "${tmp:?}/pmm/"
 		case $pmm in
-			row) sed '/{ "r_metalfx", 2\.0f },/d' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			# the row is in common/rm_pres_table.h (TASK237): a copy without it, included first in the renderer's file alone
+			row) sed 's/{ "r_metalfx", 2\.0f },//' "$rm_dir/common/rm_pres_table.h" > "${tmp:?}/pmm/rows.h"
+				if cmp -s "$rm_dir/common/rm_pres_table.h" "${tmp:?}/pmm/rows.h"; then
+					cp "$rm_dir/rm_rtgate.c" "${tmp:?}/pmm/rm_rtgate.c"
+				else
+					{ printf '#include "%s"\n' "${tmp:?}/pmm/rows.h"; cat "$rm_dir/rm_rtgate.c"; } > "${tmp:?}/pmm/rm_rtgate.c"
+				fi ;;
 			# each keeps its parameter read, so -Werror's unused-parameter does not refuse it before the test runs
 			rcaps) sed 's/(!temporal || show))/((void)temporal, show))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
 			mcaps) sed 's/if (!(modemask \& VIDMFX_TEMPORAL))/if (!(modemask | VIDMFX_TEMPORAL))/' src/client/menu/vidrules.c \
@@ -976,11 +982,14 @@ fi
 seg 10.2 "; menu and renderer scaler rule ${pm:-host test}, $pm_mutants parity mutants refused"
 
 # TASK237: the presentation overlay as the menu shows it (vidrules.c) against the one the renderer runs
-# (rm_rtgate.c), one binary over both. ppbuild <rtgate dir> <vidrules.c> <test.c> <out>; the test finds its
-# headers as "header/..." through -I, so a scratch copy of it builds too. Mutants it must refuse, each on one
-# side only: a row added to the renderer's RT-primary table (the gun shadow read 0); a row added to the
-# menu's (the gun shadow decided under Ray traced); RM_PRES_RETRO changed in the renderer's view; VIDPRES_RETRO
-# changed in the menu header the test reads
+# (rm_rtgate.c), one binary over both. The two read one table, common/rm_pres_table.h, each compiled into its
+# own module, so the test holds the rest of each side's rule in step: the cvar each menu row names, which modes
+# run where, the enums. ppbuild <rtgate dir> <vidrules.c> <test.c> <out>; the test finds its headers as
+# "header/..." through -I, so a scratch copy of it builds too. Mutants it must refuse, each on one side only: a
+# changed copy of a header included first in one file (its guard keeps the tree's copy out of that file alone),
+# for a row added to RT-primary's table in the renderer's file, the same row in the menu's file, RM_PRES_RETRO
+# changed in the renderer's, VIDPRES_RETRO changed in the menu header the test reads; and the ray-tracing rule
+# of a mode dropped from the renderer's rm_pres_decide, then from the menu's PresInForce
 ppbuild() {
 	# shellcheck disable=SC2086 # flags and fxhost are word lists
 	$cc $flags $fxhost -Wno-missing-field-initializers -I"$rm_dir" -Isrc/client/menu -o "$4" "$3" "$1/rm_rtgate.c" \
@@ -988,6 +997,7 @@ ppbuild() {
 }
 pp=""
 pp_mutants=0
+pptab=$rm_dir/common/rm_pres_table.h
 if ! ppbuild "$rm_dir" src/client/menu/vidrules.c tests/metal/rm_pres_parity_test.c "${tmp:?}/rm_pres_parity_test" \
 	> "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
@@ -1001,25 +1011,35 @@ else
 fi
 if [ -n "$pp" ]; then
 	mkdir "${tmp:?}/ppm"
-	for ppm in rrow mrow renum menum; do
+	for ppm in rrow mrow renum menum rneed mneed; do
 		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c tests/metal/rm_pres_parity_test.c "${tmp:?}/ppm/"
+		# hdr: the header whose changed copy (ppm/hdr.h) is included first in the file into; both empty for a source mutant
+		hdr=""
+		into=""
 		case $ppm in
-			rrow) sed 's/{ "r_rt_direct", 1\.0f },/{ "r_rt_direct", 1.0f }, { "r_rt_gunshadow", 0.0f },/' "$rm_dir/rm_rtgate.c" \
-				> "${tmp:?}/ppm/rm_rtgate.c" ;;
-			mrow) sed 's/return (i < 4) \&\& RTPrimaryInForce/return (i <= RT_GUNSHADOW) \&\& RTPrimaryInForce/' \
-				src/client/menu/vidrules.c > "${tmp:?}/ppm/vidrules.c" ;;
-			# the changed header is included first, so its guard keeps the tree's copy out of that file alone
-			renum) sed 's/^#define RM_PRES_RETRO 2$/#define RM_PRES_RETRO 5/' "$rm_dir/header/rm_rtgate.h" > "${tmp:?}/ppm/enum.h"
-				{ printf '#include "%s"\n' "${tmp:?}/ppm/enum.h"; cat "$rm_dir/rm_rtgate.c"; } > "${tmp:?}/ppm/rm_rtgate.c" ;;
-			menum) sed 's/^#define VIDPRES_RETRO 2$/#define VIDPRES_RETRO 5/' src/client/menu/header/vidrules.h > "${tmp:?}/ppm/enum.h"
-				{ printf '#include "%s"\n' "${tmp:?}/ppm/enum.h"; cat tests/metal/rm_pres_parity_test.c; } \
-					> "${tmp:?}/ppm/rm_pres_parity_test.c" ;;
+			rrow | mrow) hdr=$pptab
+				sed 's/{ "r_rt_direct", 1\.0f },/{ "r_rt_direct", 1.0f }, { "r_rt_gunshadow", 0.0f },/' "$hdr" > "${tmp:?}/ppm/hdr.h"
+				into=rm_rtgate.c
+				[ "$ppm" = mrow ] && into=vidrules.c ;;
+			renum) hdr=$pptab
+				into=rm_rtgate.c
+				sed 's/^#define RM_PRES_RETRO 2$/#define RM_PRES_RETRO 5/' "$hdr" > "${tmp:?}/ppm/hdr.h" ;;
+			menum) hdr=src/client/menu/header/vidrules.h
+				into=rm_pres_parity_test.c
+				sed 's/^#define VIDPRES_RETRO 2$/#define VIDPRES_RETRO 5/' "$hdr" > "${tmp:?}/ppm/hdr.h" ;;
+			rneed) sed 's/else if (rm_pres_needs_rt((int)requested) \&\& (path == RM_RTG_NONE))/else if (0 \&\& (path == RM_RTG_NONE))/' \
+				"$rm_dir/rm_rtgate.c" > "${tmp:?}/ppm/rm_rtgate.c" ;;
+			mneed) sed 's/(available || !rm_pres_needs_rt(pres))/(available || ((void)pres, 1))/' src/client/menu/vidrules.c \
+				> "${tmp:?}/ppm/vidrules.c" ;;
 		esac
-		if [ -f "${tmp:?}/ppm/enum.h" ] && { cmp -s "${tmp:?}/ppm/enum.h" "$rm_dir/header/rm_rtgate.h" ||
-			cmp -s "${tmp:?}/ppm/enum.h" src/client/menu/header/vidrules.h; }; then
+		if [ -n "$into" ]; then
+			{ printf '#include "%s"\n' "${tmp:?}/ppm/hdr.h"; cat "${tmp:?}/ppm/$into"; } > "${tmp:?}/ppm/into.c"
+			mv "${tmp:?}/ppm/into.c" "${tmp:?}/ppm/$into"
+		fi
+		if [ -n "$hdr" ] && cmp -s "$hdr" "${tmp:?}/ppm/hdr.h"; then
 			bad "the overlay-parity mutant ($ppm) changed nothing"
-		elif cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/ppm/rm_rtgate.c" && cmp -s src/client/menu/vidrules.c "${tmp:?}/ppm/vidrules.c" &&
-			cmp -s tests/metal/rm_pres_parity_test.c "${tmp:?}/ppm/rm_pres_parity_test.c"; then
+		elif [ -z "$hdr" ] && cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/ppm/rm_rtgate.c" &&
+			cmp -s src/client/menu/vidrules.c "${tmp:?}/ppm/vidrules.c"; then
 			bad "the overlay-parity mutant ($ppm) changed nothing"
 		elif ! ppbuild "${tmp:?}/ppm" "${tmp:?}/ppm/vidrules.c" "${tmp:?}/ppm/rm_pres_parity_test.c" "${tmp:?}/ppm/t" \
 			> "${tmp:?}/ppm.out" 2>&1; then
@@ -1030,9 +1050,9 @@ if [ -n "$pp" ]; then
 		else
 			pp_mutants=$((pp_mutants + 1))
 		fi
-		rm -f "${tmp:?}/ppm/enum.h"
+		rm -f "${tmp:?}/ppm/hdr.h"
 	done
-	[ "$pp_mutants" = 4 ] || bad "tests/metal/rm_pres_parity_test.c refuses $pp_mutants of its 4 mutants"
+	[ "$pp_mutants" = 6 ] || bad "tests/metal/rm_pres_parity_test.c refuses $pp_mutants of its 6 mutants"
 fi
 seg 10.25 "; menu and renderer presentation overlay ${pp:-host test}, $pp_mutants one-sided mutants refused"
 
