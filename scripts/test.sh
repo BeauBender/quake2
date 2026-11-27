@@ -16,9 +16,9 @@
 #
 # Usage: scripts/test.sh            (from anywhere; exits non-zero on failure)
 #
-# -B forces a full rebuild: the Makefile does not emit header dependencies
-# on Darwin (no -MMD), so an incremental build can leave stale objects and
-# report success for a commit that does not compile. The full build of these
+# -B forces a full rebuild: the gate must compile every file of the commit
+# under test, whatever objects an earlier build left (the .d files track
+# headers, not a changed compiler, flag or Makefile). The full build of these
 # two targets takes a few seconds; the suite builds and runs in a few more.
 set -eu
 
