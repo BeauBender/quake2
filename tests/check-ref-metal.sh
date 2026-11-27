@@ -3744,13 +3744,63 @@ else
 		fi
 	done
 fi
+# Every G-buffer read, the view test and the unprojection's centre in the three shared bodies take the
+# traced pixel through RM_RTW_AT: once RM_RTW_AT(px) is taken out, px is left only as the declaration, the
+# outputs' bounds, the list's packing and the outputs' writes, so a read added later is held too (mutants:
+# a read added at the traced pixel, and the review's four reads moved there at once).
+wlo_atpx() { # <rm_rtwater.metal>: 0 when the three shared bodies use px only through RM_RTW_AT, the bounds and the writes
+	awk '/^rm_rtw_(compact|trace|trace_ws)\(/ { b = 1; nb++; at = 0; next }
+		b && /^}/ { b = 0; if (!at) bad++; next }
+		b {
+			s = $0
+			if (s ~ /(depth|normal|mat)\.read\([[:space:]]*px[[:space:]]*\)/) bad++
+			at += gsub(/RM_RTW_AT\(px\)/, "", s)
+			gsub(/uint2 px \[\[thread_position_in_grid\]\]/, "", s)
+			gsub(/const uint2 px = /, "", s)
+			gsub(/px\.[xy] < RM_RTW_OUT\(/, "", s)
+			gsub(/mtl_rtw_list_pack\(px\.x, px\.y\)/, "", s)
+			if (s ~ /\.write\(/) sub(/, px\);$/, ");", s)
+			if (s ~ /(^|[^A-Za-z0-9_])px([^A-Za-z0-9_]|$)/) bad++
+		}
+		END { exit !((nb == 3) && !bad) }' "$1"
+}
+if ! wlo_atpx "$wlo_f"; then
+	bad "rm_rtwater.metal: a G-buffer read, the view test or the unprojection's centre in rm_rtw_compact, rm_rtw_trace or rm_rtw_trace_ws is not at RM_RTW_AT(px)"
+else
+	wlo_kpins=$((wlo_kpins + 1))
+	for m in addread fourread; do
+		case $m in
+			addread) awk '/^rm_rtw_trace_ws\(/ { b = 1 } b && /^}/ { b = 0 } { print }
+				b && !d && /^\t\tm = mat\.read\(RM_RTW_AT\(px\)\)\.r;$/ { print "\t\tm |= mat.read(px).r;"; d = 1 }' ;;
+			fourread) wlo_in rm_rtw_trace 'mat\\.read\\(RM_RTW_AT\\(px\\)\\)' 'mat.read(px)' |
+				wlo_in rm_rtw_trace 'normal\\.read\\(RM_RTW_AT\\(px\\)\\)' 'normal.read(px)' |
+				wlo_in rm_rtw_trace_ws 'depth\\.read\\(RM_RTW_AT\\(px\\)\\)' 'depth.read(px)' |
+				wlo_in rm_rtw_compact 'rm_rtw_in_view\\(v, RM_RTW_AT\\(px\\), w, h\\)' 'rm_rtw_in_view(v, px, w, h)' ;;
+		esac < "$wlo_f" > "${tmp:?}/wlo-kernel.metal"
+		if cmp -s "$wlo_f" "${tmp:?}/wlo-kernel.metal"; then
+			bad "the water's traced-pixel mutant ($m) changed nothing"
+		elif wlo_atpx "${tmp:?}/wlo-kernel.metal"; then
+			bad "the water's traced-pixel check passes the mutant ($m)"
+		elif [ -n "$rtp_metal" ] && ! wlo_compile "${tmp:?}/wlo-kernel.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the water's traced-pixel mutant ($m) does not compile, so it tests nothing"
+		else
+			wlo_kmut=$((wlo_kmut + 1))
+		fi
+	done
+fi
 for pin in "rm_rtw_compact|listed = mtl_rtw_listed(mat.read(RM_RTW_AT(px)).r, marks);|matpx" \
+	"rm_rtw_compact|if (rm_rtw_in_view(v, RM_RTW_AT(px), w, h) && (RM_RTW_AT(px).x < mat.get_width()) &&|viewpx" \
 	"rm_rtw_compact|const int qx = int(RM_RTW_AT(px).x) + dx, qy = int(RM_RTW_AT(px).y) + dy;|dilatepx" \
 	"rm_rtw_compact|else if ((px.x < RM_RTW_OUT(w, refl.get_width())) && (px.y < RM_RTW_OUT(h, refl.get_height())))|outpic" \
 	"rm_rtw_compact|const uint w = RM_RTW_PIC(refl, mat).get_width(), h = RM_RTW_PIC(refl, mat).get_height();|picout" \
 	"rm_rtw_trace|const float d = depth.read(RM_RTW_AT(px));|depthpx" \
 	"rm_rtw_trace|const float2 pc = float2(RM_RTW_AT(px)) + 0.5f;|pcpx" \
+	"rm_rtw_trace|m = mat.read(RM_RTW_AT(px)).r;|matpx" \
+	"rm_rtw_trace|const float4 nn = normal.read(RM_RTW_AT(px));|normalpx" \
 	"rm_rtw_trace|const uint w = RM_RTW_PIC(refl, depth).get_width(), h = RM_RTW_PIC(refl, depth).get_height();|picout" \
+	"rm_rtw_trace_ws|const float d = depth.read(RM_RTW_AT(px));|depthpx" \
+	"rm_rtw_trace_ws|const float2 pc = float2(RM_RTW_AT(px)) + 0.5f;|pcpx" \
 	"rm_rtw_trace_ws|const float4 nn = normal.read(RM_RTW_AT(px));|normalpx" \
 	"rm_rtw_trace_ws|m = mat.read(RM_RTW_AT(px)).r;|matpx" \
 	"rm_rtw_trace_ws|const bool inside = live && (px.x < RM_RTW_OUT(w, refl.get_width())) && (px.y < RM_RTW_OUT(h, refl.get_height()));|outpic" \
@@ -3785,6 +3835,7 @@ for pin in "rm_rtw_compact|listed = mtl_rtw_listed(mat.read(RM_RTW_AT(px)).r, ma
 			depthpx) wlo_in "$kn" 'depth\\.read\\(RM_RTW_AT\\(px\\)\\)' 'depth.read(px)' ;;
 			pcpx) wlo_in "$kn" 'float2\\(RM_RTW_AT\\(px\\)\\)' 'float2(px)' ;;
 			normalpx) wlo_in "$kn" 'normal\\.read\\(RM_RTW_AT\\(px\\)\\)' 'normal.read(px)' ;;
+			viewpx) wlo_in "$kn" 'rm_rtw_in_view\\(v, RM_RTW_AT\\(px\\), w, h\\)' 'rm_rtw_in_view(v, px, w, h)' ;;
 			taporderx) sed 's/{ qx\.lo0, qx\.lo1, qx\.lo0, qx\.lo1 }/{ qx.lo0, qx.lo0, qx.lo1, qx.lo1 }/' ;;
 			taporder) sed 's/{ qy\.lo0, qy\.lo0, qy\.lo1, qy\.lo1 }/{ qy.lo0, qy.lo1, qy.lo0, qy.lo1 }/' ;;
 			tapsrc) sed 's/const uint2 sp = rm_rtw_lo_src(tp, lo\.div, fw, fh);/const uint2 sp = tp;/' ;;
