@@ -37,17 +37,19 @@
 static byte msgbuf[4096];   /* the message the client parses */
 static byte chanbuf[4096];  /* the netchan message the client writes */
 
+#define MAP_ENTS \
+	"{\n\"classname\" \"worldspawn\"\n}\n" \
+	"{\n\"classname\" \"func_door\"\n\"model\" \"*1\"\n}\n"
+
 /* The smallest map with an inline model: the world and submodel 1, both
-   over one node splitting a solid leaf from an empty one. */
+   over one node splitting a solid leaf from an empty one, with the
+   entity string ents. The name returned is a static buffer. */
 static const char *
-write_map(void)
+write_map_ents(const char *ents)
 {
 	static byte buf[4096];
 	static char name[MAX_QPATH];
 	static int serial;
-	static const char ents[] =
-		"{\n\"classname\" \"worldspawn\"\n}\n"
-		"{\n\"classname\" \"func_door\"\n\"model\" \"*1\"\n}\n";
 	char rel[MAX_OSPATH];
 	dheader_t *h = (dheader_t *)buf;
 	dplane_t plane;
@@ -102,7 +104,7 @@ write_map(void)
 		ofs += ((LEN) + 3) & ~3; \
 	} while (0)
 
-	LUMP(LUMP_ENTITIES, ents, (int)sizeof(ents));
+	LUMP(LUMP_ENTITIES, ents, (int)strlen(ents) + 1);
 	LUMP(LUMP_PLANES, &plane, (int)sizeof(plane));
 	LUMP(LUMP_NODES, &node, (int)sizeof(node));
 	LUMP(LUMP_TEXINFO, &tex, (int)sizeof(tex));
@@ -120,6 +122,12 @@ write_map(void)
 	Com_sprintf(rel, sizeof(rel), "data/baseq2/%s", name);
 	t_write_file(rel, buf, ofs);
 	return name;
+}
+
+static const char *
+write_map(void)
+{
+	return write_map_ents(MAP_ENTS);
 }
 
 /* One valid frame from scratch, with no entities: what a demo sends
@@ -215,6 +223,33 @@ TEST(cl_first_frame_keeps_loaded_map)
 	T_EQ_STR(CM_EntityString(), "{\n\"classname\" \"worldspawn\"\n}\n"
 		"{\n\"classname\" \"func_door\"\n\"model\" \"*1\"\n}\n");
 	T_CHECK(strstr(t_console(), "ERROR") == NULL);
+}
+
+/* A stale demo frame after `gamemap` while the demo plays: SV_Map sends
+   one more demo chunk to the still-connected client, then
+   SV_SpawnServer loads the new map into the collision map the client
+   shares. The demo's frame must not load the demo's map over it. */
+TEST(cl_demo_frame_keeps_other_loaded_map)
+{
+	unsigned checksum;
+	char spawned[MAX_QPATH];
+	char demo[MAX_QPATH];
+
+	Q_strlcpy(demo, write_map(), sizeof(demo));
+	Q_strlcpy(spawned, write_map_ents("{\n\"classname\" \"worldspawn\"\n"
+		"\"message\" \"spawned\"\n}\n"), sizeof(spawned));
+	reset_demo_client(demo);
+
+	/* what SV_SpawnServer does for the new game map */
+	CM_LoadMap(spawned, false, &checksum);
+	T_EQ_INT(CM_NumInlineModels(), 2);
+
+	build_frame();
+	CL_ParseServerMessage();
+
+	T_EQ_INT(cls.state, ca_active);
+	T_EQ_STR(CM_EntityString(), "{\n\"classname\" \"worldspawn\"\n"
+		"\"message\" \"spawned\"\n}\n");
 }
 
 /* No map in the configstrings (a cinematic or a picture): nothing is
