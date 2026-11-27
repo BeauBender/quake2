@@ -886,6 +886,22 @@ CL_ParseFrame(void)
 		/* getting a valid frame message ends the connection process */
 		if (cls.state != ca_active)
 		{
+			/* CL_PrepRefresh, due now, looks up the map's inline
+			   models in the collision map. A demo server loads no
+			   map; the demo's own "precache" text loads it on the
+			   client, and that text can still wait in the command
+			   buffer behind a script's `wait`s while the demo's
+			   frames come in: load it now, as that precache does
+			   (FIX215). A map already loaded (every live connection,
+			   where frames only come after "begin") is the cached
+			   one. */
+			if (cl.configstrings[CS_MODELS + 1][0])
+			{
+				unsigned map_checksum;
+
+				CM_LoadMap(cl.configstrings[CS_MODELS + 1], true, &map_checksum);
+			}
+
 			cls.state = ca_active;
 			cl.force_refdef = true;
 			cl.predicted_origin[0] = cl.frame.playerstate.pmove.origin[0] * 0.125f;

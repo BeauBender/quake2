@@ -220,4 +220,9 @@ TEST(cl_first_frame_without_map_loads_nothing)
 	T_EQ_INT(cls.state, ca_active);
 	T_EQ_INT(CM_NumInlineModels(), 0);
 	T_EQ_STR(t_console(), "");
+
+	/* leave a real map loaded: a second CM_LoadMap("") would return
+	   the cached checksum of the last real map, which cm_empty_name
+	   does not expect */
+	CM_LoadMap(write_map(), false, &checksum);
 }
