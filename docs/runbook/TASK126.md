@@ -222,7 +222,7 @@ No kernel is wired in this slice, so there is no run at an effect scale of 1/2.
 - **The check** (`tests/check-ref-metal.sh`, segment 7.86):
   - It checks the unit's arrangement, and that the stock kernels sit alone before the `#else` and the
     four after it.
-  - It pins ten kernel calls with eleven mutants, each of which must be refused and must compile with
+  - It pins twelve kernel calls with thirteen mutants, each of which must be refused and must compile with
     `xcrun metal`. The mutants: the sample at the traced pixel itself (twice), the motion not divided,
     its sign flipped, the reset not passed, the weights at divisor 1, a pixel with no normal not
     skipped, every tap taken as traced, the neutral value 1, the fallback never counted, and the
@@ -241,7 +241,7 @@ No kernel is wired in this slice, so there is no run at an effect scale of 1/2.
 | `rm_rtsun_test` with the change | 716 checks, 0 failed |
 | `xcrun metal -c` of `rm_rtsun.metal` and `rm_rtsun_lo.metal` | both compile, no warning |
 | the stock unit's AIR against main's | the disassembly differs only in the module path and the field name `pad` / `div` |
-| segment 7.86 | `sun at its scale 10 kernel pins with 11 kernel mutants compiled and refused, 3 back-end and scene mutants refused` |
+| segment 7.86 | `sun at its scale 12 kernel pins with 13 kernel mutants compiled and refused, 4 back-end and scene mutants refused` |
 | segments 5.5, 5.6, 7, 10, 11, 12, 13, 15, 20 | pass; 40 `r_rt_*` cvars classified; 34 kernel calls, 340 kernel-call mutants refused |
 | `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh`, `scripts/pins.sh check-content` | ok, each |
 

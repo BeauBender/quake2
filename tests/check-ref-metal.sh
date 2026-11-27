@@ -3053,7 +3053,9 @@ seg 7.85 "; upsample ${rtup:-host test}, $rtup_mutants rule mutants refused${rtu
 # Metal compiler is there, the unit and every mutant compile. The back end takes the view into the
 # history at its divisor once (mutant: the plain take, the divisor dropped), dispatches the stock trace
 # at divisor 1, and makes the four pipelines; the scene reads r_rt_sun_scale, default 1, as the view's
-# divisor (mutants: the default 0.5, the divisor left at 1).
+# divisor (mutants: the default 0.5, the divisor left at 1), and sizes the traced-size histories at the traced
+# width (mutant: the render width). The upsample hands the slice-1 rule its four taps in the bilinear
+# order, both the x and the y line pinned (mutants: taps 1 and 2 swapped, once in each).
 sunlo_kpins=0 sunlo_kmut=0 sunlo_bmut=0 sunlo_metal=""
 sunlo_pin() { # <file> <kernel> <call>: 0 when the kernel's body holds the call exactly as pinned
 	awk -v fn="$2" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 } b { print }' "$1" | tr -s ' \t' '  ' |
@@ -3088,6 +3090,8 @@ for pin in "rm_rtsun_trace_lo|$sunlo_src|atpx" "rm_rtsun_temporal_lo|$sunlo_src|
 	"rm_rtsun_up|o = mtl_rtup_weights(in, v.div);|weights1" \
 	"rm_rtsun_up|if ((d < 1.0f) && (nn.a > 0.5f))|nonormal" \
 	"rm_rtsun_up|in.ok[i] = ((tc == MTL_RTSUN_C_LIT) || (tc == MTL_RTSUN_C_SHADOW)) ? 1 : 0;|everytap" \
+	"rm_rtsun_up|const uint tx[MTL_RTUP_TAPS] = { qx.lo0, qx.lo1, qx.lo0, qx.lo1 };|taporderx" \
+	"rm_rtsun_up|const uint ty[MTL_RTUP_TAPS] = { qy.lo0, qy.lo0, qy.lo1, qy.lo1 };|taporder" \
 	"rm_rtsun_up|vis = mtl_rtup_value(o, tv[0], tv[1], tv[2], tv[3], 0.0f);|neutral1" \
 	"rm_rtsun_up|fb = o.fallback ? 1u : 0u;|nocount" \
 	"rm_rtsun_up|c = mtl_rtsun_light(c, m, cls, vis, nl, v.sun.x, v.sun.y, v.sun.z);|vis1"; do
@@ -3111,6 +3115,8 @@ for pin in "rm_rtsun_trace_lo|$sunlo_src|atpx" "rm_rtsun_temporal_lo|$sunlo_src|
 			nonormal) awk -v fn="$kn" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
 				b { sub(/if \(\(d < 1\.0f\) && \(nn\.a > 0\.5f\)\)/, "if (d < 1.0f)") } { print }' ;;
 			everytap) sed 's/in\.ok\[i\] = ((tc == MTL_RTSUN_C_LIT) || (tc == MTL_RTSUN_C_SHADOW)) ? 1 : 0;/in.ok[i] = (tc == tc) ? 1 : 1;/' ;;
+			taporderx) sed 's/{ qx\.lo0, qx\.lo1, qx\.lo0, qx\.lo1 }/{ qx.lo0, qx.lo0, qx.lo1, qx.lo1 }/' ;;
+			taporder) sed 's/{ qy\.lo0, qy\.lo0, qy\.lo1, qy\.lo1 }/{ qy.lo0, qy.lo1, qy.lo0, qy.lo1 }/' ;;
 			neutral1) sed 's/tv\[3\], 0\.0f);/tv[3], 1.0f);/' ;;
 			nocount) sed 's/fb = o\.fallback ? 1u : 0u;/fb = o.fallback ? 0u : 0u;/' ;;
 			vis1) sed 's/c = mtl_rtsun_light(c, m, cls, vis, nl, v\.sun\.x/c = mtl_rtsun_light(c, m, cls, 1.0f, nl, v.sun.x/' ;;
@@ -3147,7 +3153,8 @@ sunlo_back() { # <rmb_rtsun.m>: 0 when it takes the view at its divisor once, in
 }
 sunlo_scene() { # <rm_rtsunscene.c>: 0 when the scene reads r_rt_sun_scale, default 1, as the view's divisor
 	grep -qF 'r_rt_sun_scale = ri.Cvar_Get("r_rt_sun_scale", "1", CVAR_ARCHIVE);' "$1" &&
-		grep -qF 'v.div = mtl_rtup_div(RM_Effect(r_rt_sun_scale));' "$1"
+		grep -qF 'v.div = mtl_rtup_div(RM_Effect(r_rt_sun_scale));' "$1" &&
+		grep -qF 'rmb_rtsun_temporal(RM_RTT_ViewFor(view), (unsigned long)mtl_rtup_size((unsigned)w, v.div),' "$1"
 }
 if ! sunlo_back "$sunlo_b"; then
 	bad "rmb_rtsun.m does not take the sun's view at its divisor in rmb_rtsun_encode_lo, keep the stock trace at 1, or make the four pipelines"
@@ -3161,10 +3168,11 @@ else
 	else
 		sunlo_bmut=$((sunlo_bmut + 1))
 	fi
-	for m in default nodiv; do
+	for m in default nodiv sizew; do
 		case $m in
 			default) sed 's/ri\.Cvar_Get("r_rt_sun_scale", "1", CVAR_ARCHIVE)/ri.Cvar_Get("r_rt_sun_scale", "0.5", CVAR_ARCHIVE)/' ;;
 			nodiv) sed 's/v\.div = mtl_rtup_div(RM_Effect(r_rt_sun_scale));/v.div = 1;/' ;;
+			sizew) sed 's/(unsigned long)mtl_rtup_size((unsigned)w, v\.div),/(unsigned long)(unsigned)w,/' ;;
 		esac < "$sunlo_s" > "${tmp:?}/sunlo-scene.c"
 		if cmp -s "$sunlo_s" "${tmp:?}/sunlo-scene.c" || sunlo_scene "${tmp:?}/sunlo-scene.c"; then
 			bad "the sun's scene pin passes the mutant ($m)"
