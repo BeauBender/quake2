@@ -379,8 +379,18 @@ at scale 1, kernel pins with mutants, and a skip before the rule.
 
 ### What slice 4 leaves
 
-- Nothing of the plan's slice 4 is cut: the rule, the cvar, the trace, RT7 at the traced size and
-  the upsample are all here.
+- The `r_rt_stats 1` parts of the plan's slice 4 are cut, and move to slice 6 for the sun and the
+  shadows, beside AO's count: the map-summary share of the fallback and the line
+  `ref_metal: r_rt_stats: upsample: <effect> WxH of WxH, F fallbacks`. The per-frame `r_rt_stats 2`
+  shadows line carries `traced at WxH, F upsample fallbacks` below scale 1 in this slice. The rule,
+  the cvar, the trace, RT7 at the traced size and the upsample are all here.
+- The counts buffer: `RMB_RTS_COUNTS` went from 4 to 5 words per slot, so the buffer's stride (the
+  offsets 0, 20 and 40) changes at scale 1 too. The stock kernels still write words 0 to 3, the
+  buffer is cleared each frame and the offsets stay 4-byte aligned, and the stock AIR is identical to
+  the parent's. No frame changes.
+- A scale change made while `r_rt_shadows` is off prints `reset: shadows scale` on the first
+  accumulating view after the shadows are turned back on: the histories keep their divisor across a
+  pass close, and only the next accumulation compares it.
 - The low path has never run on a GPU on this branch. The host checks compile it and pin its text.
   The hold below is its first run.
 
@@ -389,18 +399,40 @@ at scale 1, kernel pins with mutants, and a skip before the rule.
 | Check | Result |
 |---|---|
 | `rm_rtup_test` and `rm_rtshadow_test` at the red commit (`f30bd472`) | do not compile: `mtl_rtup_light_t`, `mtl_rtup_light` and `mtl_rts_holds` undeclared, `rm_rts_stats_t` has no `div`, `tw`, `th`, `fallbacks` |
-| `rm_rtup_test`, `rm_rtshadow_test` with the change | 92 and 4395 checks, 0 failed |
+| `rm_rtup_test`, `rm_rtshadow_test` with the change | 94 and 4395 checks, 0 failed |
 | `xcrun metal -c` of `rm_rtshadow.metal`, `rm_rtshadow_temporal.metal` and `rm_rtshadow_lo.metal` | all three compile, no warning |
 | the two stock units' AIR against the parent's (`e96c43b8`) | each disassembly differs only in the module path |
 | `cc -fsyntax-only -Wall -Wextra` of `rmb_rtshadow.m` and `rm_rtshadowscene.c` | no diagnostic |
 | segment 7.87 | `shadows at their scale 20 kernel pins with 23 kernel mutants compiled and refused, 6 back-end and scene mutants refused` |
-| segment 7.85 | `upsample 92 checks, 0 failed, 13 rule mutants refused, compiled` |
+| segment 7.85 | `upsample 94 checks, 0 failed, 15 rule mutants refused, compiled` (13 upsample header mutants and 2 of `mtl_rts_holds`) |
 | segment 5.5 | `temporal 148 checks, 0 failed, 14 rule mutants, 7 kernel pins with 10 kernel mutants and 4 back-end mutants refused, 3 stock-trace pins with 6 mutants refused` |
 | segments 4, 7.86, 10, 10.2, 11, 12, 15, 20 | pass; 41 `r_rt_*` cvars classified; 43 kernel calls, 430 kernel-call mutants refused |
 | `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh`, `tests/check-scenario-parsers.sh`, `scripts/pins.sh check-content` | ok, each |
 
 `make`, `make test` and the whole of `tests/check-ref-metal.sh` were not run here. The hold runs
 them.
+
+### Review round 1
+
+- **Correctness I1, the bench adapter dropped the shadows line below scale 1.** Fixed. The parser in
+  `scripts/bench/adapters/quake2.sh` keeps the 18-field line and the 24-field line that ends in
+  `traced at WxH, F upsample fallbacks`, the ms field being field 17 in both. The metrics fixture in
+  `tests/check-bench-quake2.sh` has a divisor-2 line (the text `rm_rtshadow_test` expects), and
+  `rts_ms` counts 4 (median 1.5) and `rts_traced_ms` 3, and 3 and 3 after frame 3. It failed at
+  `2256773b`. The check has a mutant list: a mutant that goes back to `n == 18` is refused.
+- **Spec I1, the `r_rt_stats 1` fallback lines.** Accepted as deferred to slice 6, as above.
+- **Note, `mtl_rtup_light` and a NaN weight.** A NaN-weight case is added to `rm_rtup_test`. The
+  `ws <= 0.0f` mutant of `!(ws > 0.0f)` is equivalent, so it is not in the list: a weight is added
+  only when it is above 0, so the sum is never a NaN and the two forms never differ.
+- **Note, `mtl_rts_holds`.** Two header mutants, the `MTL_RTS_NO_LIGHT` guard dropped and the slot loop
+  reading one slot, are refused by `rm_rtshadow_test` (`test_holds`). They run in segment 7.85, whose
+  mutant count is now 15.
+- **Notes N4 and N5.** The counts buffer's stride and the `reset: shadows scale` print are stated
+  above.
+- **Note N3, `shlo_lit`'s cut window.** Fixed. The cut ends at the shadow loop's own closing brace
+  instead of at `nl = nl;`, so a line added between them is part of what `rm_rts_lit` must hold. Its
+  two mutants are still refused (segment 7.87 is unchanged: 20, 23 and 6).
+- **Notes N1 and N2.** Accepted: a host cannot run the kernels; the hold does.
 
 ### The hold of slice 4 (M6, under the timing lock)
 
