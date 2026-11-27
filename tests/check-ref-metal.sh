@@ -1571,7 +1571,8 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	"rm_rtwater.metal rm_rtw_denoise_lo mtl_rtd_rresult" "rm_rtwater.metal rm_rtw_denoise_lo rm_rtw_lo_rok" \
 	"rm_rtwater.metal rm_rtw_up mtl_rtup_bilinear" "rm_rtwater.metal rm_rtw_up mtl_rtup_weights" \
 	"rm_rtwater.metal rm_rtw_up mtl_rtup_value" "rm_rtwater.metal rm_rtw_up rm_rtw_lo_rok" \
-	"rm_rtwater.metal rm_rtw_up mtl_rtup_own"; do
+	"rm_rtwater.metal rm_rtw_up mtl_rtup_own" "rm_rtao.metal rm_rtao_upsample mtl_rtao_up_fallback" \
+	"rm_rtao.metal rm_rtao_upsample rm_rtao_count_fallbacks"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
 	set -- $pair
 	f=$rm_dir/$1 kn=$2 hp=$3
