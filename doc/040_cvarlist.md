@@ -1541,6 +1541,25 @@ is.
   with the configuration; applies from the next frame.
   Can be set from Video options > Ray tracing (TASK194), live.
 
+* **r_rt_shadows_scale**: The share of the 3D view's width and height
+  that `r_rt_shadows` traces its rays at. `1` (the default) traces every
+  pixel, `0.5` one pixel of each 2 x 2 block, a quarter of the rays, and
+  `0.33` one of each 3 x 3 block. Below `1` each world pixel still works
+  out its own dynamic lights and how much each adds there; only whether a
+  light reaches it comes from the traced pixels next to it on its own
+  surface (the same distance, normal and material) that traced that
+  light, so an edge between two surfaces and the rim of a light's reach
+  stay where they are. A pixel no traced pixel next to it matches takes
+  the nearest in distance, and a light none of them traced is added
+  unshadowed, as with `r_rt_shadows 0`; `r_rt_stats 2` counts the pixels
+  where either happened. It is a share of the size the view is drawn at,
+  so with a MetalFX scaler (`r_metalfx`) it applies to the scaler's
+  input. A value is taken as the nearest of the three (`1` for `0.67` and
+  above, `0.33` below `0.4`); `0`, a negative value or one that is not a
+  finite number counts as `1`. A change resets the shadows' temporal
+  history (`r_rt_temporal`), which `r_rt_stats 1` reports. Saved with the
+  configuration; applies from the next frame.
+
 * **r_rt_shadows_show**: A development view of the Metal renderer's
   ray-traced shadows: with `r_rt_shadows` on, `1` replaces the 3D view by
   white where no dynamic light is in range and black where one is (the
@@ -1569,7 +1588,10 @@ is.
   model, sprites, the view weapon, shells, models it cannot build) and the
   bytes held, and with `r_rt_shadows` on a line for the shadow pass: the
   pixels it ran on, those with a dynamic light in range, those that traced
-  a ray and those shadowed, the rays and the pass's GPU time; with
+  a ray and those shadowed, the rays and the pass's GPU time (below
+  `r_rt_shadows_scale 1` those three counts are of the traced pixels, and
+  the line ends with the traced size and the drawn pixels the upsample
+  fell back on, `, traced at WxH, F upsample fallbacks`); with
   `r_rt_ao` on a line for the occlusion pass: the pixels it ran on, the
   world pixels that took a darkening, those darkened and those darkened to
   `r_rt_ao_min`, the pixels facing up (floors) and of them those darkened,
@@ -1607,7 +1629,9 @@ is.
   `size`, `rect` and `cut`, and `none` for a history that is kept; with no
   scaler it prints nothing. At any `r_metalfx`, a 3D view that resets
   the sun's history because `r_rt_sun_scale` changed prints the line
-  `ref_metal: r_rt_stats: reset: sun scale`. Nothing
+  `ref_metal: r_rt_stats: reset: sun scale`, and one that resets the
+  shadows' because `r_rt_shadows_scale` changed
+  `ref_metal: r_rt_stats: reset: shadows scale`. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next

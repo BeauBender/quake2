@@ -1066,6 +1066,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_gbuf.metal \
 		src/client/refresh/metal/rm_rtshadow.metal \
 		src/client/refresh/metal/rm_rtshadow_temporal.metal \
+		src/client/refresh/metal/rm_rtshadow_lo.metal \
 		src/client/refresh/metal/rm_rtao.metal \
 		src/client/refresh/metal/rm_rtsun.metal \
 		src/client/refresh/metal/rm_rtsun_lo.metal \
@@ -1103,6 +1104,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_gbuf.metal -o $(BUILDDIR)/ref_metal/rm_gbuf.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtshadow.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtshadow_temporal.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow_temporal.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtshadow_lo.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow_lo.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtao.metal -o $(BUILDDIR)/ref_metal/rm_rtao.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtsun.metal -o $(BUILDDIR)/ref_metal/rm_rtsun.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtsun_lo.metal -o $(BUILDDIR)/ref_metal/rm_rtsun_lo.air
@@ -1116,7 +1118,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtmtemporal.metal -o $(BUILDDIR)/ref_metal/rm_rtmtemporal.air
 	${Q}xcrun -sdk $(METAL_SDK) metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
 		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air \
-		$(BUILDDIR)/ref_metal/rm_rtshadow_temporal.air \
+		$(BUILDDIR)/ref_metal/rm_rtshadow_temporal.air $(BUILDDIR)/ref_metal/rm_rtshadow_lo.air \
 		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtsun.air $(BUILDDIR)/ref_metal/rm_rtsun_lo.air \
 		$(BUILDDIR)/ref_metal/rm_rtdenoise.air \
 		$(BUILDDIR)/ref_metal/rm_rtwdenoise.air $(BUILDDIR)/ref_metal/rm_rtwater.air \

@@ -717,6 +717,33 @@ mtl_rts_light_vis(unsigned pidx, unsigned pvis, unsigned idx)
 }
 
 /*
+ * TASK126 slice 4: 1 when the packed indices pidx hold light idx in one of
+ * their slots, so that a traced pixel's visibility of it is a traced one
+ * (mtl_rts_light_vis says 1 for a light they do not hold, which is no
+ * sample of it). MTL_RTS_NO_LIGHT, the empty slots' index, is no light.
+ */
+static inline int
+mtl_rts_holds(unsigned pidx, unsigned idx)
+{
+	int k;
+
+	if (idx >= MTL_RTS_NO_LIGHT)
+	{
+		return 0;
+	}
+
+	for (k = 0; k < MTL_RTS_CAP; k++)
+	{
+		if (mtl_rts_idx(pidx, k) == idx)
+		{
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/*
  * How far off the surface, along its normal, a shadow ray starts, for a
  * point dist units from the eye: half a unit, plus k dist^2, k being four
  * steps of a float depth near 1 (2^-24 each) per unit of the near plane's

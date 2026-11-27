@@ -257,4 +257,70 @@ mtl_rtup_reproject(unsigned x, unsigned y, float mx, float my, unsigned d, unsig
 	return mtl_rtt_reproject(x, y, mx / k, my / k, w, h);
 }
 
+/*
+ * One light's visibility at a drawn pixel (slice 4, the dlight shadows):
+ * vis, and fallback 1 where no traced pixel gave it.
+ */
+typedef struct
+{
+	float vis;
+	int fallback;
+} mtl_rtup_light_t;
+
+/*
+ * The visibility of one light under the pixel's weights o. Each traced
+ * pixel traces only the lights of its own packed set, so tap i weighs for
+ * this light only when its set holds it (h0 to h3), and its visibility of
+ * it is v0 to v3 (unread otherwise). The weights of the taps that hold it
+ * are taken over their own sum. A light that no weighted tap traced, the
+ * weights being empty or every holder's weight 0, takes visibility 1: the
+ * light unshadowed, the stock dlight, which the caller counts as a
+ * fallback.
+ */
+static inline mtl_rtup_light_t
+mtl_rtup_light(mtl_rtup_out_t o, int h0, int h1, int h2, int h3, float v0, float v1, float v2, float v3)
+{
+	mtl_rtup_light_t l;
+	float ws = 0.0f, s = 0.0f;
+
+	if (!o.empty)
+	{
+		if (h0 && (o.w[0] > 0.0f))
+		{
+			ws += o.w[0];
+			s += o.w[0] * v0;
+		}
+
+		if (h1 && (o.w[1] > 0.0f))
+		{
+			ws += o.w[1];
+			s += o.w[1] * v1;
+		}
+
+		if (h2 && (o.w[2] > 0.0f))
+		{
+			ws += o.w[2];
+			s += o.w[2] * v2;
+		}
+
+		if (h3 && (o.w[3] > 0.0f))
+		{
+			ws += o.w[3];
+			s += o.w[3] * v3;
+		}
+	}
+
+	/* written so that a NaN fails */
+	if (!(ws > 0.0f))
+	{
+		l.vis = 1.0f;
+		l.fallback = 1;
+		return l;
+	}
+
+	l.vis = s / ws;
+	l.fallback = 0;
+	return l;
+}
+
 #endif
