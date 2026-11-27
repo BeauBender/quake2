@@ -1870,26 +1870,35 @@ else
 	echo "$me: FAIL: mutant sv-no-term does not apply"
 	fails="$fails sv-no-term"
 fi
-# the mutant's verdict by construction (review round 3): on each line
-# stream a run of it can give after the INT (no "signal name=TERM", and
-# "trap 130" before or after "group-empty"), read from a file on fd 6 as
-# the case reads its FIFO, sv_seen gives the one refusal; sv_first, round
-# 1's in-order read, gave "no line trap 130" on the last two, the line two
-# loaded runs printed
+# the mutant's verdict by construction (review round 3), both ways. On each
+# line stream a run of it can give after the INT, read from a file on fd 6
+# as the case reads its FIFO, sv_seen gives: the one refusal when no line
+# is "signal name=TERM" (N: streams, "trap 130" before or after
+# "group-empty"; sv_first, round 1's in-order read, gave "no line trap 130"
+# on the last two, the line two loaded runs printed); and no refusal when
+# "signal name=TERM" comes after "group-empty", after "trap 130" or after
+# "grace-end" (P: streams). A reader that reads in order and stops at
+# "grace-end" or "group-empty" refuses the P: streams, so the case tells it
+# from sv_seen
 _eo_why=
-for _eo_s in 'trap 130|term-sent name=TERM|grace-end|kill-sent|group-empty|reaped status=137' \
-	'term-sent name=TERM|trap 130|grace-end|kill-sent|group-empty|reaped status=137' \
-	'term-sent name=TERM|group-empty|trap 130|reaped status=0' \
-	'term-sent name=TERM|group-empty|reaped status=0|trap 130'; do
-	printf '%s\n' "$_eo_s" | tr '|' '\n' > "$W/eo.lines"
+for _eo_s in 'N:trap 130|term-sent name=TERM|grace-end|kill-sent|group-empty|reaped status=137' \
+	'N:term-sent name=TERM|trap 130|grace-end|kill-sent|group-empty|reaped status=137' \
+	'N:term-sent name=TERM|group-empty|trap 130|reaped status=0' \
+	'N:term-sent name=TERM|group-empty|reaped status=0|trap 130' \
+	'P:term-sent name=TERM|group-empty|signal name=TERM|trap 130|reaped status=0' \
+	'P:trap 130|term-sent name=TERM|grace-end|kill-sent|group-empty|signal name=TERM|reaped status=137' \
+	'P:term-sent name=TERM|trap 130|signal name=TERM|group-empty|reaped status=0' \
+	'P:trap 130|term-sent name=TERM|grace-end|signal name=TERM|kill-sent|group-empty|reaped status=137'; do
+	printf '%s\n' "${_eo_s#?:}" | tr '|' '\n' > "$W/eo.lines"
 	exec 6< "$W/eo.lines"
 	sv_why=
 	sv_grace=$((PROC_BOUND + 2))
 	sv_seen 'signal name=TERM'
 	sv_grace=
 	exec 6<&-
-	case $sv_why in
-	'no line signal name=TERM after the INT, in any order, before end of file') ;;
+	case ${_eo_s%"${_eo_s#?}"}:$sv_why in
+	'N:no line signal name=TERM after the INT, in any order, before end of file') ;;
+	P:) ;;
 	*) _eo_why="${_eo_why:+$_eo_why; }[$_eo_s] gave \"$sv_why\"" ;;
 	esac
 done
@@ -1898,7 +1907,7 @@ if [ -n "$_eo_why" ]; then
 	echo "$me: FAIL: sv endgroup order: the mutant's verdict depends on the order of its lines: $_eo_why"
 	fails="$fails sv-endgroup-order"
 else
-	echo "$me: ok   sv endgroup order: every order of trap 130 and group-empty gives the mutant the one refusal"
+	echo "$me: ok   sv endgroup order: no TERM line, in any order of trap 130 and group-empty, gives the one refusal; a TERM line after group-empty, trap 130 or grace-end gives none"
 fi
 
 # The lock run's watch, with ps silent (correctness I2, round 1): the
