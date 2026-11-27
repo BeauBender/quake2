@@ -2924,7 +2924,8 @@ seg 7.8 "; RT-primary filter ${rtpd:-host test}, $rtpd_mutants rule mutants, $rt
 # tests/metal/rm_rtup_test.c holds common/mtl_rtup_math.h: the scale's divisor, a scale of 1 the identity,
 # no weight across a depth step, a material-id change, a crease or for a tap with no sample, the fallback
 # to the tap nearest in depth, counted, and an image with a depth step and a thin line. Header mutants,
-# each of which must compile and fail it: the depth guide, the material test, the normal guide and the
+# each of which must compile and fail it with a FAIL line (a crash or a sanitizer trip is an error, not a
+# refusal): the depth guide, the material test, the normal guide and the
 # sample test dropped, the fallback taking the first tap, the fallback not counted, and the identity
 # dropped at a scale of 1, and the two cross weights of the bilinear taps swapped. Where the Metal
 # compiler is there, a kernel that calls every function of the header must compile.
@@ -2979,6 +2980,10 @@ for m in depth material normal sample first count identity bilinear; do
 		bad "the upsample mutant ($m) does not compile, so it tests nothing"
 	elif rtup_run "${tmp:?}/rtupm"; then
 		bad "tests/metal/rm_rtup_test.c passes the upsample mutant ($m)"
+	elif ! grep -q '^FAIL ' "${tmp:?}/out"; then
+		# a non-zero exit with no FAIL line is a crash or a sanitizer trip, not a refusal
+		cat "${tmp:?}/out"
+		bad "tests/metal/rm_rtup_test.c errors on the upsample mutant ($m) without a FAIL line, so it is not refused"
 	else
 		rtup_mutants=$((rtup_mutants + 1))
 	fi

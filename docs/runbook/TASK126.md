@@ -87,7 +87,8 @@ at 1:1, as temporal anti-aliasing.
     no traced pixel lies on takes the far wall's value: the traced pixels nearest it in depth, 8
     fallbacks.
 - **The check.** `tests/check-ref-metal.sh` builds and runs the test. It runs the test against
-  eight mutants of the header, each of which compiles and must fail it:
+  eight mutants of the header, each of which compiles and must fail it with a `FAIL` line (a crash or a
+  sanitizer trip is an error, not a refusal):
   - the depth guide dropped;
   - the material test dropped;
   - the normal guide dropped;
