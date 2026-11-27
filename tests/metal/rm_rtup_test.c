@@ -464,6 +464,18 @@ test_light(void)
 	l = mtl_rtup_light(o, 0, 0, 1, 0, 1.0f, 1.0f, 0.0f, 1.0f);
 	CHECK(near(l.vis, 0.0f) && !l.fallback);
 
+	/* a NaN weight is no weight: it passes no tap's test, so the sum stays finite and the others hold */
+	{
+		mtl_rtup_out_t on = o;
+
+		on.w[0] = NAN;
+		l = mtl_rtup_light(on, 1, 1, 0, 0, 0.0f, 1.0f, 0.0f, 0.0f);
+		CHECK(near(l.vis, 1.0f) && !l.fallback);
+		on.w[1] = NAN;
+		l = mtl_rtup_light(on, 1, 1, 0, 0, 0.0f, 1.0f, 0.0f, 0.0f);
+		CHECK((l.vis == 1.0f) && l.fallback);
+	}
+
 	/* unequal weights among the holders */
 	in.b[0] = 0.5625f;
 	in.b[1] = in.b[2] = 0.1875f;

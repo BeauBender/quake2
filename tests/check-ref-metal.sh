@@ -3227,7 +3227,43 @@ for m in depth material normal sample first count identity bilinear motion light
 		rtup_mutants=$((rtup_mutants + 1))
 	fi
 done
-[ "$rtup_mutants" = 13 ] || bad "the upsample test refused $rtup_mutants of its 13 header mutants"
+# slice 4: two mutants of mtl_rts_holds in common/mtl_rts_math.h, which tests/metal/rm_rtshadow_test.c
+# (test_holds) must refuse: the MTL_RTS_NO_LIGHT guard dropped, and the slot loop reading only slot 0.
+# (A mutant of mtl_rtup_light's ws guard, !(ws > 0.0f) as ws <= 0.0f, is equivalent: the weights are
+# added only when above 0, so the sum is never a NaN and the two never differ; test_light holds a NaN
+# weight, which the rule ignores, as a case.)
+rts_h=$rm_dir/common/mtl_rts_math.h
+for m in holdsguard holdsloop; do
+	[ -f "$rts_h" ] || break
+	rm -rf "${tmp:?}/rtsm"
+	mkdir -p "${tmp:?}/rtsm/src/common" "${tmp:?}/rtsm/src/client/refresh" "${tmp:?}/rtsm/tests/metal"
+	cp -R "$rm_dir" "${tmp:?}/rtsm/src/client/refresh/metal"
+	cp -R src/common/shared src/common/header "${tmp:?}/rtsm/src/common/"
+	cp -R src/client/refresh/constants "${tmp:?}/rtsm/src/client/refresh/"
+	cp tests/metal/rm_rtshadow_test.c "${tmp:?}/rtsm/tests/metal/"
+	h=${tmp:?}/rtsm/src/client/refresh/metal/common/mtl_rts_math.h
+	awk -v m="$m" '/^mtl_rts_holds\(/ { b = 1 } b && /^}/ { b = 0 }
+		b && m == "holdsguard" { sub(/if \(idx >= MTL_RTS_NO_LIGHT\)/, "if (0)") }
+		b && m == "holdsloop" { sub(/k < MTL_RTS_CAP/, "k < 1") } { print }' "$rts_h" > "$h"
+	r=${tmp:?}/rtsm/src/client/refresh/metal
+	# shellcheck disable=SC2086 # flags is a word list
+	if cmp -s "$rts_h" "$h"; then
+		bad "the shadows header mutant ($m) changed nothing"
+	elif ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rtsm/t" "${tmp:?}/rtsm/tests/metal/rm_rtshadow_test.c" \
+		"$r/rm_rtshadow.c" "$r/rm_rt.c" "$r/rm_pure.c" "$r/common/mtl_matrix.c" "$r/common/mtl_ring.c" \
+		"${tmp:?}/rtsm/src/common/shared/shared.c" -lm > "${tmp:?}/cc.out" 2>&1; then
+		cat "${tmp:?}/cc.out"
+		bad "the shadows header mutant ($m) does not compile, so it tests nothing"
+	elif UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rtsm/t" > "${tmp:?}/out" 2>&1; then
+		bad "tests/metal/rm_rtshadow_test.c passes the shadows header mutant ($m)"
+	elif ! grep -q '^FAIL ' "${tmp:?}/out"; then
+		bad "tests/metal/rm_rtshadow_test.c errors on the shadows header mutant ($m) without a FAIL line"
+	else
+		rtup_mutants=$((rtup_mutants + 1))
+	fi
+done
+rm -rf "${tmp:?}/rtsm"
+[ "$rtup_mutants" = 15 ] || bad "the upsample and shadows header tests refused $rtup_mutants of their 15 header mutants"
 rtup_metal=""
 if [ -n "$rtp_metal" ] && [ -f "$rtup_h" ]; then
 	cat > "${tmp:?}/rtup-probe.metal" <<'EOF'
@@ -3448,8 +3484,9 @@ shlo_in() { # <kernel> <regex> <text>: stdin with the regex's first match on eac
 }
 shlo_lit() { # <file>: 0 when rm_rts_lit is rm_rts_shade's code in its order, without the rays' start and the shadow rays
 	rts_code "$1" rm_rts_shade | awk 'index($0, "const float3 o = p + n * mtl_rts_bias(") == 1 { next }
-		!cut && ($0 == "for (int k = 0; k < MTL_RTS_CAP; k++)") { cut = 1 }
-		(cut == 1) && ($0 == "nl = nl;") { cut = 2 }
+		!cut && ($0 == "for (int k = 0; k < MTL_RTS_CAP; k++)") { cut = 1; depth = 0; next }
+		(cut == 1) && ($0 == "{") { depth++ }
+		(cut == 1) && ($0 == "}") { if (--depth == 0) cut = 2; next }
 		cut != 1 { print }' > "${tmp:?}/shlo-want"
 	rts_code "$1" rm_rts_lit > "${tmp:?}/shlo-got"
 	[ -s "${tmp:?}/shlo-want" ] && ! grep -qF 'rm_rts_visibility' "${tmp:?}/shlo-got" &&
