@@ -502,3 +502,212 @@ The hold ran at 389df5e3 against main a9414f84.
 
 - Slice 4: model pixels, the weapon's among them, join TASK190's accumulation.
 - Slice 5: timing, in the owner's quiet window.
+
+# Slice 4: model pixels join RT-primary's accumulation
+
+Slice 4 accumulates the model pixels, the view weapon's among them, over the views under
+`r_rt_temporal` above 0, as TASK190 accumulates the world's. `r_rt_temporal 0` and
+`r_rt_direct_models 0` stay exactly as main, and no other presentation changes.
+
+## The design
+
+What existed (traced at main 9a81ccee): the direct row traces the world into `t_light`, then
+`rmb_rtdir_accumulate` blends the world pixels with the history (`t_hist`, RGBA16Float, the
+count in alpha) and its key (`t_key`, the distance's bits and the material id) into `t_acc`
+(RGBA16Unorm) and filters them 5 x 5. Every other pixel is passed through with count 0, and
+the filter gives it weight 0. The model row runs after that and writes the model pixels of
+`t_acc` with one traced sample, already in gl1's model colour (`tabs[..] / 255`).
+
+The design chosen: **the model pass accumulates its own pixels into the same history, after
+the world's accumulation, in a kernel of its own.**
+
+- **A second kernel, in a unit of its own.** `rm_rtm_temporal` (`rm_rtmtemporal.metal`)
+  includes `rm_rtmodel.metal` for its helpers, with its three entry points renamed, as
+  `rm_rtmodel.metal` includes `rm_rtdir.metal`. So `rm_rtmodel.metal` is unchanged, and so is
+  `rm_rtm_trace`'s compiled code (TASK59 1b's lesson: a kernel whose helpers gained a second
+  caller in its own unit moved its frames). The back end runs `rm_rtm_temporal` only on a view
+  that accumulated. Otherwise, at `r_rt_temporal 0`, it runs `rm_rtm_trace` with main's
+  bindings.
+- **The history holds the light, and the colour comes after.** The kernel traces the light `l`
+  as `rm_rtm_trace` does. It blends `l` with the history by TASK190's rule (`mtl_rtp_reject`,
+  `mtl_rtp_pixel`), writes the blend and its count to the history and the key, and writes gl1's
+  model colour of the blend (`mtl_rtm_color` through the tables) to the light the resolve reads.
+  So the glow pulse, the minlight floor, overbright and gamma apply to each frame's blend, and
+  are not averaged. Neither the tag nor the colour ever enters a float history:
+  - the tag is read from the G-buffer's light attachment (RGBA8Unorm), as in slice 3;
+  - the history's alpha is the count;
+  - the colour is written only to the RGBA16Unorm output.
+- **The key.** The key's distance is the shading point's distance from the eye: the world's
+  unprojection for a model, and the weapon's own point, pulled back where it is in a wall. Its
+  material word is `MTL_GB_MAT_ALIAS + 256 x` the tag's flags (`mtl_rtmt_key`). Every
+  G-buffer material id is below 256 (R8Uint), so a model key never equals a world id. A world
+  pixel that reprojects onto model history is rejected by the material rule, and so is a model
+  pixel that reprojects onto world history. The weapon's key differs from every other model's.
+- **The reprojection** is the G-buffer's motion vector, as for the world. The raster writes a
+  model's motion from its own previous pose, and the weapon's from its own unjittered
+  projection (`R_AliasMotion`'s `wproj`). So the weapon is reprojected by its own motion in the
+  depth-hacked view.
+- **The resets** are TASK190's. The view's reset applies, including a change of
+  `r_rt_direct_show`. So do the point off the screen, the depth tolerance, the key and an empty
+  or bad history. A model that is not traced this frame has count 0 in the history, which the
+  world's accumulation writes when it passes the pixel through, so it starts again when it is
+  traced. That covers `r_rt_direct_models 0`, a model without normals, and a frame where the
+  model pass failed.
+- **The world is unchanged.** `rm_rtp_temporal` and `rm_rtp_denoise` are not edited, and they
+  run before the model pass. A world pixel that reprojects onto a former model texel was
+  rejected before (count 0, material 2) and still is (the key), so its blend and count are the
+  same. The filter reads this frame's history before the model pass writes it, so it still
+  sees model texels at count 0.
+
+The trade-offs:
+
+- **Model pixels are not filtered in this slice.** The 5 x 5 filter stays world-only. A model
+  pixel whose history was just rejected (a disocclusion, a fast move past the depth
+  tolerance) shows its one sample until the history builds. Filtering would need the model
+  colour in a second filter kernel. The rule is ready for it (`mtl_rtpd_weight` already
+  separates by the key), but it is a follow-up if the frames show the need.
+- **No entity id.** The G-buffer has none, so two models with the same flags that meet on the
+  screen at a similar distance can hand history to each other within the depth tolerance, as
+  two world faces can.
+- **The option of running the model pass before the accumulation** was rejected for three
+  reasons:
+  - It would blend the final model colour, so the glow pulse would be averaged. At 0.95 and
+    60 frames a second, a 7 rad/s pulse keeps about 40 % of its swing.
+  - It would edit `rm_rtp_temporal`, whose world frames are pinned.
+  - The model colour, a gamma-mapped index, is not a light to average.
+- **A failed dispatch** of `rm_rtm_temporal` (no encoder) leaves the model pixels as the world's
+  accumulation passed them through, stock-lit, for that frame, as a failed `rm_rtm_trace` does
+  on main.
+- **Precision.** The history is half floats, so a settled light can be one colour index off
+  the float mean, as the world's is. A history's first frame (count 1) is the traced light
+  itself, so its colour equals `rm_rtm_trace`'s.
+- **The cost** is one more kernel variant, with five more textures read and two more written
+  per model pixel. Nothing new is allocated, since the histories are the world's.
+
+## What slice 4 adds
+
+- **The rule**, `common/mtl_rtmt_math.h`. It includes `mtl_rtp_math.h` and `mtl_rtm_math.h`
+  unchanged and has three parts:
+  - `mtl_rtmt_model` is `rm_rtm_trace`'s pixel test. It never holds where `mtl_rtp_world` does.
+  - `mtl_rtmt_key` is `MTL_GB_MAT_ALIAS + (flags << 8)`.
+  - `mtl_rtmt_pixel` is TASK190's `mtl_rtp_pixel` on the traced light, with an opaque alpha.
+- **The kernel**, `rm_rtm_temporal` in `rm_rtmtemporal.metal`:
+  - It includes `rm_rtmodel.metal` with exactly three `#define`s: `rm_rtm_unused_trace`,
+    `rm_rtm_unused_show` and `rm_rtm_trace` get new names, so the metallib holds no symbol
+    twice.
+  - Its light is `rm_rtm_trace`'s, line for line. Then come the key, the reprojection
+    through the motion vector, `mtl_rtp_reject` under the accumulation's view, and
+    `mtl_rtmt_pixel`.
+  - It writes four outputs at model pixels only: `rm_rtm_out` of the blend to the
+    resolve's light, the visibility, the blended light with its count to the history, and
+    the distance and key to the key texture.
+  - A fourth count, the pixels whose history was kept, goes to the stats.
+- **The back ends.**
+  - `rmb_rtdir_frame` now also hands over this view's accumulation:
+    - the history and key it read (`1 - hist_cur` after the swap);
+    - the history and key it wrote (`hist_cur`);
+    - `t_acc`;
+    - the temporal view as it was bound (`tbound`, with its reset). On a view that
+      accumulated nothing, all of these are nil.
+  - `rmb_rtmodel.m` makes the `rm_rtm_temporal` pipeline beside `rm_rtm_trace`'s. If it
+    cannot be made, it prints `ref_metal: rt models: no temporal pipeline; model pixels are
+    not accumulated` and runs `rm_rtm_trace` as before.
+  - It runs `rm_rtm_temporal` only when the light it writes is the accumulation's (`light
+    == f.acc`), with the motion vectors and the history at the light's size. Only then does
+    it bind textures 8 to 12 and the view at buffer 19. Otherwise it runs `rm_rtm_trace`
+    with main's bindings.
+- **The stats.** On a frame that accumulated, the `r_rt_stats 2` model line adds
+  `, accumulated: K kept their history`. A frame that did not accumulate prints main's line.
+- **The scenario** `rtprimary-models-temporal` is `rtprimary-weapon` at `r_rt_temporal
+  0.95`, seeded.
+- **No new cvar.** `doc/040_cvarlist.md`'s entries for `r_rt_temporal`, `r_rt_direct_models`
+  and `r_rt_stats` say what changed.
+
+## The tests, red then green
+
+- **Host.** `tests/metal/rm_rtmtemporal_test.c` was committed before the header, and it did
+  not build (red). Its checks:
+  - the pixels against `mtl_rtp_world`, for every material id;
+  - every key against every G-buffer id and every other key;
+  - the rejections across the key;
+  - a pixel's blend, count, alpha and clamp;
+  - 60 frames of a settled light with the glow pulse, whose colour equals the unaccumulated
+    colour on every frame;
+  - the minlight floor of a dark blend.
+
+  Green: `rm_rtmtemporal_test: 2707 checks, 0 failed`. check-ref-metal segment 7.96 runs it
+  and requires five header mutants, each refused by FAIL lines:
+
+  | Mutant | Change | Refused by |
+  | --- | --- | --- |
+  | `key-flags` | the key without the flags | 66 checks: the weapon's and the flags' own keys |
+  | `key-low` | the flags not above the G-buffer's ids | 7 checks: the keys against the ids |
+  | `model-world` | any material taken as a model pixel | 255 checks: the pixels |
+  | `alpha-kept` | the history's count kept as the alpha | 3 checks: the alpha |
+  | `pass` | the pixel passed through unblended | 10 checks: the blend and the count |
+
+  `rm_rtmodel_test.c` adds the stats line's suffix: 4185 checks, 0 failed, 18 of 18 mutants
+  refused.
+- **Kernel pins.** Segment 7.96 has seven pins on `rm_rtmtemporal.metal`. Each mutant
+  compiles under `xcrun metal` and is refused:
+
+  | Pin | Mutants |
+  | --- | --- |
+  | `rename`: exactly three `#define`s, then `rm_rtmodel.metal` | `rename-extra` |
+  | `same`: the light's seven lines, each also in `rm_rtm_trace` | `own-point` (the world's unprojection for the weapon) |
+  | `gate`: model pixels only, the four writes once each, inside `if (model)` | `writes-world`, `hist-everywhere` |
+  | `key`: `mtl_rtmt_key(f)`, the shading point's distance, both to the rule and the key texture | `key-material`, `dist-world` |
+  | `motion`: the motion vector and the view's reset reach the rule | `no-motion`, `no-reset` |
+  | `blend`: the model colour of the blend, the history the blended light, one `rm_rtm_out` | `color-unblended`, `hist-raw` |
+  | `nolm`: no lightmap | `reads-lm` |
+
+- **Back-end pins** (segment 7.96), each with one mutant that compiles and is refused:
+
+  | Pin | Mutant |
+  | --- | --- |
+  | `accpipe`: `rm_rtm_temporal` only on the accumulated light | `acc-any-light` |
+  | `accbind`: its five textures and its view, bound only behind `if (acc)` | `bind-always` |
+  | `swap`: `rmb_rtdir_frame` hands over the history it read and the one it wrote, after the swap | `hist-swapped` |
+
+  Segment 7.95's `bind` pin now counts twelve textures, of which five are behind
+  `if (acc)`. Its mutant is still refused. The Makefile compiles and links the new unit,
+  which check-ref-metal checks.
+- Green, from the segments' own lines: `model accumulation 2707 checks, 0 failed, 5 rule
+  mutants, 7 kernel pins with 11 kernel mutants compiled and refused, 3 back-end pins with
+  3 mutants refused`. Segment 7.95 is unchanged at 9 kernel pins, 14 mutants, 2 back-end
+  pins and 2 wiring pins. Segments 7.5 and 7.6 (the direct light's binding rules) and 20
+  (the kernel calls) pass.
+
+## The hold
+
+The checks that need no lock:
+
+- the host tests with their mutants (segments 7.9 and 7.96) and the kernel and back-end pins
+  (segments 7.95 and 7.96), each run by the segment's own lines;
+- `xcrun metal -c` of `rm_rtmtemporal.metal`, and a metallib of it with `rm_rtmodel.metal`
+  (no symbol twice);
+- `cc -fsyntax-only` of the changed C and Objective-C files;
+- check-cvar-docs, check-doc-links, check-runbook-index and check-pin-chars.
+
+The hold script (run by the orchestrator, under the lock) builds main 9a81ccee in scratch.
+Before `make` it removes `release/quake2`, so the pins' stale-build check does not refuse a
+binary that only the renderer's headers changed. It records:
+
+- `make ref_metal`, `make` and `make test`;
+- check-ref-metal, check-video-menu, check-pin-chars and check-scenario-parsers;
+- the 30 stock scenarios against main, byte for byte;
+- every existing RT-primary record against main. Every record either has `r_rt_temporal 0`
+  or has no model (`rtprimary-denoise` at 0.9 has no entities and no gun), so all of them
+  must stay byte-identical;
+- `rtprimary-models-temporal` three times (determinism), and against main's binary (want
+  differ, since main does not accumulate model pixels);
+- an `r_rt_direct_models 0` copy of it against main's binary (want identical: the world's
+  accumulation is main's, and every model is stock-lit);
+- the `r_rt_stats 2` model and temporal lines, and no refusal line.
+
+Results: (the hold's numbers go here.)
+
+## Left to the next slices
+
+- Slice 5: timing, in the owner's quiet window.
+- A 5 x 5 filter on model pixels (the trade-off above), if the owner's frames show the need.

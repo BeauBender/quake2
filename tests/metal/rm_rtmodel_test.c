@@ -957,6 +957,16 @@ test_stats_line(void)
 			"- ms"));
 	CHECK(rm_rtm_stats_format(&s, buf, 16) == 0 && buf[0] == '\0');
 	CHECK(rm_rtm_stats_format(&s, buf, 0) == 0);
+
+	/* slice 4: a frame whose model pixels were accumulated, and the ones that kept their history */
+	s.ms = 0.25;
+	s.accumulated = 1;
+	s.kept = 3000;
+	CHECK(rm_rtm_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(!strcmp(buf, "ref_metal: rt models: frame 12: 3456 model pixels, 789 shadow rays, 10 sky, sun and bounce rays, "
+			"0.250 ms, accumulated: 3000 kept their history"));
+	/* the suffix that does not fit refuses the whole line */
+	CHECK(rm_rtm_stats_format(&s, buf, 110) == 0 && buf[0] == '\0');
 }
 
 int

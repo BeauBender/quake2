@@ -241,6 +241,14 @@ rm_rtm_stats_format(const rm_rtm_stats_t *s, char *buf, int len)
 				"%lu sky, sun and bounce rays, - ms", s->frame, s->pixels, s->rays, s->open);
 	}
 
+	/* slice 4: the frame's model pixels accumulated, and how many kept their history */
+	if ((n >= 0) && (n < len) && s->accumulated)
+	{
+		const int k = snprintf(buf + n, (size_t)(len - n), ", accumulated: %lu kept their history", s->kept);
+
+		n = (k < 0) ? k : n + k;
+	}
+
 	if ((n < 0) || (n >= len))
 	{
 		buf[0] = '\0';
