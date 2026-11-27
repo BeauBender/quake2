@@ -157,23 +157,30 @@ int rm_rtt_traced_format(unsigned w, unsigned h, unsigned long fallbacks, char *
  * 1 (0 x 0 before one, and after a frame at divisor 1, which upsamples
  * nothing); fallbacks and pixels are the totals of the frames below
  * divisor 1 since the map loaded: the upsample's fallbacks and the drawn
- * pixels it wrote. Zeroed, it is an effect that has upsampled nothing.
+ * pixels it wrote. frame is the number of the newest frame handed over
+ * (0 before one): a back end hands its completed frames over in slot
+ * order, not frame order, so a frame older than it is judged for the
+ * totals alone. Zeroed, it is an effect that has upsampled nothing.
  */
 typedef struct
 {
 	unsigned long tw, th;
 	unsigned long long fallbacks, pixels;
+	unsigned long frame;
 } rm_rtt_up_t;
 
 /*
- * One frame's stats of the effect: its divisor (0 is 1), traced size,
- * drawn pixels and fallbacks. Below divisor 1 the frame is added to the
- * totals; 1 when its traced size is not the last frame's (the size-change
- * line is due), else 0. At divisor 1 the traced size is forgotten and
- * nothing is added: 0.
+ * One frame's stats of the effect: its number (rmb_frame_compute's),
+ * divisor (0 is 1), traced size, drawn pixels and fallbacks. Below
+ * divisor 1 the frame is added to the totals. A frame older than the
+ * newest one handed over adds to the totals and nothing else: 0. A newer
+ * one: 1 when its traced size is not the last frame's (the size-change
+ * line is due), else 0; at divisor 1 the traced size is forgotten and
+ * nothing is added: 0. So the line is due once per change of the traced
+ * size, in frame order, whatever order the frames are handed over in.
  */
-int rm_rtt_up_frame(rm_rtt_up_t *u, unsigned div, unsigned long tw, unsigned long th, unsigned long pixels,
-		unsigned long fallbacks);
+int rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long tw, unsigned long th,
+		unsigned long pixels, unsigned long fallbacks);
 
 /* A map loaded: the totals start again; the traced size is kept, so the line is not printed again for it. */
 void rm_rtt_up_map(rm_rtt_up_t *u);

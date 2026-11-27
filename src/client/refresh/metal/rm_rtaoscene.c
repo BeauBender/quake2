@@ -230,7 +230,7 @@ RM_RTAO_Frame(const refdef_t *fd, int scene_ready)
 	/* TASK126 slice 6: the upsample's size-change line (r_rt_stats 1) and the map summary's totals */
 	for (i = 0; i < n; i++)
 	{
-		RM_RT_UpFrame(RM_RT_UP_AO, st[i].div, st[i].tw, st[i].th, st[i].w, st[i].h, st[i].fallbacks);
+		RM_RT_UpFrame(RM_RT_UP_AO, st[i].frame, st[i].div, st[i].tw, st[i].th, st[i].w, st[i].h, st[i].fallbacks);
 	}
 
 	for (i = 0; i < n && r_rt_stats_ref && (r_rt_stats_ref->value >= 2); i++)

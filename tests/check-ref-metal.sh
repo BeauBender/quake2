@@ -4105,11 +4105,12 @@ else
 fi
 aofb_scenes() { # <rm_rtsunscene.c> <rm_rtscene.c>: 0 when every scaled effect's stats reach the lines
 	for e in "$1:SUN" "$rm_dir/rm_rtshadowscene.c:SHADOWS" "$rm_dir/rm_rtaoscene.c:AO" "$rm_dir/rm_rtwaterscene.c:WATER"; do
-		[ "$(grep -cF "RM_RT_UpFrame(RM_RT_UP_${e##*:}, st[i].div, st[i].tw, st[i].th, st[i].w, st[i].h, st[i].fallbacks);" \
+		[ "$(grep -cF "RM_RT_UpFrame(RM_RT_UP_${e##*:}, st[i].frame, st[i].div, st[i].tw, st[i].th, st[i].w, st[i].h, st[i].fallbacks);" \
 			"${e%:*}")" = 1 ] || return 1
 	done
 	[ "$(grep -cxF '	RM_RT_UpMap();' "$2")" = 2 ] &&
-		grep -qF 'if (rm_rtt_up_frame(&rt_up[effect], div, tw, th, w * h, fallbacks) && r_rt_stats && (r_rt_stats->value >= 1) &&' "$2" &&
+		awk '/^RM_RT_UpFrame\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$2" | tr '\n\t' '  ' | tr -s ' ' |
+			grep -qF 'if (rm_rtt_up_frame(&rt_up[effect], frame, div, tw, th, w * h, fallbacks) && r_rt_stats && (r_rt_stats->value >= 1) &&' &&
 		grep -qF 'for (k = 0; (k < RM_RT_UP_N) && r_rt_stats && (r_rt_stats->value >= 1); k++)' "$2" &&
 		grep -qF 'if (rm_rtt_up_total_format(rt_map, rt_up_name[k], &rt_up[k], line, sizeof(line)))' "$2"
 }
@@ -4126,7 +4127,7 @@ else
 	for m in nomap stats2; do
 		case $m in
 			nomap) awk '/^RM_RT_Summary\(/ { b = 1 } b && /^}/ { b = 0 } !(b && $0 == "\tRM_RT_UpMap();") { print }' ;;
-			stats2) sed 's/w \* h, fallbacks) && r_rt_stats && (r_rt_stats->value >= 1) &&/w * h, fallbacks) \&\& r_rt_stats \&\& (r_rt_stats->value >= 2) \&\&/' ;;
+			stats2) sed 's/^		(r_rt_stats->value >= 1) &&$/		(r_rt_stats->value >= 2) \&\&/' ;;
 		esac < "$rm_dir/rm_rtscene.c" > "${tmp:?}/aofb_scene.c"
 		if cmp -s "$rm_dir/rm_rtscene.c" "${tmp:?}/aofb_scene.c" || aofb_scenes "$rm_dir/rm_rtsunscene.c" "${tmp:?}/aofb_scene.c"; then
 			bad "the upsample lines' pin passes the mutant ($m)"

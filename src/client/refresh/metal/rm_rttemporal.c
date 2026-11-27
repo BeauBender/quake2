@@ -197,10 +197,12 @@ rm_rtt_traced_format(unsigned w, unsigned h, unsigned long fallbacks, char *buf,
 }
 
 int
-rm_rtt_up_frame(rm_rtt_up_t *u, unsigned div, unsigned long tw, unsigned long th, unsigned long pixels,
-		unsigned long fallbacks)
+rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long tw, unsigned long th,
+		unsigned long pixels, unsigned long fallbacks)
 {
 	int changed;
+
+	(void)frame;
 
 	if (div <= 1u)
 	{

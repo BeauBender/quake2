@@ -97,8 +97,8 @@ RM_RT_UpMap(void)
 }
 
 void
-RM_RT_UpFrame(int effect, unsigned div, unsigned long tw, unsigned long th, unsigned long w, unsigned long h,
-		unsigned long fallbacks)
+RM_RT_UpFrame(int effect, unsigned long frame, unsigned div, unsigned long tw, unsigned long th, unsigned long w,
+		unsigned long h, unsigned long fallbacks)
 {
 	char line[RM_STATS_LINE];
 
@@ -107,8 +107,12 @@ RM_RT_UpFrame(int effect, unsigned div, unsigned long tw, unsigned long th, unsi
 		return;
 	}
 
-	/* the size-change line: only when the traced size is not the effect's last frame's below divisor 1 */
-	if (rm_rtt_up_frame(&rt_up[effect], div, tw, th, w * h, fallbacks) && r_rt_stats && (r_rt_stats->value >= 1) &&
+	/*
+	 * the size-change line: only when the traced size is not the effect's
+	 * last frame's below divisor 1, judged in frame order (rm_rtt_up_frame)
+	 */
+	if (rm_rtt_up_frame(&rt_up[effect], frame, div, tw, th, w * h, fallbacks) && r_rt_stats &&
+		(r_rt_stats->value >= 1) &&
 		rm_rtt_up_line_format(rt_up_name[effect], tw, th, w, h, fallbacks, line, sizeof(line)))
 	{
 		R_Printf(PRINT_ALL, "%s\n", line);
