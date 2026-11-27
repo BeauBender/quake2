@@ -631,7 +631,7 @@ test_history_guards(void)
  * on), on every input that is not a NaN, ±inf included; a NaN depth or
  * normal alpha is not a world pixel.
  */
-#ifdef __FAST_MATH__
+#if defined(__FAST_MATH__) || (defined(__FINITE_MATH_ONLY__) && __FINITE_MATH_ONLY__)
 #error "the reference compares of the world-pixel test need IEEE compares; build without fast math"
 #endif
 
@@ -669,6 +669,9 @@ static const rtw_edge_t rtw_depth[] = {
 	{ 0x7fc00000u, "quiet NaN", 0 },
 	{ 0x7f800001u, "signalling NaN", 0 },
 	{ 0xffc00000u, "negative NaN", 0 },
+	{ 0xff800001u, "smallest negative NaN", 0 },
+	{ 0xffffffffu, "largest negative NaN", 0 },
+	{ 0x7fffffffu, "largest positive NaN", 0 },
 };
 #define RTW_NDEPTH ((int)(sizeof(rtw_depth) / sizeof(rtw_depth[0])))
 
@@ -683,6 +686,9 @@ static const rtw_edge_t rtw_normal[] = {
 	{ 0x7fc00000u, "quiet NaN", 0 },
 	{ 0x7f800001u, "signalling NaN", 0 },
 	{ 0xffc00000u, "negative NaN", 0 },
+	{ 0xff800001u, "smallest negative NaN", 0 },
+	{ 0xffffffffu, "largest negative NaN", 0 },
+	{ 0x7fffffffu, "largest positive NaN", 0 },
 };
 #define RTW_NNORMAL ((int)(sizeof(rtw_normal) / sizeof(rtw_normal[0])))
 
