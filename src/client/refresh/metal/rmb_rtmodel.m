@@ -51,17 +51,19 @@ extern id<MTLDevice> rmb_device;
 extern rm_ledger_t rmb_ledger;
 
 #define RMB_RTM_GROUP 8         /* the kernel's threadgroup side */
-#define RMB_RTM_COUNTS 3        /* the model pixels, their shadow rays, their sky, sun and bounce rays */
+#define RMB_RTM_COUNTS 4        /* the model pixels, their shadow rays, their sky, sun and bounce rays; slice 4: those that kept a history */
 
 _Static_assert(sizeof(rm_rtm_params_t) == 80, "the parameters are rm_rtmodel.metal's 80 bytes");
 
 static int rtm_open;
 static id<MTLComputePipelineState> rtm_pipe;
+static id<MTLComputePipelineState> rtm_tpipe;   /* slice 4: rm_rtm_temporal, nil when it cannot be made (one sample, as rtm_pipe) */
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTM_COUNTS */
 static id<MTLCounterSampleBuffer> samples;
 static atomic_ulong slot_done[RMB_FRAMES_IN_FLIGHT];
 static int slot_pending[RMB_FRAMES_IN_FLIGHT];
 static int slot_timed[RMB_FRAMES_IN_FLIGHT];
+static int slot_acc[RMB_FRAMES_IN_FLIGHT];      /* slice 4: the slot's frame accumulated its model pixels */
 static unsigned long slot_frame[RMB_FRAMES_IN_FLIGHT];
 static rm_rtm_stats_t done[RMB_FRAMES_IN_FLIGHT];
 static int ndone;
@@ -115,6 +117,19 @@ rmb_rtmodel_open(char *err, unsigned long errlen)
 		RMB_RTM_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTM_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
 
+		/* slice 4: the accumulating kernel; without it a model pixel takes one sample a view, as before */
+		{
+			id<MTLFunction> kt = [rmb_library() newFunctionWithName:@"rm_rtm_temporal"];
+			NSError *et = nil;
+
+			RMB_RTM_SET(rtm_tpipe, kt ? [rmb_device newComputePipelineStateWithFunction:kt error:&et] : nil);
+
+			if (!rtm_tpipe)
+			{
+				fprintf(stderr, "ref_metal: rt models: no temporal pipeline; model pixels are not accumulated\n");
+			}
+		}
+
 		if (!rtm_pipe || !counts)
 		{
 			snprintf(err, errlen, "cannot build the model pass's pipeline%s%s", e ? ": " : "",
@@ -148,6 +163,7 @@ rmb_rtmodel_open(char *err, unsigned long errlen)
 		atomic_store(&slot_done[i], ~0UL);   /* no frame */
 		slot_pending[i] = 0;
 		slot_frame[i] = 0;
+		slot_acc[i] = 0;
 	}
 
 	ndone = 0;
@@ -163,6 +179,7 @@ rmb_rtmodel_close(void)
 	@autoreleasepool
 	{
 		RMB_RTM_SET(rtm_pipe, nil);
+		RMB_RTM_SET(rtm_tpipe, nil);
 		RMB_RTM_SET(counts, nil);
 		RMB_RTM_SET(samples, nil);
 	}
@@ -217,6 +234,8 @@ rmb_rtmodel_read(void)
 		s->pixels = c[0];
 		s->rays = c[1];
 		s->open = c[2];
+		s->accumulated = slot_acc[k];
+		s->kept = slot_acc[k] ? c[3] : 0;
 		s->ms = -1;
 
 		if (slot_timed[k] && samples)
@@ -261,6 +280,10 @@ rmb_rtmodel_stats(rm_rtm_stats_t *s, int cap)
  * normal and material, the raster's light attachment (for a model's tag
  * alone), and writes the model pixels of light (the light the resolve
  * reads, the trace's or its accumulation) and of the trace's visibility.
+ * Slice 4: on a view whose world light was accumulated (f.acc is the
+ * light), rm_rtm_temporal in rm_rtm_trace's place, with the motion vectors
+ * and the accumulation's histories and view, writes the model pixels of
+ * the history and the key as well; otherwise rm_rtm_trace, bound as before.
  */
 static void
 rmb_rtmodel_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material, id<MTLTexture> gbl,
@@ -271,8 +294,9 @@ rmb_rtmodel_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> ma
 	id<MTLComputeCommandEncoder> ce;
 	rmb_rtdir_frame_t f;
 	rm_rtdir_view_t mv;
+	id<MTLTexture> motion;
 	const NSUInteger w = light.width, h = light.height;
-	int slot, timed;
+	int slot, timed, acc;
 
 	if (!view_set)
 	{
@@ -292,6 +316,15 @@ rmb_rtmodel_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> ma
 		(f.vis.height != h))
 	{
 		return;
+	}
+
+	/* slice 4: the world's accumulation wrote this light, at this size, with the motion vectors at it */
+	{
+		id<MTLTexture> mvt = rmb_gbuf_motion();
+
+		acc = rtm_tpipe && f.acc && (light == f.acc) && f.hist_in && f.key_in && f.hist_out && f.key_out && mvt &&
+			(mvt.width == w) && (mvt.height == h) && (f.hist_in.width == w) && (f.hist_in.height == h);
+		motion = acc ? mvt : nil;
 	}
 
 	@autoreleasepool
@@ -329,7 +362,7 @@ rmb_rtmodel_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> ma
 			return;
 		}
 
-		[ce setComputePipelineState:rtm_pipe];
+		[ce setComputePipelineState:(acc ? rtm_tpipe : rtm_pipe)];
 
 		/* the scene; its transmission and count go to slots 7 and 8, which the kernel does not read */
 		if (!rmb_rt_bind_scene(ce, fno, 2, 3, 7, 8))
@@ -386,11 +419,24 @@ rmb_rtmodel_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> ma
 		[ce setBuffer:f.tile offset:0 atIndex:12];
 		[ce setBytes:&params length:sizeof(params) atIndex:17];
 		[ce setBytes:tabs length:sizeof(tabs) atIndex:18];
+
+		/* slice 4: the motion vectors and the accumulation's histories, read where the pixel was and written at it */
+		if (acc)
+		{
+			[ce setTexture:motion atIndex:8];
+			[ce setTexture:f.hist_in atIndex:9];
+			[ce setTexture:f.key_in atIndex:10];
+			[ce setTexture:f.hist_out atIndex:11];
+			[ce setTexture:f.key_out atIndex:12];
+			[ce setBytes:&f.tview length:sizeof(f.tview) atIndex:19];
+		}
+
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTM_GROUP, RMB_RTM_GROUP, 1)];
 		[ce endEncoding];
 
 		slot_pending[slot] = 1;
 		slot_timed[slot] = timed;
+		slot_acc[slot] = acc;
 		slot_frame[slot] = fno;
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
@@ -401,7 +447,7 @@ rmb_rtmodel_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> ma
 
 /* ---- the effect table's row (rm_rtfx.c) -------------------------------------------- */
 
-/* after the direct light's trace and its accumulation: the model pixels of the light the resolve reads */
+/* after the direct light's trace and its accumulation: the model pixels of the light the resolve reads (slice 4: and of its history) */
 void
 rmb_rtmodel_fx_trace(rmb_rtfx_io_t *io)
 {

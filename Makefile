@@ -1076,6 +1076,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_rtptemporal.metal \
 		src/client/refresh/metal/rm_rtpdenoise.metal \
 		src/client/refresh/metal/rm_rtmodel.metal \
+		src/client/refresh/metal/rm_rtmtemporal.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h \
 		src/client/refresh/metal/common/mtl_gbuf_math.h \
 		src/client/refresh/metal/common/mtl_rts_math.h \
@@ -1090,6 +1091,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/common/mtl_rtdir_math.h \
 		src/client/refresh/metal/common/mtl_rtsky_math.h \
 		src/client/refresh/metal/common/mtl_rtm_math.h \
+		src/client/refresh/metal/common/mtl_rtmt_math.h \
 		src/client/refresh/metal/common/mtl_retro_math.h \
 		src/client/refresh/metal/common/mtl_hdr_math.h
 	@echo "===> METAL $<"
@@ -1111,6 +1113,7 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtptemporal.metal -o $(BUILDDIR)/ref_metal/rm_rtptemporal.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtpdenoise.metal -o $(BUILDDIR)/ref_metal/rm_rtpdenoise.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtmodel.metal -o $(BUILDDIR)/ref_metal/rm_rtmodel.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtmtemporal.metal -o $(BUILDDIR)/ref_metal/rm_rtmtemporal.air
 	${Q}xcrun -sdk $(METAL_SDK) metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
 		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air \
 		$(BUILDDIR)/ref_metal/rm_rtshadow_temporal.air \
@@ -1118,7 +1121,8 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		$(BUILDDIR)/ref_metal/rm_rtdenoise.air \
 		$(BUILDDIR)/ref_metal/rm_rtwdenoise.air $(BUILDDIR)/ref_metal/rm_rtwater.air \
 		$(BUILDDIR)/ref_metal/rm_rtdir.air $(BUILDDIR)/ref_metal/rm_rtptemporal.air \
-		$(BUILDDIR)/ref_metal/rm_rtpdenoise.air $(BUILDDIR)/ref_metal/rm_rtmodel.air -o $@
+		$(BUILDDIR)/ref_metal/rm_rtpdenoise.air $(BUILDDIR)/ref_metal/rm_rtmodel.air \
+		$(BUILDDIR)/ref_metal/rm_rtmtemporal.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
