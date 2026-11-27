@@ -210,6 +210,10 @@ prefix to tell it from a second one.
 
 ### Behaviour that changed
 
+- **A group record can outlive its group by a reuse.** Once the recorded group has emptied,
+  a new process could take its id as pid and lead a new group with it; the record would
+  then keep the lock until that group ends too. The start-time records' `written=` rule
+  has no group counterpart yet. This needs the pids to wrap around while the lock is held.
 - **A stopped command** (a stop signal, or the terminal) is no longer told apart: 74 and
   `HOW=stopped` are gone. The supervisor's CONT ends the stop at the wall time (124).
 - **What a command leaves in its group** gets TERM at once, not after 1 to 2 s.

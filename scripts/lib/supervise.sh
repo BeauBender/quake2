@@ -16,8 +16,10 @@
 # absolute path is refused; an XDG_CACHE_HOME that is not one is ignored, as
 # the XDG spec says. The directory is made with mode 0700. The directory and
 # the binary must be owned by this user and not writable by group or others,
-# and the binary must be a regular file, not a symbolic link; else sv_path
-# refuses it. The build runs cc directly, unsupervised, into a temporary name
+# and the binary must be a regular file, not a symbolic link; neither may
+# have an ACL, and every directory above the cache must be owned by this
+# user or root and not writable by group or others unless sticky; else
+# sv_path refuses it. The build runs cc directly, unsupervised, into a temporary name
 # that is moved into place, so a concurrent first use never runs a
 # half-written binary; its log is a temporary file too.
 #
@@ -50,6 +52,7 @@ sv_cache() {
 
 # sv_safe: the path is owned by this user and not writable by group or others
 sv_safe() {
+	_sv_sp=$1
 	_sv_ls=$(ls -ldn "$1" 2> /dev/null) || return 1
 	# shellcheck disable=SC2086 # the fields of the listing
 	set -- $_sv_ls
@@ -57,6 +60,31 @@ sv_safe() {
 	case $1 in
 	?????w* | ????????w*) return 1 ;;
 	esac
+	# no ACL: ls -lde lists its entries on lines of their own (the + of
+	# ls -l is hidden when the path also has extended attributes)
+	_sv_n=$(ls -lden "$_sv_sp" 2> /dev/null | sed -n '$=') || return 1
+	[ "${_sv_n:-0}" -eq 1 ]
+}
+
+# sv_parents <dir>: every directory above <dir> (a physical path) is owned
+# by this user or root, and not writable by group or others unless it is
+# sticky (as /tmp is). A parent's ACL is not read: macOS home directories
+# carry a deny ACL, which grants nothing.
+sv_parents() {
+	_sp_d=$1
+	_sp_u=$(id -u)
+	while [ -n "$_sp_d" ] && [ "$_sp_d" != / ]; do
+		_sp_d=${_sp_d%/*}
+		[ -n "$_sp_d" ] || _sp_d=/
+		_sp_l=$(ls -ldn "$_sp_d" 2> /dev/null) || return 1
+		# shellcheck disable=SC2086 # the fields of the listing
+		set -- $_sp_l
+		case ${3:-} in 0 | "$_sp_u") ;; *) return 1 ;; esac
+		case $1 in
+		?????????[tT]*) ;;
+		?????w* | ????????w*) return 1 ;;
+		esac
+	done
 	return 0
 }
 
@@ -99,7 +127,11 @@ sv_path() {
 		}
 	fi
 	sv_safe "$_sv_dir/." || {
-		echo "supervise: the tool cache is refused: not a directory owned by this user, or writable by group or others" >&2
+		echo "supervise: the tool cache is refused: not a directory owned by this user, writable by group or others, or with an ACL" >&2
+		return 1
+	}
+	_sv_real=$(cd "$_sv_dir" 2> /dev/null && pwd -P) && sv_parents "$_sv_real" || {
+		echo "supervise: the tool cache is refused: a directory above it is owned by another user, or writable by group or others and not sticky" >&2
 		return 1
 	}
 	_sv_bin=$_sv_dir/supervise-$(printf '%s\n' "$_sv_key" | cut -c1-16)
@@ -108,7 +140,7 @@ sv_path() {
 		return 1
 	fi
 	if [ -e "$_sv_bin" ] && ! sv_safe "$_sv_bin"; then
-		echo "supervise: the cached supervisor is refused: not owned by this user, or writable by group or others" >&2
+		echo "supervise: the cached supervisor is refused: not owned by this user, writable by group or others, or with an ACL" >&2
 		return 1
 	fi
 	if [ ! -x "$_sv_bin" ]; then
