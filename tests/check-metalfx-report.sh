@@ -175,7 +175,7 @@ cc -O2 -o "$tmp/framediff" "$root/scripts/pins/framediff.c" -lm || { bad "cannot
 
 # fixtures
 mkdir "$tmp/repo" "$tmp/plain" "$tmp/fakegit" "$tmp/real" "$tmp/ro" "$tmp/stubfail" "$tmp/stubtrue" "$tmp/scen" "$tmp/out" \
-    "$tmp/makefail" "$tmp/maketrue" "$tmp/basedir" "$tmp/basedir/baseq2"
+    "$tmp/makefail" "$tmp/maketrue" "$tmp/quietup" "$tmp/basedir" "$tmp/basedir/baseq2"
 git -C "$tmp/repo" init -q || { bad "git init failed"; exit 1; }
 mkdir "$tmp/fakegit/.git"
 ln -s "$tmp/real" "$tmp/link"
@@ -185,6 +185,9 @@ printf '#!/bin/sh\necho boom >&2\nexit 1\n' > "$tmp/stubfail/git"
 printf '#!/bin/sh\necho true\nexit 0\n' > "$tmp/stubtrue/git"
 printf '#!/bin/sh\nexit 1\n' > "$tmp/makefail/make"
 printf '#!/bin/sh\nexit 0\n' > "$tmp/maketrue/make"
+# a quiet host for the chunk fixtures: load1() reads uptime, and the chunks and the full run must be read at one load
+printf '#!/bin/sh\necho "up 1 day, load averages: 1.00 1.00 1.00"\n' > "$tmp/quietup/uptime"
+chmod +x "$tmp/quietup/uptime"
 chmod +x "$tmp/stubfail/git" "$tmp/stubtrue/git" "$tmp/makefail/make" "$tmp/maketrue/make"
 printf 'set timedemo 1\nset r_drawworld 1\nset sw_waterwarp 1\n' > "$tmp/scen/world.cfg"
 printf 'set timedemo 1\nset r_rt_shadows 1\n' > "$tmp/scen/rt-shadows.cfg"
@@ -826,9 +829,9 @@ limit" "$out"
     # a run split into chunks, one --out each, is combined by report with one --dir each; the rows are those of
     # the one full run, and a row two chunks both hold, or a chunk of another commit or setting, is refused
     mkeng "$w/ck" "$tmp/eng-cfg"; mkdir -p "$w/c0" "$w/c1" "$w/c2"
-    out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c0" --scenarios world,models 2>&1); want_rc chunk-full 0 $?
-    out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c1" --scenarios world 2>&1); want_rc chunk-one 0 $?
-    out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c2" --scenarios models 2>&1); want_rc chunk-two 0 $?
+    out=$(PATH="$tmp/quietup:$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c0" --scenarios world,models 2>&1); want_rc chunk-full 0 $?
+    out=$(PATH="$tmp/quietup:$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c1" --scenarios world 2>&1); want_rc chunk-one 0 $?
+    out=$(PATH="$tmp/quietup:$tmp/maketrue:$PATH" e2e "$w/ck/quake2" "$w/c2" --scenarios models 2>&1); want_rc chunk-two 0 $?
     r0=$(ls -d "$w"/c0/metalfx-t1-* 2>/dev/null | head -1); r1=$(ls -d "$w"/c1/metalfx-t1-* 2>/dev/null | head -1); r2=$(ls -d "$w"/c2/metalfx-t1-* 2>/dev/null | head -1)
     out=$($py report --dir "$r1" --dir "$r2" --html "$w/out/chunks.html" 2>&1); want_rc chunk-merge 0 $?
     full=$(cut -f1-5,7-17 "$r0/results.tsv" 2>/dev/null | sed 1d | sort)
