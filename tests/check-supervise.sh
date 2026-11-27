@@ -144,6 +144,88 @@ echo "check-supervise: builds clean with $W"
 ) || fail "the build helper (scripts/lib/supervise.sh)"
 echo "check-supervise: the helper builds on first use, once, and fails closed"
 
+# refusals (TASK221 slice 2, review round 1, security I1 and I3): the
+# cache's parents and the ACLs. Each case has a directory of its own
+# under $tmp; a cache the case expects to be accepted is seeded with the
+# binary built above, so nothing is built again. ACLs are set with chmod
+# +a on files and directories under $tmp only.
+# sv_refusals <helper>: runs each case with the helper <helper> (a copy of
+# supervise.sh, beside which no source need be: SV_SRC_DIR is the real
+# one); prints "ok <case>" or "FAIL <case>: <why>" for each, and returns 1
+# when one failed
+sv_refusals() (
+	# shellcheck source=../scripts/lib/supervise.sh
+	. "$1"
+	SV_SRC_DIR=$root/scripts/lib
+	SUPERVISE_CACHE=$tmp/cache
+	export SUPERVISE_CACHE
+	bin=$(sv_path) || { echo "FAIL setup: no binary in the cache"; exit 1; }
+	name=${bin##*/}
+	d=$(mktemp -d "$tmp/ref.XXXXXX") || exit 1
+	bad=0
+	# seed <dir>: a cache directory <dir> of mode 0700 holding the binary
+	seed() { mkdir -p "$1" && chmod 700 "$1" && cp "$bin" "$1/$name" && chmod 755 "$1/$name"; }
+	# verdict <case> refused|accepted [<real dir>]: sv_path's answer for the
+	# cache SUPERVISE_CACHE names; an accepted path must be in <real dir>
+	verdict() {
+		st=0
+		out=$(sv_path 2> "$d/err") || st=$?
+		case $2:$st in
+		refused:0) echo "FAIL $1: accepted: $out"; bad=1 ;;
+		refused:*)
+			if [ -n "$out" ] || ! grep -q '^supervise: ' "$d/err"; then echo "FAIL $1: refused without its line, or with a path"; bad=1; else echo "ok $1: refused"; fi
+			;;
+		accepted:0)
+			if [ "${out%/*}" = "$3" ] && [ -x "$out" ]; then echo "ok $1: accepted in the real directory"; else echo "FAIL $1: accepted as $out, not in $3"; bad=1; fi
+			;;
+		accepted:*) echo "FAIL $1: refused: $(tr '\n' ' ' < "$d/err")"; bad=1 ;;
+		esac
+	}
+	# a parent writable by others and not sticky
+	mkdir -p "$d/p777" && chmod 777 "$d/p777" && seed "$d/p777/cache" || exit 1
+	SUPERVISE_CACHE=$d/p777/cache
+	verdict parent-0777 refused
+	# a sticky parent writable by others, as /tmp is
+	mkdir -p "$d/p1777" && chmod 1777 "$d/p1777" && seed "$d/p1777/cache" || exit 1
+	SUPERVISE_CACHE=$d/p1777/cache
+	verdict parent-1777 accepted "$(cd "$d/p1777/cache" && pwd -P)"
+	# an allow ACL on the cache directory
+	seed "$d/cacl" && chmod +a "everyone allow list" "$d/cacl" || exit 1
+	SUPERVISE_CACHE=$d/cacl
+	verdict acl-cache refused
+	# an allow ACL on the binary
+	seed "$d/bacl" && chmod +a "everyone allow read" "$d/bacl/$name" || exit 1
+	SUPERVISE_CACHE=$d/bacl
+	verdict acl-binary refused
+	# the cache named through a symbolic link in a directory that others
+	# can write (mode 0777, not sticky), whose link they could swap: the
+	# path given is in the real directory, never through the link
+	mkdir -p "$d/open" "$d/safe" && chmod 777 "$d/open" && seed "$d/safe/c" && ln -s "$d/safe/c" "$d/open/cache" || exit 1
+	SUPERVISE_CACHE=$d/open/cache
+	verdict symlink-parent accepted "$(cd "$d/safe/c" && pwd -P)"
+	exit "$bad"
+)
+sv_refusals "$helper" > "$tmp/refusals.out" 2>&1 || {
+	cat "$tmp/refusals.out" >&2
+	fail "the helper's refusals (above)"
+}
+sed 's/^/check-supervise: refusal: /' "$tmp/refusals.out"
+# helper mutants: <name> <case> <sed expression>; the expression must
+# change exactly one line of a copy of supervise.sh, and the copy must
+# fail <case>
+hmutant() {
+	_hn=$1 _hc=$2
+	mkdir -p "$tmp/hm-$_hn" || fail "helper mutant $_hn: no directory"
+	sed "$3" "$helper" > "$tmp/hm-$_hn/supervise.sh" || fail "helper mutant $_hn: sed failed"
+	_hd=$(diff "$helper" "$tmp/hm-$_hn/supervise.sh" | grep -c '^>') || _hd=0
+	[ "$_hd" -eq 1 ] || fail "helper mutant $_hn changes $_hd lines, not 1: its pattern no longer fits supervise.sh"
+	sv_refusals "$tmp/hm-$_hn/supervise.sh" > "$tmp/hm-$_hn.out" 2>&1 && { cat "$tmp/hm-$_hn.out" >&2; fail "helper mutant $_hn survived"; }
+	grep -q "^FAIL $_hc: " "$tmp/hm-$_hn.out" || { cat "$tmp/hm-$_hn.out" >&2; fail "helper mutant $_hn did not fail $_hc"; }
+	echo "check-supervise: helper mutant $_hn fails $_hc"
+}
+hmutant parents-ok parent-0777 's/^	_sp_d=\$1$/	return 0/'
+hmutant acl-unread acl-cache 's/^	\[ "\${_sv_n:-0}" -eq 1 \]$/	:/'
+
 # cases
 for sh in /bin/bash /bin/sh; do
 	"$tmp/runner" "$tmp/supervise-test" "$tmp/fake" "$sh" || fail "a case failed with $sh as the caller"
