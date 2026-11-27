@@ -281,6 +281,29 @@ test_fallback(void)
 	CHECK(mtl_rtup_value(o, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f) == 1.0f);
 }
 
+/* each tap's bilinear weight follows its axis: tap 1 (the next in x) the x fraction, tap 2 (the next in y) the y fraction */
+static void
+test_bilinear(void)
+{
+	mtl_rtup_in_t in;
+	mtl_rtao_pair_t qx = { 0u, 1u, 0.5f }, qy = { 0u, 0u, 0.0f };
+
+	memset(&in, 0, sizeof(in));
+	in = mtl_rtup_bilinear(in, qx, qy);
+	CHECK(in.b[0] == 0.5f && in.b[1] == 0.5f && in.b[2] == 0.0f && in.b[3] == 0.0f);
+
+	qx.f = 0.0f;
+	qy.lo1 = 1u;
+	qy.f = 0.25f;
+	in = mtl_rtup_bilinear(in, qx, qy);
+	CHECK(in.b[0] == 0.75f && in.b[1] == 0.0f && in.b[2] == 0.25f && in.b[3] == 0.0f);
+
+	qx.f = 0.5f;
+	qy.f = 0.5f;
+	in = mtl_rtup_bilinear(in, qx, qy);
+	CHECK(in.b[0] == 0.25f && in.b[1] == 0.25f && in.b[2] == 0.25f && in.b[3] == 0.25f);
+}
+
 /*
  * An 8 x 8 view at divisor 2, upsampled as a kernel would: a near wall
  * (depth 100, value 0.2) in columns 0 to 2, a far one (depth 400, value
@@ -375,6 +398,7 @@ main(void)
 	test_material();
 	test_other();
 	test_fallback();
+	test_bilinear();
 	test_image();
 	printf("rm_rtup_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

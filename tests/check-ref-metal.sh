@@ -57,7 +57,7 @@
 #     the header and five pins of rm_rtpdenoise.metal with six mutants,
 #     tests/metal/rm_rtup_test.c, the joint bilateral upsample of an effect
 #     traced below the drawn size (common/mtl_rtup_math.h, option E, TASK126
-#     slice 1), with seven mutants of the header it must fail, the header
+#     slice 1), with eight mutants of the header it must fail, the header
 #     compiled as Metal where xcrun metal is there,
 #     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
 #     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eighteen
@@ -2926,8 +2926,8 @@ seg 7.8 "; RT-primary filter ${rtpd:-host test}, $rtpd_mutants rule mutants, $rt
 # to the tap nearest in depth, counted, and an image with a depth step and a thin line. Header mutants,
 # each of which must compile and fail it: the depth guide, the material test, the normal guide and the
 # sample test dropped, the fallback taking the first tap, the fallback not counted, and the identity
-# dropped at a scale of 1. Where the Metal compiler is there, a kernel that calls every function of the
-# header must compile.
+# dropped at a scale of 1, and the two cross weights of the bilinear taps swapped. Where the Metal
+# compiler is there, a kernel that calls every function of the header must compile.
 rtup=""
 rtup_tree() { # <dir>: a copy of the test and the headers, laid out as the test includes them
 	rm -rf "${1:?}"
@@ -2957,7 +2957,7 @@ else
 fi
 rtup_mutants=0
 rtup_h=$rm_dir/common/mtl_rtup_math.h
-for m in depth material normal sample first count identity; do
+for m in depth material normal sample first count identity bilinear; do
 	[ -f "$rtup_h" ] || break
 	rtup_tree "${tmp:?}/rtupm"
 	h=${tmp:?}/rtupm/src/client/refresh/metal/common/mtl_rtup_math.h
@@ -2969,6 +2969,8 @@ for m in depth material normal sample first count identity; do
 		first) sed 's/((k < 0) || (e < best))/((k < 0) || ((e < best) \&\& 0))/' ;;
 		count) sed 's/r\.fallback = 1;/r.fallback = 0;/' ;;
 		identity) sed 's/if (d <= 1u)$/if (d < 1u)/' ;;
+		bilinear) sed -e 's/in\.b\[1\] = qx\.f \* (1\.0f - qy\.f);/in.b[1] = (1.0f - qx.f) * qy.f;/' \
+			-e 's/in\.b\[2\] = (1\.0f - qx\.f) \* qy\.f;/in.b[2] = qx.f * (1.0f - qy.f);/' ;;
 	esac < "$rtup_h" > "$h"
 	if cmp -s "$rtup_h" "$h"; then
 		bad "the upsample mutant ($m) changed nothing"
@@ -2981,7 +2983,7 @@ for m in depth material normal sample first count identity; do
 		rtup_mutants=$((rtup_mutants + 1))
 	fi
 done
-[ "$rtup_mutants" = 7 ] || bad "the upsample test refused $rtup_mutants of its 7 header mutants"
+[ "$rtup_mutants" = 8 ] || bad "the upsample test refused $rtup_mutants of its 8 header mutants"
 rtup_metal=""
 if [ -n "$rtp_metal" ] && [ -f "$rtup_h" ]; then
 	cat > "${tmp:?}/rtup-probe.metal" <<'EOF'

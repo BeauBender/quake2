@@ -85,14 +85,15 @@ at 1:1, as temporal anti-aliasing.
     no traced pixel lies on takes the far wall's value: the traced pixels nearest it in depth, 8
     fallbacks.
 - **The check.** `tests/check-ref-metal.sh` builds and runs the test. It runs the test against
-  seven mutants of the header, each of which compiles and must fail it:
+  eight mutants of the header, each of which compiles and must fail it:
   - the depth guide dropped;
   - the material test dropped;
   - the normal guide dropped;
   - the sample test dropped;
   - the fallback taking the first tap;
   - the fallback not counted;
-  - the identity dropped at a scale of 1.
+  - the identity dropped at a scale of 1;
+  - the two cross weights of the bilinear taps swapped.
 
   Where `xcrun metal` is there, the check also compiles a kernel that calls every function of the
   header.
@@ -102,7 +103,7 @@ at 1:1, as temporal anti-aliasing.
 | Check | Result |
 |---|---|
 | the upsample segment of `tests/check-ref-metal.sh`, at the red commit (`87561daa`, the test without the header) | `common/mtl_rtup_math.h is missing`; `refused 0 of its 7 header mutants` |
-| the same segment with the header | `upsample 67 checks, 0 failed, 7 rule mutants refused, compiled` |
+| the same segment with the header | `upsample 67 checks, 0 failed, 8 rule mutants refused, compiled` |
 | `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh` | ok, each |
 
 ### The hold (M6, under the timing lock)
