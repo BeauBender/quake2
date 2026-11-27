@@ -591,6 +591,62 @@ Checks run in round 3, standalone from the worktree: `sh -n` and `bash -n` on
 cases)"); `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
 `tests/check-bench.sh` and the gate go to the orchestrator's hold.
 
+### Hold: two `check-bench` cases (#758)
+
+- **The failure.** The orchestrator's hold ran `tests/check-bench.sh` on the branch at
+  `fd301302` (main `94901377` was "ok"). It failed `t_inputs` ("with no shasum the hash
+  is not cksum") and `t_probe_first` ("the put failed:" with an empty reason, then "the
+  run file does not name its readers"). No earlier branch head had run the check to its
+  end, and both reproduce standalone on `486f3c81` with no lock
+  (`tests/check-bench.sh t_inputs`, `tests/check-bench.sh t_probe_first`).
+- **The cause, by trace.** Slice 2 moved `bench_bounded` onto the supervisor, so every
+  bounded command first needs `sv_path`, and `sv_path` refused:
+  - `t_inputs` runs `bench.sh host --facts` with a `PATH` of the system directories
+    without `shasum`. `sv_path` required `shasum` for its cache key ("supervise: shasum is
+    not on PATH"), where main's bounded path needed no tool and `bench_hash` falls back to
+    `cksum`. So `bench_host_init`'s bounded `system_profiler` exited 2.
+  - `t_probe_first` puts a stub `cc` first on `PATH` to stand in for the frequency probe's
+    build. The stub printed nothing for `cc --version`, so `sv_path` refused it ("cc
+    --version printed nothing"). That is no regression for a real caller: a compiler
+    always prints its version line.
+  - **The lost reason.** `bench_bounded` calls `bench_sv`, whose `bench_die` writes to the
+    standard error of the bounded call. `host.sh` and `snap.sh` send that to `/dev/null`
+    (or to the probe's build log), so the exit 2 came with no line at all.
+- **The fix.**
+  - `sv_path` keys the cache with two POSIX `cksum` CRCs of the same text (the second with
+    a prefix, as `bench_hash` does) when `shasum` is not on `PATH`, under the name
+    `supervise-crc-<16 hex digits>`, so a `cksum` key never names a `shasum` key's
+    binary. A `cksum` that fails or answers anything but two CRCs of at most 10 digits is
+    refused ("neither shasum nor cksum gave a digest"). With `shasum`, the key and the
+    name are unchanged. With no `cc` the supervisor is still refused, with its reason:
+    there is no shell fallback (the one bounded primitive).
+  - The six core calls that send a bounded command's standard error away call `bench_sv`
+    first: `bench_host_init`, `bench_snap_system`, `bench_snap`'s reader,
+    `bench_freq_init`, `bench_freq_dump` and `bench_freq_window`. A refusal then exits 2
+    with both lines, "supervise: <reason>" and "bench: cannot build the process
+    supervisor". The adapters' bounded calls come after `bench_host_init` in the same
+    shell, so the supervisor is there by then.
+  - `t_probe_first`'s stub passes `cc --version` and the build of `supervise.c` to the
+    real `cc`, unlogged, so its log still starts with the probe's build. The case's
+    assertions are main's and unchanged; `probe-after-gate` still fails it.
+- **The case.** `t_sv_path` (in `check-bench.sh`'s list after `t_inputs`): with no
+  `shasum` on `PATH`, `sv_path` and its supervisor run `true`, and `bench.sh host --facts`
+  reads the stub GPU through the bounded path; with a refused supervisor
+  (`SUPERVISE_CACHE` not absolute), each of the six calls above exits 2 and says both
+  lines. On `486f3c81` it fails every part. Two mutants, `sv-reason-host` and
+  `sv-reason-snap`, take the `bench_sv` lines out, and each of the six sites taken out
+  alone fails its own part (checked once with a copy of `scripts/bench`).
+- **No signal handling changed:** no `trap`, `set -m` or process-group line is touched, so
+  no disposition probe was needed.
+- **Checks run,** from the worktree: `sh -n` and `bash -n` on every file touched;
+  `tests/check-bench.sh t_inputs t_probe_first t_sv_path` ("ok (t_inputs t_probe_first
+  t_sv_path; no mutants)"); `tests/check-supervise.sh` ("ok (5 s)");
+  `tests/check-bench-entry.sh` (ok); `scripts/ios-device.sh --selftest` ("ok (65
+  cases)"); `tests/check-bounded-run.sh` ("ok (guard, 65 mutants refused, probe, the supervisor cases
+  and their 12 mutants, pyprobe and its 10 mutants)"); `tests/check-doc-links.sh` and
+  `tests/check-runbook-index.sh` (ok); the whole `tests/check-bench.sh`
+  under the host lock (CB_LINE).
+
 ## What remains
 
 - **Slice 3: the lock run and the deletions.** `bench_lock_run` through `sv_run`, and the
