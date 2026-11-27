@@ -1330,36 +1330,6 @@ fi
 sv_case "$here" pollint 30 polled polled 'exec sleep 30'
 sv_judge pollint
 
-# A command's own 124, 125 and 126 are its own (correctness B1, round 1):
-# the supervisor passes the command's status through, so bench_bounded
-# tells its own 124 (the wall time), 125 (cannot run) and 126 (cannot empty
-# the group) from the command's by its events, not by the status.
-# sv_own <root> <status>: "status <s> how <how>|<what it said>"
-sv_own() {
-	_so_d=$W/own-$2-$(basename "$1")
-	rm -rf "$_so_d"
-	mkdir -p "$_so_d" || return 1
-	env TMPDIR="$_so_d" sh -c '. "$1/scripts/bench/core/common.sh"; st=0; bench_bounded 20 sh -c "exit $2" 2> "$3/err" || st=$?; echo "status $st how $BENCH_BOUNDED_HOW"' sh "$1" "$2" "$_so_d" 2>&1
-	tr '\n' '|' < "$_so_d/err"
-}
-for _on in 124 125 126; do
-	_oo=$(sv_own "$here" "$_on")
-	case $_oo in
-	"status $_on how exit"*)
-		if printf '%s\n' "$_oo" | grep -F -e 'outlived' -e 'could not be stopped' -e 'spawned pid=' > /dev/null; then
-			echo "$me: FAIL: own $_on: the command's own $_on was said to be the supervisor's: $_oo"
-			fails="$fails own-$_on"
-		else
-			echo "$me: ok   own $_on: a command's own $_on is its status, HOW=exit"
-		fi
-		;;
-	*)
-		echo "$me: FAIL: own $_on: wanted \"status $_on how exit\"; got $(printf '%s\n' "$_oo" | tr '\n' ' ')"
-		fails="$fails own-$_on"
-		;;
-	esac
-done
-
 # 3. the probe: TERM and INT stop the child and the grandchild; the wall
 # time does too; nothing can run after a KILL of the caller, so both stay
 pout=$(probe "$here")
@@ -1522,6 +1492,55 @@ if sv_stage "$W/stage-noterm" scripts/lib/supervise.sh '	[ -z "$SV_PID" ] || kil
 else
 	echo "$me: FAIL: mutant sv-no-term does not apply"
 	fails="$fails sv-no-term"
+fi
+
+# A command's own 124, 125 and 126 are its own (correctness B1, round 1):
+# the supervisor passes the command's status through, so bench_bounded
+# tells its own 124 (the wall time), 125 (cannot run) and 126 (cannot empty
+# the group) from the command's by its events, not by the status.
+# sv_own <root> <status>: "status <s> how <how>|<what it said>"
+sv_own() {
+	_so_d=$W/own-$2-$(basename "$1")
+	rm -rf "$_so_d"
+	mkdir -p "$_so_d" || return 1
+	env TMPDIR="$_so_d" sh -c '. "$1/scripts/bench/core/common.sh"; st=0; bench_bounded 20 sh -c "exit $2" 2> "$3/err" || st=$?; echo "status $st how $BENCH_BOUNDED_HOW"' sh "$1" "$2" "$_so_d" 2>&1
+	tr '\n' '|' < "$_so_d/err"
+}
+for _on in 124 125 126; do
+	_oo=$(sv_own "$here" "$_on")
+	case $_oo in
+	"status $_on how exit"*)
+		if printf '%s\n' "$_oo" | grep -F -e 'outlived' -e 'could not be stopped' -e 'spawned pid=' > /dev/null; then
+			echo "$me: FAIL: own $_on: the command's own $_on was said to be the supervisor's: $_oo"
+			fails="$fails own-$_on"
+		else
+			echo "$me: ok   own $_on: a command's own $_on is its status, HOW=exit"
+		fi
+		;;
+	*)
+		echo "$me: FAIL: own $_on: wanted \"status $_on how exit\"; got $(printf '%s\n' "$_oo" | tr '\n' ' ')"
+		fails="$fails own-$_on"
+		;;
+	esac
+done
+# the mutant: the status alone decides again (every 124, 125 and 126 the
+# supervisor's), so each of the three is taken for the supervisor's own
+if sv_stage "$W/stage-own" scripts/bench/core/common.sh '	124) bench_bounded_said deadline ;;
+	125) ! bench_bounded_said spawned ;;
+	126) ! bench_bounded_said reaped ;;' '	124 | 125 | 126) return 0 ;;'; then
+	_omiss=
+	for _on in 124 125 126; do
+		case $(sv_own "$W/stage-own" "$_on") in "status $_on how exit"*) _omiss="$_omiss $_on" ;; esac
+	done
+	if [ -z "$_omiss" ]; then
+		echo "$me: mutant status-only: refused (124, 125 and 126 each taken for the supervisor's)"
+	else
+		echo "$me: FAIL: mutant status-only (the status alone decides) passed the own case for:$_omiss"
+		fails="$fails status-only"
+	fi
+else
+	echo "$me: FAIL: mutant status-only does not apply"
+	fails="$fails status-only"
 fi
 
 # a trap that runs in a bare nap prints its lines (FIX192, round 2): with fd

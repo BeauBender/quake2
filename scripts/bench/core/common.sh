@@ -968,8 +968,10 @@ bench_sv() {
 # scripts/pins.sh, scripts/ios-sim.sh and scripts/ios-device.sh run their
 # commands through it, and tests/check-bounded-run.sh refuses another
 # TERM, grace and KILL under scripts/. What ended the run is in
-# BENCH_BOUNDED_HOW, since a command may itself exit 124 or 125: "exit"
-# (its own status), "wall", "until" or "untold" (125). A stopped command
+# BENCH_BOUNDED_HOW, since a command may itself exit 124, 125 or 126,
+# which are told from the supervisor's own by its events
+# (bench_bounded_ours): "exit" (its own status), "wall", "until" or
+# "untold" (125). A stopped command
 # (a stop signal) is no longer told apart: the supervisor's CONT ends the
 # stop at the wall time. Two settings, each empty for none, read at a poll
 # of the supervisor every second (bench_nap 1) while it runs:
@@ -1052,7 +1054,10 @@ bench_bounded() {
 	fi
 	_bb_st=0
 	sv_wait || _bb_st=$?
-	case $_bb_n:$_bb_st in
+	# the supervisor's own 124, 125 or 126, by its events; else the command's
+	_bb_w=exit
+	if bench_bounded_ours "$_bb_st"; then _bb_w=$_bb_st; fi
+	case $_bb_n:$_bb_w in
 	*:126)
 		BENCH_BOUNDED_HOW=untold
 		bench_bounded_untold
@@ -1097,6 +1102,26 @@ bench_bounded_event() {
 	awk -v e="$1" -v k="$2=" '$1 == e { for (i = 2; i <= NF; i++) if (index($i, k) == 1) v = substr($i, length(k) + 1) } END { if (v == "") exit 1; print v }' "$BENCH_BOUNDED_EV"
 }
 
+# bench_bounded_said <event>: the supervisor's events hold a line <event>
+bench_bounded_said() {
+	[ -f "${BENCH_BOUNDED_EV:-}" ] && awk -v e="$1" '$1 == e { f = 1 } END { exit !f }' "$BENCH_BOUNDED_EV"
+}
+
+# bench_bounded_ours <status>: the supervisor's status <status> is its own,
+# not the command's, which it passes through and which may be 124, 125 or
+# 126 too (correctness B1, round 1). By its events: 124 is the wall time
+# only with a "deadline" event; 125 (cannot run) only with no "spawned"
+# event; 126 (cannot empty the group) only with no "reaped" event, since
+# the group may then still have a member. Any other status is the command's.
+bench_bounded_ours() {
+	case $1 in
+	124) bench_bounded_said deadline ;;
+	125) ! bench_bounded_said spawned ;;
+	126) ! bench_bounded_said reaped ;;
+	*) return 1 ;;
+	esac
+}
+
 # bench_bounded_untold: after a supervisor's 126, records the command's
 # process group (its "spawned" event) in the lock state, so the lock is
 # kept while the group has a member (bench_record_untold <pgid> group)
@@ -1121,7 +1146,7 @@ bench_bounded_end() {
 bench_bounded_stop() {
 	_bs_st=0
 	sv_stop || _bs_st=$?
-	if [ "$_bs_st" -eq 126 ]; then bench_bounded_untold; fi
+	if bench_bounded_ours "$_bs_st" && [ "$_bs_st" -eq 126 ]; then bench_bounded_untold; fi
 	bench_bounded_end
 }
 
