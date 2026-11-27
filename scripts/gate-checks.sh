@@ -232,12 +232,14 @@ gate_parent() {
 # KILL after gate_grace s), then waits for each. The shell reaps a
 # background job as soon as it exits, before any wait: a supervisor that
 # ended after the reap's last poll still has its entry, but its pid is back
-# with the system, free for another process. So a supervisor that
-# bench_pid_alive says is gone gets no TERM. That leaves the time between
-# that test and the kill, not up to a whole poll (0.2 s), for the pid to be
-# given to another process; the system hands pids out in turn, so that
-# needs the pids to wrap around within that time. The wait stays: it gives
-# a reaped job's status, or fails at once for a pid that is no job.
+# with the system, free for another process. A supervisor that
+# bench_pid_alive says is gone gets no TERM, which spares a kill that
+# would fail. The test does not narrow the window in which the pid could be
+# another process's: a pid given out again answers kill -0 too, and the
+# window is still from the supervisor's reap to the kill. What keeps it
+# small is that the system hands pids out in turn, so the pids would have
+# to wrap around within it. The wait stays: it gives a reaped job's
+# status, or fails at once for a pid that is no job.
 gate_end() {
 	for _gep; do
 		bench_pid_alive "$_gep" || continue
