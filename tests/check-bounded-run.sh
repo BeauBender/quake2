@@ -1245,6 +1245,116 @@ else
 	fails="$fails until-gone-in-watch"
 fi
 
+# 2c. the supervisor's staged cases (TASK221, slice 2): bench_bounded runs
+# its command under the process supervisor (scripts/lib/supervise.c), and
+# each case waits on the supervisor's own event lines (BENCH_BOUNDED_TAP, a
+# FIFO), then on end of file there (tests/lib/proc.sh): no sleep, no ps.
+# The caller is a script as ios-device.sh is one (its trap, bench_deferred,
+# bench_stop_group); its standard output is the FIFO too, so end of file
+# means the caller and the supervisor have both exited. PROC_BOUND is the
+# failure bound: what has not ended by then is killed and failed.
+. "$here/tests/lib/proc.sh"
+PROC_BOUND=10
+SUPERVISE_CACHE=$W/svcache
+export SUPERVISE_CACHE
+cat > "$W/svcaller" << 'EOF'
+# svcaller <root> <wall> <until or -> <out> <command...>
+r=$1 w=$2 u=$3 o=$4
+shift 4
+. "$r/scripts/bench/core/common.sh"
+exec 8>&-
+on_sig() {
+	if bench_deferred "$1"; then return 0; fi
+	trap '' INT TERM HUP
+	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group "$BENCH_BOUNDED_PID" "" "${BENCH_BOUNDED_REAPED:-}" || :; fi
+	exit "$1"
+}
+bench_on_signal() { on_sig "$1"; }
+trap 'on_sig 130' INT
+trap 'on_sig 143' TERM
+polled() { echo polled; return 1; }
+BENCH_STOP_GRACE=1
+[ "$u" = - ] || BENCH_BOUNDED_UNTIL=$u
+st=0
+bench_bounded "$w" bench_to "$o" "$o" "$@" || st=$?
+echo "returned $st"
+EOF
+# sv_case <root> <name> <wall> <until or -> <event> <command>: runs the
+# caller on <command> (sh -c), waits for the supervisor's "spawned" line,
+# then for the line <event> (a case pattern), sends the caller INT and waits
+# for end of file. Sets sv_rc (the caller's status), sv_pg (the command's
+# process group, from "spawned"), sv_s (the seconds from the INT to the end
+# of file) and sv_why (empty when every wait held). What outlived the bound
+# is killed: the caller, and the command's group.
+sv_case() {
+	_sd=$W/sv-$2-$(basename "$1")
+	rm -rf "$_sd"
+	mkdir -p "$_sd/tmp" && mkfifo "$_sd/fifo" || return 1
+	proc_open "$_sd/fifo"
+	env TMPDIR="$_sd/tmp" BENCH_BOUNDED_TAP="$_sd/fifo" python3 -I -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])' /bin/bash "$W/svcaller" "$1" "$3" "$4" "$_sd/out" sh -c "$6" < /dev/null > "$_sd/fifo" 2> "$_sd/err" &
+	_sp=$!
+	sv_pg= sv_why= sv_s=
+	if ! proc_await 'spawned *'; then
+		sv_why="no spawned event from the supervisor within 10 s"
+	else
+		sv_pg=${PROC_LINE##*pgid=}
+		proc_alone
+		if [ "$5" != spawned ] && ! proc_await "$5"; then
+			sv_why="no line $5 within 10 s"
+		else
+			kill -s INT "$_sp"
+			_st0=$(date +%s)
+			proc_eof || sv_why="the caller or the supervisor outlived the INT by 10 s"
+			sv_s=$(($(date +%s) - _st0))
+		fi
+	fi
+	if [ -n "$sv_why" ]; then
+		kill -s KILL "$_sp" 2> /dev/null
+		case $sv_pg in '' | *[!0-9]*) ;; *) kill -s KILL -- "-$sv_pg" 2> /dev/null ;; esac
+	fi
+	sv_rc=0
+	wait "$_sp" || sv_rc=$?
+	proc_close
+	return 0
+}
+# sv_left: what the case left: the command's group, and the files in its TMPDIR
+sv_left() {
+	_sl=
+	case $sv_pg in '' | *[!0-9]*) ;; *) if kill -0 -- "-$sv_pg" 2> /dev/null; then _sl="the command's group $sv_pg runs"; fi ;; esac
+	if [ -n "$(ls -A "$_sd/tmp")" ]; then _sl="${_sl:+$_sl; }scratch files: $(ls -A "$_sd/tmp" | tr '\n' ' ')"; fi
+	printf '%s\n' "$_sl"
+}
+# sv_judge <name>: the verdict of the last sv_case: exit 130 with nothing left
+sv_judge() {
+	_sj=$sv_why
+	[ -n "$_sj" ] || [ "$sv_rc" -eq 130 ] || _sj="the caller exited $sv_rc, not 130"
+	[ -n "$_sj" ] || _sj=$(sv_left)
+	if [ -n "$_sj" ]; then
+		echo "$me: FAIL: sv $1: $_sj ($(tr '\n' '|' < "$_sd/err" | cut -c1-300))"
+		fails="$fails sv-$1"
+	else
+		echo "$me: ok   sv $1: exit 130 in $sv_s s, nothing left"
+	fi
+}
+# an INT at "spawned": the caller exits 130, and its command's group is gone
+sv_case "$here" spawned 30 - spawned 'exec sleep 30'
+sv_judge spawned
+# FIX195 (#726): an INT once the command has exited and left a member that
+# ignores TERM (the end-group window of the shell watch) runs the trap at
+# once; the supervisor's stop ends the member within its grace (1 s)
+sv_case "$here" endgroup 30 - 'exited *' '(trap "" TERM; exec sleep 30) & exit 0'
+sv_judge endgroup
+if [ -z "$sv_why" ] && [ "${sv_s:-99}" -gt 5 ]; then
+	echo "$me: FAIL: sv endgroup: the caller took $sv_s s after the INT, more than 5"
+	fails="$fails sv-endgroup-slow"
+fi
+# FIX199 (#741): an INT while the until test's poll waits leaves no scratch
+# file in TMPDIR (a bench-poll directory, the events file) and nothing running
+sv_case "$here" pollint 30 polled polled 'exec sleep 30'
+sv_judge pollint
+
 # 3. the probe: TERM and INT stop the child and the grandchild; the wall
 # time does too; nothing can run after a KILL of the caller, so both stay
 pout=$(probe "$here")
