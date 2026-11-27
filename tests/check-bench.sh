@@ -2805,10 +2805,23 @@ t_sv_path() {
 	# A refused supervisor (a cache that is not an absolute path): exit 2,
 	# and both lines said, at each core call that sends the bounded
 	# command's standard error away.
+	# notop: the system snapshot on a PATH with no top, so the ioreg
+	# call's own bench_sv says the reason; neither: no top and no ioreg,
+	# so no bounded call runs and the snapshot reads unknown, exit 0.
 	printf 'freq=1\n' > "${E:?}/f.a"
-	for _c in host system reader freqinit freqdump freqwindow; do
+	for _n in notop neither; do
+		mkdir "${E:?}/$_n"
+		for _d in /bin /usr/bin /usr/sbin /sbin; do
+			ln -s "$_d"/* "${E:?}/$_n/" 2> /dev/null || true
+		done
+		rm -f "${E:?}/$_n/top"
+	done
+	rm -f "${E:?}/neither/ioreg"
+	for _c in host system reader freqinit freqdump freqwindow notop neither; do
+		_pa=$PATH
+		case $_c in notop | neither) _pa=${E:?}/$_c ;; esac
 		_st=0
-		env SUPERVISE_CACHE=relative/cache sh -c '
+		env PATH="$_pa" SUPERVISE_CACHE=relative/cache sh -c '
 			R=$1
 			BENCH_ROOT=$R
 			. "$R/core/common.sh" && . "$R/core/host.sh" && . "$R/core/snap.sh" || exit 9
@@ -2820,8 +2833,14 @@ t_sv_path() {
 			freqinit) BENCH_FREQ_PROBE=; bench_freq_init ;;
 			freqdump) bench_freq_dump "$BENCH_TMP/d" ;;
 			freqwindow) BENCH_FREQ_BIN=$BENCH_FREQ_PROBE; bench_freq_window "$3" "$3" freq ;;
+			notop | neither) BENCH_SNAP_READER=; bench_snap gate "$BENCH_TMP/g"; cat "$BENCH_TMP/g" ;;
 			esac
 			exit 0' sh "$R" "$_c" "${E:?}/f.a" > "${E:?}/r.out" 2> "${E:?}/r.err" || _st=$?
+		if [ "$_c" = neither ]; then
+			[ "$_st" -eq 0 ] && [ "$(tr '\n' '|' < "${E:?}/r.out")" = 'cpu.busy=unknown|gpu.device=unknown|' ] && ! grep -q '^supervise: ' "${E:?}/r.err" ||
+				bad "sv path: the system snapshot with no top or ioreg and a refused supervisor exited $_st, not 0 with unknown readings: [$(tr '\n' '|' < "${E:?}/r.out")] [$(tr '\n' '|' < "${E:?}/r.err")]"
+			continue
+		fi
 		[ "$_st" -eq 2 ] || bad "sv path: $_c with a refused supervisor exited $_st, not 2: $(tr '\n' ' ' < "${E:?}/r.err")"
 		grep -qx 'supervise: SUPERVISE_CACHE is not an absolute path' "${E:?}/r.err" &&
 			grep -qx 'bench: cannot build the process supervisor' "${E:?}/r.err" ||
