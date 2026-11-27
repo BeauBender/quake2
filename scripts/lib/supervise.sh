@@ -137,7 +137,10 @@ sv_path() {
 	else
 		# no shasum (a minimal PATH, #758): POSIX cksum, as bench_hash does,
 		# two CRCs of the same text with two prefixes; the name says so, so
-		# a cksum key never names a shasum key's binary
+		# a cksum key never names a shasum key's binary. The key detects a
+		# change; it is not a 64-bit identity: CRC is linear, so two texts
+		# of one length whose first CRCs agree have equal second CRCs too
+		# (the two are not independent), and it is a 32-bit check
 		_sv_a=$( {
 			printf '%s\n%s\n' "$_sv_cc" "$SV_CFLAGS"
 			cat "$_sv_src"
