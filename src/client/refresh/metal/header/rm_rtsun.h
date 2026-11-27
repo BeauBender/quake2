@@ -181,7 +181,7 @@ typedef struct
 	float bias_k;       /* mtl_rtao_bias's k: 4 x 2^-24 / gl_znear */
 	float floor_;       /* rm_rtsun_floor */
 	unsigned show;      /* rm_rtsun_show */
-	unsigned pad;
+	unsigned div;       /* TASK126: r_rt_sun_scale's divisor (mtl_rtup_div); 1 traces every pixel, as rm_rtsun_trace */
 } rm_rtsun_view_t;
 
 /*
@@ -205,9 +205,16 @@ typedef struct
 	unsigned long rays;         /* below the floor and facing it: one ray each */
 	unsigned long lit;          /* rays that reached the sky: the term added */
 	double ms;                  /* the pass's GPU time; below 0 when not measured */
+	unsigned div;               /* TASK126: the view's divisor; above 1 the counts above are the traced pixels' */
+	unsigned long tw, th;       /* the traced size (the render size at divisor 1) */
+	unsigned long fallbacks;    /* the upsample's fallbacks (common/mtl_rtup_math.h), 0 at divisor 1 */
 } rm_rtsun_stats_t;
 
-/* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
+/*
+ * The r_rt_stats 2 line of a frame's pass, without a newline: 1 when it
+ * fits in len; 0 with buf empty otherwise. Above divisor 1 it ends with
+ * the traced size and the fallbacks (rm_rtt_traced_format).
+ */
 int rm_rtsun_stats_format(const rm_rtsun_stats_t *s, char *buf, size_t len);
 
 /*

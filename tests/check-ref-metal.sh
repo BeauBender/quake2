@@ -621,13 +621,14 @@ fi
 seg 6 "; water ${rtw:-host test}"
 
 # the pure part of the sun and sky shadow (RT4, TASK56): rm_rtsun.c and common/mtl_rtsun_math.h, with
-# rm_rtshadow.c for the view's inverse, rm_rt.c for the material ids and rm_pure.c; it reads the
-# committed table scripts/rt/sun-angles.txt from this directory
+# rm_rtshadow.c for the view's inverse, rm_rt.c for the material ids, rm_pure.c and rm_rttemporal.c
+# (the stats line's traced part, TASK126); it reads the committed table scripts/rt/sun-angles.txt
+# from this directory
 rtsun=""
 # shellcheck disable=SC2086 # flags is a word list
 if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_rtsun_test" tests/metal/rm_rtsun_test.c \
 	"$rm_dir/rm_rtsun.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
-	"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	"$rm_dir/common/mtl_ring.c" "$rm_dir/rm_rttemporal.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
 	bad "tests/metal/rm_rtsun_test.c does not compile"
 elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtsun_test" > "${tmp:?}/out" 2>&1; then
