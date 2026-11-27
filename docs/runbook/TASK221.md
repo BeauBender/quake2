@@ -504,6 +504,10 @@ The last round. Each finding's case or demonstration was red on adeee98e first:
   - What is left: a trap before `SV_STATUS=` still sends the collected supervisor's pid a
     TERM (security N3), since nothing tells the shell it was collected there. The window
     is a few builtins with no fork, and the status no longer depends on it.
+  - Under `/bin/sh`, a trap in the window between `sv_wait`'s `wait` and `SV_STATUS=`
+    turns any status with no events (the supervisor's own 125, or a command's status
+    after a failed events write) into a hand record. That fails closed, and it is the
+    price of the 127 rule.
 - **Spec I1 and security I1** (a hand record's `rm -f` printed once). Fixed:
   `bench_lock_untold_live` sets `BENCH_LOCK_HAND`, and the keep note, the waiters' line
   and `lock status` name each hand record with its `rm -f` (see `bench_bounded` above).
@@ -534,6 +538,20 @@ The last round. Each finding's case or demonstration was red on adeee98e first:
     `endgroup` passed 10 of 10 ("exit 130 in 12 s, nothing left" each time), and
     `sv-no-term` was refused by it 10 of 10, each for "no line signal name=TERM after the
     INT, in any order, before end of file".
+- **Final review** (correctness I1 and N1, at `fd301302`).
+  - I1: case `sv endgroup order` could not tell `sv_seen` from a reader that reads in
+    order and stops at `grace-end` or `group-empty`, since no stream held `signal
+    name=TERM`. Four positive streams are added (`P:`), with `signal name=TERM` after
+    `group-empty`, after `trap 130` and after `grace-end`, each wanting an empty
+    `sv_why`; the four old streams (`N:`) still want the one refusal. The ok line and the
+    case's comment say both. The extracted case, run standalone:
+    ```
+    early-stopping reader: FAIL: sv endgroup order: ... [P:term-sent name=TERM|group-empty|signal name=TERM|trap 130|reaped status=0] gave "no line signal name=TERM after the INT, in any order, before end of file"; [P:trap 130|term-sent name=TERM|grace-end|kill-sent|group-empty|signal name=TERM|reaped status=137] gave "no line signal ..."; [P:trap 130|term-sent name=TERM|grace-end|signal name=TERM|kill-sent|group-empty|reaped status=137] gave "no line signal ..."
+    real sv_seen: ok   sv endgroup order: no TERM line, in any order of trap 130 and group-empty, gives the one refusal; a TERM line after group-empty, trap 130 or grace-end gives none
+    ```
+    The fourth positive stream (`signal name=TERM` right after `trap 130`, before
+    `group-empty`) passes both readers, as an in-order reader finds it.
+  - N1: the `/bin/sh` window line is added under "What is left" of the re-wait item above.
 - **Not addressed.** Correctness N2 and spec N4 (a reused id replacing a hand record
   through `mv -f`), security N1 (lost events taking a command's own 126 for the
   supervisor's; fails closed) and the confirmations were notes.
