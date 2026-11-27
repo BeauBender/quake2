@@ -1607,6 +1607,63 @@ else
 		fi
 	done
 fi
+# The trap's window in sv_wait (review round 3, correctness I1 and security
+# I2): a trap that lands after sv_wait's wait has collected the
+# supervisor's 126, at either point before SV_PID is cleared, under
+# /bin/sh (bench.sh's shell, where a second wait on the collected pid
+# gives 127, not the 126 bash gives again). Deterministic: the state that
+# trap would see is set up by hand (the supervisor stand-in exits 126 and
+# is waited for, as sv_wait's wait does), and bench_bounded_stop is called
+# there; nothing sleeps, and no pid is signalled (sv_term only resolves
+# the pid). The record is printed, not written.
+#   wait    just after the wait returned (SV_STATUS still empty)
+#   status  just after SV_STATUS=, before SV_PID= (SV_STATUS set)
+# The events are "spawned" (a group to record), none (no group: a hand
+# record), or "spawned" and "reaped" (the command's own 126: no record).
+cat > "$W/svwindow" << 'EOF'
+# svwindow <root> <wait|status> <spawned|none|reaped> <events file>
+r=$1 at=$2 evs=$3
+. "$r/scripts/lib/supervise.sh"
+. "$r/scripts/bench/core/common.sh"
+bench_record_untold() { echo "recorded $2"; }
+sv_term() { sv_pid; }
+sh -c 'exit 126' &
+SV_PID=$!
+BENCH_BOUNDED_PID=$SV_PID
+BENCH_BOUNDED_EV=$4
+: > "$BENCH_BOUNDED_EV"
+case $evs in spawned | reaped) echo "spawned pid=$SV_PID pgid=$SV_PID" >> "$BENCH_BOUNDED_EV" ;; esac
+[ "$evs" != reaped ] || echo "reaped status=126" >> "$BENCH_BOUNDED_EV"
+SV_STATUS=
+_r=0
+wait "$SV_PID" 2> /dev/null || _r=$?
+[ "$at" != status ] || SV_STATUS=$_r
+bench_bounded_stop 2> /dev/null
+echo "end"
+EOF
+# sv_window <root>: the four states, each with the record it must give;
+# sets win_why (empty: all held)
+sv_window() {
+	win_why=
+	for _wc in wait:spawned:group status:spawned:group wait:none:hand wait:reaped:none; do
+		_wa=${_wc%%:*} _wr=${_wc#*:}
+		_we=${_wr%%:*} _wx=${_wr#*:}
+		_wo=$(/bin/sh "$W/svwindow" "$1" "$_wa" "$_we" "$W/svwindow.ev" 2>&1 | tr '\n' ' ')
+		case $_wx in
+		none) _ww="end " ;;
+		*) _ww="recorded $_wx end " ;;
+		esac
+		[ "$_wo" = "$_ww" ] || win_why="${win_why:+$win_why; }the trap at $_wa with events $_we gave \"$_wo\", not \"$_ww\""
+	done
+	rm -f "$W/svwindow.ev"
+}
+sv_window "$here"
+if [ -n "$win_why" ]; then
+	echo "$me: FAIL: sv window: $win_why"
+	fails="$fails sv-window"
+else
+	echo "$me: ok   sv window: a trap after sv_wait's wait, under /bin/sh, records the 126 by the supervisor's events"
+fi
 # A group record whose id a later process group has taken holds nothing
 # (security I2, round 1), as a pid record's does: the group is started
 # first, in a group of its own (its "up" line on a FIFO says so), then
