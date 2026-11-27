@@ -2795,7 +2795,7 @@ t_sv_path() {
 		[ "$_st" -eq 0 ] && printf '%s\n' "$_p" | grep -Eq '/supervise-[0-9a-f]{16}$' ||
 			bad "sv path: with shasum on PATH the supervisor is not named supervise- and 16 hex digits: exit $_st, [$_p] [$(tr '\n' '|' < "${E:?}/sv.err")]"
 	else
-		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || bad "t_sv_path: CHECK_BENCH_REQUIRE=1 and there is no shasum"
+		[ "${CHECK_BENCH_REQUIRE:-0}" != 1 ] || { bad "t_sv_path: CHECK_BENCH_REQUIRE=1 and there is no shasum"; return 1; }
 		echo "$me: t_sv_path: the shasum key part skipped: no shasum"
 	fi
 	if [ "$(uname -s)" != Darwin ]; then
