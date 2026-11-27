@@ -202,6 +202,15 @@ prefix to tell it from a second one.
   after `written=` (`bench_lock_untold_reused`, the pid records' rule; review round 1,
   security I2). A ps that gives no answer keeps the lock. The lock shell's release then
   keeps the lock and says so.
+  - **A 126 with no group named** (no `spawned` event: a failed events write, or the
+    supervisor's "cannot watch the command") writes a hand record instead:
+    `untold.<id>` with `hand=<id>`, under the supervisor's pid (the bounding shell's when
+    there is none). It holds the lock until a person removes it, and one line names the
+    command: `rm -f '<state>/lock/untold.<id>'` (review round 2, security I1).
+  - **A trap after the 126 is collected.** `bench_bounded` empties `SV_STATUS` before the
+    supervisor starts. Once `sv_wait` has collected the status, `bench_bounded_stop` acts on
+    `SV_STATUS` rather than on `sv_stop`'s 0, so a trap that comes before `bench_bounded`
+    has recorded the group records it itself (review round 2, correctness I1).
 - **The shims.**
   - `bench_stop_group` on `BENCH_BOUNDED_PID` stops the supervisor (`bench_bounded_stop`:
     `sv_stop`, then the 126 record) and returns 0. Other pids still go to the shell stop,
@@ -250,7 +259,9 @@ Each case waits on the supervisor's events (`BENCH_BOUNDED_TAP`) and on end of f
 | `spawned` | an INT at `spawned`: exit 130, the command's group gone, TMPDIR empty | FAIL: no spawned event within 10 s | ok, 0 s |
 | `endgroup` (#726) | an INT once the command exited and left a member that ignores TERM: the caller's `trap 130` line and then the supervisor's `signal name=TERM` both come before the supervisor's own stop ends, with a grace of the bound plus 2 s (12 s); then the member is killed and nothing is left | FAIL: no spawned event within 10 s | ok, 12 s |
 | `pollint` (#741) | an INT while the until poll waits: exit 130, nothing running, no scratch file in TMPDIR | FAIL: no spawned event within 10 s | ok, 1 s |
-| `126` | a stand-in supervisor that exits 126: `bounded 125 untold`, lock status shows `untold=<pgid>`, and the lock shell says it keeps the lock, then frees it only after the command has said it ended | (added with the change) | ok |
+| `126` | a stand-in supervisor that exits 126: `caller bounded 125 untold` (round 2: the caller's lines start with `caller`), lock status shows `untold=<pgid>`, and the lock shell says it keeps the lock, then frees it only after the command has said it ended | (added with the change) | ok |
+| `126 term` | the same stand-in. An `awk` stand-in first on the caller's PATH sends its parent TERM when it is asked for the `reaped` event, the first fork after `sv_wait` has collected 126. The caller's trap stops the run as `bench.sh`'s does, and the lock is kept for the group until the command has ended | (round 2) FAIL on 0e03a682: lock status shows no `untold=` | ok |
+| `126 nospawn` | a stand-in that writes no `spawned` event: a line names the hand release, lock status shows `untold=<stand-in pid>`, the lock is still held after the command has ended, and it is freed once the case removes the record | (round 2) FAIL on 0e03a682: no line names a release by hand (nothing recorded) | ok |
 | `lock note` | a lock run with ps silent: the watch says a stop goes to the command's group, and a TERM to the lock shell stops it and frees the lock | (round 1) | ok |
 | `group reuse` | a group record written before its group started holds nothing; one written after holds the lock | (round 1) FAIL: the first held the lock | ok |
 | `own 124`, `own 125`, `own 126` | `sh -c 'exit N'`: status N, `HOW=exit`, and nothing said of a wall time or of an untold stop | (round 1) FAIL: `124 how wall`, `127 how exit`, `125 how untold` | ok |
@@ -269,6 +280,8 @@ real binary, as slice 1's `sv126` case does.
 | `watch-leader-note` | `lock note` | the watch's leader note is never said (round 1: restored) |
 | `group-reuse-unchecked` | `group reuse` | a group record is live by `kill -0` alone (round 1) |
 | `status-only` | `own 124` to `own 126` | the status alone decides again: each is taken for the supervisor's (round 1) |
+| `trap-status-dropped` | `126 term` | the trap's stop takes `sv_stop`'s 0 again: lock status shows no `untold=` (round 2) |
+| `hand-not-recorded` | `126 nospawn` | a 126 with no group named records nothing again: no line names a release by hand (round 2) |
 
 In `tests/check-supervise.sh` (round 1), `sv_refusals` runs five cases. Each has a cache of
 its own under the check's TMPDIR, seeded with the built binary, and ACLs are set with
@@ -334,6 +347,12 @@ taken once each by the hold run (`hold-T221s2.sh`), and is recorded here from it
   and comment went, because nothing sets `HOW=stopped` any more.
 - **`tests/check-supervise.sh`** (round 1): the refusal cases and helper mutants of
   security I1 and I3, which test `scripts/lib/supervise.sh`.
+- **`scripts/gate-checks.sh`** (in the slice's first commit, named in round 2): a comment only. The
+  `gate_end` comment claimed that the `bench_pid_alive` test before the TERM narrows the
+  window in which the reaped supervisor's pid could be another process's. It does not
+  (a pid given out again answers `kill -0` too); the test only spares a kill that would
+  fail. The comment now says so. It is kept, not reverted, because the old text was wrong
+  about the code this slice's stop relies on. No behaviour changes.
 
 ### Review round 1
 
@@ -382,6 +401,69 @@ bash 3.2 under INT ignored: INT ignored, TERM default, HUP default
 
 So `tee` ends only at the end of its FIFO's input, which comes once the supervisor has
 exited, or at the read-write open in `bench_bounded_tee`.
+
+### Review round 2
+
+The property: after a supervisor's 126 the lock is freed only on positive evidence. That
+evidence is the supervisor's `reaped` event (the 126 was the command's own), or a recorded
+group seen to be gone. Each finding's case was red on 0e03a682 first:
+
+- **Security I1, and the correctness and spec notes on a 126 before `spawned`** (a 126
+  with no group named freed the lock). Fixed: a hand record (`hand=<id>`, a new kind,
+  described in the lock.sh header) holds the lock until it is removed by hand, and
+  `bench_lock_record` prints one line with the `rm -f` that does it. Case `126 nospawn`;
+  mutant `hand-not-recorded`.
+- **Correctness I1** (a TERM after `sv_wait` collected 126, before the record, freed the
+  lock). Fixed by the trap path using the collected status (`SV_STATUS`), so the tee wait
+  and the `awk` forks between the collect and the record no longer matter. Case
+  `126 term`; mutant `trap-status-dropped`.
+  - What is left: inside `sv_wait`, between its `wait` returning and its `SV_STATUS=`,
+    there are three builtins and no fork or wait. A trap there finds `SV_PID` still set,
+    so `sv_stop` waits for the supervisor again. Under `/bin/bash` 3.2 that second wait
+    gives the remembered 126. Under `/bin/sh` it gives 127 ("not a child of this shell"),
+    so the 126 is lost there. No case can land a signal in that window without a sleep,
+    so it is left as a note.
+- **Spec I1.** `scripts/gate-checks.sh` is kept and now named, with its reason, under
+  "Files outside the card's list".
+- **Spec N1.** `tests/check-bench.sh`'s header says 124 with `HOW=wall` for a stopped
+  command at its wall time, and so does the same stale comment over its `t_bounded`
+  case. Both are comments only.
+- **Correctness note 4 (the two graces).** Nothing changed: the outer grace is always at
+  least the supervisor's grace plus its after-KILL time.
+  - The lock shell does not use `BENCH_STOP_GRACE` itself. It uses `bench_lock_grace`,
+    which is `max(2g, g + 5)` for `BENCH_STOP_GRACE` g.
+  - The supervisor takes g, then its KILL, then up to its after-KILL time.
+    `bench_bounded` passes no `--after-kill`, so that is the 2 s default (`sv_ms` in
+    `supervise.c`).
+  - So the outer grace is at least g + 5, and the supervisor's stop is at most g + 2:
+    at least 3 s of margin for every g, 0 included (5 against 2).
+  - The other outer stops (the traps of `pins.sh`, `ios-sim.sh` and `ios-device.sh`, and
+    `bench.sh`'s) go through `bench_bounded_stop`, which waits for the supervisor with no
+    grace of its own.
+- **Not addressed.** Security N1 to N5 and correctness notes 2 and 3 were notes, and
+  nothing changed for them.
+
+The counts: 15 supervisor cases (two new, `126 term` and `126 nospawn`) and 9 supervisor
+mutants (two new, `trap-status-dropped` and `hand-not-recorded`). The summary line is
+"ok (guard, 65 mutants refused, probe, the supervisor cases and their 9 mutants, pyprobe
+and its 10 mutants)".
+
+**The disposition probe** (round 2; no `trap`, `set -m` or process-group change in
+`scripts/`, but the new `126 term` case relies on a caller's TERM trap under `lock run`).
+A Python child under `bench.sh lock run`, as the case's caller runs, prints the
+dispositions it inherited. The outer shell is `/bin/bash` 3.2 (3.2.57) or `/bin/sh`,
+directly and under `sh -c "trap '' INT; exec ..."`. "handler" is Python's own INT
+handler, which it installs only for an INT inherited at its default:
+
+```
+/bin/bash plain: INT=handler TERM=default HUP=default
+/bin/bash int-ignored: INT=ignored TERM=default HUP=default
+/bin/sh plain: INT=handler TERM=default HUP=default
+/bin/sh int-ignored: INT=ignored TERM=default HUP=default
+```
+
+So TERM reaches the caller's trap in every shape, the merge gate's SIGINT-ignored one
+included. The case sends TERM, not INT.
 
 ## What remains
 

@@ -956,7 +956,10 @@ bench_sv() {
 # the group (its 126: the command may still run): its group is then
 # recorded in the lock state (bench_record_untold), so the lock it runs
 # under is kept while the group has a member, whatever this shell does next
-# (FIX184), and it is said. A command that cannot be run is 127. A first
+# (FIX184), and it is said; with no group named, the lock is kept until the
+# record is removed by hand (bench_bounded_untold). A trap's stop that comes
+# after the status is collected acts on it (bench_bounded_stop). A command
+# that cannot be run is 127. A first
 # word bench_to <out> <err> sends the command's output to those files (the
 # supervisor's own lines too). BENCH_BOUNDED_PID is the supervisor's pid
 # while it runs: a caller's trap stops it with bench_stop_group, which
