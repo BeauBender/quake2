@@ -688,6 +688,14 @@ cases)"); `tests/check-doc-links.sh` and `tests/check-runbook-index.sh` (ok).
     other part fails), and passes on the real code ("ok (t_core_id; no mutants)").
   - No `trap`, `set -m` or process-group line is touched, so no disposition probe was
     needed.
+  - **The whole `tests/check-bench.sh`, under the host lock, at `f2ed198c`:** every case
+    passed, 88 mutants were caught (`forget-none` and `record-no-written` among them, with
+    the lines above), and it ended "check-bench: ok", with the INT tests run. A first
+    attempt started under `nohup` failed `t_lock_tokens` ("release: wanted exit 129 on
+    HUP, got 0") and skipped the INT tests: `nohup` and a background start ignore HUP and
+    INT for the whole run, which the case needs at their defaults. Standalone,
+    `tests/check-bench.sh t_lock_tokens` passes, and fails the same way under `nohup`. So
+    a detached run of this check starts with HUP and INT at their defaults.
 
 ## What remains
 
