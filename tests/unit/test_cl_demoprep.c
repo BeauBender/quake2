@@ -34,7 +34,8 @@
 #include "../../src/client/header/client.h"
 #include "stub_client.h"
 
-static byte msgbuf[4096];
+static byte msgbuf[4096];   /* the message the client parses */
+static byte chanbuf[4096];  /* the netchan message the client writes */
 
 /* The smallest map with an inline model: the world and submodel 1, both
    over one node splitting a solid leaf from an empty one. */
@@ -149,7 +150,7 @@ reset_demo_client(const char *map)
 	stub_client_cvars();
 	memset(&cls, 0, sizeof(cls));
 	memset(&cl, 0, sizeof(cl));
-	SZ_Init(&cls.netchan.message, msgbuf, sizeof(msgbuf));
+	SZ_Init(&cls.netchan.message, chanbuf, sizeof(chanbuf));
 	cls.state = ca_connected;
 	cls.serverProtocol = PROTOCOL_VERSION;
 	cl.attractloop = true;
