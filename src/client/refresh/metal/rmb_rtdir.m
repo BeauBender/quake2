@@ -126,6 +126,7 @@ static rm_rtt_hist_t thist;             /* the last view encoded into it: a skip
 static int tmp_refused;                 /* the pipeline could not be made: not tried again until the pass is closed */
 static unsigned long tmp_bad_w, tmp_bad_h;  /* a render size whose histories could not be made: not tried again */
 static rm_rtt_view_t tview;
+static rm_rtt_view_t tbound;            /* TASK191 slice 4: the view as the last accumulation bound it, for the model pass */
 static int tview_set;
 static int acc_view;                    /* this view's light was accumulated into t_acc: the development view shows it */
 static unsigned tshow;                  /* the r_rt_direct_show of the last view accumulated */
@@ -1010,6 +1011,7 @@ rmb_rtdir_accumulate(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture>
 
 		[ce endEncoding];
 		hist_cur = 1 - hist_cur;
+		tbound = tv;
 		slot_acc[slot] = fno;
 		slot_ttimed[slot] = timed;
 		acc_view = 1;
@@ -1061,5 +1063,22 @@ rmb_rtdir_frame(rmb_rtdir_frame_t *f)
 	f->selftab = selftab;
 	f->tile = tile;
 	f->brec = brec;
+
+	/*
+	 * TASK191 slice 4: this view's accumulation, after its swap (hist_cur is
+	 * the history it wrote), set by rmb_rtdir_accumulate on every view that
+	 * traced (rmb_rtdir_fx_trace)
+	 */
+	{
+		const int acc = acc_view && t_acc && t_hist[0] && t_hist[1] && t_key[0] && t_key[1];
+
+		f->hist_in = acc ? t_hist[1 - hist_cur] : nil;
+		f->key_in = acc ? t_key[1 - hist_cur] : nil;
+		f->hist_out = acc ? t_hist[hist_cur] : nil;
+		f->key_out = acc ? t_key[hist_cur] : nil;
+		f->acc = acc ? t_acc : nil;
+		f->tview = tbound;
+	}
+
 	return 1;
 }
