@@ -51,7 +51,8 @@
 #     tests/metal/rm_rtptemporal_test.c, RT-primary's temporal accumulation
 #     (common/mtl_rtp_math.h, TASK190 slice 1), with five mutants of the
 #     header it must fail, the history's guards as integer tests of the bit
-#     pattern with seven float-compare mutants (FIX212), and four pins of
+#     pattern with seven float-compare mutants (FIX212), the world-pixel
+#     test likewise with three (FIX213), and four pins of
 #     rm_rtptemporal.metal with seven
 #     mutants, compiled with xcrun metal where it is there,
 #     tests/metal/rm_rtpdenoise_test.c, RT-primary's 5 x 5 filter of that
@@ -726,7 +727,30 @@ if [ -n "$rtdir" ]; then
 		fi
 	done
 fi
-seg 7.6 ", $rtdir_mutants fit mutants, $rtdir_sky sky mutants and $rtdir_bounce bounce mutants refused"
+# FIX197: the reload key with the lightmap array's term dropped (lmtex-dropped) must fail the reload test
+# by its own line, a same-name reload at the same address with a new array kept
+rtdir_reload=0
+if [ -n "$rtdir" ]; then
+	sed 's/ && (last_lmtex == lmtex);/ \&\& ((last_lmtex == lmtex) || 1);/' < "$rm_dir/rm_rtdir.c" > "${tmp:?}/dirm/rm_rtdir.c"
+	if cmp -s "$rm_dir/rm_rtdir.c" "${tmp:?}/dirm/rm_rtdir.c"; then
+		bad "the reload mutant (lmtex-dropped) changed nothing"
+	# shellcheck disable=SC2086 # flags is a word list
+	elif ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -DRM_RTFX_HOST -Itests/metal -I"$rm_dir" \
+		-o "${tmp:?}/dirm/t" tests/metal/rm_rtdir_test.c "${tmp:?}/dirm/rm_rtdir.c" "$rm_dir/rm_rtgate.c" \
+		"$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+		"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/dirm.out" 2>&1; then
+		cat "${tmp:?}/dirm.out"
+		bad "the reload mutant (lmtex-dropped) does not compile"
+	elif "${tmp:?}/dirm/t" > "${tmp:?}/dirm.out" 2>&1; then
+		bad "tests/metal/rm_rtdir_test.c passes the reload mutant (lmtex-dropped)"
+	elif ! grep -qxF 'reload: a same-name reload with a new lightmap array is not built again' "${tmp:?}/dirm.out"; then
+		cat "${tmp:?}/dirm.out"
+		bad "tests/metal/rm_rtdir_test.c refuses the reload mutant (lmtex-dropped) for another reason"
+	else
+		rtdir_reload=1
+	fi
+fi
+seg 7.6 ", $rtdir_mutants fit mutants, $rtdir_reload reload mutant, $rtdir_sky sky mutants and $rtdir_bounce bounce mutants refused"
 
 # RT-primary's light on alias models (TASK191 slice 1, PM9): rm_rtmodel.c and common/mtl_rtm_math.h, held
 # to gl1's model colour (rm_pure.c) and to the G-buffer's split (rm_gbuf.c), with rm_rtshadow.c for the
@@ -2695,6 +2719,76 @@ for m in bits clamp light depth empty alpha reproject; do
 	fi
 done
 [ "$rtg_mutants" = 7 ] || bad "the history's guard pin refused $rtg_mutants of its 7 mutants"
+# The world-pixel test under fast math (FIX213), FIX212's pin extended: mtl_rtp_world's depth and normal
+# alpha tests are integer tests of the bit pattern (mtl_rtp_below1 and mtl_rtp_above_half, beside it in
+# common/mtl_rtp_math.h), so a NaN depth or normal alpha is not a world pixel however fast math folds a
+# float compare, and the header holds no float compare of either. Pinned as text (comments and literals
+# blanked); each pin that fails prints its own line. Each mutant restores a float compare: it must compile
+# as C and pass the host test (without fast math the compare gives the same answers, so only the pin can
+# see it), and it must be refused by the very line it breaks, not by a failure alone.
+rtw_why() { # <rtp header>: one line per pin it fails, none when it holds
+	rwp=$1
+	[ "$(strip "$rwp" | grep -cF 'return (mat == MTL_GB_MAT_WORLD) && mtl_rtp_below1(depth) && mtl_rtp_above_half(normal_a);')" = 1 ] ||
+		echo "rtw: mtl_rtp_world is not the material and the integer tests mtl_rtp_below1 and mtl_rtp_above_half"
+	[ "$(strip "$rwp" | grep -cE '^#define MTL_RTP_BITS_HALF 0x3f000000u *$')" = 1 ] ||
+		echo "rtw: MTL_RTP_BITS_HALF is not the pattern of 0.5f"
+	[ "$(strip "$rwp" | grep -cF 'const unsigned u = MTL_RTT_BITS(f);')" = 2 ] ||
+		echo "rtw: mtl_rtp_below1 and mtl_rtp_above_half do not each read the bit pattern"
+	[ "$(strip "$rwp" | grep -cF 'return (u < MTL_RTT_BITS_1) || ((u >= MTL_RTT_SIGN) && (u <= (MTL_RTT_SIGN | MTL_RTT_BITS_INF)));')" = 1 ] ||
+		echo "rtw: mtl_rtp_below1 is not the integer test of depth < 1"
+	[ "$(strip "$rwp" | grep -cF 'return (u > MTL_RTP_BITS_HALF) && (u <= MTL_RTT_BITS_INF);')" = 1 ] ||
+		echo "rtw: mtl_rtp_above_half is not the integer test of normal alpha > 0.5"
+	if strip "$rwp" | grep -qE '< *1\.0f|1\.0f *>'; then
+		echo "rtw: a float compare of the depth (< 1.0f)"
+	fi
+	if strip "$rwp" | grep -qE '> *0\.5f|0\.5f *<'; then
+		echo "rtw: a float compare of the normal alpha (> 0.5f)"
+	fi
+	return 0
+}
+rtw_mutants=0 rtw_pin=""
+rtw_why "$rm_dir/common/mtl_rtp_math.h" > "${tmp:?}/rtw.out"
+if [ -s "${tmp:?}/rtw.out" ]; then
+	cat "${tmp:?}/rtw.out"
+	bad "common/mtl_rtp_math.h: the world-pixel test is not the integer test of the float's bit pattern (FIX213), or holds a float compare"
+else
+	rtw_pin=1
+fi
+for m in world worlddepth worldnormal; do
+	rtp_tree "${tmp:?}/rtpm"
+	p=${tmp:?}/rtpm/src/client/refresh/metal/common/mtl_rtp_math.h
+	case $m in
+		world)
+			sed 's/return (mat == MTL_GB_MAT_WORLD) \&\& mtl_rtp_below1(depth) \&\& mtl_rtp_above_half(normal_a);/return (mat == MTL_GB_MAT_WORLD) \&\& (depth < 1.0f) \&\& (normal_a > 0.5f);/' \
+				"$rm_dir/common/mtl_rtp_math.h" > "$p"
+			want="rtw: a float compare of the depth (< 1.0f)|rtw: a float compare of the normal alpha (> 0.5f)" ;;
+		worlddepth)
+			sed 's/mtl_rtp_below1(depth)/(depth < 1.0f)/' "$rm_dir/common/mtl_rtp_math.h" > "$p"
+			want="rtw: a float compare of the depth (< 1.0f)" ;;
+		worldnormal)
+			sed 's/mtl_rtp_above_half(normal_a)/(normal_a > 0.5f)/' "$rm_dir/common/mtl_rtp_math.h" > "$p"
+			want="rtw: a float compare of the normal alpha (> 0.5f)" ;;
+	esac
+	rtw_why "$p" > "${tmp:?}/rtw.out"
+	rtw_lost=""
+	old_ifs=$IFS IFS='|'
+	for w in $want; do
+		grep -qxF "$w" "${tmp:?}/rtw.out" || rtw_lost=1
+	done
+	IFS=$old_ifs
+	if cmp -s "$rm_dir/common/mtl_rtp_math.h" "$p"; then
+		bad "the world-pixel mutant ($m) changed nothing"
+	elif ! rtp_run "${tmp:?}/rtpm"; then
+		cat "${tmp:?}/cc.out" "${tmp:?}/out"
+		bad "the world-pixel mutant ($m) does not compile or fails the host test, so it is not the float compare it restores"
+	elif [ -n "$rtw_lost" ]; then
+		cat "${tmp:?}/rtw.out"
+		bad "the world-pixel pin does not refuse its mutant ($m) by its own line ($want)"
+	else
+		rtw_mutants=$((rtw_mutants + 1))
+	fi
+done
+[ "$rtw_mutants" = 3 ] || bad "the world-pixel pin refused $rtw_mutants of its 3 mutants by their own lines"
 # The kernel, rm_rtptemporal.metal, pinned as text: the reprojection with the motion vector as the
 # G-buffer wrote it (mutants: its sign flipped, no motion read), the view's reset and the material
 # reaching the rule (mutants: the reset not passed, a material compared with itself), no lightmap
@@ -2785,7 +2879,7 @@ if [ "$(grep -cF 'rmb_rtdir_temporal(RM_RTT_ViewFor(view), (unsigned long)w, (un
 	[ "$(grep -cF 'ref_metal/rm_rtptemporal.air' Makefile)" != 2 ]; then
 	bad "the RT-primary accumulation is not stepped by rm_rtdirscene.c or not linked into ref_metal.metallib"
 fi
-seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, ${rtg_pin:+history guards as integer tests with $rtg_mutants float-compare mutants refused,} $rtp_kpins kernel pins with $rtp_kmut kernel mutants refused${rtp_metal:+ and compiled}"
+seg 7.7 "; RT-primary temporal ${rtp:-host test}, $rtp_mutants rule mutants, ${rtg_pin:+history guards as integer tests with $rtg_mutants float-compare mutants refused,}${rtw_pin:+ the world-pixel test as integer tests with $rtw_mutants float-compare mutants refused by their own lines,} $rtp_kpins kernel pins with $rtp_kmut kernel mutants refused${rtp_metal:+ and compiled}"
 
 # RT-primary's light on rastered alias models (TASK191 slice 2): rm_rtmodel.metal pinned as text, each
 # pin with its mutants, each of which must compile with the Metal compiler where it is there and be refused.
