@@ -1769,8 +1769,9 @@ for m in depth normal mat countcut countflat finite rdepth rok; do
 	case $m in
 		depth) sed 's/return (w > 0.0f) \&\& (w <= 1.0f) ? w : 0.0f;/return 1.0f + 0.0f * w;/' ;;
 		normal) sed 's|const float w = (c - MTL_RTD_NORMAL_MIN) / (1.0f - MTL_RTD_NORMAL_MIN);|const float w = 1.0f + 0.0f * c;|' ;;
-		mat) sed 's/if ((m != mn) || !(cn >= 1.0f))/if (((m != mn) \&\& 0) || !(cn >= 1.0f))/' ;;
-		countcut) sed 's/if (!(n >= MTL_RTD_COUNT_FULL) || !(n < MTL_RTD_COUNT_NONE))/if (!(n >= MTL_RTD_COUNT_FULL) || 0)/' ;;
+		mat) sed 's/if ((m != mn) || !mtl_rtt_atleast1(cn))/if (((m != mn) \&\& 0) || !mtl_rtt_atleast1(cn))/' ;;
+		# FIX222: the cut at 16 is mtl_rtd_counted's upper bound; the mutant counts every pattern from 1 up to +inf
+		countcut) sed 's/return (u >= MTL_RTD_BITS_FULL) \&\& (u < MTL_RTD_BITS_NONE);/return (u >= MTL_RTD_BITS_FULL) \&\& (u <= MTL_RTT_BITS_INF);/' ;;
 		countflat) sed 's|return (MTL_RTD_COUNT_NONE - n) / (MTL_RTD_COUNT_NONE - MTL_RTD_COUNT_FULL);|return 1.0f + 0.0f * n;|' ;;
 		finite) sed 's/if (!(w > 0.0f) || !isfinite(w) || !isfinite(v))/if (!(w > 0.0f))/' ;;
 		# slice 2b: the reflections' depth guide dropped; a neighbour without a reflection blurred in
@@ -3321,7 +3322,7 @@ for m in mix count nonormal alpha clamp; do
 	h=${tmp:?}/rtpdm/src/client/refresh/metal/common/mtl_rtpd_math.h
 	case $m in
 		mix) sed 's/a\.g = mtl_rtd_add(a\.g, w, h\.g);/a.g = mtl_rtd_add(a.g, w, h.r);/' ;;
-		count) sed 's/return world \&\& (mtl_rtd_strength(n) > 0\.0f);/return world \&\& (n == n);/' ;;
+		count) sed 's/return world \&\& mtl_rtd_counted(n);/return world \&\& (n == n);/' ;;
 		nonormal) sed 's/if (!mtl_rtp_above_half(nn_a))/if (!mtl_rtp_above_half(nn_a) \&\& 0)/' ;;
 		alpha) sed 's/r\.a = a;/r.a = h.a + 0.0f * a;/' ;;
 		clamp) sed 's/r\.r = mtl_rtp_clamp(mtl_rtd_result(s\.r, h\.r, h\.a));/r.r = mtl_rtd_result(s.r, h.r, h.a);/' ;;
@@ -4554,6 +4555,150 @@ done
 rm -rf "${tmp:?}/gbfm"
 [ "$gbf_mutants" = 16 ] || bad "the G-buffer compare pin refused $gbf_mutants of its 16 mutants by their own lines"
 seg 7.97 "; no G-buffer depth or normal float compare in $gbf_files files, $gbf_mutants mutants refused by their own lines"
+
+# FIX222: no float compare of a history weight. The denoisers read the temporal kernels' history, whose
+# weight lane (.w, or .a in RT-primary's light history) is the pixel's sample count; Metal compiles a
+# float compare as "fcmp fast", whose nnan lets a NaN pass a compare written so that a NaN fails. So the
+# count's "strength above 0" (1 <= n < 16) is mtl_rtd_counted, an integer test of the pattern
+# (common/mtl_rtd_math.h), and a neighbour's "at least one sample" FIX212's mtl_rtt_atleast1. The rule,
+# read as text with comments and literals blanked and the template arguments of as_type, static_cast,
+# texture*, depth*, vec and array removed: in every .metal file under src/client/refresh/metal/ and in
+# common/mtl_rtd_math.h and mtl_rtpd_math.h, no <, >, <= or >= has a history weight on either side,
+# against anything (a literal, a macro or a variable): a .w or .a of hc, hn or hl (the names every
+# denoiser and temporal kernel gives a history read), of a hist.read(...), or a mtl_rtd_strength(...)
+# (the strength is above 0 just when mtl_rtd_counted holds). The name may sit in parentheses or behind a
+# (float) or (half) cast or a float(...) or half(...) call, and a .read(...) or the strength's call may
+# hold one level of nested parentheses. The header functions that take the count as a parameter (n, cn)
+# are pinned one by one: mtl_rtd_counted is the integer test of its pattern, and mtl_rtd_strength,
+# mtl_rtd_weight, mtl_rtd_result and mtl_rtpd_on test the count with their helper and compare neither it
+# nor the strength. Out of scope, by design: a history held under another name (h is also the homogeneous
+# point in rm_rtmodel.metal, whose h.w > 0.0f is not a history; the kernels that call a history h pass
+# its .w only to FIX212's mtl_rtt helpers), step() and select(), and mtl_rtt_count's hcount + 1.0f
+# below MTL_RTT_COUNT_MAX, which lies behind mtl_rtt_atleast1. Each failure prints its own line, naming
+# the file or the function, and each mutant must be refused by its own line.
+hw_nm='([(]*([(](float|half)[)]|(float|half)[(])?[(]*)((hc|hn|hl|hist[.]read[(]([^()]|[(][^()]*[)])*[)])[.][wa]|mtl_rtd_strength[(]([^()]|[(][^()]*[)])*[)])'
+hw_pat="(^|[^A-Za-z0-9_.])$hw_nm[)]*[[:space:]]*[<>]=?([^<>=]|\$)|(^|[^-<>=])[<>]=?[[:space:]]*$hw_nm([^A-Za-z0-9_(]|\$)"
+hw_tpl='(as_type|static_cast|texture[a-z0-9_]*|depth[a-z0-9_]*|vec|array)<[^<>;]*>'
+hw_fn() { # <file> <function>: the function's body, its name at the start of a line up to the next "}" in column 0
+	strip "$1" | awk -v fn="$2" '$0 ~ "^" fn "\\(" { b = 1 } b { print } b && /^}/ { exit }' | tr -s ' \t' '  '
+}
+hw_cmp() { # <name>: 0 when stdin compares the name with <, >, <= or >=, either side
+	grep -qE "(^|[^A-Za-z0-9_.])$1[)]*[[:space:]]*[<>]=?([^<>=]|\$)|(^|[^-<>=])[<>]=?[[:space:]]*[(]*$1([^A-Za-z0-9_(]|\$)"
+}
+hw_why() { # <metal dir>: one line per file or function that compares a history weight as a float, none when none does
+	hw_n=0
+	for hf in "$1"/*.metal "$1/common/mtl_rtd_math.h" "$1/common/mtl_rtpd_math.h"; do
+		[ -f "$hf" ] || { echo "hw: ${hf#"$1"/} is missing"; continue; }
+		hw_n=$((hw_n + 1))
+		strip "$hf" | sed -E "s/$hw_tpl/ /g" > "${tmp:?}/hw.c"
+		if grep -qE "$hw_pat" "${tmp:?}/hw.c"; then
+			echo "hw: a float compare of a history weight in ${hf#"$1"/}"
+		fi
+	done
+	hd=$1/common/mtl_rtd_math.h
+	hw_fn "$hd" mtl_rtd_counted > "${tmp:?}/hw.fn"
+	if ! grep -qF 'const unsigned u = MTL_RTT_BITS(n);' "${tmp:?}/hw.fn" ||
+			! grep -qF 'return (u >= MTL_RTD_BITS_FULL) && (u < MTL_RTD_BITS_NONE);' "${tmp:?}/hw.fn" ||
+			hw_cmp n < "${tmp:?}/hw.fn"; then
+		echo "hw: mtl_rtd_counted is not the integer test of its pattern"
+	fi
+	grep -qE '^#define MTL_RTD_BITS_FULL 0x3f800000u([^0-9A-Za-z]|$)' "$hd" &&
+		grep -qE '^#define MTL_RTD_BITS_NONE 0x41800000u([^0-9A-Za-z]|$)' "$hd" ||
+		echo "hw: MTL_RTD_BITS_FULL and MTL_RTD_BITS_NONE are not the patterns of 1 and 16"
+	for spec in "$hd mtl_rtd_strength n if (!mtl_rtd_counted(n))" \
+			"$hd mtl_rtd_weight cn if ((m != mn) || !mtl_rtt_atleast1(cn))" \
+			"$hd mtl_rtd_result n if (!mtl_rtd_counted(n) || !(a.wsum > 0.0f))" \
+			"$1/common/mtl_rtpd_math.h mtl_rtpd_on n return world && mtl_rtd_counted(n);"; do
+		# shellcheck disable=SC2086 # spec is a word list: the file, the function, the name, the text
+		set -- $spec
+		hfile=$1 hfunc=$2 hname=$3
+		shift 3
+		hw_fn "$hfile" "$hfunc" > "${tmp:?}/hw.fn"
+		hhelper=mtl_rtd_counted
+		[ "$hname" = cn ] && hhelper=mtl_rtt_atleast1
+		if ! grep -qF -- "$*" "${tmp:?}/hw.fn" || hw_cmp "$hname" < "${tmp:?}/hw.fn" || hw_cmp s < "${tmp:?}/hw.fn" ||
+				hw_cmp 'mtl_rtd_strength[(][^()]*[)]' < "${tmp:?}/hw.fn"; then
+			echo "hw: $hfunc does not test its count with $hhelper alone"
+		fi
+	done
+	return 0
+}
+hw_mutants=0
+hw_why "$rm_dir" > "${tmp:?}/hw.out"
+hw_files=$hw_n
+[ "$hw_files" -ge 20 ] || bad "the history weight pin read $hw_files files, fewer than the 20 it should"
+if [ -s "${tmp:?}/hw.out" ]; then
+	cat "${tmp:?}/hw.out"
+	bad "a kernel compares a history weight with a float compare (FIX222): use mtl_rtd_counted or mtl_rtt_atleast1"
+fi
+for m in aostrength sunlo rawlane reversed neighbour alane histread macro castname parenname halfcall strength weight \
+		result pdon counted; do
+	rm -rf "${tmp:?}/hwm"
+	cp -R "$rm_dir" "${tmp:?}/hwm"
+	case $m in
+		aostrength) f=rm_rtdenoise.metal o='(m != MTL_GB_MAT_WORLD) || !mtl_rtd_counted(hc.w) ||'
+			n='(m != MTL_GB_MAT_WORLD) || !(mtl_rtd_strength(hc.w) > 0.0f) ||'
+			want="hw: a float compare of a history weight in rm_rtdenoise.metal" ;;
+		sunlo) f=rm_rtsun.metal o='if (!mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(nv.a))'
+			n='if (!(mtl_rtd_strength(hc.w) > 0.0f) || !mtl_rtp_above_half(nv.a))'
+			want="hw: a float compare of a history weight in rm_rtsun.metal" ;;
+		rawlane) f=rm_rtdenoise.metal o='(m != MTL_GB_MAT_WORLD) || !mtl_rtd_counted(hc.w) ||'
+			n='(m != MTL_GB_MAT_WORLD) || !(hc.w >= 1.0f) ||'
+			want="hw: a float compare of a history weight in rm_rtdenoise.metal" ;;
+		reversed) f=rm_rtsun.metal o='if (!mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(nv.a))'
+			n='if (!(16.0f > hc.w) || !mtl_rtp_above_half(nv.a))'
+			want="hw: a float compare of a history weight in rm_rtsun.metal" ;;
+		neighbour) f=rm_rtdenoise.metal o='const float wt = mtl_rtp_above_half(nv.a) ? mtl_rtd_weight('
+			n='const float wt = (mtl_rtp_above_half(nv.a) && (hn.w >= 1.0f)) ? mtl_rtd_weight('
+			want="hw: a float compare of a history weight in rm_rtdenoise.metal" ;;
+		alane) f=rm_rtpdenoise.metal o='ncv.a), hc.a))' n='ncv.a), hc.a) || !(hc.a < 16.0f))'
+			want="hw: a float compare of a history weight in rm_rtpdenoise.metal" ;;
+		histread) f=rm_rtsun.metal o='if (!mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(nv.a))'
+			n='if (!(hist.read(uint2(px.x, px.y)).w >= 1.0f) || !mtl_rtp_above_half(nv.a))'
+			want="hw: a float compare of a history weight in rm_rtsun.metal" ;;
+		macro) f=rm_rtdenoise.metal o='if (!mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(nv.a))'
+			n='if (!mtl_rtd_counted(hc.w) || !(hc.w < MTL_RTD_COUNT_NONE) || !mtl_rtp_above_half(nv.a))'
+			want="hw: a float compare of a history weight in rm_rtdenoise.metal" ;;
+		castname) f=rm_rtsun.metal o='if (!mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(nv.a))'
+			n='if (!((float)hc.w >= (float)1) || !mtl_rtp_above_half(nv.a))'
+			want="hw: a float compare of a history weight in rm_rtsun.metal" ;;
+		parenname) f=rm_rtsun.metal o='if (!mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(nv.a))'
+			n='if (!((hc.w) >= 1.0f) || !mtl_rtp_above_half(nv.a))'
+			want="hw: a float compare of a history weight in rm_rtsun.metal" ;;
+		halfcall) f=rm_rtsun.metal o='if (!mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(nv.a))'
+			n='if (!(half(hc.w) >= 1.0h) || !mtl_rtp_above_half(nv.a))'
+			want="hw: a float compare of a history weight in rm_rtsun.metal" ;;
+		strength) f=common/mtl_rtd_math.h o='if (!mtl_rtd_counted(n))'
+			n='if (!(n >= MTL_RTD_COUNT_FULL) || !(n < MTL_RTD_COUNT_NONE))'
+			want="hw: mtl_rtd_strength does not test its count with mtl_rtd_counted alone" ;;
+		weight) f=common/mtl_rtd_math.h o='!mtl_rtt_atleast1(cn)' n='!(cn >= 1.0f)'
+			want="hw: mtl_rtd_weight does not test its count with mtl_rtt_atleast1 alone" ;;
+		result) f=common/mtl_rtd_math.h o='if (!mtl_rtd_counted(n) || !(a.wsum > 0.0f))'
+			n='if (!(s > 0.0f) || !(a.wsum > 0.0f))'
+			want="hw: mtl_rtd_result does not test its count with mtl_rtd_counted alone" ;;
+		pdon) f=common/mtl_rtpd_math.h o='return world && mtl_rtd_counted(n);'
+			n='return world && (mtl_rtd_strength(n) > 0.0f);'
+			want="hw: mtl_rtpd_on does not test its count with mtl_rtd_counted alone" ;;
+		counted) f=common/mtl_rtd_math.h o='return (u >= MTL_RTD_BITS_FULL) && (u < MTL_RTD_BITS_NONE);'
+			n='return (u == u) && (n >= MTL_RTD_COUNT_FULL) && (n < MTL_RTD_COUNT_NONE);'
+			want="hw: mtl_rtd_counted is not the integer test of its pattern" ;;
+	esac
+	gbf_sub "$rm_dir/$f" "$o" "$n" > "${tmp:?}/hwm/$f"
+	hw_why "${tmp:?}/hwm" > "${tmp:?}/hw.out"
+	if [ "$(grep -cF -- "$o" "$rm_dir/$f")" != 1 ]; then
+		bad "the history weight mutant ($m): its target is not in $f exactly once"
+	elif cmp -s "$rm_dir/$f" "${tmp:?}/hwm/$f"; then
+		bad "the history weight mutant ($m) changed nothing"
+	elif ! grep -qxF "$want" "${tmp:?}/hw.out"; then
+		cat "${tmp:?}/hw.out"
+		bad "the history weight pin does not refuse its mutant ($m) by its own line ($want)"
+	else
+		hw_mutants=$((hw_mutants + 1))
+	fi
+done
+rm -rf "${tmp:?}/hwm"
+[ "$hw_mutants" = 16 ] || bad "the history weight pin refused $hw_mutants of its 16 mutants by their own lines"
+seg 7.98 "; no history weight float compare in $hw_files files, $hw_mutants mutants refused by their own lines"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"
