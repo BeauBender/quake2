@@ -837,7 +837,7 @@ so each is this slice's:
   `bench_bounded` now calls too (`bench_bounded <s>` is the uint check and
   `bench_bounded_run <s> BENCH_STOP_GRACE /dev/null`). For the lock run: no wall time
   (no `--timeout`), the lock's grace (`bench_lock_grace`, twice `BENCH_STOP_GRACE` and
-  at least `BENCH_STOP_GRACE` + 5), and the caller's standard input unless it is a
+  at least `BENCH_STOP_GRACE` + 5, clamped to 999999999 s), and the caller's standard input unless it is a
   terminal. An asynchronous list without job control reads `/dev/null`, so `sv_start`
   takes `SV_STDIN3`: the supervisor reads fd 3, which `bench_bounded_run` opens on its
   standard input (a closed one is `/dev/null`).
@@ -864,6 +864,14 @@ so each is this slice's:
   event with no `reaped` one (KILLed alone), or with a 127, is read the same way
   (`bench_bounded_lost`, review round 2), and the line is "the process supervisor ended
   with status <s> before the command's group was empty: it may still run".
+  The lock's grace is clamped to 999999999 s, the supervisor's largest `--grace` (9
+  digits; round 5): every `BENCH_STOP_GRACE` that `bench_is_uint` accepts runs the
+  command, where from 500000000 s on twice it was 10 digits and `lock run` exited 127
+  on the supervisor's usage refusal. The other values a shell passes to the supervisor
+  are each one accepted setting with no sum or product: `bench_bounded`'s wall time
+  (`bench_is_uint`, or `0.001` for 0) and its grace (`BENCH_STOP_GRACE`, or 5 from
+  pins.sh, ios-sim.sh and ios-device.sh), ios-sim.sh's `--grace 5` launch and the gate
+  runner's `--grace 10`. No caller passes `--after-kill`.
 - **Decided from the events, never from a `wait` alone:** the run's status goes through
   `bench_bounded_ours`, and a trap's stop through `bench_bounded_stop`, as slice 2's
   `bench_bounded` does, the `/bin/sh` re-wait's 127 included.
@@ -1098,6 +1106,7 @@ Review round 2, from the worktree:
 | `supervise.c`, `cc -fsyntax-only -O2 -Wall -Wextra -Werror`, with and without `-DSUPERVISE_TEST` | ok on `b49cc5c2` |
 | `tests/check-supervise.sh`, the whole `tests/check-bounded-run.sh`, `tests/check-bench.sh t_lock_stop t_lock_tokens t_lock_defer t_core_id` and the round 1 hold's other checks | the hold script `hold-TASK221s3r2.sh`, on the final commit |
 | round 4: `tests/check-bench.sh t_quiet_marker`, whose stopped command now holds the lock until a TERM to its lock shell (the whole check-bench hung on its old wait for 74); `doc/085_unittests.md` no longer promises 74 | `check-doc-links` and `check-runbook-index` ok from the worktree; the case itself, with the round 3 hold's checks, in the hold script `hold-TASK221s3r4.sh`, on the final commit |
+| round 5: `tests/check-bench.sh t_digit_cap`, which now runs `lock run` with `BENCH_STOP_GRACE` 999999999 and 999999995 and wants the command run (both exited 127 on `e68e4944`), and the `lock-grace-unclamped` mutant | ok, in about 2 s, from the worktree; the whole `check-bench`, with the round 4 hold's checks, in the hold script `hold-TASK221s3r5.sh`, on the final commit |
 
 ### Review round 1: #726 and #741
 

@@ -96,7 +96,8 @@
 # still carries this process's token. On INT, TERM or HUP the lock shell
 # first stops the command (bench_stop_group: TERM to the supervisor, which
 # sends the group TERM and CONT, KILL after bench_lock_grace, twice
-# BENCH_STOP_GRACE and at least BENCH_STOP_GRACE + 5 s, so that a nested
+# BENCH_STOP_GRACE and at least BENCH_STOP_GRACE + 5 s, clamped to
+# 999999999 s, so that a nested
 # bench.sh stopping a group of its own with that grace finishes first) and
 # waits for the supervisor: the lock is never freed before its "reaped"
 # event. When the command exits, what it left running in its group is
@@ -746,11 +747,20 @@ bench_lock_untold_live() {
 # running alike: twice BENCH_STOP_GRACE (default 10), and at least
 # BENCH_STOP_GRACE + 5. The floor lets a nested bench.sh stop its own
 # bounded group, which takes up to its grace and 2 s after its KILL, before
-# this KILL ends it.
+# this KILL ends it. The grace is clamped to 999999999 s, the supervisor's
+# largest --grace (9 digits): BENCH_STOP_GRACE is at most 9 digits
+# (bench_is_uint), so from 500000000 s on twice it would be 10 and the
+# supervisor would refuse it. The test comes before any product or sum, so
+# no arithmetic here passes 9 digits (the floor then gives way for a
+# BENCH_STOP_GRACE above 999999994 s).
 bench_lock_grace() {
 	_lg_g=${BENCH_STOP_GRACE:-10}
-	_lg_l=$((2 * _lg_g))
-	[ "$_lg_l" -ge $((_lg_g + 5)) ] || _lg_l=$((_lg_g + 5))
+	if [ "$_lg_g" -ge 500000000 ]; then
+		_lg_l=999999999
+	else
+		_lg_l=$((2 * _lg_g))
+		[ "$_lg_l" -ge $((_lg_g + 5)) ] || _lg_l=$((_lg_g + 5))
+	fi
 	printf '%s\n' "$_lg_l"
 }
 

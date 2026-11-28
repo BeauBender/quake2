@@ -3687,6 +3687,8 @@ mutant settle-no-nap core/snap.sh '		bench_nap "$_st_nap"' '		:' t_settle || mfa
 mutant poll-digits-unbounded core/common.sh '[ "${#1}" -le 12 ]' 'true' t_gate_poll || mfail=1
 mutant digit-cap-dropped core/common.sh '	bench_is_uint_max "$1" 9' '	bench_is_uint_max "$1" 99' t_digit_cap || mfail=1
 mutant digit-cap-crc core/common.sh '! bench_is_uint_max "$_bh_a" 10' '! bench_is_uint_max "$_bh_a" 9' t_digit_cap || mfail=1
+# the lock grace unclamped: twice a 9-digit BENCH_STOP_GRACE is 10 digits, which the supervisor refuses
+mutant lock-grace-unclamped core/lock.sh '	if [ "$_lg_g" -ge 500000000 ]; then' '	if false; then' t_digit_cap || mfail=1
 # The TASK221 slice 2 hold (#758): a refused supervisor's reason is said
 # where the bounded command's standard error is sent away.
 mutant sv-reason-host core/host.sh '		bench_sv' '		:' t_sv_path || mfail=1
