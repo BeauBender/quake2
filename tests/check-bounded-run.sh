@@ -2075,6 +2075,13 @@ done
 #          its own, names it ("spawned" on fd 9), then waits for its
 #          parent's exit (a kqueue in python3) and exits 126 with the group
 #          left; the lock shell alone is KILLed.
+#   sv     the real supervisor alone is KILLed (the holder's child=, the
+#          command's parent), while the lock shell lives (review round 2,
+#          security B1): its "spawned" with no "reaped" is its 126, so the
+#          lock shell records the group, says the command may still run,
+#          keeps the lock while the group has a member, and exits 125 once
+#          it is empty. The lock shell runs under a sh that says its exit
+#          on the FIFO, which also takes the lock shell's output.
 # Each then wants, while the command runs: lock status alive=yes, and a
 # second lock run with BENCH_LOCK_WAIT=1 exiting 75. Once the command has
 # ended: a lock run reclaims the lock (exit 0), and the lock is free.
@@ -2107,11 +2114,14 @@ sv_lockkill() {
 	_kb=$PROC_BOUND
 	PROC_BOUND=60
 	proc_open "$_kd/fifo"
-	_kc='echo "command pid=$$" >> "$0"; read x < "$1"; echo command-ended >> "$0"'
+	_kc='echo "command pid=$$ ppid=$PPID" >> "$0"; read x < "$1"; echo command-ended >> "$0"'
 	if [ "$2" = group ]; then
 		env TMPDIR="$_kd/tmp" BENCH_STATE="$_kd/state" BENCH_BOUNDED_TAP="$_kd/fifo" python3 -I -c 'import os, sys
 os.setpgid(0, 0)
 os.execvp(sys.argv[1], sys.argv[1:])' sh "$1/scripts/bench/bench.sh" lock run lk -- sh -c "$_kc" "$_kd/fifo" "$_kd/hold" < /dev/null > "$_kd/out" 2>&1 &
+	elif [ "$2" = sv ]; then
+		env TMPDIR="$_kd/tmp" BENCH_STATE="$_kd/state" BENCH_BOUNDED_TAP="$_kd/fifo" sh -c 'sh "$@"; echo "lock-shell-exit $?"' \
+			sh "$1/scripts/bench/bench.sh" lock run lk -- sh -c "$_kc" "$_kd/fifo" "$_kd/hold" < /dev/null > "$_kd/fifo" 2>&1 &
 	else
 		[ -n "$sv_bin" ] && cp "$W/lkstand" "$_kd/cache/${sv_bin##*/}" && chmod 700 "$_kd/cache/${sv_bin##*/}" || return 1
 		env TMPDIR="$_kd/tmp" BENCH_STATE="$_kd/state" SUPERVISE_CACHE="$_kd/cache" FAKE_TAP="$_kd/fifo" \
@@ -2120,10 +2130,14 @@ os.execvp(sys.argv[1], sys.argv[1:])' sh "$1/scripts/bench/bench.sh" lock run lk
 	_kp=$!
 	# the command's pid, and the line that names its group ("spawned" from
 	# the tap, or the stand-in's "fake"), in either order
-	_kg= _kn=
+	_kg= _kn= _kq=
 	while { [ -z "$_kg" ] || [ -z "$_kn" ]; } && proc_await '*'; do
 		case $PROC_LINE in
-		'command pid='*) _kg=${PROC_LINE#command pid=} ;;
+		'command pid='*)
+			_kg=${PROC_LINE#command pid=}
+			_kq=${_kg##* ppid=}
+			_kg=${_kg%% *}
+			;;
 		'spawned '* | 'fake '*) _kn=${PROC_LINE##*pgid=} ;;
 		esac
 	done
@@ -2136,11 +2150,32 @@ os.execvp(sys.argv[1], sys.argv[1:])' sh "$1/scripts/bench/bench.sh" lock run lk
 	if [ -z "$lk_why" ]; then
 		if [ "$2" = group ]; then
 			kill -s KILL -- "-$_kp" 2> /dev/null
+		elif [ "$2" = sv ]; then
+			# the supervisor, the command's parent; the lock shell lives on
+			case $_kq in
+			'' | 0* | 1 | *[!0-9]*) lk_why="the command named no parent: [$_kq]" ;;
+			*) kill -s KILL "$_kq" 2> /dev/null ;;
+			esac
+			_kz=
+			while [ -z "$lk_why" ] && proc_await '*'; do
+				case $PROC_LINE in
+				'bench: '*'it may still run')
+					_kz=1
+					break
+					;;
+				'lock-shell-exit '*)
+					lk_why="the lock shell exited ${PROC_LINE#lock-shell-exit } at its supervisor's KILL with no untold note, the command's group running"
+					;;
+				esac
+			done
+			[ -n "$lk_why" ] || [ -n "$_kz" ] || lk_why="no line from the lock shell within $PROC_BOUND s of its supervisor's KILL"
 		else
 			kill -s KILL "$_kp" 2> /dev/null
 		fi
-		wait "$_kp" 2> /dev/null
-		if [ "$2" = sv126 ] && ! proc_await 'fake-exit 126'; then
+		[ "$2" = sv ] || wait "$_kp" 2> /dev/null
+		if [ -n "$lk_why" ]; then
+			:
+		elif [ "$2" = sv126 ] && ! proc_await 'fake-exit 126'; then
 			lk_why="the stand-in did not exit 126 after its parent's KILL"
 		elif ! kill -0 -- "-$_kg" 2> /dev/null; then
 			lk_why="the command's group $_kg did not outlive the KILL"
@@ -2152,6 +2187,12 @@ os.execvp(sys.argv[1], sys.argv[1:])' sh "$1/scripts/bench/bench.sh" lock run lk
 		lock=held*' alive=yes'*) ;;
 		*) lk_why="the lock was taken as gone while the command's group ran: $_kl" ;;
 		esac
+		if [ "$2" = sv ]; then
+			case $_kl in
+			*" child=$_kq "*) ;;
+			*) lk_why="${lk_why:+$lk_why; }the KILLed pid $_kq is not the holder's child=: $_kl" ;;
+			esac
+		fi
 		_ks=0
 		env TMPDIR="$_kd/tmp" BENCH_STATE="$_kd/state" BENCH_LOCK_WAIT=1 BENCH_LOCK_POLL=0.2 sh "$1/scripts/bench/bench.sh" lock run lk2 -- true > /dev/null 2>&1 || _ks=$?
 		[ "$_ks" -eq 75 ] || lk_why="${lk_why:+$lk_why; }a second lock run exited $_ks while the command ran, not 75"
@@ -2161,6 +2202,13 @@ os.execvp(sys.argv[1], sys.argv[1:])' sh "$1/scripts/bench/bench.sh" lock run lk
 	echo go >&7
 	exec 7>&-
 	if [ -z "$lk_why" ] && ! proc_await command-ended; then lk_why="the command did not end"; fi
+	if [ -z "$lk_why" ] && [ "$2" = sv ]; then
+		if ! proc_await 'lock-shell-exit *'; then
+			lk_why="the lock shell did not exit once the command's group was empty"
+		elif [ "$PROC_LINE" != 'lock-shell-exit 125' ]; then
+			lk_why="the lock shell exited ${PROC_LINE#lock-shell-exit }, not 125, after its supervisor's KILL"
+		fi
+	fi
 	if [ -z "$lk_why" ]; then
 		_ks=0
 		env TMPDIR="$_kd/tmp" BENCH_STATE="$_kd/state" BENCH_LOCK_WAIT=20 BENCH_LOCK_POLL=0.2 sh "$1/scripts/bench/bench.sh" lock run lk3 -- true > "$_kd/lk3" 2>&1 || _ks=$?
@@ -2175,13 +2223,15 @@ os.execvp(sys.argv[1], sys.argv[1:])' sh "$1/scripts/bench/bench.sh" lock run lk
 	proc_close
 	PROC_BOUND=$_kb
 }
-for _lkm in group sv126; do
+for _lkm in group sv sv126; do
 	sv_lockkill "$here" "$_lkm"
 	if [ -n "$lk_why" ]; then
 		echo "$me: FAIL: lock kill $_lkm: $lk_why"
 		fails="$fails lock-kill-$_lkm"
 	elif [ "$_lkm" = group ]; then
 		echo "$me: ok   lock kill group: a KILL of the lock shell's whole group keeps the lock while the command's group runs (75), then it is reclaimed"
+	elif [ "$_lkm" = sv ]; then
+		echo "$me: ok   lock kill sv: a KILL of the supervisor alone keeps the lock while the command's group runs (75); the lock shell says so, then exits 125 and the lock is free"
 	else
 		echo "$me: ok   lock kill sv126: a KILLed lock shell and its supervisor's 126 keep the lock while the command's group runs (75), then it is reclaimed"
 	fi
@@ -2201,6 +2251,47 @@ if sv_stage "$W/stage-group-unread" scripts/bench/core/lock.sh '	bench_lock_grou
 else
 	echo "$me: FAIL: mutant group-unread does not apply"
 	fails="$fails group-unread"
+fi
+# An id with a leading zero is no process group (review round 2, security
+# N1, correctness N1): kill -0 -- -00 is the caller's own group and
+# kill -0 -- -01 is kill(-1, 0), every process. Only a forged lock
+# directory holds one, since the supervisor writes %d, but a lock that read
+# it would be held for ever. sv_zero <root> <id>: an events file naming <id>
+# as the command's group, a group record under <id>, and a holder whose
+# child= is <id>, in a lock directory of its own; prints "<id>: <the three
+# verdicts>; groups=<the kill calls that named a group> signals=<the kill
+# calls that sent a signal, not 0>". kill is a function there that logs its
+# arguments, then runs the shell's own.
+sv_zero() {
+	_zd=$W/zero-$(printf '%s' "$2" | tr -c '0-9A-Za-z' _)-$(basename "$1")
+	rm -rf "${_zd:?}"
+	mkdir -p "${_zd:?}/lock" || return 1
+	printf 'spawned pid=%s pgid=%s\n' "$2" "$2" > "${_zd:?}/lock/bench-sv.1.zero"
+	printf 'pid=%s\nstart=-\nwritten=-\ntoken=t\ngroup=%s\n' "$2" "$2" > "${_zd:?}/lock/untold.$2"
+	sh -c '. "$1/scripts/bench/core/common.sh"; . "$1/scripts/bench/core/lock.sh"
+K=$2/kills
+kill() { printf "%s\n" "$*" >> "$K"; command kill "$@"; }
+BENCH_LOCK_DIR=$2/lock
+g=no u=no a=no
+if bench_lock_group_live; then g=yes; fi
+if bench_lock_untold_live; then u=yes; fi
+if bench_lock_alive "child=$3"; then a=yes; fi
+: >> "$2/kills"
+printf "%s: group_live=%s untold_live=%s alive=%s; %s\n" "$3" "$g" "$u" "$a" "$(awk "/-- -/ { g++ } \$1 != \"-0\" { s++ } END { printf \"groups=%d signals=%d\", g, s }" "$2/kills")"' sh "$1" "$_zd" "$2" 2>&1
+}
+_zb=
+for _zv in 00 01 007 -1 0 1 x; do
+	_zo=$(sv_zero "$here" "$_zv")
+	case $_zo in
+	"$_zv: group_live=no untold_live=no alive=no; groups=0 signals=0") ;;
+	*) _zb="${_zb:+$_zb | }$_zo" ;;
+	esac
+done
+if [ -n "$_zb" ]; then
+	echo "$me: FAIL: lock zero ids: $_zb"
+	fails="$fails lock-zero-ids"
+else
+	echo "$me: ok   lock zero ids: 00, 01, 007, -1, 0, 1 and x name no group: not alive, no kill names a group or sends a signal"
 fi
 # A command's own 124, 125 and 126 are its own (correctness B1, round 1):
 # the supervisor passes the command's status through, so bench_bounded
