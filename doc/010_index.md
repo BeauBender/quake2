@@ -1,5 +1,7 @@
 # Portmanbeau Quake II Documentation
 
+This is the fork's copy of upstream's documentation; see [FORK.md](../FORK.md).
+
 Welcome to the Portmanbeau Quake II documentation. Here is documented how
 Portmanbeau Quake II is installed and configured. Please make sure to read
 through the whole guide before asking questions!
