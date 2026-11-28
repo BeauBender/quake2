@@ -1084,6 +1084,15 @@ Review round 1, from the worktree:
 | `tests/check-ci-parity.sh`, `tests/check-runbook-index.sh` | ok on `649a2a71` |
 | the whole `tests/check-bounded-run.sh` and `tests/check-bench.sh` (branch only), `check-bench-entry`, the lock's single `check-bench` cases, `check-gate-parallel`, `check-require-guards`, `check-doc-links` and both iOS selftests | the hold script `hold-TASK221s3r1.sh`, on the final commit |
 
+Review round 2, from the worktree:
+
+| Check | Result |
+|---|---|
+| check-bounded-run's `lock kill group`, `lock kill sv`, `lock kill sv126`, `lock zero ids`, extracted, private state | `lock kill sv` and `lock zero ids` FAIL on `9a39b939` (the cases on `88654c79`'s code, lines above); all ok on `b49cc5c2`, its supervisor built into a private cache; `group-unread` and `lost-unread` refused there |
+| `tests/check-bounded-run.sh guard <root>` | ok on `b49cc5c2` |
+| `supervise.c`, `cc -fsyntax-only -O2 -Wall -Wextra -Werror`, with and without `-DSUPERVISE_TEST` | ok on `b49cc5c2` |
+| `tests/check-supervise.sh`, the whole `tests/check-bounded-run.sh`, `tests/check-bench.sh t_lock_stop t_lock_tokens t_lock_defer t_core_id` and the round 1 hold's other checks | the hold script `hold-TASK221s3r2.sh`, on the final commit |
+
 ### Review round 1: #726 and #741
 
 - **#741** (the `bench-poll` scratch directory left in TMPDIR) goes with `bench_poll`,
