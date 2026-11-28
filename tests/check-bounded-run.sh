@@ -2036,6 +2036,134 @@ for _lm in \
 		fails="$fails $_lmn"
 	fi
 done
+# The lock is held while the command's group has a member, whatever kills
+# the lock shell or its supervisor (TASK221 slice 3, review round 1:
+# security B1, correctness I2, spec I4). The holder's child= is the
+# supervisor, which shares the lock shell's process group, so neither of
+# them stands for the command's group; the group the supervisor named
+# ("spawned") does. The command says its pid (its group's id) on the FIFO
+# and reads a second FIFO, so it runs until the case writes there.
+# sv_lockkill <root> <mode> sets lk_why (empty: it held):
+#   group  the lock shell leads a process group of its own (python3
+#          setpgid), and at the supervisor's "spawned" (BENCH_BOUNDED_TAP)
+#          that whole group is KILLed: the lock shell, the supervisor and
+#          its tee alike. Nothing is left to stop the command.
+#   sv126  the lock run's supervisor is a stand-in (SUPERVISE_CACHE, as the
+#          sv 126 case plants one) that starts the command in a group of
+#          its own, names it ("spawned" on fd 9), then waits for its
+#          parent's exit (a kqueue in python3) and exits 126 with the group
+#          left; the lock shell alone is KILLed.
+# Each then wants, while the command runs: lock status alive=yes, and a
+# second lock run with BENCH_LOCK_WAIT=1 exiting 75. Once the command has
+# ended: a lock run reclaims the lock (exit 0), and the lock is free.
+cat > "$W/lkstand" << 'EOF'
+#!/bin/sh
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+pp=$PPID
+python3 -I -c 'import os, sys
+os.setpgid(0, 0)
+os.execvp(sys.argv[1], sys.argv[1:])' "$@" < /dev/null > /dev/null 2>&1 9>&- &
+echo "spawned pid=$! pgid=$!" >&9
+echo "fake pid=$$ pgid=$!" >> "$FAKE_TAP"
+python3 -I -c 'import select, sys
+kq = select.kqueue()
+try:
+    kq.control([select.kevent(int(sys.argv[1]), select.KQ_FILTER_PROC, select.KQ_EV_ADD, select.KQ_NOTE_EXIT)], 0)
+    kq.control(None, 1)
+except OSError:
+    pass' "$pp" 9>&-
+echo "group-left count=1" >&9
+echo "fake-exit 126" >> "$FAKE_TAP"
+exit 126
+EOF
+sv_lockkill() {
+	_kd=$W/sv-lk-$2-$(basename "$1")
+	lk_why=
+	rm -rf "${_kd:?}"
+	mkdir -p "${_kd:?}/tmp" "${_kd:?}/state" "${_kd:?}/cache" && chmod 700 "${_kd:?}/cache" && mkfifo "${_kd:?}/fifo" "${_kd:?}/hold" || return 1
+	_kb=$PROC_BOUND
+	PROC_BOUND=60
+	proc_open "$_kd/fifo"
+	_kc='echo "command pid=$$" >> "$0"; read x < "$1"; echo command-ended >> "$0"'
+	if [ "$2" = group ]; then
+		env TMPDIR="$_kd/tmp" BENCH_STATE="$_kd/state" BENCH_BOUNDED_TAP="$_kd/fifo" python3 -I -c 'import os, sys
+os.setpgid(0, 0)
+os.execvp(sys.argv[1], sys.argv[1:])' sh "$1/scripts/bench/bench.sh" lock run lk -- sh -c "$_kc" "$_kd/fifo" "$_kd/hold" < /dev/null > "$_kd/out" 2>&1 &
+	else
+		[ -n "$sv_bin" ] && cp "$W/lkstand" "$_kd/cache/${sv_bin##*/}" && chmod 700 "$_kd/cache/${sv_bin##*/}" || return 1
+		env TMPDIR="$_kd/tmp" BENCH_STATE="$_kd/state" SUPERVISE_CACHE="$_kd/cache" FAKE_TAP="$_kd/fifo" \
+			sh "$1/scripts/bench/bench.sh" lock run lk -- sh -c "$_kc" "$_kd/fifo" "$_kd/hold" < /dev/null > "$_kd/out" 2>&1 &
+	fi
+	_kp=$!
+	# the command's pid, and the line that names its group ("spawned" from
+	# the tap, or the stand-in's "fake"), in either order
+	_kg= _kn=
+	while { [ -z "$_kg" ] || [ -z "$_kn" ]; } && proc_await '*'; do
+		case $PROC_LINE in
+		'command pid='*) _kg=${PROC_LINE#command pid=} ;;
+		'spawned '* | 'fake '*) _kn=${PROC_LINE##*pgid=} ;;
+		esac
+	done
+	if [ -z "$_kg" ] || [ -z "$_kn" ]; then
+		lk_why="the command did not start (command pid [$_kg], group [$_kn])"
+	elif [ "$_kg" != "$_kn" ]; then
+		lk_why="the command $_kg does not lead the group $_kn"
+	fi
+	proc_alone
+	if [ -z "$lk_why" ]; then
+		if [ "$2" = group ]; then
+			kill -s KILL -- "-$_kp" 2> /dev/null
+		else
+			kill -s KILL "$_kp" 2> /dev/null
+		fi
+		wait "$_kp" 2> /dev/null
+		if [ "$2" = sv126 ] && ! proc_await 'fake-exit 126'; then
+			lk_why="the stand-in did not exit 126 after its parent's KILL"
+		elif ! kill -0 -- "-$_kg" 2> /dev/null; then
+			lk_why="the command's group $_kg did not outlive the KILL"
+		fi
+	fi
+	if [ -z "$lk_why" ]; then
+		_kl=$(env BENCH_STATE="$_kd/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
+		case $_kl in
+		lock=held*' alive=yes'*) ;;
+		*) lk_why="the lock was taken as gone while the command's group ran: $_kl" ;;
+		esac
+		_ks=0
+		env TMPDIR="$_kd/tmp" BENCH_STATE="$_kd/state" BENCH_LOCK_WAIT=1 BENCH_LOCK_POLL=0.2 sh "$1/scripts/bench/bench.sh" lock run lk2 -- true > /dev/null 2>&1 || _ks=$?
+		[ "$_ks" -eq 75 ] || lk_why="${lk_why:+$lk_why; }a second lock run exited $_ks while the command ran, not 75"
+	fi
+	# the command ends; the lock is then reclaimable
+	exec 7<> "$_kd/hold"
+	echo go >&7
+	exec 7>&-
+	if [ -z "$lk_why" ] && ! proc_await command-ended; then lk_why="the command did not end"; fi
+	if [ -z "$lk_why" ]; then
+		_ks=0
+		env TMPDIR="$_kd/tmp" BENCH_STATE="$_kd/state" BENCH_LOCK_WAIT=20 BENCH_LOCK_POLL=0.2 sh "$1/scripts/bench/bench.sh" lock run lk3 -- true > "$_kd/lk3" 2>&1 || _ks=$?
+		[ "$_ks" -eq 0 ] || lk_why="a lock run after the command ended exited $_ks, not 0 ($(tr '\n' '|' < "$_kd/lk3" | cut -c1-300))"
+		_kl=$(env BENCH_STATE="$_kd/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
+		[ "$_kl" = lock=free ] || lk_why="${lk_why:+$lk_why; }the lock was not free after that run: $_kl"
+	fi
+	if ! proc_eof; then lk_why=${lk_why:-"something held the FIFO $PROC_BOUND s after the command ended"}; fi
+	kill -s KILL "$_kp" 2> /dev/null
+	case $_kg in '' | *[!0-9]*) ;; *) kill -s KILL -- "-$_kg" 2> /dev/null ;; esac
+	wait "$_kp" 2> /dev/null
+	proc_close
+	PROC_BOUND=$_kb
+}
+for _lkm in group sv126; do
+	sv_lockkill "$here" "$_lkm"
+	if [ -n "$lk_why" ]; then
+		echo "$me: FAIL: lock kill $_lkm: $lk_why"
+		fails="$fails lock-kill-$_lkm"
+	elif [ "$_lkm" = group ]; then
+		echo "$me: ok   lock kill group: a KILL of the lock shell's whole group keeps the lock while the command's group runs (75), then it is reclaimed"
+	else
+		echo "$me: ok   lock kill sv126: a KILLed lock shell and its supervisor's 126 keep the lock while the command's group runs (75), then it is reclaimed"
+	fi
+done
 # A command's own 124, 125 and 126 are its own (correctness B1, round 1):
 # the supervisor passes the command's status through, so bench_bounded
 # tells its own 124 (the wall time), 125 (cannot run) and 126 (cannot empty
