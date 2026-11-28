@@ -1,3 +1,10 @@
+Portmanbeau Quake II (this fork):
+- This repository is a long-lived fork of Yamagi Quake II, taken at
+  upstream commit 9dbf6992 (2026-10-15). Its provenance and sync policy
+  are in FORK.md; the changes against upstream are listed in the README
+  under "How it differs from upstream". The git history is the full
+  record. The entries below are upstream's history, unchanged.
+
 Quake II 8.60 to 8.70:
 - The default SDL version is now 3.0. SDL 2.0 is still supported as an
   optional build flag. There are no plans to remove SDL 2.0 support in
