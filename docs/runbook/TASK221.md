@@ -1144,6 +1144,42 @@ One run of the whole `sh tests/check-bench.sh` on each tree, each inside the ben
 
 The round 0 hold's branch run, on `0d5ae74c`, never finished. `t_quiet_marker` still expected the removed exit 74, and the orchestrator stopped the run after 46 minutes. Round 4 fixed that case.
 
+### Round 6: the gate's two checks
+
+The merge gate on `01a1214f` failed two checks that no hold had run. Both failed the same way with the lock on and with `BENCH_LOCK=0`, and both checks pass on main.
+
+**`tests/check-metalfx-report.sh`, `e2e-lock`, `e2e-lock-wait` and `e2e-lock-off`.** Each case builds a throwaway tree with `mktree` and copies `scripts/bench` into it alone. Since this slice the lock runs its command under the process supervisor, and `common.sh` looks for `scripts/lib/supervise.sh` beside the core, then beside `BENCH_ROOT`, then in `BENCH_SV_LIB`. The tree had none of these, so every `bench.sh lock run` in it exited 2 before running anything. A tree holding `scripts/bench` alone, with a private `BENCH_STATE`, reproduces it:
+
+```
+$ BENCH_STATE=<scratch> sh <tree>/scripts/bench/bench.sh lock run gate -- echo ran
+bench: cannot find the process supervisor, scripts/lib/supervise.sh
+(status 2)
+```
+
+With `scripts/lib` copied beside the core, the same call prints `ran` and exits 0. The stub `pins.sh` never started under the lock (`e2e-lock`), the holder never took it (`e2e-lock-wait`), and the last `e2e-lock-off` run, which has the lock on and expects the generator's own 3, got the lock's 2. The four off reasons passed, since none of them calls `bench.sh`. The dependency is deliberate. Decision 0016 withdrew moving the core to other repositories, and the core now needs `scripts/lib`, as every real tree has it. So the check was wrong, not the code. Its two lock trees now get `scripts/lib/supervise.sh` and `supervise.c` beside the core (the trees already had `scripts/lib/bounded.py`), and a comment says why.
+
+**`tests/check-image-decoder-selftest.sh`, case (l).** Case (l) pinned FIX201's accepted behaviour: a TERM to the check's pid ends the check, and the supervised run goes on until its 4 s deadline. This slice's parent watch changed that. The check's supervisor is the check's child, so when the check dies the supervisor sees `parent-gone`, sends the group TERM and the run ends at once, which is the "0 s after it started" in the gate. The supervisor's events for the run, linked out of the check's scratch directory before the TERM, prove it:
+
+```
+spawned pid=<P> pgid=<P>
+parent-gone pid=<check>
+term-sent name=TERM
+exited status=0
+group-empty
+reaped status=0
+```
+
+The events show `parent-gone` and then `term-sent`, with no `deadline`. Case (l) now requires the run to end at the check's TERM: the stub sees the stop less than 3 s after it starts, and the events, which the stub hard-links to the self-test's scratch before it says `start` (the check's EXIT trap removes the check's own directory), show `parent-gone` and no `deadline`. Its other guarantees stay: the check exits 143, and the fifo every member holds reaches end of file, so nothing outlives the run. `docs/runbook/FIX201.md` describes the new behaviour.
+
+On `6e7207a9` (the two fixes; the commit after it changes this runbook alone), from the worktree, `BENCH_LOCK=0`:
+
+| Check | Final line |
+|---|---|
+| `tests/check-metalfx-report.sh` (40-minute bound) | `check-metalfx-report: ok (123 mutants killed)`, status 0, 1749 s |
+| `tests/check-image-decoder-selftest.sh` | `check-image-decoder-selftest: ok (12 cases: ... a TERM to the check's pid ending its run through the supervisor's parent watch)`, 62 s |
+| `tests/check-bounded-run.sh` | `check-bounded-run: ok (guard, 66 mutants refused, probe, the supervisor cases and their 14 mutants, pyprobe and its 10 mutants)` |
+| `tests/check-supervise.sh` | `check-supervise: ok (8 s)` |
+
 ### Files outside the card's list
 
 - **`scripts/lib/supervise.c`, `tests/supervise/supervise_test.c`,
@@ -1153,6 +1189,8 @@ The round 0 hold's branch run, on `0d5ae74c`, never finished. `t_quiet_marker` s
   their helpers and a dead `bench_on_signal`).
 - **`scripts/pins.sh`**: its dead `bench_on_signal` and the comment naming
   `bench_undefer` (two lines), so no deleted name is left in `scripts/`.
+- **`tests/check-metalfx-report.sh`, `tests/check-image-decoder-selftest.sh`,
+  `docs/runbook/FIX201.md`**: round 6, the two gate checks above.
 
 ## What remains
 
