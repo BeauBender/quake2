@@ -54,15 +54,40 @@ typedef struct
 	mtl_rtp_rgba_t hist;
 } mtl_rtp_px_t;
 
+#define MTL_RTP_BITS_HALF 0x3f000000u   /* 0.5f */
+
+/* 1 when f < 1 (every negative value, -inf and -0 included; not a NaN, not 1 or more, not +inf) */
+static inline int
+mtl_rtp_below1(float f)
+{
+	const unsigned u = MTL_RTT_BITS(f);
+
+	return (u < MTL_RTT_BITS_1) || ((u >= MTL_RTT_SIGN) && (u <= (MTL_RTT_SIGN | MTL_RTT_BITS_INF)));
+}
+
+/* 1 when f > 0.5 (+inf included; not a NaN, not 0.5, not a negative value or -0) */
+static inline int
+mtl_rtp_above_half(float f)
+{
+	const unsigned u = MTL_RTT_BITS(f);
+
+	return (u > MTL_RTP_BITS_HALF) && (u <= MTL_RTT_BITS_INF);
+}
+
 /*
  * 1 when the pixel is one the direct-light kernel traced: the G-buffer's
  * world material, a depth short of the far plane and a written normal
  * (rm_rtdir_trace's rule). Every other pixel's light is passed through.
+ * FIX213: the depth and normal alpha tests are integer tests of the bit
+ * pattern, as FIX212's guards (see MTL_RTT_BITS), so under the shaders'
+ * fast math a NaN depth or normal alpha is still not a world pixel; on
+ * every other input, -0 and the infinities included, the answer is the
+ * float compares' (depth < 1, normal_a > 0.5).
  */
 static inline int
 mtl_rtp_world(unsigned mat, float depth, float normal_a)
 {
-	return (mat == MTL_GB_MAT_WORLD) && (depth < 1.0f) && (normal_a > 0.5f);
+	return (mat == MTL_GB_MAT_WORLD) && mtl_rtp_below1(depth) && mtl_rtp_above_half(normal_a);
 }
 
 /* 1 when v is a light the history can hold: finite and in [0, 1] (a NaN fails; an integer test of the pattern, see MTL_RTT_BITS) */

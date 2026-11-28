@@ -623,6 +623,167 @@ test_history_guards(void)
 	CHECK(mtl_rtp_reject(0u, 1, 1.0f, 1.0f, 0.0f, 0u, 0u, rgba(0.5f, 0.5f, from_bits(0x7fc00001u), 5.0f)) == MTL_RTP_REJ_BAD);
 }
 
+/*
+ * FIX213: the world-pixel test (mtl_rtp_world) under fast math, as FIX212's
+ * guards: its depth and normal alpha tests are integer tests of the bit
+ * pattern (mtl_rtp_below1, mtl_rtp_above_half). Against the float compares
+ * they replace, compiled here without fast math (refused below if it is
+ * on), on every input that is not a NaN, ±inf included; a NaN depth or
+ * normal alpha is not a world pixel.
+ */
+#if defined(__FAST_MATH__) || (defined(__FINITE_MATH_ONLY__) && __FINITE_MATH_ONLY__)
+#error "the reference compares of the world-pixel test need IEEE compares; build without fast math"
+#endif
+
+static int
+ref_world(unsigned mat, float depth, float normal_a)
+{
+	return (mat == MTL_GB_MAT_WORLD) && (depth < 1.0f) && (normal_a > 0.5f);
+}
+
+/* 1 when the pattern is a NaN, either sign */
+static int
+is_nan_bits(unsigned u)
+{
+	return (u & ~MTL_RTT_SIGN) > MTL_RTT_BITS_INF;
+}
+
+/* an edge: its pattern, its name and the verdict wanted (1 a world pixel) */
+typedef struct
+{
+	unsigned bits;
+	const char *name;
+	int want;
+} rtw_edge_t;
+
+/* the depth's edges, with a written normal (1.0) and the world material */
+static const rtw_edge_t rtw_depth[] = {
+	{ 0x80000000u, "-0", 1 },
+	{ 0x00000000u, "+0", 1 },
+	{ 0x3f7fffffu, "largest below 1", 1 },
+	{ 0x3f800000u, "1", 0 },
+	{ 0x3f800001u, "smallest above 1", 0 },
+	{ 0x80000001u, "negative subnormal", 1 },
+	{ 0x7f800000u, "+inf", 0 },
+	{ 0xff800000u, "-inf", 1 },
+	{ 0x7fc00000u, "quiet NaN", 0 },
+	{ 0x7f800001u, "signalling NaN", 0 },
+	{ 0xffc00000u, "negative NaN", 0 },
+	{ 0xff800001u, "smallest negative NaN", 0 },
+	{ 0xffffffffu, "largest negative NaN", 0 },
+	{ 0x7fffffffu, "largest positive NaN", 0 },
+};
+#define RTW_NDEPTH ((int)(sizeof(rtw_depth) / sizeof(rtw_depth[0])))
+
+/* the normal alpha's edges, at a depth of 0.5 and the world material */
+static const rtw_edge_t rtw_normal[] = {
+	{ 0x3f000000u, "0.5", 0 },
+	{ 0x3f000001u, "next above 0.5", 1 },
+	{ 0x3effffffu, "next below 0.5", 0 },
+	{ 0x80000000u, "-0", 0 },
+	{ 0x7f800000u, "+inf", 1 },
+	{ 0xff800000u, "-inf", 0 },
+	{ 0x7fc00000u, "quiet NaN", 0 },
+	{ 0x7f800001u, "signalling NaN", 0 },
+	{ 0xffc00000u, "negative NaN", 0 },
+	{ 0xff800001u, "smallest negative NaN", 0 },
+	{ 0xffffffffu, "largest negative NaN", 0 },
+	{ 0x7fffffffu, "largest positive NaN", 0 },
+};
+#define RTW_NNORMAL ((int)(sizeof(rtw_normal) / sizeof(rtw_normal[0])))
+
+/* one input: the verdict and the helper's, against the old compare unless a NaN is in it */
+static int
+rtw_one(unsigned mat, unsigned d, unsigned n)
+{
+	const float df = from_bits(d), nf = from_bits(n);
+	const int got = mtl_rtp_world(mat, df, nf);
+
+	if (got != (mtl_rtp_below1(df) && mtl_rtp_above_half(nf) && (mat == MTL_GB_MAT_WORLD)))
+	{
+		return 0;
+	}
+
+	if (is_nan_bits(d) || is_nan_bits(n))
+	{
+		/* a NaN is refused, by its own helper */
+		return (got == 0) && (!is_nan_bits(d) || !mtl_rtp_below1(df)) && (!is_nan_bits(n) || !mtl_rtp_above_half(nf));
+	}
+
+	return (got == ref_world(mat, df, nf)) && (mtl_rtp_below1(df) == (df < 1.0f)) &&
+		(mtl_rtp_above_half(nf) == (nf > 0.5f));
+}
+
+static void
+test_world_edges(void)
+{
+	static const unsigned mats[] = { MTL_GB_MAT_NONE, MTL_GB_MAT_WORLD, MTL_GB_MAT_ALIAS, MTL_GB_MAT_WATER,
+		MTL_GB_MAT_SKY };
+	unsigned i;
+	int j;
+
+	for (j = 0; j < RTW_NDEPTH; j++)
+	{
+		const int got = mtl_rtp_world(MTL_GB_MAT_WORLD, from_bits(rtw_depth[j].bits), 1.0f);
+
+		printf("rtw: depth %-20s 0x%08x: %d (want %d)\n", rtw_depth[j].name, rtw_depth[j].bits, got, rtw_depth[j].want);
+		CHECK(got == rtw_depth[j].want);
+		CHECK(rtw_one(MTL_GB_MAT_WORLD, rtw_depth[j].bits, 0x3f800000u));
+	}
+
+	for (j = 0; j < RTW_NNORMAL; j++)
+	{
+		const int got = mtl_rtp_world(MTL_GB_MAT_WORLD, 0.5f, from_bits(rtw_normal[j].bits));
+
+		printf("rtw: normal %-19s 0x%08x: %d (want %d)\n", rtw_normal[j].name, rtw_normal[j].bits, got, rtw_normal[j].want);
+		CHECK(got == rtw_normal[j].want);
+		CHECK(rtw_one(MTL_GB_MAT_WORLD, 0x3f000000u, rtw_normal[j].bits));
+	}
+
+	/* the material as today: the world's alone, for every depth and normal edge */
+	for (i = 0; i < sizeof(mats) / sizeof(mats[0]); i++)
+	{
+		for (j = 0; j < RTW_NDEPTH; j++)
+		{
+			int k;
+
+			for (k = 0; k < RTW_NNORMAL; k++)
+			{
+				CHECK(rtw_one(mats[i], rtw_depth[j].bits, rtw_normal[k].bits));
+			}
+		}
+	}
+
+	CHECK(!mtl_rtp_world(MTL_GB_MAT_WORLD + 1u, 0.5f, 1.0f));
+}
+
+/* every 2^12th pattern of each input, crossed with every edge of the other, against the old compare */
+static void
+test_world_sweep(void)
+{
+	unsigned i;
+	int j, bad = 0, n = 0;
+
+	for (i = 0u; i < (1u << 20); i++)
+	{
+		const unsigned u = i << 12;
+
+		for (j = 0; j < RTW_NNORMAL; j++, n++)
+		{
+			bad += !rtw_one(MTL_GB_MAT_WORLD, u, rtw_normal[j].bits);
+		}
+
+		for (j = 0; j < RTW_NDEPTH; j++, n++)
+		{
+			bad += !rtw_one(MTL_GB_MAT_WORLD, rtw_depth[j].bits, u);
+		}
+	}
+
+	printf("rtw: sweep %d inputs, %d wrong\n", n, bad);
+	CHECK(n == (1 << 20) * (RTW_NDEPTH + RTW_NNORMAL));
+	CHECK(bad == 0);
+}
+
 int
 main(void)
 {
@@ -636,6 +797,8 @@ main(void)
 	test_depth_sweep();
 	test_reproject_sweep();
 	test_history_guards();
+	test_world_edges();
+	test_world_sweep();
 	printf("rm_rtptemporal_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }
