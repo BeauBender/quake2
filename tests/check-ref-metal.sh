@@ -4491,7 +4491,8 @@ if [ -s "${tmp:?}/gbf.out" ]; then
 	cat "${tmp:?}/gbf.out"
 	bad "a kernel compares a G-buffer depth or normal alpha with a float compare (FIX219): use mtl_rtp_below1, mtl_rtp_above_half or mtl_rtt_positive"
 fi
-for m in aodepth dirnormal readnormal reversed pdnormal mtnormal alphalevel; do
+for m in aodepth dirnormal readnormal reversed pdnormal mtnormal alphalevel dotlit lanew intlit bigf expo castname \
+		parenname halfread nestedread; do
 	rm -rf "${tmp:?}/gbfm"
 	cp -R "$rm_dir" "${tmp:?}/gbfm"
 	case $m in
@@ -4510,6 +4511,25 @@ for m in aodepth dirnormal readnormal reversed pdnormal mtnormal alphalevel; do
 			want="gbf: a float compare of a G-buffer normal alpha in common/mtl_rtmt_math.h" ;;
 		alphalevel) f=common/mtl_rtw_math.h o='if (!mtl_rtt_positive(a))' n='if (!(a > 0.0f))'
 			want="gbf: mtl_rtw_alpha_level does not test its alpha with mtl_rtt_positive alone" ;;
+		dotlit) f=rm_rtdir.metal o='mtl_rtp_above_half(nn.a)' n='(nn.a > .5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdir.metal" ;;
+		lanew) f=rm_rtdir.metal o='mtl_rtp_above_half(nn.a)' n='(nn.w > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdir.metal" ;;
+		intlit) f=rm_rtao.metal o='u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && mtl_rtp_below1(ds)'
+			n='u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && (ds < 1)'
+			want="gbf: a float compare of a G-buffer depth in rm_rtao.metal" ;;
+		bigf) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = (1.0F > ds) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		expo) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = (ds < 1e0f) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		castname) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = ((float)ds < (float)1) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		parenname) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = ((ds) < 1.0f) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		halfread) f=rm_rtdenoise.metal o='!mtl_rtp_above_half(normal.read(px).a)' n='!(half(normal.read(px).a) > 0.5h)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdenoise.metal" ;;
+		nestedread) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = (depth.read(uint2(px.x, px.y)) < 1.0f) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
 	esac
 	gbf_sub "$rm_dir/$f" "$o" "$n" > "${tmp:?}/gbfm/$f"
 	gbf_why "${tmp:?}/gbfm" > "${tmp:?}/gbf.out"
@@ -4525,7 +4545,7 @@ for m in aodepth dirnormal readnormal reversed pdnormal mtnormal alphalevel; do
 	fi
 done
 rm -rf "${tmp:?}/gbfm"
-[ "$gbf_mutants" = 7 ] || bad "the G-buffer compare pin refused $gbf_mutants of its 7 mutants by their own lines"
+[ "$gbf_mutants" = 16 ] || bad "the G-buffer compare pin refused $gbf_mutants of its 16 mutants by their own lines"
 seg 7.97 "; no G-buffer depth or normal float compare in $gbf_files files, $gbf_mutants mutants refused by their own lines"
 
 if [ "$fail" = 0 ]; then
