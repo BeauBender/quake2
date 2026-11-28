@@ -125,6 +125,7 @@ fast check-pins-latch.sh
 fast check-pins.sh
 fast check-pre-commit-hook.sh
 fast check-pre-push-hook.sh
+fast check-prune-branches.sh
 fast check-ref-metal.sh
 fast check-refrecord.sh
 fast check-removed-deps.sh

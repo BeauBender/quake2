@@ -1,0 +1,67 @@
+name: Prune branches
+run-name: prune-branches
+# Deletes the remote work branches whose work is already on main (TASK244).
+# The rules are in scripts/prune-branches.sh, which
+# tests/check-prune-branches.sh checks, with this file. Every run prints the
+# plan, one line a branch with its sha and reason, so a deleted branch can
+# be pushed back from the log. Only a run started by hand with apply set
+# deletes anything; the weekly run only prints the plan.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Delete the branches the plan lists (otherwise only print it)
+        type: boolean
+        default: false
+  schedule:
+  - cron: '17 6 * * 1'
+permissions: {}
+concurrency:
+  group: prune-branches
+  cancel-in-progress: false
+jobs:
+  prune:
+    name: Prune merged branches
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+    - name: Plan
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      shell: sh
+      run: |
+        set -eu
+        git fetch -q --prune origin '+refs/heads/*:refs/remotes/origin/*'
+        gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" \
+          --jq '.[].head.ref' >open.txt
+        gh api --paginate "repos/$GH_REPO/pulls?state=closed&per_page=100" \
+          --jq '.[] | select(.merged_at != null and .head.repo.full_name == env.GH_REPO) | "\(.head.ref) \(.head.sha)"' >merged.txt
+        gh api --paginate "repos/$GH_REPO/issues?state=closed&per_page=100" \
+          --jq '.[] | select(.pull_request == null and .state_reason == "completed") | (.closed_at | fromdate | tostring) as $at | .labels[].name | select(startswith("id:")) | ltrimstr("id:") + " " + $at' >closed.txt
+        scripts/prune-branches.sh plan open.txt merged.txt closed.txt >plan.txt
+        cat plan.txt
+        {
+          echo '```'
+          awk '{ n[$1 " " $4]++ } END { for (k in n) print n[k], k }' plan.txt | sort -k2
+          echo '```'
+          echo '<details><summary>Plan</summary>'
+          echo
+          echo '```'
+          cat plan.txt
+          echo '```'
+          echo '</details>'
+        } >>"$GITHUB_STEP_SUMMARY"
+    - name: Delete
+      if: github.event_name == 'workflow_dispatch' && inputs.apply
+      shell: sh
+      run: |
+        scripts/prune-branches.sh apply plan.txt
