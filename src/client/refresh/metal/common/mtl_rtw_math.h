@@ -35,6 +35,8 @@
 #ifndef MTL_RTW_MATH_H
 #define MTL_RTW_MATH_H
 
+#include "mtl_rtt_math.h"   /* FIX219: mtl_rtt_positive, the mark level's alpha test */
+
 #ifndef MTL_RTAO_MASK
 #error "mtl_rtw_math.h needs mtl_rtao_math.h first"
 #endif
@@ -776,11 +778,15 @@ mtl_rtw_mark_blend(float a)
 			+ a * mtl_rtw_bf_value(MTL_RTW_MARK_DST_FACTOR, MTL_RTW_MARK_A);
 }
 
-/* the two-bit level the normal attachment stores for alpha a, to the nearest (0 for NaN) */
+/*
+ * the two-bit level the normal attachment stores for alpha a, to the
+ * nearest (0 for NaN). FIX219: a > 0 is an integer test of the pattern
+ * (mtl_rtt_positive), so a NaN is level 0 under the shaders' fast math too.
+ */
 static inline unsigned
 mtl_rtw_alpha_level(float a)
 {
-	if (!(a > 0.0f))
+	if (!mtl_rtt_positive(a))
 	{
 		return 0u;
 	}

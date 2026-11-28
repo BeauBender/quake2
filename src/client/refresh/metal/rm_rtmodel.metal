@@ -245,7 +245,7 @@ rm_rtm_trace(depth2d<float, access::read> depth [[texture(0)]],
 	{
 		d = depth.read(px);
 		nn = normal.read(px);
-		model = ((d < 1.0f) && (nn.a > 0.5f)) ? 1u : 0u;
+		model = (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a)) ? 1u : 0u;
 	}
 
 	if (model)

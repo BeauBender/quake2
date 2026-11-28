@@ -62,6 +62,7 @@ using namespace metal::raytracing;
 
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
+#include "common/mtl_rtp_math.h"   /* FIX219: the G-buffer depth and normal tests (mtl_rtp_below1, mtl_rtp_above_half) */
 #include "common/mtl_rtao_math.h"
 #include "common/mtl_rts_math.h"
 #include "common/mtl_rtw_math.h"
@@ -600,7 +601,7 @@ rm_rtw_ss_at(constant rm_rtw_view &v, depth2d<float, access::read> depth, textur
 
 			hd = distance(o + r3 * dist, v.eye.xyz);
 
-			if (qd < 1.0f)
+			if (mtl_rtp_below1(qd))
 			{
 				off = fabs(distance(rm_rtw_unproject(v, float2(q) + 0.5f, qd), v.eye.xyz) - hd);
 			}
@@ -663,7 +664,7 @@ rm_rtw_trace_lo(constant rm_rtw_lo &lo [[buffer(17)]],
 		{
 			const float4 nn = normal.read(RM_RTW_AT(px));
 
-			if ((d < 1.0f) && (nn.a > 0.5f))
+			if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 			{
 				n = normalize(nn.xyz * 2.0f - 1.0f);
 				p = rm_rtw_unproject(v, pc, d);
@@ -673,7 +674,7 @@ rm_rtw_trace_lo(constant rm_rtw_lo &lo [[buffer(17)]],
 		else
 		{
 			/* translucent water in front of the raster's surface: a ray from the eye through the pixel */
-			const bool surf = (d < 1.0f) && (m != MTL_GB_MAT_NONE) && (m != MTL_GB_MAT_SKY);
+			const bool surf = mtl_rtp_below1(d) && (m != MTL_GB_MAT_NONE) && (m != MTL_GB_MAT_SKY);
 			const float3 dv = rm_rtw_unproject(v, pc, surf ? d : 0.5f) - v.eye.xyz;
 			const float dl = length(dv);
 			const float lim = mtl_rtw_eye_max(surf ? dl : 0.0f);
@@ -801,7 +802,7 @@ rm_rtw_trace_lo(constant rm_rtw_lo &lo [[buffer(17)]],
 
 					hd = distance(o + r3 * hit.distance, v.eye.xyz);
 
-					if (qd < 1.0f)
+					if (mtl_rtp_below1(qd))
 					{
 						off = fabs(distance(rm_rtw_unproject(v, float2(q) + 0.5f, qd), v.eye.xyz) - hd);
 					}
@@ -950,7 +951,7 @@ rm_rtw_trace_ws_lo(constant rm_rtw_lo &lo [[buffer(17)]],
 		{
 			const float4 nn = normal.read(RM_RTW_AT(px));
 
-			if ((d < 1.0f) && (nn.a > 0.5f))
+			if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 			{
 				n = normalize(nn.xyz * 2.0f - 1.0f);
 				p = rm_rtw_unproject(v, pc, d);
@@ -960,7 +961,7 @@ rm_rtw_trace_ws_lo(constant rm_rtw_lo &lo [[buffer(17)]],
 		else
 		{
 			/* translucent water in front of the raster's surface: a ray from the eye through the pixel */
-			const bool surf = (d < 1.0f) && (m != MTL_GB_MAT_NONE) && (m != MTL_GB_MAT_SKY);
+			const bool surf = mtl_rtp_below1(d) && (m != MTL_GB_MAT_NONE) && (m != MTL_GB_MAT_SKY);
 			const float3 dv = rm_rtw_unproject(v, pc, surf ? d : 0.5f) - v.eye.xyz;
 			const float dl = length(dv);
 			const float lim = mtl_rtw_eye_max(surf ? dl : 0.0f);
@@ -1127,7 +1128,7 @@ rm_rtw_trace_ws_lo(constant rm_rtw_lo &lo [[buffer(17)]],
 
 						hd = distance(o + r3 * hit.distance, v.eye.xyz);
 
-						if (qd < 1.0f)
+						if (mtl_rtp_below1(qd))
 						{
 							off = fabs(distance(rm_rtw_unproject(v, float2(q) + 0.5f, qd), v.eye.xyz) - hd);
 						}
@@ -1479,7 +1480,7 @@ rm_rtw_up(depth2d<float, access::read> depth [[texture(0)]],
 		const uint m = mat.read(px).r;
 		const uint own = mtl_rtw_is_water(m) ? MTL_RTW_CLASS_WATER : (MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS);
 
-		if ((d < 1.0f) && (nn.a > 0.5f))
+		if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 		{
 			const uint lw = refl_lo.get_width(), lh = refl_lo.get_height();
 			const mtl_rtao_pair_t qx = mtl_rtao_up_pair(px.x, lo.div, lw), qy = mtl_rtao_up_pair(px.y, lo.div, lh);
@@ -1505,8 +1506,8 @@ rm_rtw_up(depth2d<float, access::read> depth [[texture(0)]],
 				tv[i] = refl_lo.read(tp);
 				tw[i] = wdist_lo.read(tp).r;
 				in.mn[i] = mat.read(sp).r;
-				in.ok[i] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv[i].a)) && (ds < 1.0f) && (ns.a > 0.5f)) ? 1 : 0;
-				in.dn[i] = (ds < 1.0f) ? distance(rm_rtw_unproject(v, float2(sp) + 0.5f, ds), v.eye.xyz) : 0.0f;
+				in.ok[i] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv[i].a)) && mtl_rtp_below1(ds) && mtl_rtp_above_half(ns.a)) ? 1 : 0;
+				in.dn[i] = mtl_rtp_below1(ds) ? distance(rm_rtw_unproject(v, float2(sp) + 0.5f, ds), v.eye.xyz) : 0.0f;
 				in.nn[i] = rm_rtw_lo_normal(ns);
 			}
 
