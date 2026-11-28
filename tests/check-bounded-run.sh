@@ -1449,6 +1449,27 @@ if s.count(old) != 1: sys.exit("the edit does not apply: %d" % s.count(old))
 open(p, "w").write(s.replace(old, new))' "$1/$2" "$3" "$4"
 }
 
+# #741's cleanup, as a committed mutant (review round 1, spec I3): the
+# events file's rm -f dropped from bench_bounded_end, which bench_bounded's
+# stop (bench_bounded_stop) ends with; the case pollint must refuse it by
+# its "scratch files" line
+if sv_stage "$W/stage-ev-kept" scripts/bench/core/common.sh '	if [ -n "$BENCH_BOUNDED_EV" ]; then rm -f "$BENCH_BOUNDED_EV" "$BENCH_BOUNDED_EV.tap"; fi' '	:'; then
+	sv_case "$W/stage-ev-kept" pollint 30 polled polled 'exec sleep 30'
+	_pj=$sv_why
+	[ -n "$_pj" ] || [ "$sv_rc" -eq 130 ] || _pj="the caller exited $sv_rc, not 130"
+	[ -n "$_pj" ] || _pj=$(sv_left)
+	case $_pj in
+	*'scratch files: bench-sv.'*) echo "$me: mutant events-kept: refused by sv pollint ($_pj)" ;;
+	*)
+		echo "$me: FAIL: mutant events-kept passed the sv pollint case: ${_pj:-nothing left}"
+		fails="$fails events-kept"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant events-kept does not apply"
+	fails="$fails events-kept"
+fi
+
 # A supervisor that could not empty its command's group (its 126) keeps the
 # lock while that group has a member, and says so (TASK221): bench_bounded
 # records the group in the lock state, and the lock shell's release waits
@@ -2340,4 +2361,4 @@ if [ -n "$fails" ]; then
 	echo "$me: failed:$fails"
 	exit 1
 fi
-echo "$me: ok (guard, $nmut mutants refused, probe, the supervisor cases and their 12 mutants, pyprobe and its 10 mutants)"
+echo "$me: ok (guard, $nmut mutants refused, probe, the supervisor cases and their 14 mutants, pyprobe and its 10 mutants)"
