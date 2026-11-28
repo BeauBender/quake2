@@ -387,7 +387,9 @@ printf 'check token=%s entry=%s\n' "${BENCH_LOCK_TOKEN:-none}" "${BENCH_LOCK_ENT
 EOF
 # A compiler that coverage.sh takes for gcc, and its gcov: the run goes
 # through the instrumented make and then fails for want of coverage data.
-printf '#!/bin/sh\necho "gcc version 0 (stub)"\n' > "${tmp:?}/cov/cc"
+# The build of the lock run's process supervisor (TASK221 slice 3) goes to
+# the real cc, so the lock run under coverage.sh still runs.
+printf '#!/bin/sh\ncase "$*" in *supervise*) exec %s "$@" ;; esac\necho "gcc version 0 (stub)"\n' "$(command -v cc)" > "${tmp:?}/cov/cc"
 printf '#!/bin/sh\nexit 0\n' > "${tmp:?}/cov/gcov"
 # A make that logs its pid and process group, then runs for 30 s: a make
 # for a KILL to land in.
@@ -630,9 +632,10 @@ EOF
 	# The lock shell sits above the gate, not between the gate and its
 	# scheduler: the scheduler's parent, which GATE_PARENT must name (the
 	# scheduler ends every check at its first poll otherwise), is the run of
-	# test.sh under the lock, and that run's parent is the lock shell.
+	# test.sh under the lock, and that run's parent is the lock run's
+	# supervisor (TASK221 slice 3), on the lock shell's command.
 	grep -qx "sched-parent=sh ${T:?}/scripts/test.sh" "${LOG:?}" &&
-		grep -q '^sched-grandparent=sh scripts/bench/bench.sh lock run gate -- env ' "${LOG:?}" ||
+		grep -q '^sched-grandparent=[^ ]*/supervise-[^ ]* --grace [0-9]* --events 9 -- env ' "${LOG:?}" ||
 		bad "nested: the scheduler was not started by the run of test.sh under the lock; $(say)"
 	# Its one other child is the watcher of its lock shell: the leader of a
 	# process group of its own (no check's, not the scheduler's), and gone
