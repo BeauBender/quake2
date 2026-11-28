@@ -30,9 +30,9 @@ The easiest way to install Portmanbeau Quake II is to start with the patch.
 Please note that the patch is **required** for all full versions of the
 game. Without the patch the game will not work correctly!
 
-1. Download the patch from our mirror or somewhere else. The MD5
-   checksum is `490557d4a90ff346a175d865a2bade87`:
-   https://deponie.yamagi.org/quake2/idstuff/q2-3.20-x86-full-ctf.exe
+1. Download the patch `q2-3.20-x86-full-ctf.exe` from a source you
+   trust. Check its MD5 checksum against
+   `490557d4a90ff346a175d865a2bade87`.
 2. Extract the patch into an empty directory. The patch comes as a
    self-extracting ZIP file. On a Mac an archiver or the *unzip* command
    can be used.
@@ -143,12 +143,11 @@ reading the comment section at the top (lines starting with "//").
 
 #### Download And Setup
 
-1. Download the .ent files from the yquake2 repositories on GitHub.
-   * **baseq2**: yquake2/yquake2/stuff/mapfixes/baseq2/
-   * **juggernaut**: yquake2/yquake2/stuff/mapfixes/juggernaut/
-   * **xatrix**: yquake2/xatrix/stuff/mapfixes/
-   * **rogue**: yquake2/rogue/stuff/mapfixes/
-   * **zaero**: yquake2/zaero/stuff/mapfixes/
+1. Take the .ent files from this repository's `stuff/mapfixes/`.
+   * **baseq2**: `stuff/mapfixes/baseq2/`
+   * **juggernaut**: `stuff/mapfixes/juggernaut/`
+   * The map fixes for the addons (**xatrix**, **rogue**) and for
+     **zaero** are kept in upstream's addon repositories, not here.
 2. Once you have the .ent files you want, put them in the respective
    *maps/* sub-folder. So *xatrix* .ent files should go into your local
    *xatrix/maps/* folder (create this folder if it does not exist).
@@ -167,10 +166,11 @@ repository at <https://github.com/BeauBender/quake2> is its home only.
 ### Monster Footstep Sounds
 
 Portmanbeau Quake II has optional support for monster footstep sounds. These
-require some custom audio files. Download the footsteps archive from
-https://deponie.yamagi.org/quake2/assets/footsteps.pkz and extract it.
-Copy the extracted sound directories into the *baseq2/* directory as
-loose files, or repack them as a `.pak` archive and copy that instead.
+require some custom audio files. Obtain the footsteps archive
+`footsteps.pkz` (upstream Yamagi Quake II hosts it; this repository does
+not) and extract it. Copy the extracted sound directories into the
+*baseq2/* directory as loose files, or repack them as a `.pak` archive
+and copy that instead.
 This fork does not load `.pkz`, `.pk3` or other ZIP based archives;
 only `.pak` archives and loose files are read.
 
@@ -184,9 +184,8 @@ no soundtrack.
 
 ### Game Data Setup
 
-1. Download the demo from our mirror or somewhere else. Its MD5
-   checksum is `4d1cd4618e80a38db59304132ea0856c`:
-   https://deponie.yamagi.org/quake2/idstuff/q2-314-demo-x86.exe
+1. Download the demo `q2-314-demo-x86.exe` from a source you trust.
+   Check its MD5 checksum against `4d1cd4618e80a38db59304132ea0856c`.
 2. Extract the downloaded file. It's a self-extract ZIP archive.
    An archiver or the *unzip* command can be used.
 3. Create a new directory and a subdirectory *baseq2/* in it.
