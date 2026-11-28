@@ -49,6 +49,7 @@ using namespace metal;
 
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
+#include "common/mtl_rtp_math.h"   /* FIX219: the G-buffer depth and normal tests (mtl_rtp_below1, mtl_rtp_above_half) */
 
 /* 0 the texel alone, 1 the texel and the lightmap, 2 the vertex colour times the texel, 3 the vertex colour alone */
 constant int rm_gb_kind [[function_constant(2)]];
@@ -432,7 +433,7 @@ rm_fragment_show_motion(rm_fs_varying in [[stage_in]],
 		return float4(d, d, d, 1.0f);
 	}
 
-	return float4(saturate(0.5f + m.x / s.scale), saturate(0.5f + m.y / s.scale), (d < 1.0f) ? 1.0f : 0.0f, 1.0f);
+	return float4(saturate(0.5f + m.x / s.scale), saturate(0.5f + m.y / s.scale), mtl_rtp_below1(d) ? 1.0f : 0.0f, 1.0f);
 }
 
 /* the G-buffer's own: albedo (1), normal (2), material id (3, times 40), light (5) */

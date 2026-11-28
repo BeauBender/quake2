@@ -68,6 +68,7 @@ using namespace metal::raytracing;
 
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
+#include "common/mtl_rtp_math.h"   /* FIX219: the G-buffer depth and normal tests (mtl_rtp_below1, mtl_rtp_above_half) */
 #include "common/mtl_rts_math.h"
 
 /* the passes a ray takes through water and translucent surfaces before it counts as stopped */
@@ -337,7 +338,7 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 		const float d = depth.read(px);
 		const float4 nn = normal.read(px);
 
-		if ((d < 1.0f) && (nn.a > 0.5f))
+		if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 		{
 			const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
 			const float3 p = rm_rts_position(v, px, d);
@@ -647,7 +648,7 @@ rm_rts_shade(bool inside, uint2 px, depth2d<float, access::read> depth, texture2
 		const float d = depth.read(px);
 		const float4 nn = normal.read(px);
 
-		if ((d < 1.0f) && (nn.a > 0.5f))
+		if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 		{
 			const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
 			const float3 p = rm_rts_position(v, px, d);
@@ -937,7 +938,7 @@ rm_rts_temporal(depth2d<float, access::read> depth [[texture(0)]],
 		const uint set = mtl_rtt_lights(mtl_rts_pack_idx(s.top, s.flags)), hset = hr.x, hm = hr.z;
 		float dist = 0.0f;
 
-		if (d < 1.0f)
+		if (mtl_rtp_below1(d))
 		{
 			dist = distance(rm_rts_position(v, px, d), v.eye.xyz);
 		}
@@ -1120,7 +1121,7 @@ rm_rts_temporal_lo(depth2d<float, access::read> depth [[texture(0)]],
 		const uint set = mtl_rtt_lights(mtl_rts_pack_idx(s.top, s.flags)), hset = hr.x, hm = hr.z;
 		float dist = 0.0f;
 
-		if (d < 1.0f)
+		if (mtl_rtp_below1(d))
 		{
 			dist = distance(rm_rts_position(v, sp, d), v.eye.xyz);
 		}
@@ -1167,7 +1168,7 @@ rm_rts_lit(bool inside, uint2 px, depth2d<float, access::read> depth, texture2d<
 		const float d = depth.read(px);
 		const float4 nn = normal.read(px);
 
-		if ((d < 1.0f) && (nn.a > 0.5f))
+		if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 		{
 			const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
 			const float3 p = rm_rts_position(v, px, d);
@@ -1385,8 +1386,8 @@ rm_rts_up(depth2d<float, access::read> depth [[texture(0)]],
 
 			/* a tap holds a sample where rm_rts_shade traced its source pixel: the world, with a depth and a normal */
 			in.mn[i] = mat.read(sp).r;
-			in.ok[i] = ((in.mn[i] == MTL_GB_MAT_WORLD) && (ds < 1.0f) && (ns.a > 0.5f)) ? 1 : 0;
-			in.dn[i] = (ds < 1.0f) ? distance(rm_rts_position(v, sp, ds), v.eye.xyz) : 0.0f;
+			in.ok[i] = ((in.mn[i] == MTL_GB_MAT_WORLD) && mtl_rtp_below1(ds) && mtl_rtp_above_half(ns.a)) ? 1 : 0;
+			in.dn[i] = mtl_rtp_below1(ds) ? distance(rm_rts_position(v, sp, ds), v.eye.xyz) : 0.0f;
 			in.nn[i] = rm_rts_lo_normal(ns);
 			tw[i] = out_lo.read(tp).rg;
 		}
