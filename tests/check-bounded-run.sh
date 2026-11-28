@@ -1486,8 +1486,9 @@ fi
 #            asked for the "reaped" event (bench_bounded_said reaped, the
 #            first fork after the collect), and the caller's trap stops the
 #            bounded run as bench.sh's does (correctness I1)
-#   nospawn  the stand-in writes no "spawned" event (a failed events write,
-#            or the supervisor's "cannot watch the command"), so there is
+#   nospawn  the stand-in writes no "spawned" event (a failed events write;
+#            the supervisor's "cannot watch the command" has one, so it
+#            is a group record), so there is
 #            no group to record: the lock is held by a record that names
 #            its release by hand, also once the command has ended, until
 #            the case removes it (security I1)

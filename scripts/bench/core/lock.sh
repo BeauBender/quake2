@@ -85,7 +85,10 @@
 # waiters (bench_lock_group_live). The window left is from posix_spawnp's
 # return to that write, a few instructions: a KILL of the lock shell's
 # whole group that lands there leaves the command running with no group
-# named, and the lock can then be reclaimed while it runs. The file goes
+# named, and the lock can then be reclaimed while it runs. A KILL of the
+# supervisor alone has the same window (137 with no "spawned" and no
+# "reaped": the events file is removed and the lock freed while the
+# command runs). The file goes
 # with the bounded run's end, and with the lock's release or reclaim.
 #
 # Release: the EXIT, INT, TERM and HUP traps of bench.sh call

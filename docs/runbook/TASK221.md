@@ -192,7 +192,8 @@ prefix to tell it from a second one.
     error;
   - 124 with `HOW=until`;
   - 2 for an until test that is missing or gone;
-  - 127 for a command that cannot be run (the supervisor's 125).
+  - 127 for a command that cannot be run (the supervisor's 125). A supervisor that cannot
+    be run (`sv_wait` gives 127 with no events) leaves a hand record and returns 125.
 - **126 keeps the lock and says so.** The supervisor's 126 (a group it cannot empty) becomes
   125 with `HOW=untold`. The command's group (its `spawned` event) is recorded in the lock
   state as a group record: `untold.<pgid>` with `group=<pgid>`. `bench_lock_untold_live`
@@ -202,8 +203,10 @@ prefix to tell it from a second one.
   after `written=` (`bench_lock_untold_reused`, the pid records' rule; review round 1,
   security I2). A ps that gives no answer keeps the lock. The lock shell's release then
   keeps the lock and says so.
-  - **A 126 with no group named** (no `spawned` event: a failed events write, or the
-    supervisor's "cannot watch the command") writes a hand record instead:
+  - **A 126 that has a `spawned` line** (the supervisor's "cannot watch the command"
+    included: `supervise.c` writes `spawned` before `sv_peek` can fail) is a group record.
+  - **A 126 with no group named** (no `spawned` event: a failed events write) writes a hand
+    record instead:
     `untold.<id>` with `hand=<id>`, under the supervisor's pid (the bounding shell's when
     there is none). It holds the lock until a person removes it, with
     `rm -f '<state>/lock/untold.<id>'` (review round 2, security I1). Every line that shows
@@ -848,7 +851,9 @@ so each is this slice's:
   the supervisor writes just after the spawn, before it watches the group (review
   round 2). The window left is from `posix_spawnp`'s return to that write: a KILL of
   the lock shell's whole group that lands there leaves the command running with no
-  group named, and the lock reclaimable. A holder an older harness wrote
+  group named, and the lock reclaimable. A KILL of the supervisor alone has the same
+  window: 137 with no `spawned` and no `reaped`, the events file removed and the lock
+  freed while the command runs. A holder an older harness wrote
   (`child=` the command, its group's leader) is still read as before, through
   `kill -0 -- -<child>`.
 - **The status contract.** The command's own status; 75 for the wait; 127 for a command

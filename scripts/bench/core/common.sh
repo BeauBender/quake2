@@ -325,9 +325,12 @@ bench_sv() {
 # recorded in the lock state (bench_bounded_untold), so the lock it runs
 # under is kept while the group has a member, whatever this shell does next
 # (FIX184), and it is said; with no group named, the lock is kept until the
-# record is removed by hand (bench_bounded_untold). A trap's stop that comes
+# record is removed by hand (bench_bounded_untold). A 126 that has a
+# "spawned" line, the supervisor's "cannot watch the command" included
+# (supervise.c writes "spawned" before it can fail), is a group record. A trap's stop that comes
 # after the status is collected acts on it (bench_bounded_stop). A command
-# that cannot be run is 127. A first
+# that cannot be run is 127; a supervisor that cannot be run (127 with no
+# events) leaves a hand record and returns 125. A first
 # word bench_to <out> <err> sends the command's output to those files (the
 # supervisor's own lines too). BENCH_BOUNDED_PID is the supervisor's pid
 # while it runs: a caller's trap stops it with bench_stop_group, which
@@ -559,11 +562,11 @@ bench_bounded_lost() {
 # bench_bounded_untold: after a supervisor's 126, records the command's
 # process group (its "spawned" event) in the lock state, so the lock is
 # kept while the group has a member (bench_lock_record <pgid> group).
-# When the supervisor named no group (a failed events write, or its
-# "cannot watch the command"), nothing tells when the command is gone: the
+# When the supervisor named no group (a failed events write, or no events
+# at all), nothing tells when the command is gone: the
 # lock is kept until the record is removed by hand (bench_lock_record <id>
 # hand, under the supervisor's pid, else this shell's; security I1, review
-# round 2). A caller without the lock's code (core/lock.sh) runs under no
+# round 2). A 126 that has a "spawned" line is never a hand record. A caller without the lock's code (core/lock.sh) runs under no
 # lock of this core's, and records nothing.
 bench_bounded_untold() {
 	_bu_g=$(bench_bounded_event spawned pgid) || _bu_g=
