@@ -4,7 +4,7 @@
   "cardPrefixes": ["TASK"],
   "kanban": { "repo": "BeauBender/quake2" },
   "gate": { "test": "scripts/test.sh", "merge": "scripts/test.sh", "stampCommands": ["scripts/test.sh"] },
-  "merge": { "ciChecks": "require" },
+  "merge": { "ciChecks": "require", "allowedDrift": [".claude/memory/*", "docs/runbook/*", "docs/reviews/*", "docs/audits/*", "docs/analysis/*", "docs/decisions/*"] },
   "prs": { "stacking": "always" },
   "risk": {
     "autoMergeCap": "H",
