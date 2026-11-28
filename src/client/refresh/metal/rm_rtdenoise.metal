@@ -41,6 +41,7 @@ using namespace metal;
 
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
+#include "common/mtl_rtp_math.h"   /* FIX219: the G-buffer depth and normal tests (mtl_rtp_below1, mtl_rtp_above_half) */
 #include "common/mtl_rtsun_math.h"
 #include "common/mtl_rtd_math.h"
 
@@ -80,7 +81,7 @@ rm_rtd_filter(texture2d<float, access::read> normal, texture2d<float, access::re
 				const float3 m3 = normalize(nv.xyz * 2.0f - 1.0f);
 				const mtl_rtao_v3_t nn = mtl_rtao_v3(m3.x, m3.y, m3.z);
 				const uint mn = (uint)hn.z;
-				const float wt = (nv.a > 0.5f) ? mtl_rtd_weight(dx, dy, hc.y, hn.y, nc, nn, mc, mn, hn.w) : 0.0f;
+				const float wt = mtl_rtp_above_half(nv.a) ? mtl_rtd_weight(dx, dy, hc.y, hn.y, nc, nn, mc, mn, hn.w) : 0.0f;
 
 				acc = mtl_rtd_add(acc, wt, hn.x);
 			}
@@ -116,7 +117,7 @@ rm_rtao_denoise(texture2d<float, access::read> normal [[texture(1)]],
 		const float4 hc = hist.read(px);
 		const uint m = (uint)hc.z;
 
-		if ((m != MTL_GB_MAT_WORLD) || !(mtl_rtd_strength(hc.w) > 0.0f) || !(normal.read(px).a > 0.5f))
+		if ((m != MTL_GB_MAT_WORLD) || !(mtl_rtd_strength(hc.w) > 0.0f) || !mtl_rtp_above_half(normal.read(px).a))
 		{
 			return;
 		}
@@ -163,7 +164,7 @@ rm_rtsun_denoise(texture2d<float, access::read> normal [[texture(1)]],
 		const float4 hc = hist.read(px);
 		const float4 nv = normal.read(px);
 
-		if (!(mtl_rtd_strength(hc.w) > 0.0f) || !(nv.a > 0.5f))
+		if (!(mtl_rtd_strength(hc.w) > 0.0f) || !mtl_rtp_above_half(nv.a))
 		{
 			return;
 		}
