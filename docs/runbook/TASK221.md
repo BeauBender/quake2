@@ -826,21 +826,213 @@ so each is this slice's:
   was not run here, since it builds with make; its failing part is ios-sim's selftest
   above.
 
+## Slice 3: the lock run, the deletions, and the last callers
+
+### The lock run (scripts/bench/core/lock.sh)
+
+- **`bench_lock_run` runs its command through `bench_bounded_run`**, the run that
+  `bench_bounded` now calls too (`bench_bounded <s>` is the uint check and
+  `bench_bounded_run <s> BENCH_STOP_GRACE /dev/null`). For the lock run: no wall time
+  (no `--timeout`), the lock's grace (`bench_lock_grace`, twice `BENCH_STOP_GRACE` and
+  at least `BENCH_STOP_GRACE` + 5), and the caller's standard input unless it is a
+  terminal. An asynchronous list without job control reads `/dev/null`, so `sv_start`
+  takes `SV_STDIN3`: the supervisor reads fd 3, which `bench_bounded_run` opens on its
+  standard input (a closed one is `/dev/null`).
+- **The holder names the supervisor** as `child=`, through `BENCH_BOUNDED_STARTED`
+  (`bench_lock_started`), once it has started. The supervisor lives while anything of
+  the command's group runs, so the waiters take the lock as alive while it does.
+- **The status contract.** The command's own status; 75 for the wait; 127 for a command
+  that cannot be run; on the supervisor's 126 ("could not stop") the group is recorded
+  (`bench_bounded_untold`), the lock is kept while it has a member (the release waits,
+  and says so), and `lock run` exits 125 and says "a command, or what it left running,
+  could not be stopped: it may still run".
+- **Decided from the events, never from a `wait` alone:** the run's status goes through
+  `bench_bounded_ours`, and a trap's stop through `bench_bounded_stop`, as slice 2's
+  `bench_bounded` does, the `/bin/sh` re-wait's 127 included.
+- **bench.sh's `bench_on_signal`** is `trap '' INT TERM HUP`, `bench_stop_group
+  "$BENCH_BOUNDED_PID"` (the shim: TERM to the supervisor and a wait for it), and the
+  exit. The EXIT trap's release comes after that wait, so the lock is never freed
+  before the supervisor's `reaped` event. `bench_poll_end`, `bench_lock_stop_child`,
+  the fd 8 hand-back and the `BENCH_DEFER` window are gone.
+
+### The parent-death watch (scripts/lib/supervise.c)
+
+`supervise.c` had none: a KILLed lock shell left the supervisor running its command.
+The smallest change that works, outside the card's file list because the card's
+"What remains" names the watch: the supervisor reads `getppid()` before the spawn
+and watches that pid's exit on its kqueue (`EVFILT_PROC`, `NOTE_EXIT`). A parent
+gone before the watch is set (`getppid()` no longer that pid, or the `kevent`
+fails) runs nothing (125, "the caller <pid> is gone, or cannot be watched"). The
+parent's exit emits `parent-gone pid=<pid>` and starts a stop as a TERM does
+(status 143). Case `parent-gone` in `tests/supervise/supervise_test.c` (a caller
+shell that runs the supervisor in the background, KILLed; a probe on the test
+clock after the shell is reaped): red on main ("the caller's death stopped
+nothing (events: spawned ... probe)"), ok on the branch. Mutants
+`no-parent-watch` (the watch never set) and `parent-no-stop` (the event seen, no
+stop) each fail it with that line. The watch covers every supervisor caller: the
+gate's checks (slice 1), `bench_bounded`, the lock run and ios-sim's launch client.
+
+### ios-sim.sh's launch client
+
+The simulator launch (`launch_app`) and the smoke's launch run under the supervisor
+in the background (`spawn_launch <log> <command>...`, `--grace 5`): `lpid` is the
+supervisor's pid, which lives while anything of the client's group runs.
+`bench_spawn_running` became `bench_pid_alive` on that pid, `bench_await` became
+`await_launch <seconds>` (a 1 s poll by the clock, then a `wait`), and
+`stop_spawned` sets `SV_PID` and calls `sv_stop` (TERM to the supervisor and a wait
+for it; its 126 is said). A signal before `lpid` is stored leaves the supervisor to
+its parent watch. Only those call sites changed; the selftest passes
+(see "Checks run").
+
+### The shims (scripts/bench/core/common.sh)
+
+- `bench_stop_group <pid>`: two lines; the bounded pid (`BENCH_BOUNDED_PID`, also
+  `starting` in the fork window) is stopped by `bench_bounded_stop`, any other pid
+  gets nothing, and it returns 0.
+- `bench_deferred <status>`: false (`return 1`). Nothing is deferred: the fork window
+  is `sv_pid`'s. `BENCH_BOUNDED_PID=starting` and an empty `SV_STATUS` now come before
+  the events file is made, so a trap there removes that file through the shim.
+- `bench_nap` and `bench_now` stay, for `snap.sh` and the release's wait: the nap
+  backgrounds its `sleep` and waits for it with the `wait` builtin; `bench_now` is
+  `date +%s`.
+
+### Deleted
+
+From `common.sh`: `bench_poll`, `bench_poll_done`, `bench_poll_line`,
+`bench_poll_to`, `bench_poll_end`, `BENCH_POLL_PID`, `BENCH_POLL_DIR`,
+`BENCH_POLL_LINE`, `BENCH_POLL_SEQ`, `bench_sleep_quiet`, `bench_past`,
+`bench_proc_read`, `bench_proc_same`, `bench_spawn_id`, `bench_spawn_read`,
+`bench_spawn_forget`, `bench_spawned`, `bench_spawn`, `bench_undefer`,
+`bench_group_alive`, `bench_signal_group`, `bench_untold`, `bench_stop_groups`,
+`bench_groups_alive`, `bench_watch`, `bench_watch_read`, `bench_end_group`,
+`bench_spawn_running`, `bench_await`, `BENCH_AWAIT_STATUS`, `BENCH_SPAWNED`,
+`BENCH_SPAWN_PID`, `BENCH_SPAWN_SAID`, `BENCH_SPAWN_START`, `BENCH_SPAWN_GROUP`,
+`BENCH_DEFER`, `BENCH_DEFERRED` and `bench_record_untold`
+(`bench_bounded_untold` calls `bench_lock_record` when lock.sh is there). From
+`lock.sh`: `bench_lock_stop_child`, `bench_lock_hold_untold`, `BENCH_LOCK_CHILD`,
+`BENCH_LOCK_REAPED`, and the start-time half of `bench_lock_untold_*` (a pid record's
+`bench_proc_same`; `bench_lock_untold_reused` reads its one `ps -o lstart=` itself,
+in UTC and the C locale). `bench_lock_record` writes group and hand records only. The
+dash and no-job-control paths went with `bench_spawn` (its `set -m` and its "no job
+control" note) and with `t_poll_end_reaped`'s dash run. The dead `bench_on_signal`
+functions of `pins.sh`, `ios-device.sh` and `ios-sim.sh` (only `bench_undefer` called
+them) went too.
+
+`git grep -n -w <name>` for each deleted name, on the branch, prints nothing outside
+`docs/runbook/` (the card files' history), `docs/decisions/0016-harness-supervision.md`
+and `docs/reviews/` (dated records), and this list. The exceptions: comments in
+`scripts/test.sh` (lines 25 and 110, "as bench_spawn does" and "after bench_spawn's
+fork"), left because `scripts/test.sh` is not this card's to touch (#761);
+`scripts/lib/bounded.py`'s comments naming `bench_stop_groups` (TASK225's file); and
+`CLAUDE.md`'s freeze rule (line 70), which names `bench_poll`, `bench_spawn`,
+`bench_watch` and `bench_stop_groups` as the primitives being replaced, an
+instructions file outside this card, for the owner to retire.
+
+### Behaviour that changed
+
+- **74 is gone.** A stopped command (a stop signal, or the terminal) is not told apart:
+  it holds the lock until a signal stops the lock shell, whose supervisor sends the
+  group TERM and CONT.
+- **What a command leaves in its group gets TERM at once** at the leader's exit, not
+  after 1 to 2 s, then KILL after the lock's grace.
+- **The command's signals are at their defaults.** Under a caller that ignores INT (the
+  merge gate), the command used to inherit the ignore; the supervisor resets it. Probed
+  under `/bin/bash` 3.2.57, `/bin/bash -c "trap '' INT; exec sh bench.sh lock run probe
+  -- /bin/bash -c 'kill -INT \$\$; echo survived'"`: on main "command survived its INT",
+  exit 0; on the branch exit 130. With INT at its default in the caller both give 130.
+  No other `trap`, `set -m` or process-group line changed: bench.sh's `trap '' INT
+  TERM HUP` is unchanged, and `set -m` went with `bench_spawn`.
+- **A KILLed lock shell** leaves no command running: the supervisor's parent watch stops
+  the group. The waiters take the lock as alive while the supervisor (`child=`) runs.
+- **An older harness's pid record** (no `group=` or `hand=`) holds the lock while its
+  pid answers `kill -0`: the start time no longer decides (fail closed).
+
+### The cases
+
+| Case | What it shows | On main (c687c5cc) | On this branch |
+|---|---|---|---|
+| `lock run term` (check-bounded-run) | a TERM to the lock shell while its command ignores TERM (set before it says `ready`): `signal name=TERM` and `term-sent` reach the tap, lock status shows the lock held at `term-sent` (the group ignores TERM and is KILLed only after the 10 s grace, so held by construction), then `reaped`, end of file, exit 143, the lock free | FAIL: "no spawned event from the lock run's supervisor within 60 s" | ok, 10 s |
+| `lock run int` (check-bounded-run) | an INT to the lock shell at `spawned`: exit 130, the lock free, the command's group gone, TMPDIR empty | FAIL: "no spawned event from the lock run's supervisor within 60 s" | ok, 0 s |
+| `parent-gone` (check-supervise) | above | FAIL | ok |
+| `stop shim` (check-bounded-run, replaces `poll-end`) | `bench_stop_group` on another pid sends nothing and returns 0; in the window before the start it removes its own events file and leaves a sibling's | ok (as today) | ok (as today) |
+| `t_lock_defer` (check-bench) | a TERM in `sv_start`'s fork window (a `sleep 1` before `SV_PID=$!` in a copy of scripts/lib) stops the command; exit 143, the lock free | (the stall applied to `bench_spawn`) | ok (as today) |
+| `t_spawn_stderr` (check-bench) | adds: with standard input closed the command reads `/dev/null` | ok | ok |
+| `t_lock_tokens` (check-bench) | unchanged: the command gets the caller's standard input | ok | ok (failed before `SV_STDIN3`) |
+| `t_core_id` (check-bench, rewritten) | the lock state's records: pid records held by `kill -0` (same, unknown, unwritten, ps silent, another start, a written time before it), a live group record, lock status, stale records (pid gone, group gone, a later group under the id) reclaimed, group records across three TZ pairs, the release over a stale record, `bench_bounded_untold`'s `written=` | (the old identity cases) | ok |
+
+Both new lock run cases wait on the supervisor's events through `BENCH_BOUNDED_TAP` and
+`tests/lib/proc.sh`, with a 60 s failure bound; neither has a `sleep N` wait or a
+`ps` poll.
+
+| Mutant | File and rule | Refused by its line |
+|---|---|---|
+| `lock-freed-before-reaped` | bench.sh: the trap releases the lock before its stop | lock run term: "the lock was freed before reaped: at term-sent, lock=free" |
+| `lock-freed-on-126` | common.sh: no group record on a 126 (`*) return 0 ;;`) | sv 126: "the lock was not kept for the group the supervisor could not empty" |
+| `sv-run-no-term` | supervise.sh: `sv_term` sends no TERM | lock run term: "sv_run did not forward TERM: no signal name=TERM within 60 s" |
+| `no-parent-watch`, `parent-no-stop` | supervise.c | parent-gone: "the caller's death stopped nothing" |
+| `start-read-local` (moved) | lock.sh: `bench_lock_untold_reused` reads ps in the local zone | t_core_id: "record: TZ UTC then Asia/Tokyo: a live group record did not keep the lock alive" |
+| `nap-quiet-wait` (moved) | common.sh: the nap's `wait` with standard error on /dev/null | nap trap: "nap trap: exit 143; stderr []" |
+| `hand-not-recorded` (retargeted) | common.sh: `_bu_k=hand` made `return 0` | sv 126 nospawn: "the lock was not kept" |
+| `ios-sim-kill9`, `sim-pkill-9` (retargeted) | ios-sim.sh: a KILL before `SV_PID=$1` in `stop_spawned` | the guard: "a KILL outside" |
+
+The 126 case's stand-in supervisor now stands in for the bounded call's supervisor
+only (`SUPERVISE_CACHE` on the inner command): the lock run's own is the real one.
+
+**Removed with the deleted code** (case: its mutants):
+
+- check-bench `t_poll_end_reaped` (dash, bash and sh): `poll-end-kill-fails`.
+- check-bench `t_core_id`'s identity cases (the spawn record, the watch, the stops, the
+  end of a group, the lock's stop and hold, the ps-silent and dash lock runs):
+  `spawn-no-id`, `watch-no-id`, `signal-no-id`, `stop-term-untold`,
+  `stop-kill-untold`, `alive-slot-taken`, `end-group-any`, `spawn-gone-group`,
+  `signal-leader-untold`, `forget-none`, `lock-no-hold`, `hold-ends-early`,
+  `trap-no-fd8`. Its record mutants stay (`alive-no-record`,
+  `record-ignores-written`, `record-no-written`, `written-local`,
+  `status-unwritten-no-record`, `start-read-local` moved).
+- check-bench `t_spawn_stderr`'s xtrace part: `fork-stderr`, `fork-stderr-nostdin`,
+  `fork-stderr-closed`.
+- check-bench `t_lock_defer`'s `BENCH_DEFER` window: `defer-signal-lost`, `defer-off`.
+- check-bench `t_lock_stop`'s process-group check of the spawn: `spawn-no-group`; its
+  74 parts (a STOP, the terminal) now end by a TERM (exit 143).
+- check-bounded-run `lock note`: `watch-leader-note`; `poll-end` (replaced by `stop
+  shim`); `stage_root` (the ps-read stage); the until case's `bench_watch` half.
+
+check-bench now runs 76 mutants, its 75 mutant lines and the `gc-notice` fixture
+mutant: 96 before, less the 20 above (`start-read-local` moved, not removed). Its
+header names the count. `t_cant_tell` stays: it tests the check's own helpers, not
+the core.
+
+### Checks run
+
+On `34b13b2c` unless said:
+
+| Check | Result |
+|---|---|
+| `tests/check-supervise.sh` | ok (5 s), 9 supervise.c mutants (on `459ac197`; supervise.c unchanged since) |
+| `tests/check-bench.sh t_lock_stop t_lock_tokens t_spawn_stderr t_lock_defer t_core_id t_cant_tell` | ok (on `6dbc96d6`) |
+| check-bench's six `t_core_id` mutants, alone on a scratch copy | each caught, by the lines above |
+| `tests/check-bench-entry.sh` | ok |
+| `tests/check-ci-map.sh`, `tests/check-runbook-index.sh` | ok |
+| `scripts/ios-device.sh --selftest` | ok (65 cases) |
+| the lock run cases and their two mutants, extracted | ok; on main both cases fail as above |
+| `tests/check-bounded-run.sh`, `scripts/ios-sim.sh selftest`, `tests/check-ci-parity.sh` | see the report |
+| `tests/check-gate-parallel.sh`, `tests/check-require-guards.sh`, the whole `tests/check-bench.sh` (with its time on main and on the branch, `uptime` each) | the hold script, `hold-TASK221s3.sh` |
+
+### Files outside the card's list
+
+- **`scripts/lib/supervise.c`, `tests/supervise/supervise_test.c`,
+  `tests/check-supervise.sh`**: the parent-death watch the card's "What remains" names,
+  its case and its two mutants.
+- **`scripts/ios-sim.sh`**: the slice 3 caller "What remains" named (only the launch call sites,
+  their helpers and a dead `bench_on_signal`).
+- **`scripts/pins.sh`**: its dead `bench_on_signal` and the comment naming
+  `bench_undefer` (two lines), so no deleted name is left in `scripts/`.
+
 ## What remains
 
-- **Slice 3: the lock run and the deletions.** `bench_lock_run` through `sv_run`, and the
-  supervisor's parent-death watch. Today's callers of what slice 3 deletes, outside
-  `common.sh` and `lock.sh`, as `git grep` shows them:
-  - **`bench_spawn`, `bench_spawn_running`, `bench_await`:** `scripts/ios-sim.sh` (the
-    simulator launch and its log stream, lines 1638 to 1809). `ios-sim.sh` moves in slice 3.
-  - **`bench_poll_end`, `bench_lock_stop_child`:** `scripts/bench/bench.sh`'s
-    `bench_on_signal`.
-  - **`bench_stop_groups`:** named in comments in `scripts/lib/bounded.py`.
-  - **The rest** (`bench_poll*`, `bench_spawn_id`, `bench_spawn_read`,
-    `bench_spawn_forget`, `bench_spawned`, `bench_watch*`, `bench_group(s)_alive`,
-    `bench_signal_group`, `bench_end_group`, `bench_proc_read`, `bench_proc_same`,
-    `bench_untold`, `BENCH_SPAWNED`, and in `lock.sh` `bench_lock_hold_untold` and the
-    start-time half of `bench_lock_untold_*`): only `common.sh`, `lock.sh` and the tests that
-    exercise them (`check-bench`'s `t_core_id`, `t_cant_tell`, `t_poll_end_reaped`, and
-    `check-bounded-run`'s nap case).
-  - **Kept:** `bench_nap` and `bench_now`, for `snap.sh`.
+- **The stale comments in `scripts/test.sh`** (lines 25 and 110 name `bench_spawn`),
+  for the card that may touch it (#761), and `CLAUDE.md`'s freeze rule, whose
+  primitives are now deleted.
+- **The once-only measurement** of `check-bench` (before and after) and the whole
+  `check-bench`, `check-gate-parallel` and `check-require-guards` runs: the hold
+  script `hold-TASK221s3.sh`; their results are recorded here from its log.
