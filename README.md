@@ -86,6 +86,8 @@ this fork; other platforms are unmaintained (see
 
 * [doc/010_index.md](doc/010_index.md): the user documentation. It comes
   from upstream and is updated as features are removed.
+* [FORK.md](FORK.md): where the fork came from, the `upstream` remote and
+  the sync policy.
 * [docs/README.md](docs/README.md): a map of the repository for working on
   the code, with the plans and decision records.
 
