@@ -681,16 +681,16 @@ The orchestrator runs the hold script. The base is the parent slice, `task126s4`
 
 | Check | Result |
 |---|---|
-| base and branch | to be filled from the hold's summary |
-| `make ref_metal`, `make`, `make test` | to be filled |
-| `tests/check-ref-metal.sh`, with segment 7.88's mutant counts | to be filled |
-| every stock scenario outside `rtprimary-*`, `rt-water-half`, `rt-water-entities-half` and `rt-water-ss-third`, byte-identical to the parent | to be filled |
-| the 20 RT-primary records, byte-identical to the parent | to be filled |
-| `rt-water-half`, `rt-water-entities-half` and `rt-water-ss-third`, three runs each identical, and different from `rt-water`, `rt-water-entities` and `rt-water` | to be filled |
-| the `r_rt_stats 2` water line at `r_rt_water_scale 0.5`, with its fallback count | to be filled |
-| the water lines with a reflected pixel, at `r_rt_water_scale 0.5` | to be filled |
-| the `r_rt_stats 2` water lines of `rt-water-ss-third` (screen space, divisor 3), with a reflected pixel and the fallback count | to be filled |
-| the live run: both paths below scale 1, the blur, no validation or pipeline error | to be filled |
+| base and branch | branch `81066ff2`, base the parent slice, `task126s4` (#814) (#815, "The hold") |
+| `make ref_metal`, `make`, `make test` | exit 0, each; `make test` 591 tests, 0 failed (#815) |
+| `tests/check-ref-metal.sh`, with segment 7.88's mutant counts | ok; segment 7.88 31 kernel pins with 36 kernel mutants and 9 back-end and scene mutants, segment 7.85 104 checks and 16 mutants, segment 20 55 kernel calls (#815) |
+| every stock scenario outside `rtprimary-*`, `rt-water-half`, `rt-water-entities-half` and `rt-water-ss-third`, byte-identical to the parent | 32 of 32, the 10 `rt-*` among them (#815) |
+| the 20 RT-primary records, byte-identical to the parent | 20 of 20 (#815) |
+| `rt-water-half`, `rt-water-entities-half` and `rt-water-ss-third`, three runs each identical, and different from `rt-water`, `rt-water-entities` and `rt-water` | each three runs identical, each different from its scale-1 scenario (#815) |
+| the `r_rt_stats 2` water line at `r_rt_water_scale 0.5`, with its fallback count | every line below scale 1 carries the traced part; `rt-water-half` 0.182 % fallbacks (#815) |
+| the water lines with a reflected pixel, at `r_rt_water_scale 0.5` | every line reflects something (#815) |
+| the `r_rt_stats 2` water lines of `rt-water-ss-third` (screen space, divisor 3), with a reflected pixel and the fallback count | every line traced at 213x160 and reflecting something; 0.266 % fallbacks (#815) |
+| the live run: both paths below scale 1, the blur, no validation or pipeline error | not run as written: its console `demomap` stops at `CM_InlineModel: bad number`, on the parent's build too (#816). In its place `rt-water-half`, `rt-water-ss-third` and `rt-water` were recorded through `pins.sh` with `MTL_DEBUG_LAYER=1`: 0 validation or pipeline errors, allocation lines at 320x240 and 213x160 (#815) |
 
 ## Slice 6: the `r_rt_stats 1` counts, AO's fallback, the device line, E and H
 
@@ -910,19 +910,22 @@ spec ACCEPT-WITH-FINDINGS (I1, N1 to N4).
 ### The hold of slice 6 (M6, under the timing lock)
 
 The orchestrator runs the hold script. The base is the parent slice, `task126s5` at `81066ff2`.
+Two holds ran: the first at `36fc53e6`, the second (`hold-T126s6r2.sh`, round 2 below) at `dc3f29fd`.
+Each cell gives the first, then the second. The first's results are in "Hold, round 2" below, the
+second's in #817's body ("The hold").
 
 | Check | Result |
 |---|---|
-| base and branch | to be filled from the hold's summary |
-| `make ref_metal`, `make`, `make test` | to be filled |
-| `tests/check-ref-metal.sh`, with segments 5.5, 7.89 and 20's counts (round 1: 245 checks and 22 rule mutants, 18 mutants, the sun's 721 checks) | to be filled |
-| every stock scenario outside `rtprimary-*`, `rt-all-e` and `rt-all-h` (every `rt-ao*` among them), byte-identical to the parent | to be filled |
-| the 20 RT-primary records, byte-identical to the parent | to be filled |
-| `rt-all-e` and `rt-all-h`, three runs each on `demo1.dm2` and on `water.dm2`, each identical to itself | to be filled |
-| the `r_rt_stats 1` lines of `rt-all-e` and `rt-all-h`: each size-change line once per effect, and the summary's totals equal to the sum of the `r_rt_stats 2` lines' | to be filled |
-| the invariant in E for the shadows: masked pixels within 1/255 on every frame | to be filled |
-| the invariant in E for the sun (round 1, `r_rt_sun_show 1`'s mask): masked pixels within 1/255 on every frame | to be filled |
-| the live run under the validation layer: each scale changed once, each size-change line printed once; the device line not printed on this host | to be filled |
+| base and branch | first: branch `36fc53e6`; second: branch `dc3f29fd`; base `task126s5` at `81066ff2` for both (#817) |
+| `make ref_metal`, `make`, `make test` | both: exit 0, each (round 2 below; #817) |
+| `tests/check-ref-metal.sh`, with segments 5.5, 7.89 and 20's counts (round 1: 245 checks and 22 rule mutants, 18 mutants, the sun's 721 checks) | both: ok. Second: segment 5.5 245 checks and 22 rule mutants, segment 7.89 4 pins with 18 mutants, segment 20 57 kernel calls, the sun's 726 checks with `test_up_lines_sum` (#817; round 2 below) |
+| every stock scenario outside `rtprimary-*`, `rt-all-e` and `rt-all-h` (every `rt-ao*` among them), byte-identical to the parent | both: 35 of 35 (round 2 below; #817), 13 `rt-*` and both `rt-ao*` among them in the second (#817) |
+| the 20 RT-primary records, byte-identical to the parent | both: 20 of 20 (round 2 below; #817) |
+| `rt-all-e` and `rt-all-h`, three runs each on `demo1.dm2` and on `water.dm2`, each identical to itself | both: three runs identical on both demos (round 2 below; #817) |
+| the `r_rt_stats 1` lines of `rt-all-e` and `rt-all-h`: each size-change line once per effect, and the summary's totals equal to the sum of the `r_rt_stats 2` lines' | first: the sun's and the water's sums one frame short, read line by line, which was the hold misreading torn lines (round 2 below); second: the totals equal the sums for all four effects in E and in H, the sun in E 355068 fallbacks of 211353600 pixels over 688 lines (#817) |
+| the invariant in E for the shadows: masked pixels within 1/255 on every frame | first: 0 changed pixels (round 2 below); second: `changed 0..0`, 23 of 23 frames inside the band (#817) |
+| the invariant in E for the sun (round 1, `r_rt_sun_show 1`'s mask): masked pixels within 1/255 on every frame | first: 0 changed pixels (round 2 below); second: `changed 0..0`, 23 of 23 frames inside the band (#817) |
+| the live run under the validation layer: each scale changed once, each size-change line printed once; the device line not printed on this host | first: the demo never played, so no event saw a world view (round 2 below; #816); second: each size-change line printed once in its own event (AO's at the start, then the shadows', the sun's, AO's at 1/3 and the water's), the map change printed the summary totals, no device line, 0 validation or pipeline errors (#817) |
 
 ### Hold, round 2
 
@@ -982,4 +985,4 @@ It found three faults.
 | the four mutants of `test_up_lines_sum` | 2, 3, 2 and 4 checks failed |
 | the first hold's `rt-all-e` stats log, read line by line | the sun 354398 of 211046400, the water 11036 of 211046400 |
 | the same log, rejoined | each of the four effects equal to its summary total |
-| the second hold | to be filled from `hold-T126s6r2.sh`'s summary |
+| the second hold | at `dc3f29fd`: every check passed, each cell of the slice 6 hold table above (#817, "The hold") |
