@@ -373,9 +373,10 @@ In one hold on the code of the final commit (`7fe879bd9763`; main merged: yes (m
   emitters do.
 - **A stale lightmap texture id on reloading the same map.** `RM_RTDir_Lights` returns early when the world
   pointer and the name match, so `brec_lmtex` could name a freed texture. The kernel then reads none, so the bounce
-  goes dark and nothing is read out of bounds. This is a follow-up, not fixed here.
+  goes dark and nothing is read out of bounds. Fixed by [FIX197](FIX197.md): the key holds the lightmap array.
 - **Mutant names.** The kernel mutants are caught by the whole-body pin of `rm_rtdir_bounce` and
-  `rm_rtdir_tri_lm`, so their names describe what they would break, not which check refuses them.
+  `rm_rtdir_tri_lm`, so their names describe what they would break, not which check refuses them. Fixed by
+  [FIX197](FIX197.md): each mutant is refused by the check its name says.
 
 ## Left for later rows (slice 2)
 

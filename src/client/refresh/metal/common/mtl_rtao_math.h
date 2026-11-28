@@ -423,6 +423,28 @@ mtl_rtao_up_ao(mtl_rtao_up_t u)
 }
 
 /*
+ * TASK126 slice 6: 1 where mtl_rtao_up_ao falls back, to the world
+ * pixels' mean or to 1: no traced pixel that is a world pixel on the
+ * pixel's surface has a weight above 0 (its ws is 0). For the count
+ * alone; the AO is mtl_rtao_up_ao's either way.
+ */
+static inline int
+mtl_rtao_up_fallback(mtl_rtao_up_t u)
+{
+	int i;
+
+	for (i = 0; i < 4; i++)
+	{
+		if (u.world[i] && u.same[i] && (u.w[i] > 0.0f))
+		{
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+/*
  * The factor the lightmap term takes (design section 2): the AO clamped
  * to [floor, 1], floor being r_rt_ao_min as rm_rtao_floor reads it (0 to
  * 1). An AO that is not finite counts as 1.

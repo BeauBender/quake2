@@ -153,6 +153,7 @@ static id<MTLComputePipelineState> trace_lo_pipe, trace_ws_lo_pipe, compact_lo_p
 static int lo_refused;
 static unsigned slot_div[RMB_FRAMES_IN_FLIGHT];                 /* the view's divisor */
 static unsigned long slot_tw[RMB_FRAMES_IN_FLIGHT], slot_th[RMB_FRAMES_IN_FLIGHT];  /* its traced size */
+static unsigned long slot_w[RMB_FRAMES_IN_FLIGHT], slot_h[RMB_FRAMES_IN_FLIGHT];    /* TASK126 slice 6: the drawn size */
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTW_SET(slot, obj) \
@@ -807,6 +808,8 @@ rmb_rtw_read(void)
 		s->div = slot_div[k];
 		s->tw = slot_tw[k];
 		s->th = slot_th[k];
+		s->w = slot_w[k];
+		s->h = slot_h[k];
 		s->fallbacks = c[RMB_RTW_C_FALLBACK];
 		s->ms = s->compact_ms = s->trace_ms = s->span_ms = -1;
 
@@ -1383,6 +1386,8 @@ rmb_rtw_trace(id<MTLTexture> target, id<MTLTexture> depth, id<MTLTexture> normal
 		slot_div[slot] = prep_div;
 		slot_tw[slot] = (prep_div > 1) ? (unsigned long)t_refl_lo.width : (unsigned long)w;
 		slot_th[slot] = (prep_div > 1) ? (unsigned long)t_refl_lo.height : (unsigned long)h;
+		slot_w[slot] = (unsigned long)w;
+		slot_h[slot] = (unsigned long)h;
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
 			atomic_store(&slot_done[slot], fno);

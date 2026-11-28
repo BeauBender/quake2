@@ -151,4 +151,58 @@ unsigned rm_rtt_hist_take_at(rm_rtt_hist_t *h, const rm_rtt_view_t *t, unsigned 
 int rm_rtt_scale_line_format(const char *effect, char *buf, size_t len);
 int rm_rtt_traced_format(unsigned w, unsigned h, unsigned long fallbacks, char *buf, size_t len);
 
+/*
+ * TASK126 slice 6: one effect's upsample, as its r_rt_stats lines report
+ * it. tw x th is the traced size of the effect's last frame below divisor
+ * 1 (0 x 0 before one, and after a frame at divisor 1, which upsamples
+ * nothing); fallbacks and pixels are the totals of the frames below
+ * divisor 1 since the map loaded: the upsample's fallbacks and the drawn
+ * pixels it wrote. frame is the number of the newest frame handed over
+ * (0 before one): a back end hands its completed frames over in slot
+ * order, not frame order, so a frame older than it is judged for the
+ * totals alone. from is the number of the map's first frame: a frame
+ * numbered below it was encoded for an earlier map and still in flight
+ * when this one loaded, and is not this map's. Zeroed, it is an effect
+ * that has upsampled nothing.
+ */
+typedef struct
+{
+	unsigned long tw, th;
+	unsigned long long fallbacks, pixels;
+	unsigned long frame, from;
+} rm_rtt_up_t;
+
+/*
+ * One frame's stats of the effect: its number (rmb_frame_compute's),
+ * divisor (0 is 1), traced size, drawn pixels and fallbacks. Below
+ * divisor 1 the frame is added to the totals. A frame older than the
+ * newest one handed over adds to the totals and nothing else: 0. A newer
+ * one: 1 when its traced size is not the last frame's (the size-change
+ * line is due), else 0; at divisor 1 the traced size is forgotten and
+ * nothing is added: 0. So the line is due once per change of the traced
+ * size, in frame order, whatever order the frames are handed over in.
+ */
+int rm_rtt_up_frame(rm_rtt_up_t *u, unsigned long frame, unsigned div, unsigned long tw, unsigned long th,
+		unsigned long pixels, unsigned long fallbacks);
+
+/*
+ * A map loaded, its first frame numbered from (rmb_frame_next): the totals
+ * start again and a frame numbered below from is not added to them; the
+ * traced size is kept, so the line is not printed again for it.
+ */
+void rm_rtt_up_map(rm_rtt_up_t *u, unsigned long from);
+
+/*
+ * The lines, without a newline; each 1 when it fits in len, 0 with buf
+ * empty otherwise. The r_rt_stats 1 line of a frame whose traced size
+ * changed: "ref_metal: r_rt_stats: upsample: <effect> TWxTH of WxH, F
+ * fallbacks", F that frame's. The effect's line of the r_rt_stats 1 map
+ * summary: "ref_metal: rt: <map>: upsample: <effect> F fallbacks of P
+ * upsampled pixels (S %)", S F over P in percent, to three places; 0,
+ * buf empty, for an effect that upsampled no pixel.
+ */
+int rm_rtt_up_line_format(const char *effect, unsigned long tw, unsigned long th, unsigned long w, unsigned long h,
+		unsigned long fallbacks, char *buf, size_t len);
+int rm_rtt_up_total_format(const char *map, const char *effect, const rm_rtt_up_t *u, char *buf, size_t len);
+
 #endif /* RM_RTTEMPORAL_H */

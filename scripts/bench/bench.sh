@@ -91,21 +91,11 @@ bench_on_signal() {
 	# a subshell asks, since a failed redirection ends dash.
 	if (: >&8) 2> /dev/null; then exec 2>&8; fi
 	bench_lock_stop_child
-	# A bounded command the stop could not tell about (status 2: it leads
-	# no group and ps gives no answer, so nothing was sent) may still run:
-	# this shell stays, and so the lock it runs under, while it may
-	# (bench_lock_hold_untold, as bench_lock_stop_child does; FIX181). Its
-	# renewed stop takes the bounded command's grace, as the stop above
-	# does, not the lock's: a lock shell stopping this shell gives it the
-	# lock's grace, which is longer (FIX181, round 1).
-	# It is recorded in the lock state first (FIX184), so a lock shell that
-	# KILLs this shell keeps the lock while it may run.
-	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then
-		_os_r=0
-		bench_stop_group "$BENCH_BOUNDED_PID" "" "${BENCH_BOUNDED_REAPED:-}" || _os_r=$?
-		if [ "$_os_r" -eq 2 ]; then bench_record_untold "$BENCH_BOUNDED_PID"; fi
-		if [ "$_os_r" -eq 2 ]; then bench_lock_hold_untold "$BENCH_BOUNDED_PID" "${BENCH_STOP_GRACE:-10}"; fi
-	fi
+	# A bounded command runs under its supervisor (TASK221): the stop sends
+	# it TERM and waits for it. A group it could not empty (its 126) is
+	# recorded in the lock state first (FIX184), so the lock is kept while
+	# that group has a member, whatever ends this shell.
+	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group "$BENCH_BOUNDED_PID" || :; fi
 	exit "$1"
 }
 

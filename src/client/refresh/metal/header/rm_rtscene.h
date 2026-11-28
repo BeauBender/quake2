@@ -53,6 +53,23 @@ int RM_RT_SceneReady(void);
 unsigned RM_RT_Carried(void);
 
 /*
+ * TASK126 slice 6: one frame's stats slot of a scaled effect, from the
+ * effect's scene as it reads them, in slot order: its frame number,
+ * divisor, traced size, drawn size and the upsample's fallbacks, kept in
+ * the effect's rm_rtt_up_t, which judges the frames in frame order. Under
+ * r_rt_stats 1 a frame whose traced size changed prints
+ * "ref_metal: r_rt_stats: upsample: <effect> TWxTH of WxH, F fallbacks",
+ * and the map's summary prints each effect's totals (rm_rtt_up_total_format).
+ */
+#define RM_RT_UP_SHADOWS 0
+#define RM_RT_UP_SUN 1
+#define RM_RT_UP_AO 2
+#define RM_RT_UP_WATER 3
+#define RM_RT_UP_N 4
+void RM_RT_UpFrame(int effect, unsigned long frame, unsigned div, unsigned long tw, unsigned long th, unsigned long w,
+		unsigned long h, unsigned long fallbacks);
+
+/*
  * RT3 (TASK55), rm_rtshadowscene.c: the dynamic-light shadows. Init and
  * Shutdown with RM_RT_Init and the release of the ray-tracing objects;
  * Wanted: r_rt_shadows asks for the structures (rm_rt_wanted); MapBuilt:

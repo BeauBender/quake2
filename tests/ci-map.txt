@@ -99,6 +99,7 @@ product .shellcheckrc
 fast check-autorelease-pool.sh
 fast check-bench-quake2.sh
 fast check-bsp-loader.sh
+fast check-build-deps.sh
 fast check-card-acceptance.sh
 fast check-card-close-labels.sh
 fast check-ci-map.sh

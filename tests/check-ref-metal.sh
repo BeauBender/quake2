@@ -62,7 +62,10 @@
 #     slices 1 and 2), with nine mutants of the header it must fail, the header
 #     compiled as Metal where xcrun metal is there; then the sun's kernels at
 #     r_rt_sun_scale (slice 3, rm_rtsun_lo.metal) pinned as text with their
-#     mutants, compiled where xcrun metal is there,
+#     mutants, compiled where xcrun metal is there; and slice 6's AO fallback
+#     count (mtl_rtao_up_fallback against rm_rtao_test, rm_rtao_upsample's
+#     count pinned so no pixel reads it), the r_rt_stats 1 upsample lines'
+#     wiring and the line on a device without ray tracing, with mutants,
 #     tests/metal/rm_rtmodel_test.c, the rules of RT-primary's light on
 #     alias models (rm_rtmodel.c and common/mtl_rtm_math.h, TASK191; eighteen
 #     scratch mutants of the two must fail it, and all eighteen must),
@@ -336,10 +339,15 @@ fi
 # the light set's flags not masked, a history that skipped a view still read (the early return), a
 # history made again still read, the views' number restarting on a map load; TASK126 slice 2's: the
 # scale reason dropped, the divisor not compared, the divisor forgotten when a history is made again
-# (so the history remade at an effect's new size no longer says why). Each must compile (a
+# (so the history remade at an effect's new size no longer says why); TASK126 slice 6's: the
+# upsample's size change judged on the width alone, the size not forgotten at divisor 1, a frame's
+# pixels not added, a map load forgetting the size, the empty total printed; its review round 1's: the
+# frame-order test dropped, so a frame handed over late moves the size back; the map's first frame not
+# kept, and its test dropped, so the last map's frames in flight join the new map's totals. Each must compile (a
 # mutant the compiler refuses tests nothing, review TASK59 slice 1, I1) and fail the test.
 rtt_mutants=0
-for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep scalereason scalecmp scalekeep; do
+for m in mat lights depth off reset frameend mapload lightsmask histgap histreset seqkeep scalereason scalecmp scalekeep \
+	upcmp upforget upadd upmapsize upempty uporder upfrom upfromkeep; do
 	rtt_tree "${tmp:?}/rttm"
 	h=${tmp:?}/rttm/src/client/refresh/metal/common/mtl_rtt_math.h
 	c=${tmp:?}/rttm/src/client/refresh/metal/rm_rttemporal.c
@@ -361,6 +369,15 @@ for m in mat lights depth off reset frameend mapload lightsmask histgap histrese
 		scalereason) sed 's/r |= RM_RTT_RESET_SCALE;/r |= 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		scalecmp) sed 's/(h->div != d)/((h->div != d) \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 		scalekeep) sed 's/	h->valid = 0;/	h->valid = 0; h->div = 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upcmp) sed 's/changed = (tw != u->tw) || (th != u->th);/changed = (tw != u->tw);/' "$rm_dir/rm_rttemporal.c" \
+			> "$c" ;;
+		upforget) sed 's/		u->tw = u->th = 0;/		(void)0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upadd) sed 's/	u->pixels += pixels;/	(void)pixels;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upmapsize) sed 's/^	u->pixels = 0;$/	u->pixels = 0; u->tw = 0;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upempty) sed 's/	if (!u->pixels)$/	if (!u->pixels \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		uporder) sed 's/^	if (frame < u->frame)$/	if ((frame < u->frame) \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upfrom) sed 's/^	if (frame < u->from)$/	if ((frame < u->from) \&\& 0)/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
+		upfromkeep) sed 's/^	u->from = from;$/	(void)from;/' "$rm_dir/rm_rttemporal.c" > "$c" ;;
 	esac
 	if cmp -s "$rm_dir/common/mtl_rtt_math.h" "$h" && cmp -s "$rm_dir/rm_rttemporal.c" "$c"; then
 		bad "the temporal mutant ($m) changed nothing"
@@ -709,7 +726,30 @@ if [ -n "$rtdir" ]; then
 		fi
 	done
 fi
-seg 7.6 ", $rtdir_mutants fit mutants, $rtdir_sky sky mutants and $rtdir_bounce bounce mutants refused"
+# FIX197: the reload key with the lightmap array's term dropped (lmtex-dropped) must fail the reload test
+# by its own line, a same-name reload at the same address with a new array kept
+rtdir_reload=0
+if [ -n "$rtdir" ]; then
+	sed 's/ && (last_lmtex == lmtex);/ \&\& ((last_lmtex == lmtex) || 1);/' < "$rm_dir/rm_rtdir.c" > "${tmp:?}/dirm/rm_rtdir.c"
+	if cmp -s "$rm_dir/rm_rtdir.c" "${tmp:?}/dirm/rm_rtdir.c"; then
+		bad "the reload mutant (lmtex-dropped) changed nothing"
+	# shellcheck disable=SC2086 # flags is a word list
+	elif ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -DRM_RTFX_HOST -Itests/metal -I"$rm_dir" \
+		-o "${tmp:?}/dirm/t" tests/metal/rm_rtdir_test.c "${tmp:?}/dirm/rm_rtdir.c" "$rm_dir/rm_rtgate.c" \
+		"$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+		"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/dirm.out" 2>&1; then
+		cat "${tmp:?}/dirm.out"
+		bad "the reload mutant (lmtex-dropped) does not compile"
+	elif "${tmp:?}/dirm/t" > "${tmp:?}/dirm.out" 2>&1; then
+		bad "tests/metal/rm_rtdir_test.c passes the reload mutant (lmtex-dropped)"
+	elif ! grep -qxF 'reload: a same-name reload with a new lightmap array is not built again' "${tmp:?}/dirm.out"; then
+		cat "${tmp:?}/dirm.out"
+		bad "tests/metal/rm_rtdir_test.c refuses the reload mutant (lmtex-dropped) for another reason"
+	else
+		rtdir_reload=1
+	fi
+fi
+seg 7.6 ", $rtdir_mutants fit mutants, $rtdir_reload reload mutant, $rtdir_sky sky mutants and $rtdir_bounce bounce mutants refused"
 
 # RT-primary's light on alias models (TASK191 slice 1, PM9): rm_rtmodel.c and common/mtl_rtm_math.h, held
 # to gl1's model colour (rm_pure.c) and to the G-buffer's split (rm_gbuf.c), with rm_rtshadow.c for the
@@ -922,8 +962,8 @@ else
 fi
 seg 10 "; ray-tracing gate ${rtg:-host test}"
 
-# TASK190 slice 3: the menu's copy of RT-primary's scaler row (vidrules.c) against the renderer's (rm_rtgate.c,
-# with rm_metalfx.c's view size), one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must
+# TASK190 slice 3: the menu's copy of RT-primary's scaler rule (vidrules.c) against the renderer's (rm_rtgate.c,
+# with rm_metalfx.c's view size and the row of common/rm_pres_table.h), one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must
 # refuse: the renderer's row dropped; the renderer's, then the menu's, capability rule dropped; the renderer's,
 # then the menu's, size rule dropped; the menu's debug-view rule dropped (round 2, N2)
 pmbuild() {
@@ -949,7 +989,13 @@ if [ -n "$pm" ]; then
 	for pmm in row rcaps mcaps rsize msize mshow; do
 		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c "${tmp:?}/pmm/"
 		case $pmm in
-			row) sed '/{ "r_metalfx", 2\.0f },/d' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
+			# the row is in common/rm_pres_table.h (TASK237): a copy without it, included first in the renderer's file alone
+			row) sed 's/{ "r_metalfx", 2\.0f },//' "$rm_dir/common/rm_pres_table.h" > "${tmp:?}/pmm/rows.h"
+				if cmp -s "$rm_dir/common/rm_pres_table.h" "${tmp:?}/pmm/rows.h"; then
+					cp "$rm_dir/rm_rtgate.c" "${tmp:?}/pmm/rm_rtgate.c"
+				else
+					{ printf '#include "%s"\n' "${tmp:?}/pmm/rows.h"; cat "$rm_dir/rm_rtgate.c"; } > "${tmp:?}/pmm/rm_rtgate.c"
+				fi ;;
 			# each keeps its parameter read, so -Werror's unused-parameter does not refuse it before the test runs
 			rcaps) sed 's/(!temporal || show))/((void)temporal, show))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/pmm/rm_rtgate.c" ;;
 			mcaps) sed 's/if (!(modemask \& VIDMFX_TEMPORAL))/if (!(modemask | VIDMFX_TEMPORAL))/' src/client/menu/vidrules.c \
@@ -974,6 +1020,81 @@ if [ -n "$pm" ]; then
 	[ "$pm_mutants" = 6 ] || bad "tests/metal/rm_pres_menu_test.c refuses $pm_mutants of its 6 mutants"
 fi
 seg 10.2 "; menu and renderer scaler rule ${pm:-host test}, $pm_mutants parity mutants refused"
+
+# TASK237: the presentation overlay as the menu shows it (vidrules.c) against the one the renderer runs
+# (rm_rtgate.c), one binary over both. The two read one table, common/rm_pres_table.h, each compiled into its
+# own module, so the test holds the rest of each side's rule in step: the cvar each menu row names, which modes
+# run where, the enums. ppbuild <rtgate dir> <vidrules.c> <test.c> <out>; the test finds its headers as
+# "header/..." through -I, so a scratch copy of it builds too. Mutants it must refuse, each on one side only: a
+# changed copy of a header included first in one file (its guard keeps the tree's copy out of that file alone),
+# for a row added to RT-primary's table in the renderer's file, the same row in the menu's file, RM_PRES_RETRO
+# changed in the renderer's, VIDPRES_RETRO changed in the menu header the test reads; and the ray-tracing rule
+# of a mode dropped from the renderer's rm_pres_decide, then from the menu's PresInForce
+ppbuild() {
+	# shellcheck disable=SC2086 # flags and fxhost are word lists
+	$cc $flags $fxhost -Wno-missing-field-initializers -I"$rm_dir" -Isrc/client/menu -o "$4" "$3" "$1/rm_rtgate.c" \
+		"$rm_dir/rm_rtfx.c" "$2" -lm
+}
+pp=""
+pp_mutants=0
+pptab=$rm_dir/common/rm_pres_table.h
+if ! ppbuild "$rm_dir" src/client/menu/vidrules.c tests/metal/rm_pres_parity_test.c "${tmp:?}/rm_pres_parity_test" \
+	> "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_pres_parity_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_pres_parity_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_pres_parity_test.c failed: the menu and the renderer disagree on a presentation's overlay"
+else
+	pp=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_pres_parity_test: //')
+	case $pp in *", 0 failed") ;; *) bad "tests/metal/rm_pres_parity_test.c printed no result line"; pp="";; esac
+fi
+if [ -n "$pp" ]; then
+	mkdir "${tmp:?}/ppm"
+	for ppm in rrow mrow renum menum rneed mneed; do
+		cp "$rm_dir/rm_rtgate.c" src/client/menu/vidrules.c tests/metal/rm_pres_parity_test.c "${tmp:?}/ppm/"
+		# hdr: the header whose changed copy (ppm/hdr.h) is included first in the file into; both empty for a source mutant
+		hdr=""
+		into=""
+		case $ppm in
+			rrow | mrow) hdr=$pptab
+				sed 's/{ "r_rt_direct", 1\.0f },/{ "r_rt_direct", 1.0f }, { "r_rt_gunshadow", 0.0f },/' "$hdr" > "${tmp:?}/ppm/hdr.h"
+				into=rm_rtgate.c
+				[ "$ppm" = mrow ] && into=vidrules.c ;;
+			renum) hdr=$pptab
+				into=rm_rtgate.c
+				sed 's/^#define RM_PRES_RETRO 2$/#define RM_PRES_RETRO 5/' "$hdr" > "${tmp:?}/ppm/hdr.h" ;;
+			menum) hdr=src/client/menu/header/vidrules.h
+				into=rm_pres_parity_test.c
+				sed 's/^#define VIDPRES_RETRO 2$/#define VIDPRES_RETRO 5/' "$hdr" > "${tmp:?}/ppm/hdr.h" ;;
+			rneed) sed 's/else if (rm_pres_needs_rt((int)requested) \&\& (path == RM_RTG_NONE))/else if (0 \&\& (path == RM_RTG_NONE))/' \
+				"$rm_dir/rm_rtgate.c" > "${tmp:?}/ppm/rm_rtgate.c" ;;
+			mneed) sed 's/(available || !rm_pres_needs_rt(pres))/(available || ((void)pres, 1))/' src/client/menu/vidrules.c \
+				> "${tmp:?}/ppm/vidrules.c" ;;
+		esac
+		if [ -n "$into" ]; then
+			{ printf '#include "%s"\n' "${tmp:?}/ppm/hdr.h"; cat "${tmp:?}/ppm/$into"; } > "${tmp:?}/ppm/into.c"
+			mv "${tmp:?}/ppm/into.c" "${tmp:?}/ppm/$into"
+		fi
+		if [ -n "$hdr" ] && cmp -s "$hdr" "${tmp:?}/ppm/hdr.h"; then
+			bad "the overlay-parity mutant ($ppm) changed nothing"
+		elif [ -z "$hdr" ] && cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/ppm/rm_rtgate.c" &&
+			cmp -s src/client/menu/vidrules.c "${tmp:?}/ppm/vidrules.c"; then
+			bad "the overlay-parity mutant ($ppm) changed nothing"
+		elif ! ppbuild "${tmp:?}/ppm" "${tmp:?}/ppm/vidrules.c" "${tmp:?}/ppm/rm_pres_parity_test.c" "${tmp:?}/ppm/t" \
+			> "${tmp:?}/ppm.out" 2>&1; then
+			cat "${tmp:?}/ppm.out"
+			bad "the overlay-parity mutant ($ppm) does not compile"
+		elif "${tmp:?}/ppm/t" > "${tmp:?}/ppm.out" 2>&1; then
+			bad "tests/metal/rm_pres_parity_test.c passes the overlay-parity mutant ($ppm)"
+		else
+			pp_mutants=$((pp_mutants + 1))
+		fi
+		rm -f "${tmp:?}/ppm/hdr.h"
+	done
+	[ "$pp_mutants" = 6 ] || bad "tests/metal/rm_pres_parity_test.c refuses $pp_mutants of its 6 mutants"
+fi
+seg 10.25 "; menu and renderer presentation overlay ${pp:-host test}, $pp_mutants one-sided mutants refused"
 
 # the effect table (TASK179): tests/metal/rm_rtfx_test.c over rm_rtfx.c and rm_rtgate.c, the order every walk
 # takes, each row's switch against the gate's table, and the pipeline rule of rmb_gbuf_pipe3d. fxbuild <dir>
@@ -1067,6 +1188,14 @@ if ! "$pt" "$ptfix/hdr.cfg" --as enhanced > "${tmp:?}/pt.hdr" 2> /dev/null || gr
 elif ! "$pt" "$ptfix/hdr.cfg" 2>&1 | grep -q '^r_hdr: 0 -> 1$'; then
 	bad "$pt --as defaults did not list r_hdr: 0 -> 1 for $ptfix/hdr.cfg"
 fi
+# TASK237: every mode's rows name a macro that the shared table (common/rm_pres_table.h) defines
+for ptm in enhanced:ENHANCED retro:RETRO raytraced:RTPRIMARY; do
+	if ! "$pt" "$ptfix/good.cfg" --as "${ptm%%:*}" > "${tmp:?}/pt.out" 2> /dev/null ||
+		! grep -qx "#define RM_PRES_${ptm#*:}_ROWS \\\\" "${tmp:?}/pt.out" ||
+		! grep -qx "#define RM_PRES_${ptm#*:}_ROWS \\\\" "$rm_dir/common/rm_pres_table.h"; then
+		bad "$pt --as ${ptm%%:*} printed no RM_PRES_${ptm#*:}_ROWS that $rm_dir/common/rm_pres_table.h defines"
+	fi
+done
 for ptbad in badline badname; do
 	if "$pt" "$ptfix/$ptbad.cfg" > "${tmp:?}/pt.out" 2>&1; then
 		bad "$pt accepted $ptfix/$ptbad.cfg"
@@ -1561,7 +1690,8 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	"rm_rtwater.metal rm_rtw_denoise_lo mtl_rtd_rresult" "rm_rtwater.metal rm_rtw_denoise_lo rm_rtw_lo_rok" \
 	"rm_rtwater.metal rm_rtw_up mtl_rtup_bilinear" "rm_rtwater.metal rm_rtw_up mtl_rtup_weights" \
 	"rm_rtwater.metal rm_rtw_up mtl_rtup_value" "rm_rtwater.metal rm_rtw_up rm_rtw_lo_rok" \
-	"rm_rtwater.metal rm_rtw_up mtl_rtup_own"; do
+	"rm_rtwater.metal rm_rtw_up mtl_rtup_own" "rm_rtao.metal rm_rtao_upsample mtl_rtao_up_fallback" \
+	"rm_rtao.metal rm_rtao_upsample rm_rtao_count_fallbacks"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
 	set -- $pair
 	f=$rm_dir/$1 kn=$2 hp=$3
@@ -4011,6 +4141,227 @@ else
 	done
 fi
 seg 7.88 "; water at its scale $wlo_kpins kernel pins with $wlo_kmut kernel mutants${wlo_metal:+ compiled and} refused, $wlo_bmut back-end and scene mutants refused"
+
+# TASK126 slice 6: AO's upsample fallback counted with no pixel changed, the r_rt_stats 1 upsample lines
+# wired, and the line on a device without ray tracing.
+# - mtl_rtao_up_fallback (common/mtl_rtao_math.h) against rm_rtao_test's test_up_fallback, built with the
+#   header given included first (its guard keeps the real one out): two mutants, the surface test and the
+#   weight test dropped, each of which must compile and fail it.
+# - the double-count invariant's rule for the sun at any scale (rm_rtsun_test's test_no_double_count, design
+#   section 5): one mutant of common/mtl_rtsun_math.h, a little of the term at visibility 0. Its upsample's
+#   half (test_up_no_double_count, review round 1): one mutant of common/mtl_rtup_math.h, an empty pixel
+#   taken as visibility 1, which must fail that test with its FAIL line.
+# - rm_rtao_upsample: the fallback taken right after mtl_rtao_up_ao, in the branch that reads the traced
+#   pixels' surfaces; the count at the kernel's end, in word 7; and fell named on those three lines alone,
+#   so nothing the kernel writes can read it. Six mutants, each refused and compiled with xcrun metal:
+#   counted in the fast path too, inverted, never counted, the word moved, the sum not taken, and the AO
+#   made to read the count.
+# - rmb_rtao.m reads the eighth word with the divisor and traced size: three mutants.
+# - each scaled effect's scene hands every stats slot to RM_RT_UpFrame; rm_rtscene.c prints the size-change
+#   line and the summary's totals under r_rt_stats 1 and starts the totals again with the map: three mutants.
+# - rm_rtg_scales_format against rm_rtgate_test (the device test dropped) and its call in rm_main.c
+#   (dropped): two mutants.
+aofb_mut=0 aofb_pins=0 aofb_metal=""
+aofb_build() { # <mtl_rtao_math.h>: 0 when rm_rtao_test builds with mtl_shader_math.h and that header included first
+	# shellcheck disable=SC2086 # flags is a word list
+	$cc $flags -include "$rm_dir/common/mtl_shader_math.h" -include "$1" '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/aofb_t" tests/metal/rm_rtao_test.c \
+		"$rm_dir/rm_rtao.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+		"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1
+}
+if ! aofb_build "$rm_dir/common/mtl_rtao_math.h" || ! "${tmp:?}/aofb_t" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/cc.out" "${tmp:?}/out"
+	bad "tests/metal/rm_rtao_test.c fails with common/mtl_rtao_math.h included first"
+fi
+for m in fbsame fbweight; do
+	case $m in
+		fbsame) sed 's/if (u\.world\[i\] && u\.same\[i\] && (u\.w\[i\] > 0\.0f))/if (u.world[i] \&\& (u.w[i] > 0.0f))/' ;;
+		fbweight) sed 's/if (u\.world\[i\] && u\.same\[i\] && (u\.w\[i\] > 0\.0f))/if (u.world[i] \&\& u.same[i])/' ;;
+	esac < "$rm_dir/common/mtl_rtao_math.h" > "${tmp:?}/aofb_math.h"
+	if cmp -s "$rm_dir/common/mtl_rtao_math.h" "${tmp:?}/aofb_math.h"; then
+		bad "the AO fallback mutant ($m) changed nothing"
+	elif ! aofb_build "${tmp:?}/aofb_math.h"; then
+		cat "${tmp:?}/cc.out"
+		bad "the AO fallback mutant ($m) does not compile, so it tests nothing"
+	elif "${tmp:?}/aofb_t" > "${tmp:?}/out" 2>&1; then
+		bad "tests/metal/rm_rtao_test.c passes the AO fallback mutant ($m)"
+	elif ! grep -q '^FAIL ' "${tmp:?}/out"; then
+		bad "tests/metal/rm_rtao_test.c fails the AO fallback mutant ($m) without a FAIL line"
+	else
+		aofb_mut=$((aofb_mut + 1))
+	fi
+done
+# the double-count invariant's rule for the sun (rm_rtsun_test's test_no_double_count): a mutant that adds a
+# little of the term at visibility 0 must compile and fail it
+sed 's/const float k = vis \* ndotl;/const float k = (vis + 0.001f) * ndotl;/' "$rm_dir/common/mtl_rtsun_math.h" \
+	> "${tmp:?}/aofb_sun.h"
+# shellcheck disable=SC2086 # flags is a word list
+if cmp -s "$rm_dir/common/mtl_rtsun_math.h" "${tmp:?}/aofb_sun.h"; then
+	bad "the sun's double-count mutant changed nothing"
+elif ! $cc $flags -I"$rm_dir/common" -include "$rm_dir/common/mtl_shader_math.h" -include "${tmp:?}/aofb_sun.h" '-DYQ2OSTYPE="host"' \
+	'-DYQ2ARCH="host"' -o "${tmp:?}/aofb_s" tests/metal/rm_rtsun_test.c "$rm_dir/rm_rtsun.c" "$rm_dir/rm_rtshadow.c" \
+	"$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" \
+	"$rm_dir/rm_rttemporal.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "the sun's double-count mutant does not compile, so it tests nothing"
+elif "${tmp:?}/aofb_s" > "${tmp:?}/out" 2>&1 || ! grep -q 'test_no_double_count\|rm_rtsun_test.c:' "${tmp:?}/out"; then
+	bad "tests/metal/rm_rtsun_test.c passes the sun's double-count mutant"
+else
+	aofb_mut=$((aofb_mut + 1))
+fi
+# the upsample's half (test_up_no_double_count): an empty pixel taken as visibility 1 must compile and fail it
+sed 's/^		return neutral;$/		return neutral + 1.0f;/' "$rm_dir/common/mtl_rtup_math.h" > "${tmp:?}/aofb_up.h"
+# shellcheck disable=SC2086 # flags is a word list
+if cmp -s "$rm_dir/common/mtl_rtup_math.h" "${tmp:?}/aofb_up.h"; then
+	bad "the sun upsample's double-count mutant changed nothing"
+elif ! $cc $flags -I"$rm_dir/common" -include "$rm_dir/common/mtl_shader_math.h" -include "${tmp:?}/aofb_up.h" '-DYQ2OSTYPE="host"' \
+	'-DYQ2ARCH="host"' -o "${tmp:?}/aofb_s" tests/metal/rm_rtsun_test.c "$rm_dir/rm_rtsun.c" "$rm_dir/rm_rtshadow.c" \
+	"$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" \
+	"$rm_dir/rm_rttemporal.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "the sun upsample's double-count mutant does not compile, so it tests nothing"
+elif "${tmp:?}/aofb_s" > "${tmp:?}/out" 2>&1 || ! grep -q '^FAIL tests/metal/rm_rtsun_test\.c:[0-9]*: ok_empty$' "${tmp:?}/out"; then
+	bad "tests/metal/rm_rtsun_test.c passes the sun upsample's double-count mutant (an empty pixel at visibility 1)"
+else
+	aofb_mut=$((aofb_mut + 1))
+fi
+aofb_k=$rm_dir/rm_rtao.metal
+aofb_kernel() { # <rm_rtao.metal>: 0 when rm_rtao_upsample takes, counts and isolates the fallback as pinned
+	awk '/^rm_rtao_upsample\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$1" > "${tmp:?}/aofb_body"
+	awk 'prev ~ /^\t\t\t\tao = mtl_rtao_up_ao\(u\);$/ && $0 ~ /^\t\t\t\tfell = mtl_rtao_up_fallback\(u\) \? 1u : 0u;$/ { f = 1 }
+		{ prev = $0 } END { exit !f }' "${tmp:?}/aofb_body" &&
+		[ "$(grep -cxF '	rm_rtao_count_fallbacks(counts, fell);' "${tmp:?}/aofb_body")" = 1 ] &&
+		[ "$(grep -c '[^a-z_]fell[^a-z_]' "${tmp:?}/aofb_body")" = 3 ] &&
+		grep -qx '	uint fell = 0;   /\* TASK126 slice 6: 1 where the AO fell back, for the count alone \*/' "${tmp:?}/aofb_body" &&
+		grep -qxF '#define RM_RTAO_C_FALLBACKS 7' "$1" &&
+		awk '/^rm_rtao_count_fallbacks\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$1" | tr -s ' \t' '  ' |
+		grep -qF 'const uint c_fb = simd_sum(fell);' &&
+		awk '/^rm_rtao_count_fallbacks\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$1" | tr -s ' \t' '  ' |
+		grep -qF 'atomic_fetch_add_explicit(&counts[RM_RTAO_C_FALLBACKS], c_fb, memory_order_relaxed);'
+}
+aofb_compile() { # <rm_rtao.metal>: 0 when it compiles as the Makefile compiles it
+	xcrun -sdk macosx metal -c -I"$rm_dir" "$1" -o "${tmp:?}/aofb.air" > "${tmp:?}/metal.out" 2>&1
+}
+if ! aofb_kernel "$aofb_k"; then
+	bad "rm_rtao.metal: rm_rtao_upsample does not take, count and isolate the fallback as pinned"
+else
+	aofb_pins=$((aofb_pins + 1))
+	if [ -n "$rtp_metal" ]; then
+		if aofb_compile "$aofb_k"; then
+			aofb_metal=1
+		else
+			cat "${tmp:?}/metal.out"
+			bad "rm_rtao.metal does not compile"
+		fi
+	fi
+	for m in fbfast fbinv fbnone fbword fbsum fbpixel; do
+		case $m in
+			fbfast) sed 's/^				ao = u\.ao\[0\];$/				ao = u.ao[0]; fell = 1u;/' ;;
+			fbinv) sed 's/fell = mtl_rtao_up_fallback(u) ? 1u : 0u;/fell = mtl_rtao_up_fallback(u) ? 0u : 1u;/' ;;
+			fbnone) sed 's/rm_rtao_count_fallbacks(counts, fell);/rm_rtao_count_fallbacks(counts, 0u);/' ;;
+			fbword) sed 's/^#define RM_RTAO_C_FALLBACKS 7$/#define RM_RTAO_C_FALLBACKS 6/' ;;
+			fbsum) sed 's/const uint c_fb = simd_sum(fell);/const uint c_fb = fell;/' ;;
+			fbpixel) awk '/^rm_rtao_upsample\(/ { b = 1 } b && /^}/ { b = 0 }
+				b { sub(/^\tao = rint\(ao \* 255\.0f\) \/ 255\.0f;$/, "\tao = fell ? 1.0f : rint(ao * 255.0f) / 255.0f;") } { print }' ;;
+		esac < "$aofb_k" > "${tmp:?}/aofb.metal"
+		if cmp -s "$aofb_k" "${tmp:?}/aofb.metal"; then
+			bad "the AO count's kernel mutant ($m) changed nothing"
+		elif aofb_kernel "${tmp:?}/aofb.metal"; then
+			bad "the AO count's kernel pin passes the mutant ($m)"
+		elif [ -n "$rtp_metal" ] && ! aofb_compile "${tmp:?}/aofb.metal"; then
+			cat "${tmp:?}/metal.out"
+			bad "the AO count's kernel mutant ($m) does not compile, so it tests nothing"
+		else
+			aofb_mut=$((aofb_mut + 1))
+		fi
+	done
+fi
+aofb_back() { # <rmb_rtao.m>: 0 when the back end reads the eighth word with the divisor and the traced size
+	grep -qxF '#define RMB_RTAO_COUNTS 8       /* traced, occluded, at the floor, up, up and occluded, rays, hits, fallbacks (rm_rtao.metal) */' "$1" &&
+		grep -qxF '		s->fallbacks = c[7];' "$1" &&
+		grep -qxF '		slot_div[slot] = (view.div > 1) ? view.div : 1u;' "$1" &&
+		grep -qxF '		slot_tw[slot] = (view.div > 1) ? (unsigned long)t_ao_lo.width : (unsigned long)w;' "$1"
+}
+if ! aofb_back "$rm_dir/rmb_rtao.m"; then
+	bad "rmb_rtao.m does not read the AO's fallbacks with its divisor and traced size"
+else
+	aofb_pins=$((aofb_pins + 1))
+	for m in counts7 word6 div1; do
+		case $m in
+			counts7) sed 's/^#define RMB_RTAO_COUNTS 8 /#define RMB_RTAO_COUNTS 7 /' ;;
+			word6) sed 's/s->fallbacks = c\[7\];/s->fallbacks = c[6];/' ;;
+			div1) sed 's/slot_div\[slot\] = (view\.div > 1) ? view\.div : 1u;/slot_div[slot] = 1u;/' ;;
+		esac < "$rm_dir/rmb_rtao.m" > "${tmp:?}/aofb.m"
+		if cmp -s "$rm_dir/rmb_rtao.m" "${tmp:?}/aofb.m" || aofb_back "${tmp:?}/aofb.m"; then
+			bad "the AO back end's pin passes the mutant ($m)"
+		else
+			aofb_mut=$((aofb_mut + 1))
+		fi
+	done
+fi
+aofb_scenes() { # <rm_rtsunscene.c> <rm_rtscene.c>: 0 when every scaled effect's stats reach the lines
+	for e in "$1:SUN" "$rm_dir/rm_rtshadowscene.c:SHADOWS" "$rm_dir/rm_rtaoscene.c:AO" "$rm_dir/rm_rtwaterscene.c:WATER"; do
+		[ "$(grep -cF "RM_RT_UpFrame(RM_RT_UP_${e##*:}, st[i].frame, st[i].div, st[i].tw, st[i].th, st[i].w, st[i].h, st[i].fallbacks);" \
+			"${e%:*}")" = 1 ] || return 1
+	done
+	[ "$(grep -cxF '	RM_RT_UpMap();' "$2")" = 2 ] &&
+		awk '/^RM_RT_UpFrame\(/ { b = 1 } b && /^}/ { b = 0 } b { print }' "$2" | tr '\n\t' '  ' | tr -s ' ' |
+			grep -qF 'if (rm_rtt_up_frame(&rt_up[effect], frame, div, tw, th, w * h, fallbacks) && r_rt_stats && (r_rt_stats->value >= 1) &&' &&
+		grep -qF 'for (k = 0; (k < RM_RT_UP_N) && r_rt_stats && (r_rt_stats->value >= 1); k++)' "$2" &&
+		grep -qF 'if (rm_rtt_up_total_format(rt_map, rt_up_name[k], &rt_up[k], line, sizeof(line)))' "$2"
+}
+if ! aofb_scenes "$rm_dir/rm_rtsunscene.c" "$rm_dir/rm_rtscene.c"; then
+	bad "a scaled effect's stats do not reach RM_RT_UpFrame, or rm_rtscene.c does not print or restart the totals"
+else
+	aofb_pins=$((aofb_pins + 1))
+	sed '/RM_RT_UpFrame(RM_RT_UP_SUN, /d' "$rm_dir/rm_rtsunscene.c" > "${tmp:?}/aofb_sun.c"
+	if cmp -s "$rm_dir/rm_rtsunscene.c" "${tmp:?}/aofb_sun.c" || aofb_scenes "${tmp:?}/aofb_sun.c" "$rm_dir/rm_rtscene.c"; then
+		bad "the upsample lines' pin passes the mutant (the sun's call dropped)"
+	else
+		aofb_mut=$((aofb_mut + 1))
+	fi
+	for m in nomap stats2; do
+		case $m in
+			nomap) awk '/^RM_RT_Summary\(/ { b = 1 } b && /^}/ { b = 0 } !(b && $0 == "\tRM_RT_UpMap();") { print }' ;;
+			stats2) sed 's/^		(r_rt_stats->value >= 1) &&$/		(r_rt_stats->value >= 2) \&\&/' ;;
+		esac < "$rm_dir/rm_rtscene.c" > "${tmp:?}/aofb_scene.c"
+		if cmp -s "$rm_dir/rm_rtscene.c" "${tmp:?}/aofb_scene.c" || aofb_scenes "$rm_dir/rm_rtsunscene.c" "${tmp:?}/aofb_scene.c"; then
+			bad "the upsample lines' pin passes the mutant ($m)"
+		else
+			aofb_mut=$((aofb_mut + 1))
+		fi
+	done
+fi
+# the device line: the gate's test against a mutant that prints it on every device, and its call in rm_main.c
+sed 's/^	if (rm_rtg_traces(g))$/	if (0 \&\& rm_rtg_traces(g))/' "$rm_dir/rm_rtgate.c" > "${tmp:?}/aofb_rtgate.c"
+# shellcheck disable=SC2086 # flags is a word list
+if cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/aofb_rtgate.c"; then
+	bad "the device line's mutant (the device test dropped) changed nothing"
+elif ! $cc $flags $fxhost -I"$rm_dir" -o "${tmp:?}/aofb_g" tests/metal/rm_rtgate_test.c "${tmp:?}/aofb_rtgate.c" \
+	"$rm_dir/rm_rtfx.c" -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "the device line's mutant does not compile, so it tests nothing"
+elif "${tmp:?}/aofb_g" > "${tmp:?}/out" 2>&1; then
+	bad "tests/metal/rm_rtgate_test.c passes the device line's mutant (the device test dropped)"
+else
+	aofb_mut=$((aofb_mut + 1))
+fi
+aofb_main() { # <rm_main.c>: 0 when the device line is printed right after the gate's
+	awk 'p2 ~ /rm_rtg_format\(&rm_rtg, line, sizeof\(line\)\);$/ && p1 ~ /R_Printf\(PRINT_ALL, "%s\\n", line\);$/ { g = NR }
+		g && (NR > g) && (NR <= g + 4) && /^\tif \(rm_rtg_scales_format\(&rm_rtg, line, sizeof\(line\)\)\)$/ { f = 1 }
+		{ p2 = p1; p1 = $0 } END { exit !f }' "$1"
+}
+if ! aofb_main "$rm_dir/rm_main.c"; then
+	bad "rm_main.c does not print the device line after the gate's"
+else
+	aofb_pins=$((aofb_pins + 1))
+	sed 's/^	if (rm_rtg_scales_format(&rm_rtg, line, sizeof(line)))$/	if (0)/' "$rm_dir/rm_main.c" > "${tmp:?}/aofb_main.c"
+	if cmp -s "$rm_dir/rm_main.c" "${tmp:?}/aofb_main.c" || aofb_main "${tmp:?}/aofb_main.c"; then
+		bad "the device line's pin passes the mutant (its call dropped)"
+	else
+		aofb_mut=$((aofb_mut + 1))
+	fi
+fi
+seg 7.89 "; AO's fallback count and the upsample lines $aofb_pins pins with $aofb_mut mutants${aofb_metal:+ compiled and} refused"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"

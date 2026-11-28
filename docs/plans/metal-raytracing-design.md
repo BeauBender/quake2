@@ -681,7 +681,11 @@ device until RT10 sets defaults per cell, so with the design defaults
 (`r_metalfx 0`, `r_metalfx_scale 0` and every effect scale 1, "The effect
 scales" below) a frame with an effect on is configuration C; with
 `r_metalfx 2` it is configuration A, and no effect is traced below the
-internal size, so no hybrid is on by default.
+internal size, so no hybrid is on by default. As shipped (TASK126), one
+scale is not at its design default: `r_rt_ao_scale` has defaulted to 0.5
+since TASK157, so a frame with the AO on traces the AO alone at 1/2,
+which is E (or, under `r_metalfx 2`, a hybrid) for that one effect; the
+other three scales default to 1.
 
 On model R the ray cost depends only on the traced pixel count, so A, E
 and H tracing the same count cost the same in rays. They differ in the
@@ -873,7 +877,12 @@ renders as with every effect off, as under A. RT7's histories reset on
 this section's events that do not concern the scaler (a map load, a
 `vid_restart`, a camera cut, a teleport, a change of the rectangle, an
 effect turned back on after a world refdef with every effect off), and
-an effect's history also on a change of that effect's scale. At every
+an effect's history also on a change of that effect's scale. As built
+(TASK126) that is a reason of its own, `scale`, which resets that
+effect's history alone and, under `r_rt_stats 1`, prints
+`ref_metal: r_rt_stats: reset: <effect> scale` at any `r_metalfx`; an
+effect that keeps no history (the water reflections) has nothing to reset
+and prints no reset line. At every
 effect scale 1, E is C (`r_metalfx 0`): one frame, so the four
 effect scenarios' pins at scale 1 cover E, and section 5's double-count
 invariant applies to E's output pixels. The render-stage path (section 4)
@@ -884,10 +893,17 @@ from a fragment pass at each effect's size instead (RT9).
 
 **The effect scales (RT13), and their design defaults.** RT13 adds one
 archived cvar per effect, names them, and gives each its entry in
-`doc/040_cvarlist.md`. A value is that effect's traced width and height
+`doc/040_cvarlist.md`: `r_rt_shadows_scale`, `r_rt_sun_scale` and
+`r_rt_water_scale` (TASK126), each defaulting to 1, beside TASK157's
+`r_rt_ao_scale`, which keeps its shipped default of 0.5 (the owner's
+default on TASK126: moving it to 1 would change the default frame and
+every `rt-ao*` pin). Each takes 1, 1/2 or 1/3 only, the nearest of the
+three, since one traced pixel stands for a whole d x d block.
+RT-primary and its bounce take no scale: their output is the whole lit
+term, and they lower their cost through `r_metalfx_scale`. A value is that effect's traced width and height
 as a fraction of the output's, or of the internal size while RT11's
 scaler is on (the hybrid). The design default of every effect scale is
-1: E is off, and each effect is traced at the size the 3D frame is
+1 (AO's shipped 0.5 aside, above): E is off, and each effect is traced at the size the 3D frame is
 rasterized at, so with `r_metalfx 2` and `r_metalfx_scale` at its
 default the frame is configuration A (above), and with `r_metalfx 0` it
 is C. The 1/2 at which the matrix costs E is a
@@ -896,7 +912,9 @@ cell by the default policy (below), replacing these, as it replaces
 option A's per-family design defaults of `r_metalfx_scale` (the subsection
 above); until then a scale below 1 is the player's choice. Where the
 device has no ray tracing (the VM) the effect scales do nothing, with a
-report line (RT13).
+report line (RT13): `ref_metal: ray tracing: none on this device: the
+effect scales do nothing`, printed once at the renderer's start beside the
+gate's line (TASK126).
 
 **Hybrids.** In general a hybrid rasterizes at a fraction s_A of the
 output, upscales with the temporal scaler and traces each effect at a
@@ -904,8 +922,11 @@ fraction s_E of the internal size, so it traces (s_A x s_E) squared of
 the output's pixels and adds the scaler (from s_A) and the upsample (to
 the internal size). H is (1/2, 1/2). Another is A with only some effects
 below the internal size, for example AO. A hybrid is RT13's effect
-scales applied to RT11's internal size, so RT13 builds it once RT11 has
-landed.
+scales applied to RT11's internal size. As built (TASK126) it falls out
+with no code of its own: every effect runs at `RM_GB_TargetSize`, which
+is the output under `r_metalfx 0` and the scaler's input under
+`r_metalfx 2`, and an effect scale divides that size. The scenarios
+`rt-all-e` and `rt-all-h` pin E and H.
 
 **Dynamic resolution.** A controller sets the scale, A's internal height,
 E's effect scales or H's pair, for the next world refdef from the

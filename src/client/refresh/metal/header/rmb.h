@@ -1729,6 +1729,15 @@ int rmb_read(unsigned char *bgra, size_t len);
 void rmb_target_size(int *w, int *h);
 
 /*
+ * TASK126 slice 6, review round 1: the smallest frame number a frame
+ * that hands out its compute command buffer from now on can carry
+ * (rmb_frame_compute's): the open frame's while it can still hand it
+ * out, else the next frame's. Every frame numbered below it was encoded
+ * before the call.
+ */
+unsigned long rmb_frame_next(void);
+
+/*
  * Blits the frame to the drawable when there is one (at rm_present_region,
  * the rest of a larger drawable cleared to black), presents and commits.
  */

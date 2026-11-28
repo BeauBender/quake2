@@ -156,6 +156,24 @@ rm_rtg_reset_format(const char *name, const rm_rtg_t *g, char *buf, size_t len)
 			rm_rtg_why_text(g->why)), buf, len);
 }
 
+int
+rm_rtg_scales_format(const rm_rtg_t *g, char *buf, size_t len)
+{
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	if (rm_rtg_traces(g))
+	{
+		buf[0] = '\0';
+		return 0;
+	}
+
+	return rtg_put(snprintf(buf, len, "ref_metal: ray tracing: none on this device: the effect scales do nothing"),
+			buf, len);
+}
+
 /*
  * Every r_rt_* cvar of ref_metal, sorted by name. An effect switch (the
  * switch of a row of the effect table, rm_rtfx_is_switch: TASK179 keeps
@@ -341,104 +359,11 @@ rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t *ou
 }
 
 /*
- * The presentation modes (TASK183). Enhanced is the stock lighting model
- * with the ray-traced layers on at their defaults (the plan's section
- * 2.2): each effect switch below reads 1 under it, and every other
- * setting (the AO's size, the sun's angles, r_metalfx, ...) stays the
- * user's. Retro (TASK184, PM2) needs no ray tracing and runs on every
- * device; its post-process decides no cvar of its own, but plan call P8
- * (TASK197) has it read every ray-traced layer and r_metalfx as 0, so no
- * layer or scaler smears or relights the quantized view. r_rt_direct is
- * not in its table and keeps the user's value: that switch runs nothing
- * outside RT-primary (rm_rtdir_on). No cvar is written; the overlay is
- * read-only like Enhanced's.
- * RT-primary (TASK188, PM6 slice 1) turns on its direct light
- * (r_rt_direct) and, as the plan's section 2.2 has it, the water
- * reflections; AO is off (the bounce, PM7, replaces it), and so are the
- * sun and the dlight shadows until PM7 and PM6's second slice make them
- * terms of the light model, so no layer adds the lightmap's light back.
- * TASK190 slice 3 gives it the MetalFX temporal scaler (r_metalfx 2)
- * where the internal size is below the output (the plan's section 2.2),
- * which rm_pres_fx decides; the scale (r_metalfx_scale) stays the user's.
+ * The presentation modes (TASK183): each mode's overlay is its table in
+ * common/rm_pres_table.h (TASK237), which says why each row is there and
+ * which the client's video menu reads too. No cvar is written; the overlay
+ * is read-only.
  */
-typedef struct
-{
-	const char *name;
-	float value;
-} pres_row_t;
-
-/*
- * A mode's overlay is a table of rows, a cvar and the value the mode gives
- * it. scripts/rt/preset-to-table.sh prints the rows of a saved preset in
- * this format (TASK195); a host test compiles them in through
- * RM_PRES_ENHANCED_ROWS.
- */
-#ifndef RM_PRES_ENHANCED_ROWS
-#define RM_PRES_ENHANCED_ROWS \
-	{ "r_rt_shadows", 1.0f }, \
-	{ "r_rt_sun", 1.0f }, \
-	{ "r_rt_ao", 1.0f }, \
-	{ "r_rt_water", 1.0f },
-#endif
-
-static const pres_row_t pres_enhanced[] = {
-	RM_PRES_ENHANCED_ROWS
-};
-
-#define PRES_NENHANCED ((int)(sizeof(pres_enhanced) / sizeof(pres_enhanced[0])))
-
-/* Retro's table (P8): the layers' switches and the scaler, all read as 0 (r_rt_direct is RT-primary's alone) */
-static const pres_row_t pres_retro[] = {
-	{ "r_rt_shadows", 0.0f },
-	{ "r_rt_sun", 0.0f },
-	{ "r_rt_ao", 0.0f },
-	{ "r_rt_water", 0.0f },
-	{ "r_rt_gunshadow", 0.0f },
-	{ "r_metalfx", 0.0f },
-};
-
-#define PRES_NRETRO ((int)(sizeof(pres_retro) / sizeof(pres_retro[0])))
-
-/*
- * RT-primary's table (TASK188): the direct light on, the layers it replaces off, the water on;
- * and (TASK190 slice 3) the scaler, RM_FX_TEMPORAL of header/rm_metalfx.h
- */
-static const pres_row_t pres_rtprimary[] = {
-	{ "r_rt_direct", 1.0f },
-	{ "r_rt_shadows", 0.0f },
-	{ "r_rt_sun", 0.0f },
-	{ "r_rt_ao", 0.0f },
-	{ "r_rt_water", 1.0f },
-	{ "r_metalfx", 2.0f },
-};
-
-#define PRES_NRTPRIMARY ((int)(sizeof(pres_rtprimary) / sizeof(pres_rtprimary[0])))
-
-/* the table a mode overlays, NULL when it decides nothing */
-static const pres_row_t *
-pres_table(int mode, int *n)
-{
-	if (mode == RM_PRES_ENHANCED)
-	{
-		*n = PRES_NENHANCED;
-		return pres_enhanced;
-	}
-
-	if (mode == RM_PRES_RETRO)
-	{
-		*n = PRES_NRETRO;
-		return pres_retro;
-	}
-
-	if (mode == RM_PRES_RTPRIMARY)
-	{
-		*n = PRES_NRTPRIMARY;
-		return pres_rtprimary;
-	}
-
-	*n = 0;
-	return NULL;
-}
 
 int
 rm_pres_decide(float requested, int path, int *why)
@@ -446,40 +371,18 @@ rm_pres_decide(float requested, int path, int *why)
 	int w = RM_PRES_WHY_OK, mode = RM_PRES_STOCK;
 
 	/* a value that is not a number compares false here and is no mode */
-	if (!((requested >= 0.0f) && (requested < 4.0f)))
+	if (!((requested >= 0.0f) && (requested < (float)RM_PRES_COUNT)))
 	{
 		w = RM_PRES_WHY_NOTBUILT;
 	}
-	else if ((int)requested == RM_PRES_ENHANCED)
+	else if (rm_pres_needs_rt((int)requested) && (path == RM_RTG_NONE))
 	{
-		if (path == RM_RTG_NONE)
-		{
-			w = RM_PRES_WHY_NORT;
-		}
-		else
-		{
-			mode = RM_PRES_ENHANCED;
-		}
+		/* Enhanced, and RT-primary by capability only (decision 0014): wherever the device traces rays */
+		w = RM_PRES_WHY_NORT;
 	}
-	else if ((int)requested == RM_PRES_RETRO)
+	else
 	{
-		mode = RM_PRES_RETRO;
-	}
-	else if ((int)requested == RM_PRES_RTPRIMARY)
-	{
-		/* by capability only (decision 0014): wherever the device traces rays */
-		if (path == RM_RTG_NONE)
-		{
-			w = RM_PRES_WHY_NORT;
-		}
-		else
-		{
-			mode = RM_PRES_RTPRIMARY;
-		}
-	}
-	else if ((int)requested != RM_PRES_STOCK)
-	{
-		w = RM_PRES_WHY_NOTBUILT;
+		mode = (int)requested;
 	}
 
 	if (why)
@@ -493,23 +396,9 @@ rm_pres_decide(float requested, int path, int *why)
 float
 rm_pres_value(int mode, const char *name, float user)
 {
-	int i, n;
-	const pres_row_t *t = pres_table(mode, &n);
+	float v;
 
-	if (!t || !name)
-	{
-		return user;
-	}
-
-	for (i = 0; i < n; i++)
-	{
-		if (!strcmp(t[i].name, name))
-		{
-			return t[i].value;
-		}
-	}
-
-	return user;
+	return rm_pres_row(mode, name, &v) ? v : user;
 }
 
 float
@@ -681,17 +570,9 @@ rm_effect_overlaid(int pres_mode, const char *ab_spec, const char *name)
 		return 0;
 	}
 
+	if (rm_pres_row(pres_mode, name, NULL))
 	{
-		int n;
-		const pres_row_t *t = pres_table(pres_mode, &n);
-
-		for (int i = 0; t && i < n; i++)
-		{
-			if (!strcmp(t[i].name, name))
-			{
-				return 1;
-			}
-		}
+		return 1;
 	}
 
 	return ab_spec && ab_spec[0] && rm_ab_value(ab_spec, name, b, sizeof(b));

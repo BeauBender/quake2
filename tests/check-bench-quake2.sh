@@ -114,6 +114,10 @@ printf '#!/bin/sh\nif [ "$*" = -u ] && [ -n "${STUB_UID:-}" ]; then echo "$STUB_
 chmod +x "${T:?}/bin/ioreg" "${T:?}/bin/pgrep" "${T:?}/bin/system_profiler" "${T:?}/bin/make" "${T:?}/bin/id"
 PATH=${T:?}/bin:$PATH
 export PATH
+# the bounded path's process supervisor (TASK221): the mutants' copy of
+# scripts/bench alone finds scripts/lib here
+BENCH_SV_LIB=$(cd "$REAL/../lib" && pwd -P)
+export BENCH_SV_LIB
 printf 'physical-gpu=yes\nraytracing=yes\nmetalfx=yes\nmetalfx-temporal=yes\ndisplay-hz=60\n' > "${T:?}/caps-all"
 printf 'physical-gpu=yes\nraytracing=no\nmetalfx=yes\nmetalfx-temporal=yes\ndisplay-hz=60\n' > "${T:?}/caps-nort"
 printf 'physical-gpu=yes\nraytracing=yes\nmetalfx=yes\nmetalfx-temporal=no\ndisplay-hz=60\n' > "${T:?}/caps-spatial"
@@ -436,7 +440,7 @@ L=${T:?}/metrics.log
 	echo 'ref_metal: rt ao: frame 1: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 8.000 ms'
 	echo 'ref_metal: rt ao: frame 2: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 8.000 ms'
 	echo 'Map: base2ref_metal: rt ao: frame 3: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 3.600 ms'
-	echo 'ref_metal: rt ao: frame 4: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 3.700 ms'
+	echo 'ref_metal: rt ao: frame 4: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 3.700 ms, traced at 960x540, 3 upsample fallbacks'
 	echo '689 frames, 0.1 seconds: 6890.0 fps'
 	echo '12 frames, 9.0 seconds: 1.3 fps'
 	echo 'ref_metal: metal_stats: 1000 frames, 400 without a drawable, 3 skipped, 1 failed command buffers, 0 readbacks'
@@ -675,6 +679,23 @@ else
 		bad "the mutant (the divisor-2 shadows line dropped) passed the metrics test"
 	else
 		echo "$me: mutant (the divisor-2 shadows line dropped): caught by the metrics test"
+	fi
+fi
+unset Q2H_ROOT
+# the AO-line mutant (TASK126 slice 6): the parser back to the 25-field line only
+# must lose the divisor-2 AO line (r_rt_ao_scale's default) and so fail the metrics test
+sed 's/(n == 25 || (n == 31 \&\& f\[26\] == "traced"))/n == 25/' "$REAL/adapters/quake2.sh" > "$M/adapters/quake2.sh"
+if cmp -s "$REAL/adapters/quake2.sh" "$M/adapters/quake2.sh"; then
+	bad "the AO-line mutant did not apply"
+else
+	Q2H_ROOT=$M
+	export Q2H_ROOT
+	L=${T:?}/metrics.log
+	q2h "${T:?}/m.case" adapter_metrics "${T:?}/m.case" "$L" > "${T:?}/mut.out" 2> /dev/null || true
+	if cmp -s "${T:?}/m.want" "${T:?}/mut.out"; then
+		bad "the mutant (the divisor-2 AO line dropped) passed the metrics test"
+	else
+		echo "$me: mutant (the divisor-2 AO line dropped): caught by the metrics test"
 	fi
 fi
 unset Q2H_ROOT
