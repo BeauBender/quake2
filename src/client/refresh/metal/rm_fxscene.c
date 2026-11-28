@@ -164,8 +164,8 @@ RM_FX_Read(void)
 					"is not supported on this device, it reads", line, sizeof(line)), line);
 		}
 
-		/* no ray-traced effect exists before RT3: the denoised scaler runs as the temporal one */
-		fx_mode = rm_fx_run(got, 0, fx_has);
+		/* no ray-traced effect exists before RT3: the denoised scaler runs as the temporal one; none for off */
+		fx_mode = rm_fx_view_mode(asked_v, fx_has);
 
 		if (fx_mode == RM_FX_OFF)
 		{
