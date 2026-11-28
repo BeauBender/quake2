@@ -73,8 +73,8 @@ static inline float
 mtl_rtpd_weight(int dx, int dy, float d, float dn, mtl_rtao_v3_t n, mtl_rtao_v3_t nn, unsigned m, unsigned mn,
 		float cn, float nn_a)
 {
-	/* written so that a NaN fails */
-	if (!(nn_a > 0.5f))
+	/* FIX219: an integer test of the pattern (mtl_rtp_math.h), so a NaN fails under the shaders' fast math too */
+	if (!mtl_rtp_above_half(nn_a))
 	{
 		return 0.0f;
 	}

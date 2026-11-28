@@ -36,6 +36,7 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/common/mtl_rtp_math.h"
+#include "rm_gbuf_edges.h"
 
 static int checks, failures;
 
@@ -784,6 +785,77 @@ test_world_sweep(void)
 	CHECK(bad == 0);
 }
 
+/*
+ * FIX219: the shared G-buffer helpers every kernel's world-pixel and
+ * normal-alpha tests call, each over its own edge table (the verdict wanted
+ * per edge of rm_gbuf_edges.h, 1 the compare holds) and the 2^12-stride
+ * sweep against the float compare it replaces: mtl_rtp_below1 (depth < 1),
+ * mtl_rtp_above_half (normal alpha > 0.5) and mtl_rtt_positive (the water
+ * mark's alpha > 0). A NaN is refused by each.
+ */
+static const int gbh_below1[GBE_NEDGE] = { 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0 };
+static const int gbh_above_half[GBE_NEDGE] = { 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
+static const int gbh_positive[GBE_NEDGE] = { 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
+
+/* the helper h's verdict on the pattern u: the float compare ref's, or 0 for a NaN */
+static int
+gbh_one(int which, unsigned u)
+{
+	const float f = from_bits(u);
+	int got, ref;
+
+	switch (which)
+	{
+		case 0:
+			got = mtl_rtp_below1(f);
+			ref = f < 1.0f;
+			break;
+		case 1:
+			got = mtl_rtp_above_half(f);
+			ref = f > 0.5f;
+			break;
+		default:
+			got = mtl_rtt_positive(f);
+			ref = f > 0.0f;
+			break;
+	}
+
+	return gbe_is_nan(u) ? (got == 0) : (got == ref);
+}
+
+static void
+test_gbuf_helpers(void)
+{
+	static const char *const names[] = { "mtl_rtp_below1", "mtl_rtp_above_half", "mtl_rtt_positive" };
+	static const int *const wants[] = { gbh_below1, gbh_above_half, gbh_positive };
+	int h, j;
+
+	for (h = 0; h < 3; h++)
+	{
+		unsigned i;
+		int bad = 0;
+
+		for (j = 0; j < GBE_NEDGE; j++)
+		{
+			const float f = gbe_float(gbe_edges[j].bits);
+			const int got = (h == 0) ? mtl_rtp_below1(f) : (h == 1) ? mtl_rtp_above_half(f) : mtl_rtt_positive(f);
+
+			printf("gbh: %s %-22s 0x%08x: %d (want %d)\n", names[h], gbe_edges[j].name, gbe_edges[j].bits, got,
+				wants[h][j]);
+			CHECK(got == wants[h][j]);
+			CHECK(gbh_one(h, gbe_edges[j].bits));
+		}
+
+		for (i = 0u; i < GBE_SWEEP_N; i++)
+		{
+			bad += !gbh_one(h, i << GBE_SWEEP_SHIFT);
+		}
+
+		printf("gbh: %s sweep %u patterns, %d wrong\n", names[h], GBE_SWEEP_N, bad);
+		CHECK(bad == 0);
+	}
+}
+
 int
 main(void)
 {
@@ -799,6 +871,7 @@ main(void)
 	test_history_guards();
 	test_world_edges();
 	test_world_sweep();
+	test_gbuf_helpers();
 	printf("rm_rtptemporal_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

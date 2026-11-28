@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/common/mtl_rtmt_math.h"
+#include "rm_gbuf_edges.h"
 
 static int checks, failures;
 
@@ -230,9 +231,62 @@ test_color(void)
 	}
 }
 
+/*
+ * FIX219: the model pixel's depth and normal alpha over the shared edges,
+ * each crossed with every edge of the other, and the 2^12-stride sweep of
+ * each against every edge of the other: the old compare's verdict
+ * ((depth < 1.0f) && (normal_a > 0.5f), here without fast math) on every
+ * input with no NaN, and not a model pixel where either is a NaN.
+ */
+static int
+gbe_model_one(unsigned d, unsigned n)
+{
+	const float df = gbe_float(d), nf = gbe_float(n);
+	const int got = mtl_rtmt_model(MTL_GB_MAT_ALIAS, df, nf);
+
+	if (gbe_is_nan(d) || gbe_is_nan(n))
+	{
+		return got == 0;
+	}
+
+	return got == ((df < 1.0f) && (nf > 0.5f));
+}
+
+static void
+test_model_edges(void)
+{
+	unsigned i;
+	int j, k, bad = 0;
+
+	for (j = 0; j < GBE_NEDGE; j++)
+	{
+		printf("gbe: mtl_rtmt_model depth %-22s 0x%08x: %d, normal alpha: %d\n", gbe_edges[j].name, gbe_edges[j].bits,
+			mtl_rtmt_model(MTL_GB_MAT_ALIAS, gbe_float(gbe_edges[j].bits), 1.0f),
+			mtl_rtmt_model(MTL_GB_MAT_ALIAS, 0.5f, gbe_float(gbe_edges[j].bits)));
+
+		for (k = 0; k < GBE_NEDGE; k++)
+		{
+			CHECK(gbe_model_one(gbe_edges[j].bits, gbe_edges[k].bits));
+		}
+	}
+
+	for (i = 0u; i < GBE_SWEEP_N; i++)
+	{
+		for (j = 0; j < GBE_NEDGE; j++)
+		{
+			bad += !gbe_model_one(i << GBE_SWEEP_SHIFT, gbe_edges[j].bits);
+			bad += !gbe_model_one(gbe_edges[j].bits, i << GBE_SWEEP_SHIFT);
+		}
+	}
+
+	printf("gbe: mtl_rtmt_model sweep %u inputs, %d wrong\n", GBE_SWEEP_N * 2u * (unsigned)GBE_NEDGE, bad);
+	CHECK(bad == 0);
+}
+
 int
 main(void)
 {
+	test_model_edges();
 	test_model();
 	test_key();
 	test_reject();
