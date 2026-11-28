@@ -377,9 +377,60 @@ test_weight_edges(void)
 	CHECK(bad == 0);
 }
 
+/*
+ * FIX222: the pixel's count over the shared edges and the 2^12-stride
+ * sweep: mtl_rtpd_on writes a world pixel where main's float compare
+ * (mtl_rtd_strength(n) > 0.0f, here without fast math, 1 <= n < 16)
+ * holds, no other, and never for a NaN.
+ */
+static int
+gbe_on_one(unsigned u)
+{
+	const float n = gbe_float(u);
+
+	if (mtl_rtpd_on(0, n))
+	{
+		return 0;
+	}
+
+	if (gbe_is_nan(u))
+	{
+		return !mtl_rtpd_on(1, n);
+	}
+
+	return mtl_rtpd_on(1, n) == ((n >= 1.0f) && (n < 16.0f));
+}
+
+static void
+test_on_edges(void)
+{
+	unsigned i;
+	int j, bad = 0;
+
+	for (j = 0; j < GBE_NEDGE; j++)
+	{
+		printf("gbe: mtl_rtpd_on n %-22s 0x%08x: %d\n", gbe_edges[j].name, gbe_edges[j].bits,
+			mtl_rtpd_on(1, gbe_float(gbe_edges[j].bits)));
+		CHECK(gbe_on_one(gbe_edges[j].bits));
+	}
+
+	CHECK(gbe_on_one(0x417fffffu) && mtl_rtpd_on(1, gbe_float(0x417fffffu)));
+	CHECK(gbe_on_one(0x41800000u) && !mtl_rtpd_on(1, gbe_float(0x41800000u)));
+	CHECK(gbe_on_one(0x41800001u));
+
+	for (i = 0u; i < GBE_SWEEP_N; i++)
+	{
+		bad += !gbe_on_one(i << GBE_SWEEP_SHIFT);
+	}
+
+	printf("gbe: mtl_rtpd_on sweep %u patterns, %d wrong\n", GBE_SWEEP_N, bad);
+	CHECK(bad == 0);
+}
+
 int
 main(void)
 {
+	test_on_edges();
 	test_weight_edges();
 	test_on();
 	test_weight();

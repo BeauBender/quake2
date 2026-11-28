@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/common/mtl_rtd_math.h"
+#include "rm_gbuf_edges.h"
 
 static int checks, failures;
 
@@ -452,9 +453,140 @@ test_rblur(void)
 	CHECK(near(img_rblur(4, 3), 4.0f / 16.0f));
 }
 
+/*
+ * FIX222: the history weight's tests over FIX219's edges, the floats
+ * beside 16 and the 2^12-stride sweep. Each reference is main's float
+ * code (compiled here without fast math, rm_gbuf_edges.h refuses it):
+ * mtl_rtd_counted gives "the strength is above 0", mtl_rtd_strength,
+ * mtl_rtd_weight's count and mtl_rtd_result give main's answer bit for
+ * bit on every pattern that is not a NaN; a NaN is refused by each (not
+ * counted, strength 0, weight 0, the value kept).
+ */
+static float
+hw_ref_strength(float n)
+{
+	if (!(n >= MTL_RTD_COUNT_FULL) || !(n < MTL_RTD_COUNT_NONE))
+	{
+		return 0.0f;
+	}
+
+	return (MTL_RTD_COUNT_NONE - n) / (MTL_RTD_COUNT_NONE - MTL_RTD_COUNT_FULL);
+}
+
+static float
+hw_ref_result(mtl_rtd_acc_t a, float v, float n)
+{
+	const float s = hw_ref_strength(n);
+	float mean;
+
+	if (!(s > 0.0f) || !(a.wsum > 0.0f))
+	{
+		return v;
+	}
+
+	mean = a.sum / a.wsum;
+
+	if (!isfinite(mean))
+	{
+		return v;
+	}
+
+	if (!isfinite(v))
+	{
+		return mean;
+	}
+
+	return v + s * (mean - v);
+}
+
+static unsigned
+hw_bits(float f)
+{
+	unsigned u;
+
+	memcpy(&u, &f, sizeof(u));
+	return u;
+}
+
+/* the floats beside the count's cut at 16 and inside the ramp, beyond FIX219's shared edges */
+static const gbe_edge_t hw_edges[] = {
+	{ 0x3f7fffffu, "largest below 1" },
+	{ 0x40000000u, "2" },
+	{ 0x41080000u, "8.5" },
+	{ 0x41700000u, "15" },
+	{ 0x417fffffu, "largest below 16" },
+	{ 0x41800000u, "16" },
+	{ 0x41800001u, "smallest above 16" },
+	{ 0x437f0000u, "255" },
+};
+#define HW_NEDGE ((int)(sizeof(hw_edges) / sizeof(hw_edges[0])))
+
+/* 1 when every history-weight test gives main's answer for the pattern u, and refuses it when a NaN */
+static int
+hw_one(unsigned u)
+{
+	const mtl_rtao_v3_t up = mtl_rtao_v3(0.0f, 0.0f, 1.0f);
+	const float n = gbe_float(u);
+	const float w = mtl_rtd_weight(1, 0, 100.0f, 100.0f, up, up, 1, 1, n);
+	const float wfull = mtl_rtd_weight(1, 0, 100.0f, 100.0f, up, up, 1, 1, 1.0f);
+	mtl_rtd_acc_t a = mtl_rtd_acc();
+
+	a = mtl_rtd_add(a, 1.0f, 0.25f);
+
+	if (gbe_is_nan(u))
+	{
+		return !mtl_rtd_counted(n) && (hw_bits(mtl_rtd_strength(n)) == 0u) && (w == 0.0f) &&
+			(hw_bits(mtl_rtd_result(a, 0.75f, n)) == hw_bits(0.75f));
+	}
+
+	return (mtl_rtd_counted(n) == (hw_ref_strength(n) > 0.0f)) &&
+		(mtl_rtd_counted(n) == ((n >= 1.0f) && (n < 16.0f))) &&
+		(hw_bits(mtl_rtd_strength(n)) == hw_bits(hw_ref_strength(n))) &&
+		(hw_bits(w) == hw_bits((n >= 1.0f) ? wfull : 0.0f)) &&
+		(hw_bits(mtl_rtd_result(a, 0.75f, n)) == hw_bits(hw_ref_result(a, 0.75f, n)));
+}
+
+static void
+test_history_weight(void)
+{
+	unsigned i;
+	int j, bad = 0;
+
+	CHECK(gbe_float(MTL_RTD_BITS_FULL) == MTL_RTD_COUNT_FULL);
+	CHECK(gbe_float(MTL_RTD_BITS_NONE) == MTL_RTD_COUNT_NONE);
+
+	for (j = 0; j < GBE_NEDGE + HW_NEDGE; j++)
+	{
+		const gbe_edge_t *e = (j < GBE_NEDGE) ? &gbe_edges[j] : &hw_edges[j - GBE_NEDGE];
+		const float n = gbe_float(e->bits);
+
+		printf("hw: %-22s 0x%08x: counted %d, strength 0x%08x\n", e->name, e->bits, mtl_rtd_counted(n),
+			hw_bits(mtl_rtd_strength(n)));
+		CHECK(hw_one(e->bits));
+	}
+
+	/* the verdicts the edges want: counted from 1 up to, not at, 16 */
+	CHECK(!mtl_rtd_counted(gbe_float(0x3f7fffffu)));
+	CHECK(mtl_rtd_counted(gbe_float(0x3f800000u)));
+	CHECK(mtl_rtd_counted(gbe_float(0x417fffffu)));
+	CHECK(!mtl_rtd_counted(gbe_float(0x41800000u)));
+	CHECK(!mtl_rtd_counted(gbe_float(0x80000000u)));
+	CHECK(!mtl_rtd_counted(gbe_float(0x7f800000u)));
+	CHECK(!mtl_rtd_counted(gbe_float(0xff800000u)));
+
+	for (i = 0u; i < GBE_SWEEP_N; i++)
+	{
+		bad += !hw_one(i << GBE_SWEEP_SHIFT);
+	}
+
+	printf("hw: history weight sweep %u patterns, %d wrong\n", GBE_SWEEP_N, bad);
+	CHECK(bad == 0);
+}
+
 int
 main(void)
 {
+	test_history_weight();
 	test_strength();
 	test_tap();
 	test_depth();

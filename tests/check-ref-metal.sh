@@ -1744,8 +1744,8 @@ rtd_tree() { # <dir>: a scratch tree of the test and its headers
 	rm -rf "${1:?}"
 	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
 	cp "$rm_dir/common/mtl_rtd_math.h" "$rm_dir/common/mtl_rtao_math.h" "$rm_dir/common/mtl_shader_math.h" \
-		"$1/src/client/refresh/metal/common/"
-	cp tests/metal/rm_rtdenoise_test.c "$1/tests/metal/"
+		"$rm_dir/common/mtl_rtt_math.h" "$1/src/client/refresh/metal/common/"
+	cp tests/metal/rm_gbuf_edges.h tests/metal/rm_rtdenoise_test.c "$1/tests/metal/"
 }
 rtd_build() { # <tree>: 0 when the tree's test builds
 	# shellcheck disable=SC2086 # flags is a word list
