@@ -3082,10 +3082,34 @@ t_quiet_marker() {
 	grep -qx session=none "${E:?}/seen" || bad "marker: a session id with a space was kept"
 	[ ! -e "$_q" ] || bad "marker: left after the command exited 3"
 	B lock run zzq -- sh -c '[ ! -e "$1" ]' x "$_q" || bad "marker: written without --quiet"
-	# A stopped command (74), and TERM or HUP to the lock shell.
+	# A stopped command (no longer 74, TASK221 slice 3: it holds the lock
+	# until a signal stops the lock shell): the marker stays while it is
+	# stopped, and a TERM to the lock shell ends it and removes the marker.
+	# Then TERM or HUP to the lock shell of a running one.
+	start env BENCH_STOP_GRACE=0 sh "$R/bench.sh" lock run --quiet zzqstop -- sh -c 'echo $$ > "$1"; kill -STOP $$' x "${E:?}/qstop.pid" > /dev/null 2>&1
+	_h=$BG
+	wait_file 5 "${E:?}/qstop.pid" || bad "marker: the stopped command never started"
+	_sp=$(cat "${E:?}/qstop.pid" 2> /dev/null) || _sp=
+	_n=0
+	while :; do
+		case $(ps -o stat= -p "${_sp:-0}" 2> /dev/null) in
+		T*) break ;;
+		esac
+		[ "$_n" -lt 50 ] || {
+			bad "marker: the command never stopped"
+			break
+		}
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	[ -s "$_q" ] || bad "marker: not there while the command is stopped"
+	kill -TERM "$_h"
 	_st=0
-	B lock run --quiet zzq -- sh -c 'kill -STOP $$' > /dev/null 2>&1 || _st=$?
-	[ "$_st" -eq 74 ] && [ ! -e "$_q" ] || bad "marker: left after a stopped command (status $_st)"
+	if ended 10 "$_h" "marker: lock run still waits on a stopped command after a TERM"; then collect "$_h" || _st=$?; fi
+	[ "$_st" -eq 143 ] || bad "marker: wanted exit 143 from a stopped command's lock shell on TERM, got $_st"
+	[ ! -e "$_q" ] || bad "marker: left after a TERM to a stopped command's lock shell"
+	[ "$(B lock status)" = lock=free ] || bad "marker: a stopped command's lock was not released"
+	outlived "$_sp" "marker: the stopped command outlived its lock shell"
 	for _sig in TERM HUP; do
 		start sh "$R/bench.sh" lock run --quiet zzqsig -- sleep 30 2> /dev/null
 		wait_file 10 "$_q" || bad "marker: not written by a lock shell for $_sig"
