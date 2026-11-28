@@ -503,7 +503,8 @@ done
 # the copy holds the stock kernel's code lines in their order, so that the two cannot drift apart
 # unseen. Mutants: the stock kernel edited (the checksum and the copy pin refuse it), the copy edited in
 # either helper, a repeated line of the copy dropped or moved (round 2), the guard dropped.
-rts_trace_sum='2595407311 7173'  # cksum of rm_rts_trace's text, from its name to its closing brace (TASK188 slice 3a)
+# FIX219 (#826) moved the stock trace's two G-buffer compares onto mtl_rtp_below1 and mtl_rtp_above_half; the hold on 2ba0dc63 showed every stock and rt-* pin byte-identical to main.
+rts_trace_sum='389723114 7191'  # cksum of rm_rts_trace's text, from its name to its closing brace (TASK188 slice 3a, re-pinned by FIX219)
 rts_text() { # <file>: rm_rts_trace's definition, from its name to its closing brace
 	awk '/^rm_rts_trace\(/ { b = 1 } b { print } b && /^}/ { exit }' "$1"
 }
@@ -2676,7 +2677,7 @@ rtp_tree() { # <dir>: a copy of the test and the headers, laid out as the test i
 	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
 	cp "$rm_dir/common/mtl_rtp_math.h" "$rm_dir/common/mtl_rtt_math.h" "$rm_dir/common/mtl_shader_math.h" \
 		"$rm_dir/common/mtl_gbuf_math.h" "$1/src/client/refresh/metal/common/"
-	cp tests/metal/rm_rtptemporal_test.c "$1/tests/metal/"
+	cp tests/metal/rm_gbuf_edges.h tests/metal/rm_rtptemporal_test.c "$1/tests/metal/"
 }
 rtp_build() { # <tree>: 0 when the tree's test builds
 	# shellcheck disable=SC2086 # flags is a word list
@@ -2969,7 +2970,7 @@ rtk_pin() { # <file> <pin>: 0 when the file holds the pin
 			grep -qxF '#define rm_rtdir_trace rm_rtm_unused_trace' "$1" &&
 			grep -qxF '#define rm_fragment_rtdir_show rm_rtm_unused_show' "$1" && grep -qxF '#include "rm_rtdir.metal"' "$1" ;;
 		gate) rtk_body "$1" | grep -qF 'if (inside && (m == MTL_GB_MAT_ALIAS))' &&
-			rtk_body "$1" | grep -qF 'model = ((d < 1.0f) && (nn.a > 0.5f)) ? 1u : 0u;' &&
+			rtk_body "$1" | grep -qF 'model = (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a)) ? 1u : 0u;' &&
 			[ "$(strip "$1" | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.write\(' | sort | tr -d '\n')" = 'light_out.write(vis_out.write(' ] &&
 			[ "$(rtk_body "$1" | awk '/^ if \(model\)$/ { b = 1 } b && /^ }$/ { b = 0 } b' | grep -cE '(light_out|vis_out)\.write\(')" = 2 ] ;;
 		base) [ "$(strip "$1" | grep -oF 'gbl.' | wc -l | tr -d ' ')" = 1 ] &&
@@ -3017,7 +3018,7 @@ for p in rename gate base nolm fit dot tagmat weapon pullback; do
 		case $m in
 			rename-extra) awk '{ print } /^#define rm_fragment_rtdir_show / { print "#define rm_rtdir_own rm_rtm_own" }' ;;
 			model-writes-world) sed 's/if (inside && (m == MTL_GB_MAT_ALIAS))/if (inside \&\& (m == MTL_GB_MAT_WORLD))/' ;;
-			no-normal-traced) sed 's/model = ((d < 1.0f) && (nn.a > 0.5f)) ? 1u : 0u;/model = (d < 1.0f) ? 1u : 0u;/' ;;
+			no-normal-traced) sed 's/model = (mtl_rtp_below1(d) \&\& mtl_rtp_above_half(nn\.a)) ? 1u : 0u;/model = mtl_rtp_below1(d) ? 1u : 0u;/' ;;
 			model-from-base) sed 's/light_out.write(rm_rtm_out(l.rgb, f, p, tabs), px);/light_out.write(rm_rtm_out(l.rgb + gbl.read(px).rgb, f, p, tabs), px);/' ;;
 			model-reads-lm) awk '/texture\(3\)\]\],$/ { print; print "\t\ttexture2d<float, access::read> lm [[texture(4)]],"; next }
 				/light_out\.write\(rm_rtm_out\(/ { sub(/l\.rgb,/, "l.rgb + lm.read(px).rgb,") } { print }' ;;
@@ -3143,7 +3144,7 @@ rmt_tree() { # <dir>: a copy of the test and the headers, laid out as the test i
 	cp "$rm_dir/common/mtl_rtmt_math.h" "$rm_dir/common/mtl_rtp_math.h" "$rm_dir/common/mtl_rtt_math.h" \
 		"$rm_dir/common/mtl_rtm_math.h" "$rm_dir/common/mtl_shader_math.h" "$rm_dir/common/mtl_gbuf_math.h" \
 		"$1/src/client/refresh/metal/common/"
-	cp tests/metal/rm_rtmtemporal_test.c "$1/tests/metal/"
+	cp tests/metal/rm_gbuf_edges.h tests/metal/rm_rtmtemporal_test.c "$1/tests/metal/"
 }
 rmt_build() { # <tree>: 0 when the tree's test builds
 	# shellcheck disable=SC2086 # flags is a word list
@@ -3168,7 +3169,7 @@ for m in key-flags key-low model-world alpha-kept pass; do
 	case $m in
 		key-flags) sed 's/return MTL_GB_MAT_ALIAS + ((f & MTL_RTM_FLAGS) << MTL_RTMT_KEY_SHIFT);/return MTL_GB_MAT_ALIAS + ((f \& 0u) << MTL_RTMT_KEY_SHIFT);/' ;;
 		key-low) sed 's/^#define MTL_RTMT_KEY_SHIFT 8$/#define MTL_RTMT_KEY_SHIFT 0/' ;;
-		model-world) sed 's/return (mat == MTL_GB_MAT_ALIAS) && (depth/return (mat != MTL_GB_MAT_NONE) \&\& (depth/' ;;
+		model-world) sed 's/return (mat == MTL_GB_MAT_ALIAS) && mtl_rtp_below1(depth)/return (mat != MTL_GB_MAT_NONE) \&\& mtl_rtp_below1(depth)/' ;;
 		alpha-kept) sed 's/	cur\.a = 1\.0f;/	cur.a = h.a;/' ;;
 		pass) sed 's/return mtl_rtp_pixel(1, rej,/return mtl_rtp_pixel(0, rej,/' ;;
 	esac < "$rmt_h" > "$h"
@@ -3352,7 +3353,7 @@ rtpd_tree() { # <dir>: a copy of the test and the headers, laid out as the test 
 	cp "$rm_dir/common/mtl_rtpd_math.h" "$rm_dir/common/mtl_rtp_math.h" "$rm_dir/common/mtl_rtd_math.h" \
 		"$rm_dir/common/mtl_rtao_math.h" "$rm_dir/common/mtl_rtt_math.h" "$rm_dir/common/mtl_shader_math.h" \
 		"$rm_dir/common/mtl_gbuf_math.h" "$1/src/client/refresh/metal/common/"
-	cp tests/metal/rm_rtpdenoise_test.c "$1/tests/metal/"
+	cp tests/metal/rm_gbuf_edges.h tests/metal/rm_rtpdenoise_test.c "$1/tests/metal/"
 }
 rtpd_build() { # <tree>: 0 when the tree's test builds
 	# shellcheck disable=SC2086 # flags is a word list
@@ -3377,7 +3378,7 @@ for m in mix count nonormal alpha clamp; do
 	case $m in
 		mix) sed 's/a\.g = mtl_rtd_add(a\.g, w, h\.g);/a.g = mtl_rtd_add(a.g, w, h.r);/' ;;
 		count) sed 's/return world \&\& (mtl_rtd_strength(n) > 0\.0f);/return world \&\& (n == n);/' ;;
-		nonormal) sed 's/if (!(nn_a > 0\.5f))/if (!(nn_a > 0.5f) \&\& 0)/' ;;
+		nonormal) sed 's/if (!mtl_rtp_above_half(nn_a))/if (!mtl_rtp_above_half(nn_a) \&\& 0)/' ;;
 		alpha) sed 's/r\.a = a;/r.a = h.a + 0.0f * a;/' ;;
 		clamp) sed 's/r\.r = mtl_rtp_clamp(mtl_rtd_result(s\.r, h\.r, h\.a));/r.r = mtl_rtd_result(s.r, h.r, h.a);/' ;;
 	esac < "$rtpd_h" > "$h"
@@ -3679,7 +3680,7 @@ for pin in "rm_rtsun_trace_lo|$sunlo_src|atpx" "rm_rtsun_temporal_lo|$sunlo_src|
 	"rm_rtsun_temporal_lo|mtl_rtup_reproject(px.x, px.y, mv.x, mv.y, v.div, w, hh)|undivided sign" \
 	"rm_rtsun_temporal_lo|mtl_rtt_reject(t.reset, r.ok, dist, h.y, t.move, m, hm, 0u, 0u, h.w)|noreset" \
 	"rm_rtsun_up|o = mtl_rtup_weights(in, v.div);|weights1" \
-	"rm_rtsun_up|if ((d < 1.0f) && (nn.a > 0.5f))|nonormal" \
+	"rm_rtsun_up|if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))|nonormal" \
 	"rm_rtsun_up|in.ok[i] = ((tc == MTL_RTSUN_C_LIT) || (tc == MTL_RTSUN_C_SHADOW)) ? 1 : 0;|everytap" \
 	"rm_rtsun_up|const uint tx[MTL_RTUP_TAPS] = { qx.lo0, qx.lo1, qx.lo0, qx.lo1 };|taporderx" \
 	"rm_rtsun_up|const uint ty[MTL_RTUP_TAPS] = { qy.lo0, qy.lo0, qy.lo1, qy.lo1 };|taporder" \
@@ -3704,7 +3705,7 @@ for pin in "rm_rtsun_trace_lo|$sunlo_src|atpx" "rm_rtsun_temporal_lo|$sunlo_src|
 				b { sub(/mtl_rtt_reject\(t\.reset,/, "mtl_rtt_reject(0u,") } { print }' ;;
 			weights1) sed 's/o = mtl_rtup_weights(in, v\.div);/o = mtl_rtup_weights(in, 1u);/' ;;
 			nonormal) awk -v fn="$kn" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
-				b { sub(/if \(\(d < 1\.0f\) && \(nn\.a > 0\.5f\)\)/, "if (d < 1.0f)") } { print }' ;;
+				b { sub(/if \(mtl_rtp_below1\(d\) && mtl_rtp_above_half\(nn\.a\)\)/, "if (mtl_rtp_below1(d))") } { print }' ;;
 			everytap) sed 's/in\.ok\[i\] = ((tc == MTL_RTSUN_C_LIT) || (tc == MTL_RTSUN_C_SHADOW)) ? 1 : 0;/in.ok[i] = (tc == tc) ? 1 : 1;/' ;;
 			taporderx) sed 's/{ qx\.lo0, qx\.lo1, qx\.lo0, qx\.lo1 }/{ qx.lo0, qx.lo0, qx.lo1, qx.lo1 }/' ;;
 			taporder) sed 's/{ qy\.lo0, qy\.lo0, qy\.lo1, qy\.lo1 }/{ qy.lo0, qy.lo1, qy.lo0, qy.lo1 }/' ;;
@@ -3868,7 +3869,7 @@ for pin in "rm_rts_trace_lo|$shlo_src|atpx" "rm_rts_temporal_lo|$shlo_src|atpx" 
 	"rm_rts_up|if (inside && (s.nl > 0) && (s.top.idx[0] != MTL_RTS_NO_LIGHT))|noskip" \
 	"rm_rts_up|const uint tx[MTL_RTUP_TAPS] = { qx.lo0, qx.lo1, qx.lo0, qx.lo1 };|taporderx" \
 	"rm_rts_up|const uint ty[MTL_RTUP_TAPS] = { qy.lo0, qy.lo0, qy.lo1, qy.lo1 };|taporder" \
-	"rm_rts_up|in.ok[i] = ((in.mn[i] == MTL_GB_MAT_WORLD) && (ds < 1.0f) && (ns.a > 0.5f)) ? 1 : 0;|everytap" \
+	"rm_rts_up|in.ok[i] = ((in.mn[i] == MTL_GB_MAT_WORLD) && mtl_rtp_below1(ds) && mtl_rtp_above_half(ns.a)) ? 1 : 0;|everytap" \
 	"rm_rts_up|o = mtl_rtup_weights(in, lo.div);|weights1" \
 	"rm_rts_up|l = mtl_rtup_light(o, mtl_rts_holds(tw[0].g, li), mtl_rts_holds(tw[1].g, li), mtl_rts_holds(tw[2].g, li),|setdropped" \
 	"rm_rts_up|mtl_rts_light_vis(tw[2].g, tw[2].r, li), mtl_rts_light_vis(tw[3].g, tw[3].r, li));|tapvis" \
@@ -3898,7 +3899,7 @@ for pin in "rm_rts_trace_lo|$shlo_src|atpx" "rm_rts_temporal_lo|$shlo_src|atpx" 
 			noskip) sed 's/if (inside && (s\.nl > 0) && (s\.top\.idx\[0\] != MTL_RTS_NO_LIGHT))/if (inside)/' ;;
 			taporderx) sed 's/{ qx\.lo0, qx\.lo1, qx\.lo0, qx\.lo1 }/{ qx.lo0, qx.lo0, qx.lo1, qx.lo1 }/' ;;
 			taporder) sed 's/{ qy\.lo0, qy\.lo0, qy\.lo1, qy\.lo1 }/{ qy.lo0, qy.lo1, qy.lo0, qy.lo1 }/' ;;
-			everytap) sed 's/in\.ok\[i\] = ((in\.mn\[i\] == MTL_GB_MAT_WORLD) && (ds < 1\.0f) && (ns\.a > 0\.5f)) ? 1 : 0;/in.ok[i] = 1;/' ;;
+			everytap) sed 's/in\.ok\[i\] = ((in\.mn\[i\] == MTL_GB_MAT_WORLD) \&\& mtl_rtp_below1(ds) \&\& mtl_rtp_above_half(ns\.a)) ? 1 : 0;/in.ok[i] = 1;/' ;;
 			weights1) sed 's/o = mtl_rtup_weights(in, lo\.div);/o = mtl_rtup_weights(in, 1u);/' ;;
 			setdropped) sed 's/mtl_rts_holds(tw\[[0-3]\]\.g, li)/1/g' ;;
 			tapvis) sed 's/mtl_rts_light_vis(tw\[2\]\.g, tw\[2\]\.r, li), mtl_rts_light_vis(tw\[3\]\.g, tw\[3\]\.r, li));/mtl_rts_light_vis(tw[3].g, tw[3].r, li), mtl_rts_light_vis(tw[2].g, tw[2].r, li));/' ;;
@@ -4131,9 +4132,9 @@ for pin in "rm_rtw_compact|listed = mtl_rtw_listed(mat.read(RM_RTW_AT(px)).r, ma
 	"rm_rtw_up|const uint tx[MTL_RTUP_TAPS] = { qx.lo0, qx.lo1, qx.lo0, qx.lo1 };|taporderx" \
 	"rm_rtw_up|const uint ty[MTL_RTUP_TAPS] = { qy.lo0, qy.lo0, qy.lo1, qy.lo1 };|taporder" \
 	"rm_rtw_up|const uint2 sp = rm_rtw_lo_src(tp, lo.div, fw, fh);|tapsrc" \
-	"rm_rtw_up|in.ok[i] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv[i].a)) && (ds < 1.0f) && (ns.a > 0.5f)) ? 1 : 0;|everytap" \
+	"rm_rtw_up|in.ok[i] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv[i].a)) && mtl_rtp_below1(ds) && mtl_rtp_above_half(ns.a)) ? 1 : 0;|everytap" \
 	"rm_rtw_up|const uint own = mtl_rtw_is_water(m) ? MTL_RTW_CLASS_WATER : (MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS);|layer" \
-	"rm_rtw_up|if ((d < 1.0f) && (nn.a > 0.5f))|noskip" \
+	"rm_rtw_up|if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))|noskip" \
 	"rm_rtw_up|in = mtl_rtup_own(in);|noown" \
 	"rm_rtw_up|o = mtl_rtup_weights(in, lo.div);|weights1" \
 	"rm_rtw_up|fb = o.fallback ? 1u : 0u;|nocount" \
@@ -4164,9 +4165,9 @@ for pin in "rm_rtw_compact|listed = mtl_rtw_listed(mat.read(RM_RTW_AT(px)).r, ma
 			taporderx) sed 's/{ qx\.lo0, qx\.lo1, qx\.lo0, qx\.lo1 }/{ qx.lo0, qx.lo0, qx.lo1, qx.lo1 }/' ;;
 			taporder) sed 's/{ qy\.lo0, qy\.lo0, qy\.lo1, qy\.lo1 }/{ qy.lo0, qy.lo1, qy.lo0, qy.lo1 }/' ;;
 			tapsrc) sed 's/const uint2 sp = rm_rtw_lo_src(tp, lo\.div, fw, fh);/const uint2 sp = tp;/' ;;
-			everytap) sed 's/in\.ok\[i\] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv\[i\]\.a)) && (ds < 1\.0f)/in.ok[i] = ((ds < 1.0f)/' ;;
+			everytap) sed 's/in\.ok\[i\] = (rm_rtw_lo_rok(own, rm_rtw_cls(tv\[i\]\.a)) \&\& mtl_rtp_below1(ds)/in.ok[i] = (mtl_rtp_below1(ds)/' ;;
 			layer) sed 's/const uint own = mtl_rtw_is_water(m) ? MTL_RTW_CLASS_WATER : (MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS);/const uint own = MTL_RTW_CLASS_WATER;/' ;;
-			noskip) wlo_in "$kn" 'if \\(\\(d < 1\\.0f\\) && \\(nn\\.a > 0\\.5f\\)\\)' 'if (d < 1.0f)' ;;
+			noskip) wlo_in "$kn" 'if \\(mtl_rtp_below1\\(d\\) && mtl_rtp_above_half\\(nn\\.a\\)\\)' 'if (mtl_rtp_below1(d))' ;;
 			weights1) sed 's/o = mtl_rtup_weights(in, lo\.div);/o = mtl_rtup_weights(in, 1u);/' ;;
 			noown) awk '/^rm_rtw_up\(/ { b = 1 } b && /^}/ { b = 0 } b && /^[[:space:]]+in = mtl_rtup_own\(in\);$/ { next } { print }' ;;
 			nocount) wlo_in "$kn" 'fb = o\\.fallback \\? 1u : 0u;' 'fb = o.fallback ? 0u : 0u;' ;;
@@ -4489,6 +4490,126 @@ else
 	fi
 fi
 seg 7.89 "; AO's fallback count and the upsample lines $aofb_pins pins with $aofb_mut mutants${aofb_metal:+ compiled and} refused"
+
+# FIX219: no float compare of a G-buffer depth or normal alpha in any kernel. Metal compiles a float
+# compare as "fcmp fast", whose nnan lets a NaN pass a compare written so that a NaN fails, so every
+# kernel takes the depth's "short of the far plane" (depth < 1) and the normal's "written" (alpha > 0.5)
+# through the shared integer helpers mtl_rtp_below1 and mtl_rtp_above_half (common/mtl_rtp_math.h,
+# FIX213), and the water mark's level its "alpha > 0" through mtl_rtt_positive (common/mtl_rtt_math.h,
+# FIX212). The rule, read as text with comments and literals blanked: in every .metal file under
+# src/client/refresh/metal/ and in the headers that test a G-buffer value for a kernel
+# (common/mtl_rtp_math.h, mtl_rtpd_math.h, mtl_rtmt_math.h and mtl_rtw_math.h), no <, >, <= or >= has a
+# depth name on one side and a float literal on the other: d, ds, qd, depth or a depth.read(...), the
+# names the kernels give the G-buffer's depth; nor a normal alpha name: a .a or .w of a vector whose
+# name starts with n (nn, ns, nv, ncv), normal_a, nn_a or a normal.read(...).a or .w. The literal is
+# an integer, a leading-dot, a decimal or an exponent form, with an f, F, h or H suffix; the name, or
+# the literal, may sit in a parenthesis or behind a (float) or (half) cast or a half(...) call, and a
+# .read(...) may hold one level of nested parentheses. mtl_rtw_alpha_level's own alpha is the
+# parameter a, a name too short for the rule, so it is pinned by itself. Out of scope, by design: a
+# compare against a variable (d < far), step() and select() with a variable, and a depth or normal
+# alpha held under a name other than these (a new kernel keeps to these names). Each failure prints its
+# own line, naming the file. Each mutant puts back one of main's compares (the kernel ones are main's
+# text, which compiled), so only this pin sees it, and each must be refused by its own line.
+gbf_num='([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?[fFhH]?'
+gbf_dep='(d|ds|qd|depth|depth[.]read[(]([^()]|[(][^()]*[)])*[)])'
+gbf_nrm='(n[a-z]*[.][aw]|normal_a|nn_a|normal[.]read[(]([^()]|[(][^()]*[)])*[)][.][aw])'
+gbf_pre='([(](float|half)[)]|(float|half)?[(])?'	# an optional cast or parenthesis before the name
+gbf_lit='[(]*([(](float|half)[)])?-?'	# the same before the literal
+gbf_pat() { # <name pattern>: a float compare of the name against a float literal, either side
+	printf '(^|[^A-Za-z0-9_.])%s%s[)]?[[:space:]]*[<>]=?[[:space:]]*%s%s|(^|[^A-Za-z0-9_.])%s%s[)]?[[:space:]]*[<>]=?[[:space:]]*%s%s[)]?([^A-Za-z0-9_.(]|$)' \
+		"$gbf_pre" "$1" "$gbf_lit" "$gbf_num" "$gbf_lit" "$gbf_num" "$gbf_pre" "$1"
+}
+gbf_dpat=$(gbf_pat "$gbf_dep")
+gbf_npat=$(gbf_pat "$gbf_nrm")
+gbf_why() { # <metal dir>: one line per file and kind of float compare it holds, none when it holds none
+	gbf_n=0
+	for gf in "$1"/*.metal "$1/common/mtl_rtp_math.h" "$1/common/mtl_rtpd_math.h" "$1/common/mtl_rtmt_math.h" \
+		"$1/common/mtl_rtw_math.h"; do
+		[ -f "$gf" ] || { echo "gbf: ${gf#"$1"/} is missing"; continue; }
+		gbf_n=$((gbf_n + 1))
+		strip "$gf" > "${tmp:?}/gbf.c"
+		if grep -qE "$gbf_dpat" "${tmp:?}/gbf.c"; then
+			echo "gbf: a float compare of a G-buffer depth in ${gf#"$1"/}"
+		fi
+		if grep -qE "$gbf_npat" "${tmp:?}/gbf.c"; then
+			echo "gbf: a float compare of a G-buffer normal alpha in ${gf#"$1"/}"
+		fi
+	done
+	strip "$1/common/mtl_rtw_math.h" | awk '/^mtl_rtw_alpha_level\(float a\)$/ { b = 1 } b { print } b && /^}/ { exit }' \
+		> "${tmp:?}/gbf.lvl"
+	if ! grep -qF 'if (!mtl_rtt_positive(a))' "${tmp:?}/gbf.lvl" ||
+			grep -qE "(^|[^A-Za-z0-9_.])a[[:space:]]*[<>]=?[[:space:]]*-?$gbf_num" "${tmp:?}/gbf.lvl"; then
+		echo "gbf: mtl_rtw_alpha_level does not test its alpha with mtl_rtt_positive alone"
+	fi
+	[ "$gbf_n" -ge 22 ] || echo "gbf: read $gbf_n files, fewer than the 22 it should"
+	return 0
+}
+gbf_sub() { # <file> <old> <new>: the file with the first <old> replaced by <new>, on stdout
+	awk -v o="$2" -v n="$3" '!done && (i = index($0, o)) { $0 = substr($0, 1, i - 1) n substr($0, i + length(o)); done = 1 } { print }' "$1"
+}
+gbf_mutants=0
+gbf_why "$rm_dir" > "${tmp:?}/gbf.out"
+gbf_files=$gbf_n
+if [ -s "${tmp:?}/gbf.out" ]; then
+	cat "${tmp:?}/gbf.out"
+	bad "a kernel compares a G-buffer depth or normal alpha with a float compare (FIX219): use mtl_rtp_below1, mtl_rtp_above_half or mtl_rtt_positive"
+fi
+for m in aodepth dirnormal readnormal reversed pdnormal mtnormal alphalevel dotlit lanew intlit bigf expo castname \
+		parenname halfread nestedread; do
+	rm -rf "${tmp:?}/gbfm"
+	cp -R "$rm_dir" "${tmp:?}/gbfm"
+	case $m in
+		aodepth) f=rm_rtao.metal o='u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && mtl_rtp_below1(ds)'
+			n='u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && (ds < 1.0f)'
+			want="gbf: a float compare of a G-buffer depth in rm_rtao.metal" ;;
+		dirnormal) f=rm_rtdir.metal o='mtl_rtp_above_half(nn.a)' n='(nn.a > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdir.metal" ;;
+		readnormal) f=rm_rtdenoise.metal o='!mtl_rtp_above_half(normal.read(px).a)' n='!(normal.read(px).a > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdenoise.metal" ;;
+		reversed) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = (1.0f > ds) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		pdnormal) f=common/mtl_rtpd_math.h o='!mtl_rtp_above_half(nn_a)' n='!(nn_a > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in common/mtl_rtpd_math.h" ;;
+		mtnormal) f=common/mtl_rtmt_math.h o='mtl_rtp_above_half(normal_a)' n='(normal_a > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in common/mtl_rtmt_math.h" ;;
+		alphalevel) f=common/mtl_rtw_math.h o='if (!mtl_rtt_positive(a))' n='if (!(a > 0.0f))'
+			want="gbf: mtl_rtw_alpha_level does not test its alpha with mtl_rtt_positive alone" ;;
+		dotlit) f=rm_rtdir.metal o='mtl_rtp_above_half(nn.a)' n='(nn.a > .5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdir.metal" ;;
+		lanew) f=rm_rtdir.metal o='mtl_rtp_above_half(nn.a)' n='(nn.w > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdir.metal" ;;
+		intlit) f=rm_rtao.metal o='u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && mtl_rtp_below1(ds)'
+			n='u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && (ds < 1)'
+			want="gbf: a float compare of a G-buffer depth in rm_rtao.metal" ;;
+		bigf) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = (1.0F > ds) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		expo) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = (ds < 1e0f) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		castname) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = ((float)ds < (float)1) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		parenname) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = ((ds) < 1.0f) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		halfread) f=rm_rtdenoise.metal o='!mtl_rtp_above_half(normal.read(px).a)' n='!(half(normal.read(px).a) > 0.5h)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdenoise.metal" ;;
+		nestedread) f=rm_rtwater.metal o='in.dn[i] = mtl_rtp_below1(ds) ?' n='in.dn[i] = (depth.read(uint2(px.x, px.y)) < 1.0f) ?'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+	esac
+	gbf_sub "$rm_dir/$f" "$o" "$n" > "${tmp:?}/gbfm/$f"
+	gbf_why "${tmp:?}/gbfm" > "${tmp:?}/gbf.out"
+	if [ "$(grep -cF -- "$o" "$rm_dir/$f")" != 1 ]; then
+		bad "the G-buffer compare mutant ($m): its target is not in $f exactly once"
+	elif cmp -s "$rm_dir/$f" "${tmp:?}/gbfm/$f"; then
+		bad "the G-buffer compare mutant ($m) changed nothing"
+	elif ! grep -qxF "$want" "${tmp:?}/gbf.out"; then
+		cat "${tmp:?}/gbf.out"
+		bad "the G-buffer compare pin does not refuse its mutant ($m) by its own line ($want)"
+	else
+		gbf_mutants=$((gbf_mutants + 1))
+	fi
+done
+rm -rf "${tmp:?}/gbfm"
+[ "$gbf_mutants" = 16 ] || bad "the G-buffer compare pin refused $gbf_mutants of its 16 mutants by their own lines"
+seg 7.97 "; no G-buffer depth or normal float compare in $gbf_files files, $gbf_mutants mutants refused by their own lines"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"

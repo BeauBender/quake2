@@ -54,6 +54,7 @@ using namespace metal::raytracing;
 
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
+#include "common/mtl_rtp_math.h"   /* FIX219: the G-buffer depth and normal tests (mtl_rtp_below1, mtl_rtp_above_half) */
 #include "common/mtl_rtao_math.h"
 #include "common/mtl_rtt_math.h"
 
@@ -264,7 +265,7 @@ rm_rtao_trace(depth2d<float, access::read> depth [[texture(0)]],
 		const float d = depth.read(px);
 		const float4 nn = normal.read(px);
 
-		if ((d < 1.0f) && (nn.a > 0.5f))
+		if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 		{
 			const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
 			const float3 p = rm_rtao_position(v, px, d);
@@ -362,7 +363,7 @@ rm_rtao_trace1(depth2d<float, access::read> depth [[texture(0)]],
 		const float d = depth.read(px);
 		const float4 nn = normal.read(px);
 
-		if ((d < 1.0f) && (nn.a > 0.5f))
+		if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 		{
 			const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
 			const float3 p = rm_rtao_position(v, px, d);
@@ -420,7 +421,7 @@ rm_rtao_trace_lo(depth2d<float, access::read> depth [[texture(0)]],
 			const float d = depth.read(sp);
 			const float4 nn = normal.read(sp);
 
-			if ((d < 1.0f) && (nn.a > 0.5f))
+			if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 			{
 				const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
 				const float3 p = rm_rtao_position(v, sp, d);
@@ -475,7 +476,7 @@ rm_rtao_upsample(depth2d<float, access::read> depth [[texture(0)]],
 		const float d = depth.read(px);
 		const float4 nn = normal.read(px);
 
-		if ((d < 1.0f) && (nn.a > 0.5f))
+		if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 		{
 			const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
 			const float3 p = rm_rtao_position(v, px, d);
@@ -510,7 +511,7 @@ rm_rtao_upsample(depth2d<float, access::read> depth [[texture(0)]],
 					const float4 ns = normal.read(sp);
 
 					u.w[i] = fx * fy;
-					u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && (ds < 1.0f) && (ns.a > 0.5f);
+					u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && mtl_rtp_below1(ds) && mtl_rtp_above_half(ns.a);
 					u.same[i] = 0;
 
 					if (u.world[i])
@@ -592,7 +593,7 @@ rm_rtao_temporal(depth2d<float, access::read> depth [[texture(0)]],
 		const uint hm = (uint)h.z;
 		float dist = 0.0f;
 
-		if (d < 1.0f)
+		if (mtl_rtp_below1(d))
 		{
 			dist = distance(rm_rtao_position(v, px, d), v.eye.xyz);
 		}
