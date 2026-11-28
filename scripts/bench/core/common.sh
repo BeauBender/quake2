@@ -318,7 +318,9 @@ bench_sv() {
 # supervisor sends the group TERM and CONT, KILL after BENCH_STOP_GRACE
 # seconds (10), and returns once the group is empty. Returns the command's
 # status; 124 past the wall time; 125 when the supervisor could not empty
-# the group (its 126: the command may still run): its group is then
+# the group (its 126: the command may still run), or ended after the spawn
+# with no "reaped" event (a KILL of the supervisor alone: the command was
+# never reaped, bench_bounded_lost), with a note: its group is then
 # recorded in the lock state (bench_bounded_untold), so the lock it runs
 # under is kept while the group has a member, whatever this shell does next
 # (FIX184), and it is said; with no group named, the lock is kept until the
@@ -460,15 +462,23 @@ bench_bounded_run() {
 	_bb_st=0
 	sv_wait || _bb_st=$?
 	bench_bounded_tee
-	# the supervisor's own 124, 125 or 126, by its events; else the command's
-	_bb_w=exit
-	if bench_bounded_ours "$_bb_st"; then _bb_w=$_bb_st; fi
+	# the supervisor's own 124, 125 or 126, by its events; one that ended
+	# with no "reaped" after its "spawned" (KILLed), or with a 127, is its
+	# 126, as a trap's stop reads it (bench_bounded_lost); else the command's
+	_bb_w=exit _bb_l=
+	if bench_bounded_ours "$_bb_st"; then
+		_bb_w=$_bb_st
+	elif bench_bounded_lost "$_bb_st"; then
+		_bb_w=126 _bb_l=$_bb_st
+	fi
 	case $_bb_n:$_bb_w in
 	*:126)
 		BENCH_BOUNDED_HOW=untold
 		bench_bounded_untold
 		bench_bounded_end
-		if [ -n "$_bb_s" ]; then
+		if [ -n "$_bb_l" ]; then
+			bench_note "the process supervisor ended with status $_bb_l before the command's group was empty: it may still run"
+		elif [ -n "$_bb_s" ]; then
 			bench_note "a command outlived its wall time of $_bb_s s, or what it left running did, and it could not be stopped: it may still run"
 		else
 			bench_note "a command, or what it left running, could not be stopped: it may still run"
@@ -530,6 +540,19 @@ bench_bounded_ours() {
 	126) ! bench_bounded_said reaped ;;
 	*) return 1 ;;
 	esac
+}
+
+# bench_bounded_lost <status>: the supervisor's status <status>, which is
+# not its own (bench_bounded_ours), still leaves the command running as far
+# as its events tell: no "reaped" event, and a "spawned" one or a 127. A
+# command's own status always comes with "reaped", so this is a supervisor
+# that was KILLed or died after the spawn, or a shell's wait that collected
+# no status. Both of bench_bounded's paths take it as the supervisor's 126
+# (bench_bounded_run after sv_wait, and bench_bounded_stop): the group is
+# recorded (bench_bounded_untold), and bench_bounded returns 125 with
+# BENCH_BOUNDED_HOW "untold" (review round 2, security B1).
+bench_bounded_lost() {
+	! bench_bounded_said reaped && { [ "$1" -eq 127 ] || bench_bounded_said spawned; }
 }
 
 # bench_bounded_untold: after a supervisor's 126, records the command's
@@ -623,7 +646,7 @@ bench_bounded_stop() {
 	bench_bounded_tee
 	if bench_bounded_ours "$_bs_st"; then
 		[ "$_bs_st" -ne 126 ] || bench_bounded_untold
-	elif ! bench_bounded_said reaped && { [ "$_bs_st" -eq 127 ] || bench_bounded_said spawned; }; then
+	elif bench_bounded_lost "$_bs_st"; then
 		bench_bounded_untold
 	fi
 	bench_bounded_end
