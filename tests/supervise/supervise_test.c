@@ -110,7 +110,7 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 	const char *script = "exec \"$@\"";
 	/* the forms that set up a signal state a shell might change run the supervisor with no shell */
 	int chldign = strcmp(form, "chldign") == 0, pendterm = strcmp(form, "pendterm") == 0;
-	int direct = chldign || pendterm;
+	int direct = chldign || pendterm, hold = strcmp(form, "bghold") == 0;
 
 	memset(r, 0, sizeof(*r));
 	r->ev = r->clk = r->hel = r->err = -1;
@@ -122,10 +122,19 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 	{
 		script = "exec \"$@\" <&- >&- 2>&-";
 	}
-	else if (strcmp(form, "bg") == 0)
+	else if (strcmp(form, "bg") == 0 || hold)
 	{
 		/* the supervisor a child of the caller shell, which the case can kill (parent-gone) */
 		script = "\"$@\" & wait \"$!\"";
+	}
+	else if (strcmp(form, "orphan") == 0)
+	{
+		/*
+		 * the caller gone before the supervisor starts: the shell exits at
+		 * once and is reaped, its subshell waits for a line on the clock
+		 * pipe (4), then execs the supervisor, re-parented (orphan)
+		 */
+		script = "(read x <&4; exec \"$@\") & exit 0";
 	}
 	else if (strcmp(form, "sandbox") == 0)
 	{
@@ -189,6 +198,15 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 			unsetenv("SUPERVISE_TEST_CLOCK_FD");
 		}
 		setenv("FAKE_HELLO_FD", "5", 1);
+		if (hold)
+		{
+			/* the test build holds between its read of the caller's pid and the watch */
+			setenv("SUPERVISE_TEST_PARENT_HOLD", "4", 1);
+		}
+		else
+		{
+			unsetenv("SUPERVISE_TEST_PARENT_HOLD");
+		}
 		/* no case depends on how the gate was started: dispositions and mask are set here */
 		{
 			sigset_t none;
@@ -1410,9 +1428,18 @@ c_parent_gone(struct run *r)
 	{
 	}
 	r->shell = 0;
-	if (!probe(r) || at(r, "parent-gone") < 0 || at(r, "term-sent") < 0)
+	if (!probe(r))
 	{
-		return fail(r, "the caller's death stopped nothing (events: %s)", r->log);
+		return fail(r, "the supervisor ended before the probe (events: %s)", r->log);
+	}
+	/* each of the two for its own reason (review round 1, security N4) */
+	if (at(r, "parent-gone") < 0)
+	{
+		return fail(r, "the caller's death was not seen (events: %s)", r->log);
+	}
+	if (at(r, "term-sent") < 0)
+	{
+		return fail(r, "the caller's death sent the group no TERM (events: %s)", r->log);
 	}
 	if (expect_line(r, l, "sig=TERM", "the leader") || expect_gone(r, l, "the leader"))
 	{
@@ -1432,6 +1459,83 @@ c_parent_gone(struct run *r)
 		return fail(r, "something of the group %d is left", (int)r->pgid);
 	}
 	return 0;
+}
+
+/*
+ * no_run: the supervisor, whose caller is gone, ran nothing: no spawned
+ * event before its events closed (end of file), and its line <said> on
+ * standard error. The supervisor is no child of the runner then, so its
+ * status cannot be read: the line stands for it, since it is said only
+ * with the status 125. The command (a fake told to exit 0) ends by itself
+ * if it was run.
+ */
+static int
+no_run(struct run *r, const char *said)
+{
+	if (ev_wait(r, "spawned") != NULL)
+	{
+		return fail(r, "a supervisor whose caller is gone ran its command (events: %s)", r->log);
+	}
+	finish(r);
+	if (strstr(r->errtxt, said) == NULL)
+	{
+		return fail(r, "no line \"%s\" (125): %s", said, r->errtxt);
+	}
+	return 0;
+}
+
+/*
+ * the caller is gone before the supervisor starts (review round 1:
+ * security I1, correctness I1, spec I5): the shell that started its
+ * subshell has exited and been reaped, so the subshell, and the supervisor
+ * it execs, is re-parented (getppid() is 1). It runs nothing (125)
+ */
+static int
+c_orphan(struct run *r)
+{
+	const char *args[] = { "exit", "0", NULL };
+	int st;
+
+	if (start(r, "orphan", NULL, NULL, args))
+	{
+		return 1;
+	}
+	while (waitpid(r->shell, &st, 0) < 0 && errno == EINTR)
+	{
+	}
+	r->shell = 0;
+	tick(r, '\n');
+	return no_run(r, ": the caller is gone already\n");
+}
+
+/*
+ * the caller goes between the supervisor's read of its pid and the watch
+ * (review round 1, correctness N1): the test build holds there
+ * (SUPERVISE_TEST_PARENT_HOLD, a byte on the clock), the case KILLs the
+ * caller and reaps it, then lets the supervisor go on. The watch is
+ * refused, or getppid() is no longer the caller: it runs nothing (125)
+ */
+static int
+c_parent_race(struct run *r)
+{
+	const char *args[] = { "exit", "0", NULL };
+	int st;
+
+	if (start(r, "bghold", NULL, NULL, args))
+	{
+		return 1;
+	}
+	if (ev_wait(r, "parent-hold") == NULL)
+	{
+		return fail(r, "no parent-hold event: the test build did not hold before the watch (events: %s)", r->log);
+	}
+	kill(r->shell, SIGKILL);
+	while (waitpid(r->shell, &st, 0) < 0 && errno == EINTR)
+	{
+	}
+	r->shell = 0;
+	tick(r, 'W');
+	return no_run(r, " is gone, or cannot be watched\n");
 }
 
 static const struct
@@ -1461,6 +1565,8 @@ static const struct
 	{ "stderr-escape", c_stderr_escape, 0 },
 	{ "events-twice", c_events_twice, 0 },
 	{ "parent-gone", c_parent_gone, 1 },
+	{ "orphan", c_orphan, 0 },
+	{ "parent-race", c_parent_race, 1 },
 };
 
 int
