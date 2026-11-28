@@ -530,6 +530,14 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$@" < /dev/null > "$_p_d/log" 2>&1 &
 	fi
 	_p_rc=0
 	wait "$_p_c" 2> /dev/null || _p_rc=$?
+	# after a KILL of the caller, the supervisor's parent watch stops the
+	# stand-ins (TASK221 slice 3): up to 10 s for that, while the flag that
+	# would end them by themselves is still there
+	_p_n=0
+	while [ "$_p_case" = kill ] && { [ "$(verdict "$_p_d/child.pid")" = runs ] || [ "$(verdict "$_p_d/gc.pid")" = runs ]; } && [ "$_p_n" -lt 100 ]; do
+		sleep 0.1
+		_p_n=$((_p_n + 1))
+	done
 	printf '%s %s: caller exit %s%s%s; child %s; grandchild %s\n' "$_p_who" "$_p_case" "$_p_rc" "$_p_h" "$_p_w" \
 		"$(verdict "$_p_d/child.pid")" "$(verdict "$_p_d/gc.pid")"
 	# the stand-ins end by themselves once the flag is gone
@@ -1406,7 +1414,8 @@ sv_case "$here" pollint 30 polled polled 'exec sleep 30'
 sv_judge pollint
 
 # 3. the probe: TERM and INT stop the child and the grandchild; the wall
-# time does too; nothing can run after a KILL of the caller, so both stay
+# time does too; after a KILL of the caller, the supervisor's parent watch
+# (parent-gone, TASK221 slice 3) stops both: on main they stayed
 pout=$(probe "$here")
 printf '%s\n' "$pout" | sed "s/^/$me: probe: /"
 for c in pins ios-sim ios-device; do
@@ -1414,8 +1423,8 @@ for c in pins ios-sim ios-device; do
 		printf '%s\n' "$pout" | grep -E "^$c $k: caller exit [1-9][0-9]*; child gone; grandchild gone$" > /dev/null ||
 			{ echo "$me: FAIL: probe $c $k: the caller must fail and leave nothing running"; fails="$fails probe-$c-$k"; }
 	done
-	printf '%s\n' "$pout" | grep -E "^$c kill: caller exit 137; child runs; grandchild runs$" > /dev/null ||
-		{ echo "$me: FAIL: probe $c kill: the stand-ins outlive a KILL of the caller"; fails="$fails probe-$c-kill"; }
+	printf '%s\n' "$pout" | grep -E "^$c kill: caller exit 137; child gone; grandchild gone$" > /dev/null ||
+		{ echo "$me: FAIL: probe $c kill: the stand-ins outlived a KILL of the caller: the supervisor did not stop them"; fails="$fails probe-$c-kill"; }
 done
 # a second signal in ios-sim's late cleanup call stops that call too, and
 # the scratch directory still goes (FIX131)
@@ -2106,8 +2115,9 @@ esac
 # a trap that runs in a bare nap prints its lines (FIX192, round 2): with fd
 # 8 closed, a TERM in bench_nap runs the caller's trap and its EXIT trap,
 # and both lines reach standard error. The mutant puts the nap's /dev/null
-# on its wait (TASK221 slice 3: the nap waits for its sleep itself), which
-# then covers the trap that runs in it
+# on a group around its wait (TASK221 slice 3: the nap waits for its sleep
+# itself), which then covers the trap that runs in it (a /dev/null on the
+# wait alone does not: bash runs the trap after the builtin's redirection)
 nap_trap() {
 	_nt_d=$W/nap-$(basename "$1")
 	rm -rf "$_nt_d"
@@ -2139,12 +2149,12 @@ nout=$(nap_trap "$here")
 echo "$me: $nout"
 [ "$nout" = "nap trap: exit 143; stderr [on_signal: stopping|cleanup ran|]" ] ||
 	{ echo "$me: FAIL: nap trap: a trap in a bare nap must print its lines and its EXIT trap's to standard error"; fails="$fails nap-trap"; }
-if sv_stage "$W/stage-nap" scripts/bench/core/common.sh '	wait "$!" || _bn_st=$?' '	wait "$!" 2> /dev/null || _bn_st=$?'; then
+if sv_stage "$W/stage-nap" scripts/bench/core/common.sh '	wait "$!" || _bn_st=$?' '	{ wait "$!"; } 2> /dev/null || _bn_st=$?'; then
 	mout=$(nap_trap "$W/stage-nap")
 	case $mout in
 	"nap trap: exit 143; stderr []") echo "$me: mutant nap-quiet-wait: refused ($mout)" ;;
 	*)
-		echo "$me: FAIL: mutant nap-quiet-wait (the nap's /dev/null on its wait) passed the nap trap case: $mout"
+		echo "$me: FAIL: mutant nap-quiet-wait (the nap's /dev/null on a group around its wait) passed the nap trap case: $mout"
 		fails="$fails nap-quiet-wait"
 		;;
 	esac
