@@ -258,7 +258,9 @@ spawn_launch()
 }
 
 # await_launch <seconds>: waits that long at most (whole seconds) for the
-# launch client's supervisor to end, and collects it; false while it runs
+# launch client's supervisor to end, and collects it; false while it runs.
+# Once it is collected lpid is cleared at once, so the EXIT trap's cleanup
+# never signals a pid this script has reaped (review round 1, security N1)
 await_launch()
 {
 	local n=0
@@ -268,6 +270,7 @@ await_launch()
 		n=$((n + 1))
 	done
 	wait "$lpid" 2>/dev/null || :
+	lpid=
 }
 
 # stop_spawned <pid>: ends the launch client spawn_launch started as <pid>,
