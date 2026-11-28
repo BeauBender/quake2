@@ -70,6 +70,7 @@ static int dir_active;              /* this frame traces the direct light */
 static int dir_viewed;              /* RM_RTDir_View handed this frame's view to the back end */
 static const rm_world_t *dir_world; /* the map whose lights are uploaded */
 static char dir_map[MAX_QPATH];     /* its model name (a new map's buffers may take the old one's address) */
+static int dir_lmtex;               /* its lightmap array, the bounce's (FIX197: a reload at the same address has a new one) */
 static long dir_nlights;            /* the records uploaded: the lights, then the emissive faces */
 static int dir_fixed;               /* the frame's exposure is r_rt_direct_exposure's */
 static float dir_fit;               /* the map's exposure, fitted at its load (TASK188 slice 3c, rm_rtdir_fit_tree) */
@@ -93,6 +94,7 @@ RM_RTDir_Init(const rmb_caps_t *caps)
 	dir_opened = dir_refused = dir_active = dir_viewed = dir_fixed = 0;
 	dir_world = fit_world = NULL;
 	dir_map[0] = fit_map[0] = '\0';
+	dir_lmtex = 0;
 	dir_nlights = 0;
 }
 
@@ -376,13 +378,15 @@ RM_RTDir_Lights(void)
 	rm_rtdir_emitpack_t ewhy;
 	long nemit = 0;
 
-	if ((dir_world == wm->world) && !strcmp(dir_map, wm->name))
+	/* FIX197: a same-name reload at the same address has a new lightmap array, so it is built again */
+	if (rm_rtdir_lights_current(dir_world, dir_map, dir_lmtex, wm->world, wm->name, wm->world->lmtex))
 	{
 		return;
 	}
 
 	dir_world = wm->world;
 	Q_strlcpy(dir_map, wm->name, sizeof(dir_map));
+	dir_lmtex = wm->world->lmtex;
 	memset(&why, 0, sizeof(why));
 	memset(&ewhy, 0, sizeof(ewhy));
 

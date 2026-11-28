@@ -378,6 +378,22 @@ float rm_rtdir_bounce_scale(float v);
 long rm_rtdir_bounce_table(const rm_surfrec_t *recs, long nrecs, const float (*albedo)[3], unsigned *out,
 		unsigned long ntris);
 
+/*
+ * FIX197: 1 when what RM_RTDir_Lights uploaded is still the current
+ * world's, so it returns early: the world it was built for (last, its
+ * model name last_name and its lightmap array's texture id last_lmtex,
+ * rm_world_t.lmtex) is the world, the name and the array of now. A new
+ * world, a new name or a new array is 0: the lights, the emissive faces
+ * and the bounce records are built again. A world freed and made again
+ * at the same address on a same-name reload (flushmap 1) has a new
+ * array, so the bounce never keeps a freed id; one whose new array took
+ * the old id back names a live array, the current world's. Two arrays of
+ * 0 (none made) are the same; an array gone to 0 is a new one. A NULL
+ * name is never current.
+ */
+int rm_rtdir_lights_current(const void *last, const char *last_name, int last_lmtex, const void *world, const char *name,
+		int lmtex);
+
 /* One frame's direct-light pass, for the r_rt_stats 2 line (counted on the GPU, read once the frame completed). */
 typedef struct
 {

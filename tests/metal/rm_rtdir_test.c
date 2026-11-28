@@ -998,6 +998,21 @@ binding_broken(const char *src)
 
 	memset(text + (acc.body - text), ' ', acc.nbody);
 
+	/*
+	 * TASK189 slice 2: the bounce's array the world's (rmb_rtdir_set_bounce's lmtex), bound at index 7 while it
+	 * is there, its records' count taken at the encode; FIX197: a check of its own, ahead of the binding list,
+	 * so a mutant of it is refused for that
+	 */
+	r = pin_and(pin_count(tr.body, tr.nbody, "[ce setTexture:(lm_ok ? atlas : white_arr) atIndex:7];", 1),
+		pin_count(tr.body, tr.nbody, "id<MTLTexture> atlas = brec_lmtex ? rmb_texture_for_draw(brec_lmtex) : nil;", 1));
+	r = pin_and(r, pin_count(text, strlen(text), "brec_lmtex = lmtex;", 1));
+	r = pin_and(r, pin_count(tr.body, tr.nbody, "view.nbrec = (brec && lm_ok && geom_ok) ? (unsigned)nbrec : 0u;", 1));
+
+	if (r != PIN_OK)
+	{
+		return PIN_WHY(r, "the bounce's lightmap array: index 7 is not the world's lightmap array");
+	}
+
 	r = ((count_in(text, strlen(text), "setTexture") == (int)n) && (count_in(tr.body, tr.nbody, "setTexture") == (int)n)) ?
 		PIN_OK : PIN_BROKEN;
 
@@ -1032,10 +1047,6 @@ binding_broken(const char *src)
 	r = pin_and(r, pin_count(text, strlen(text), "view.ndlights = ndlights;", 1));
 	/* TASK188 slice 3c: the table's count taken at the encode, beside its binding, whatever the order of the calls before */
 	r = pin_and(r, pin_count(tr.body, tr.nbody, "view.nself = selftab ? (unsigned)nself : 0u;", 1));
-	/* TASK189 slice 2: the bounce's array the world's (rmb_rtdir_set_bounce's lmtex), its records' count taken at the encode */
-	r = pin_and(r, pin_count(tr.body, tr.nbody, "id<MTLTexture> atlas = brec_lmtex ? rmb_texture_for_draw(brec_lmtex) : nil;", 1));
-	r = pin_and(r, pin_count(text, strlen(text), "brec_lmtex = lmtex;", 1));
-	r = pin_and(r, pin_count(tr.body, tr.nbody, "view.nbrec = (brec && lm_ok && geom_ok) ? (unsigned)nbrec : 0u;", 1));
 
 	if ((r != PIN_OK) || (count_in(text, strlen(text), "atIndex:10]") != 1) || (count_in(text, strlen(text), "atIndex:11]") != 1) ||
 		(count_in(text, strlen(text), "view.ndlights") != 1) || (count_in(text, strlen(text), "view.nself") != 1))
@@ -3322,6 +3333,82 @@ bounce_broken(const char *src)
 		return "rm_rtdir_bounce or rm_rtdir_tri_lm is not defined once";
 	}
 
+	/*
+	 * FIX197: the rules a mutant breaks, each a check of its own ahead of the
+	 * whole-body pins below, so each mutant is refused by the rule its name
+	 * says (test_bounce_kernel asserts each one's line)
+	 */
+	if (count_in(b.body, b.nbody, "\tif (!mtl_rtsky_bounces(v.show, v.bounce.x))\n") != 1)
+	{
+		return "the view gate: the bounce is not traced by the view's own show and scale";
+	}
+
+	if ((count_in(b.body, b.nbody, "px.y, 2u)], v.frame, 2u)") != 1) || (count_in(b.body, b.nbody, "px.y, 3u)], v.frame, 3u)") != 1) ||
+		(count_in(b.body, b.nbody, "mtl_rtao_noise(") != 2))
+	{
+		return "the bounce's numbers: its direction is not the tile's third and fourth numbers";
+	}
+
+	if (count_in(b.body, b.nbody, "\tfor (int face = 0; face <= MTL_RTDIR_LAYERS; face++)\n") != 1)
+	{
+		return "the layer bound: the faces the bounce passes are not bounded by MTL_RTDIR_LAYERS";
+	}
+
+	if (count_in(b.body, b.nbody, "(tri >= v.nbrec)") != 1)
+	{
+		return "the record bound: a bounce record past the table is read";
+	}
+
+	if (count_in(b.body, b.nbody, "(slice >= atlas.get_array_size())") != 1)
+	{
+		return "the slice bound: a lightmap slice past the array's layers is read";
+	}
+
+	if (count_in(b.body, b.nbody, "rm_rtdir_seen(") != 0)
+	{
+		return "the shadow ray: the bounce casts a ray of its own at its hit";
+	}
+
+	if ((count_in(b.params, b.nparams, "texture2d<") != 0) || (count_in(b.body, b.nbody, ".read(") != 0))
+	{
+		return "the own lightmap: the bounce reads a lightmap at the pixel, not at its hit";
+	}
+
+	if ((count_in(b.body, b.nbody, "\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n") != 1) ||
+		(count_in(b.body, b.nbody, "l = ") != 1))
+	{
+		return "the styled lightmap: the hit's light is not the frame's lightmap array";
+	}
+
+	if ((count_in(b.body, b.nbody, "mtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 0u), l.r, v.bounce.x)") != 1) ||
+		(count_in(b.body, b.nbody, "mtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 1u), l.g, v.bounce.x)") != 1) ||
+		(count_in(b.body, b.nbody, "mtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 2u), l.b, v.bounce.x)") != 1))
+	{
+		return "the albedo: the bounce's term is not its record's albedo times the light and the scale";
+	}
+
+	if (words_in(b.body, b.nbody, "sky") != 0)
+	{
+		return "the sky's colour: the bounce adds the sky at a hit, which the sky light already counts";
+	}
+
+	if ((count_in(lm.body, lm.nbody, "\tst = float2(mtl_rtsky_bary(a0.z, a1.z, a2.z, bc.x, bc.y), "
+		"mtl_rtsky_bary(a0.w, a1.w, a2.w, bc.x, bc.y));\n") != 1) || (count_in(lm.body, lm.nbody, " * g.stride4 + 1];\n") != 3))
+	{
+		return "the lightmap coordinates: rm_rtdir_tri_lm does not read the hit triangle's lightmap coordinates";
+	}
+
+	if ((count_in(lm.body, lm.nbody, "(tri >= g.ntris)") != 1) ||
+		(count_in(lm.body, lm.nbody, "(i0 >= g.nverts) || (i1 >= g.nverts) || (i2 >= g.nverts)") != 1))
+	{
+		return "the vertex bound: rm_rtdir_tri_lm reads a triangle or a vertex past the buffers";
+	}
+
+	if (count_in(k.body, k.nbody, "bounce, v.exposure)") != 0)
+	{
+		return "the exposure: the bounce's term is exposed with the traced light";
+	}
+
 	r = pin_and(pin_count(k.body, k.nbody, KERNEL_BOUNCE, 1), pin_count(k.body, k.nbody, KERNEL_WRITE, 1));
 
 	if ((r != PIN_OK) || (words_in(k.body, k.nbody, "bounce") != 2) || (count_in(text, strlen(text), "rm_rtdir_bounce(") != 2))
@@ -3377,6 +3464,12 @@ bounces_broken(const char *src)
 	if (r != PIN_OK)
 	{
 		return PIN_WHY(r, "mtl_rtsky_bounces does not trace the bounce under the picture and view 7 alone");
+	}
+
+	/* FIX197: the layer bound a check of its own, so a mutant that widens it is refused for that */
+	if (count_in(a.body, a.nbody, "(layer < MTL_RTDIR_LAYERS)") != 1)
+	{
+		return "the layer bound: mtl_rtsky_bounce_at passes faces past MTL_RTDIR_LAYERS";
 	}
 
 	r = pin_and(pin_is(a.params, a.nparams, "(unsigned mat, int layer)"), pin_is(a.body, a.nbody, BOUNCE_AT_BODY));
@@ -3618,23 +3711,132 @@ test_bounce(void)
 }
 
 /*
+ * FIX197: what RM_RTDir_Lights uploaded is kept only for the world, the
+ * name and the lightmap array it was built for. A world freed and made
+ * again at the same address with the same name (flushmap 1, or the same
+ * map loaded again) has a new array: the bounce records are built again,
+ * so they never name the freed one. Each case with its verdict; the
+ * line printed is the one tests/check-ref-metal.sh's reload mutant
+ * (lmtex-dropped) must show.
+ */
+static void
+test_reload(void)
+{
+	static const char wa[1], wb[1];
+	static const struct
+	{
+		const char *why;
+		const void *last, *world;
+		const char *last_name, *name;
+		int last_lmtex, lmtex, current;
+	} cases[] = {
+		{ "same world, name and array: kept", wa, wa, "maps/base1.bsp", "maps/base1.bsp", 7, 7, 1 },
+		{ "a same-name reload with a new lightmap array is not built again", wa, wa, "maps/base1.bsp",
+			"maps/base1.bsp", 7, 9, 0 },
+		{ "a new world: built again", wa, wb, "maps/base1.bsp", "maps/base1.bsp", 7, 7, 0 },
+		{ "a new name: built again", wa, wa, "maps/base1.bsp", "maps/base2.bsp", 7, 7, 0 },
+		{ "no array before or now: kept", wa, wa, "maps/base1.bsp", "maps/base1.bsp", 0, 0, 1 },
+		{ "an array gone to none: built again", wa, wa, "maps/base1.bsp", "maps/base1.bsp", 7, 0, 0 },
+		{ "an array made where none was: built again", wa, wa, "maps/base1.bsp", "maps/base1.bsp", 0, 7, 0 },
+		{ "no array and a new world: built again", wa, wb, "maps/base1.bsp", "maps/base1.bsp", 0, 0, 0 },
+		{ "the pass reopened (no world uploaded): built again", NULL, wa, "maps/base1.bsp", "maps/base1.bsp", 7, 7, 0 },
+		{ "nothing uploaded yet: built again", NULL, wa, "", "maps/base1.bsp", 0, 7, 0 },
+		{ "a NULL name: built again", wa, wa, NULL, "maps/base1.bsp", 7, 7, 0 },
+	};
+	int i;
+
+	for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++)
+	{
+		const int got = rm_rtdir_lights_current(cases[i].last, cases[i].last_name, cases[i].last_lmtex, cases[i].world,
+				cases[i].name, cases[i].lmtex);
+
+		if (got != cases[i].current)
+		{
+			printf("reload: %s\n", cases[i].why);
+		}
+
+		CHECK(got == cases[i].current);
+	}
+}
+
+/* the glue's key, RM_RTDir_Lights's one early return: the pure rule's, with the world's array now and the one stored */
+#define RELOAD_GLUE "\tif (rm_rtdir_lights_current(dir_world, dir_map, dir_lmtex, wm->world, wm->name, wm->world->lmtex))\n" \
+	"\t{\n" \
+	"\t\treturn;\n" \
+	"\t}\n" \
+	"\n" \
+	"\tdir_world = wm->world;\n" \
+	"\tQ_strlcpy(dir_map, wm->name, sizeof(dir_map));\n" \
+	"\tdir_lmtex = wm->world->lmtex;\n"
+
+/* NULL when rm_rtdirscene.c's text (src) keys the upload by rm_rtdir_lights_current alone, else the rule broken */
+static const char *
+reload_glue_broken(const char *src)
+{
+	static char text[65536];
+	fn_t li;
+
+	strip_comments(src, text, sizeof(text));
+
+	if (!find_fn(text, "static void\nRM_RTDir_Lights(", &li))
+	{
+		return "RM_RTDir_Lights is not defined once";
+	}
+
+	if ((pin_count(li.body, li.nbody, RELOAD_GLUE, 1) != PIN_OK) ||
+		(count_in(text, strlen(text), "rm_rtdir_lights_current(") != 1) || (words_in(text, strlen(text), "dir_lmtex") != 4) ||
+		(count_in(li.body, li.nbody, "return;") != 1))
+	{
+		return "the upload is not kept by the world, the name and the lightmap array it was built for";
+	}
+
+	return NULL;
+}
+
+/* the glue holds the key, and a mutant that drops the array from it (reload-glue-lmtex) is refused for that */
+static void
+test_reload_glue(void)
+{
+	static char scene[65536], m[65536 + 1024];
+	const char *why;
+
+	CHECK(read_file("src/client/refresh/metal/rm_rtdirscene.c", scene, sizeof(scene)));
+	why = reload_glue_broken(scene);
+
+	if (why)
+	{
+		printf("rm_rtdirscene.c: %s\n", why);
+	}
+
+	CHECK(why == NULL);
+	CHECK(mutate(scene, "dir_lmtex, wm->world, wm->name, wm->world->lmtex))", "dir_lmtex, wm->world, wm->name, dir_lmtex))", m,
+		sizeof(m)));
+	why = reload_glue_broken(m);
+	CHECK(why && !strcmp(why, "the upload is not kept by the world, the name and the lightmap array it was built for"));
+}
+
+/*
  * The kernel's file holds the bounce's rules, and each mutant of one
- * breaks a check (bounce_broken's, or kernel_broken's for the lightmap
- * at the pixel): a second shadow ray at the hit (bounce-shadow-ray), the
- * hit's light not the frame's lightmap with its styles but a constant
- * (bounce-unstyled), the bounce traced and added under every view, view 1
- * among them (bounce-view1), the pixel's own lightmap read (bounce-own-lm),
- * the term before the exposure (bounce-exposed), the albedo left out
- * (bounce-no-albedo), the faces passed unbounded (bounce-unbounded), the
- * sky ray's numbers reused (bounce-sky-numbers), the sky's colour at a sky
- * hit, counted twice (bounce-sky-lit), a record past the table read
- * (bounce-unbounded-rec) and the term dropped from the write
- * (bounce-dropped); in mtl_rtsky_math.h (bounces_broken): view 1 tracing
- * it (view1-bounce), the sky shaded (bounce-sky-shade), view 7 not alone
- * (bounce-not-alone), the layers widened (bounce-layers) and two rays
- * (bounce-two-rays); in rmb_rtdir.m and rm_rtdirscene.c: another texture
- * than the world's lightmap array bound (bounce-white-array,
- * bounce-other-texture, bounce-no-lmtex).
+ * breaks a check (bounce_broken's): a second shadow ray at the hit
+ * (bounce-shadow-ray), the hit's light not the frame's lightmap with its
+ * styles but a constant (bounce-unstyled), the bounce traced and added
+ * under every view, view 1 among them (bounce-view1), the pixel's own
+ * lightmap read (bounce-own-lm), the term before the exposure
+ * (bounce-exposed), the albedo left out (bounce-no-albedo), the faces
+ * passed unbounded (bounce-unbounded), the sky ray's numbers reused
+ * (bounce-sky-numbers), the sky's colour at a sky hit, counted twice
+ * (bounce-sky-lit), a record past the table read (bounce-unbounded-rec),
+ * the term dropped from the write (bounce-dropped), and (FIX197) a slice
+ * past the array read (bounce-unbounded-slice), the hit's diffuse
+ * coordinates read for its lightmap's (tri-lm-diffuse-st) and a vertex
+ * past the buffer read (tri-lm-unbounded-vert); in mtl_rtsky_math.h
+ * (bounces_broken): view 1 tracing it (view1-bounce), the sky shaded
+ * (bounce-sky-shade), view 7 not alone (bounce-not-alone), the layers
+ * widened (bounce-layers) and two rays (bounce-two-rays); in rmb_rtdir.m
+ * and rm_rtdirscene.c: another texture than the world's lightmap array
+ * bound (bounce-white-array, bounce-other-texture, bounce-no-lmtex).
+ * FIX197: each mutant names the check that refuses it, and the test
+ * holds each to that check's own line.
  */
 static void
 test_bounce_kernel(void)
@@ -3645,40 +3847,64 @@ test_bounce_kernel(void)
 
 	static const struct
 	{
-		const char *name, *edit[3][2];
+		const char *name, *edit[3][2], *why;
 	} mutants[] = {
 		{ "bounce-shadow-ray", { { "\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n",
 			"\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n"
-			"\t\tl *= rm_rtdir_seen(ray(o, dir, 0.0f, hit.distance), ias, inst, tmat, ntris, 0u);\n" } } },
-		{ "bounce-unstyled", { { "\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n", "\t\tl = float3(1.0f);\n" } } },
-		{ "bounce-view1", { { "mtl_rtsky_bounces(v.show, v.bounce.x)", "mtl_rtsky_bounces(0u, v.bounce.x)" } } },
+			"\t\tl *= rm_rtdir_seen(ray(o, dir, 0.0f, hit.distance), ias, inst, tmat, ntris, 0u);\n" } },
+			"the shadow ray: the bounce casts a ray of its own at its hit" },
+		{ "bounce-unstyled", { { "\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n", "\t\tl = float3(1.0f);\n" } },
+			"the styled lightmap: the hit's light is not the frame's lightmap array" },
+		{ "bounce-view1", { { "mtl_rtsky_bounces(v.show, v.bounce.x)", "mtl_rtsky_bounces(0u, v.bounce.x)" } },
+			"the view gate: the bounce is not traced by the view's own show and scale" },
 		{ "bounce-own-lm", { { "\t\tdevice const uint *brec, thread rm_rtdir_tally &t)\n{",
 			"\t\tdevice const uint *brec, thread rm_rtdir_tally &t, texture2d<float, access::read> lm)\n{" },
 			{ "\t\tl = atlas.sample(rm_rtdir_lmsmp, st, slice, level(0.0f)).rgb;\n", "\t\tl = lm.read(px).rgb;\n" },
-			{ "atlas, verts, idx, g, brec, t) : float3(0.0f);", "atlas, verts, idx, g, brec, t, lm) : float3(0.0f);" } } },
+			{ "atlas, verts, idx, g, brec, t) : float3(0.0f);", "atlas, verts, idx, g, brec, t, lm) : float3(0.0f);" } },
+			"the own lightmap: the bounce reads a lightmap at the pixel, not at its hit" },
 		{ "bounce-exposed", { { KERNEL_WRITE,
-			"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + bounce, v.exposure), open + bounce, v.show), px);" } } },
+			"light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw + bounce, v.exposure), open + bounce, v.show), px);" } },
+			"the exposure: the bounce's term is exposed with the traced light" },
 		{ "bounce-no-albedo", { { "mtl_rtsky_bounce_term(mtl_rtsky_brec_albedo(rec, 0u), l.r, v.bounce.x)",
-			"mtl_rtsky_bounce_term(1.0f, l.r, v.bounce.x)" } } },
-		{ "bounce-unbounded", { { "for (int face = 0; face <= MTL_RTDIR_LAYERS; face++)", "for (int face = 0; face <= 64; face++)" } } },
+			"mtl_rtsky_bounce_term(1.0f, l.r, v.bounce.x)" } },
+			"the albedo: the bounce's term is not its record's albedo times the light and the scale" },
+		{ "bounce-unbounded", { { "for (int face = 0; face <= MTL_RTDIR_LAYERS; face++)", "for (int face = 0; face <= 64; face++)" } },
+			"the layer bound: the faces the bounce passes are not bounded by MTL_RTDIR_LAYERS" },
 		{ "bounce-sky-numbers", { { "px.y, 2u)], v.frame, 2u)", "px.y, 0u)], v.frame, 0u)" },
-			{ "px.y, 3u)], v.frame, 3u)", "px.y, 1u)], v.frame, 1u)" } } },
+			{ "px.y, 3u)], v.frame, 3u)", "px.y, 1u)], v.frame, 1u)" } },
+			"the bounce's numbers: its direction is not the tile's third and fourth numbers" },
 		{ "bounce-sky-lit", { { "\t\tif ((at != MTL_RTSKY_BOUNCE_SHADE) || (tri >= v.nbrec))\n\t\t{\n\t\t\treturn float3(0.0f);\n",
-			"\t\tif ((at != MTL_RTSKY_BOUNCE_SHADE) || (tri >= v.nbrec))\n\t\t{\n\t\t\treturn (m == 4u) ? v.sky.rgb : float3(0.0f);\n" } } },
-		{ "bounce-unbounded-rec", { { "(tri >= v.nbrec)", "(tri == 0xffffffffu)" } } },
-		{ "bounce-dropped", { { KERNEL_WRITE, "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show), px);" } } },
+			"\t\tif ((at != MTL_RTSKY_BOUNCE_SHADE) || (tri >= v.nbrec))\n\t\t{\n\t\t\treturn (m == 4u) ? v.sky.rgb : float3(0.0f);\n" } },
+			"the sky's colour: the bounce adds the sky at a hit, which the sky light already counts" },
+		{ "bounce-unbounded-rec", { { "(tri >= v.nbrec)", "(tri == 0xffffffffu)" } },
+			"the record bound: a bounce record past the table is read" },
+		{ "bounce-dropped", { { KERNEL_WRITE, "light_out.write(rm_rtdir_out_open(rm_rtdir_out(raw, v.exposure), open, v.show), px);" } },
+			"the bounce does not join the exposed light once, in the world's write" },
+		{ "bounce-unbounded-slice", { { "(slice >= atlas.get_array_size()) ||", "(slice == 0xffffffffu) ||" } },
+			"the slice bound: a lightmap slice past the array's layers is read" },
+		{ "tri-lm-diffuse-st", { { "mtl_rtsky_bary(a0.z, a1.z, a2.z, bc.x, bc.y), mtl_rtsky_bary(a0.w, a1.w, a2.w, bc.x, bc.y)",
+			"mtl_rtsky_bary(a0.x, a1.x, a2.x, bc.x, bc.y), mtl_rtsky_bary(a0.y, a1.y, a2.y, bc.x, bc.y)" } },
+			"the lightmap coordinates: rm_rtdir_tri_lm does not read the hit triangle's lightmap coordinates" },
+		{ "tri-lm-unbounded-vert", { { "if ((i0 >= g.nverts) || (i1 >= g.nverts) || (i2 >= g.nverts))",
+			"if ((i0 >= g.nverts) || (i1 >= g.nverts))" } },
+			"the vertex bound: rm_rtdir_tri_lm reads a triangle or a vertex past the buffers" },
 	};
 
 	static const struct
 	{
-		const char *name, *from, *to;
+		const char *name, *from, *to, *why;
 	} hmutants[] = {
 		{ "view1-bounce", "\treturn ((show == 0u) || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n",
-			"\treturn ((show <= 1u) || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n" },
-		{ "bounce-sky-shade", "\tif (mat == 1u)\n", "\tif ((mat == 1u) || (mat == 4u))\n" },
-		{ "bounce-not-alone", " || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n}\n\n/*\n * Slice 2", ") ? 1 : 0;\n}\n\n/*\n * Slice 2" },
-		{ "bounce-layers", "(layer < MTL_RTDIR_LAYERS))\n\t{\n\t\treturn MTL_RTSKY_BOUNCE_PASS;", "(layer < 64))\n\t{\n\t\treturn MTL_RTSKY_BOUNCE_PASS;" },
-		{ "bounce-two-rays", "#define MTL_RTSKY_BOUNCE_RAYS 1\n", "#define MTL_RTSKY_BOUNCE_RAYS 2\n" },
+			"\treturn ((show <= 1u) || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n",
+			"mtl_rtsky_bounces does not trace the bounce under the picture and view 7 alone" },
+		{ "bounce-sky-shade", "\tif (mat == 1u)\n", "\tif ((mat == 1u) || (mat == 4u))\n",
+			"mtl_rtsky_bounce_at does not shade world faces alone and pass water and glass" },
+		{ "bounce-not-alone", " || (show == MTL_RTSKY_SHOW_BOUNCE)) ? 1 : 0;\n}\n\n/*\n * Slice 2", ") ? 1 : 0;\n}\n\n/*\n * Slice 2",
+			"mtl_rtsky_alone is not the views 5, 6 and 7" },
+		{ "bounce-layers", "(layer < MTL_RTDIR_LAYERS))\n\t{\n\t\treturn MTL_RTSKY_BOUNCE_PASS;", "(layer < 64))\n\t{\n\t\treturn MTL_RTSKY_BOUNCE_PASS;",
+			"the layer bound: mtl_rtsky_bounce_at passes faces past MTL_RTDIR_LAYERS" },
+		{ "bounce-two-rays", "#define MTL_RTSKY_BOUNCE_RAYS 1\n", "#define MTL_RTSKY_BOUNCE_RAYS 2\n",
+			"the bounce is not one ray a pixel in the bound, or its view not 7" },
 	};
 
 	CHECK(read_file("src/client/refresh/metal/common/mtl_rtsky_math.h", hdr, sizeof(hdr)));
@@ -3701,9 +3927,13 @@ test_bounce_kernel(void)
 		{
 			printf("bounce mutant %s: %s\n", hmutants[i].name, applied ? "passes the bounce check" : "does not apply");
 		}
+		else if (strcmp(why, hmutants[i].why))
+		{
+			printf("bounce mutant %s: refused by \"%s\", not by \"%s\"\n", hmutants[i].name, why, hmutants[i].why);
+		}
 
-		CHECK(applied && (why != NULL));
-		refused += (applied && why) ? 1 : 0;
+		CHECK(applied && why && !strcmp(why, hmutants[i].why));
+		refused += (applied && why && !strcmp(why, hmutants[i].why)) ? 1 : 0;
 	}
 
 	CHECK(read_file("src/client/refresh/metal/rm_rtdir.metal", src, sizeof(src)));
@@ -3728,17 +3958,8 @@ test_bounce_kernel(void)
 			applied = mutate(m2, mutants[i].edit[e][0], mutants[i].edit[e][1], m, sizeof(m));
 		}
 
+		/* FIX197: refused by the check its name says, ahead of the whole-body pins, and by no other */
 		why = applied ? bounce_broken(m) : NULL;
-
-		if (applied && !why)
-		{
-			why = kernel_broken(m);
-		}
-
-		if (applied && !why)
-		{
-			why = open_broken(m);
-		}
 
 		/* by hand: RM_RTDIR_MUTANTS=<dir> writes each mutant to <dir>/<name>.metal, to compile it */
 		if (applied && getenv("RM_RTDIR_MUTANTS"))
@@ -3762,23 +3983,29 @@ test_bounce_kernel(void)
 		{
 			printf("bounce mutant %s: %s\n", mutants[i].name, applied ? "passes the bounce check" : "does not apply");
 		}
+		else if (strcmp(why, mutants[i].why))
+		{
+			printf("bounce mutant %s: refused by \"%s\", not by \"%s\"\n", mutants[i].name, why, mutants[i].why);
+		}
 
-		CHECK(applied && (why != NULL));
-		refused += (applied && why) ? 1 : 0;
+		CHECK(applied && why && !strcmp(why, mutants[i].why));
+		refused += (applied && why && !strcmp(why, mutants[i].why)) ? 1 : 0;
 	}
 
 	/* the host side: the world's lightmap array, the one R_RegenAllLightmaps keeps with the frame's styles, bound */
 	CHECK(read_file("src/client/refresh/metal/rmb_rtdir.m", host, sizeof(host)));
 	CHECK(binding_broken(host) == NULL);
+	/* bounce-white-array, bounce-other-texture: refused by the bounce's array check, by its own line */
 	CHECK(mutate(host, "[ce setTexture:(lm_ok ? atlas : white_arr) atIndex:7];", "[ce setTexture:white_arr atIndex:7];", m, sizeof(m)));
 	why = binding_broken(m);
-	CHECK(why != NULL);
-	refused += why ? 1 : 0;
+	CHECK(why && !strcmp(why, "the bounce's lightmap array: index 7 is not the world's lightmap array"));
+	refused += (why && !strcmp(why, "the bounce's lightmap array: index 7 is not the world's lightmap array")) ? 1 : 0;
 	CHECK(mutate(host, "rmb_texture_for_draw(brec_lmtex)", "rmb_texture_for_draw(1)", m, sizeof(m)));
 	why = binding_broken(m);
-	CHECK(why != NULL);
-	refused += why ? 1 : 0;
+	CHECK(why && !strcmp(why, "the bounce's lightmap array: index 7 is not the world's lightmap array"));
+	refused += (why && !strcmp(why, "the bounce's lightmap array: index 7 is not the world's lightmap array")) ? 1 : 0;
 
+	/* bounce-no-lmtex: the scene hands the back end the world's array, by its own line */
 	CHECK(read_file("src/client/refresh/metal/rm_rtdirscene.c", scene, sizeof(scene)));
 	CHECK(count_in(scene, strlen(scene), "rmb_rtdir_set_bounce(rec, ntris, w->lmtex)") == 1);
 	CHECK(mutate(scene, "rmb_rtdir_set_bounce(rec, ntris, w->lmtex)", "rmb_rtdir_set_bounce(rec, ntris, 0)", m, sizeof(m)));
@@ -3827,6 +4054,8 @@ main(void)
 	test_mode();
 	test_sky_sun();
 	test_bounce();
+	test_reload();
+	test_reload_glue();
 	test_bounce_kernel();
 	printf("rm_rtdir_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
