@@ -615,7 +615,10 @@ limit" "$out"
     fi
 
     # the host lock (a private BENCH_STATE, the bench harness copied into the tree): the generator takes it
-    # once for its whole run, pins.sh passes straight through, and every way out leaves the lock free
+    # once for its whole run, pins.sh passes straight through, and every way out leaves the lock free. The
+    # tree gets the process supervisor's library (scripts/lib/supervise.sh and supervise.c) beside the bench
+    # core, as the repository has it: since TASK221 slice 3 the lock runs its command under that supervisor,
+    # and a core with no scripts/lib beside it refuses every lock run with 2
     if has lock; then
     export MFX_NATIVE_TGA="$tmp/a.tga" MFX_OPT_TGA="$tmp/other.tga"
     # the seconds stop_group gives pins.sh between TERM and KILL: when pins.sh may be the lock shell of a
@@ -624,6 +627,7 @@ limit" "$out"
     # the generator (the lock's grace, at least BENCH_STOP_GRACE + 5)
     out=$(python3 -I "$HELP" "$d" stop-wait 2>&1); [ "$out" = "25 11 25 65 25 25 2000000003 25 25 / 10 1 10 30 10 10 999999999 10 10" ] || ko e2e-lock-grace "$out"
     lt="$w/lt"; mktree "$lt" "$d/mfx.py"; cp "$tmp/pins-stub-locked" "$lt/scripts/pins.sh"; cp -R "$root/scripts/bench" "$lt/scripts/bench"
+    cp "$root/scripts/lib/supervise.sh" "$root/scripts/lib/supervise.c" "$lt/scripts/lib/"
     # the ways out during record(), each of which ends the run under the lock, the grandchild included,
     # and leaves the lock free:
     #   timeout  sh_group alone (no hold of its own), so the stub pins.sh is the lock shell of its own hold:
@@ -731,6 +735,7 @@ limit" "$out"
     # under the generator's hold each record and each timed engine run passes straight through (the holder
     # they see is metalfx-report)
     lk="$w/lk"; mktree "$lk" "$d/mfx.py"; cp "$tmp/pins-stub-locked" "$lk/scripts/pins.sh"; cp -R "$root/scripts/bench" "$lk/scripts/bench"
+    cp "$root/scripts/lib/supervise.sh" "$root/scripts/lib/supervise.c" "$lk/scripts/lib/"
     python3 -I "$HELP" mutate "$d/mfx.py" "$lk/scripts/metalfx-report/mfx.py" 'env=env, timeout=900)' 'env=env, timeout=4)' > "$w/lk-mut.log" ||
         ko e2e-lock-wait "cannot shorten the record's limit: $(cat "$w/lk-mut.log")"
     st="$w/lk-state"; bsh="$lk/scripts/bench/bench.sh"
