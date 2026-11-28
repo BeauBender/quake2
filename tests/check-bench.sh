@@ -3472,6 +3472,14 @@ t_digit_cap() {
 		env "$_s=999999999" sh "$R/bench.sh" lock run cap -- true > /dev/null 2>&1 || _st=$?
 		[ "$_st" -eq 0 ] || bad "cap: $_s=999999999 was refused (status $_st)"
 	done
+	# the lock's grace, twice BENCH_STOP_GRACE, is clamped to the supervisor's
+	# largest --grace (9 digits): every accepted grace still runs the command
+	for _v in 999999999 999999995; do
+		rm -f "${E:?}/ran"
+		_st=0
+		env BENCH_STOP_GRACE="$_v" sh "$R/bench.sh" lock run cap -- touch "${E:?}/ran" > "${E:?}/out" 2> "${E:?}/err" || _st=$?
+		[ "$_st" -eq 0 ] && [ -e "${E:?}/ran" ] || bad "cap: the lock grace for BENCH_STOP_GRACE=$_v is past the supervisor's limit (status $_st): $(sed -n 1p "${E:?}/err")"
+	done
 	for _k in warmup wall; do
 		zcase "$_k" 999999999
 		_st=0
