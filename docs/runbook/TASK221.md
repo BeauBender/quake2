@@ -1059,6 +1059,18 @@ On `34b13b2c` unless said:
 | `tests/check-bounded-run.sh`, `scripts/ios-sim.sh selftest`, `tests/check-ci-parity.sh` | see the report |
 | `tests/check-gate-parallel.sh`, `tests/check-require-guards.sh`, the whole `tests/check-bench.sh` (with its time on main and on the branch, `uptime` each) | the hold script, `hold-TASK221s3.sh` |
 
+Review round 1, from the worktree:
+
+| Check | Result |
+|---|---|
+| check-bounded-run's `lock kill group` and `lock kill sv126`, extracted, private state | FAIL on `78d0f74b` (the cases on `0d5ae74c`'s code, lines above); ok on `791ab865`; `group-unread` refused there |
+| check-bounded-run's `sv pollint` and `events-kept`, extracted | ok, and refused, on `60dbb0c3` |
+| `tests/check-bounded-run.sh guard <root>` | ok on `60dbb0c3` (the new marker listed) |
+| supervise_test `orphan`, `parent-race` (both shells) | FAIL on `8dd195f3` (lines above); ok on `4c0b63d2` |
+| `tests/check-supervise.sh` | ok (6 s), 11 supervise.c mutants, each by its own line, on `649a2a71` |
+| `tests/check-ci-parity.sh`, `tests/check-runbook-index.sh` | ok on `649a2a71` |
+| the whole `tests/check-bounded-run.sh` and `tests/check-bench.sh` (branch only), `check-bench-entry`, the lock's single `check-bench` cases, `check-gate-parallel`, `check-require-guards`, `check-doc-links` and both iOS selftests | the hold script `hold-TASK221s3r1.sh`, on the final commit |
+
 ### Review round 1: #726 and #741
 
 - **#741** (the `bench-poll` scratch directory left in TMPDIR) goes with `bench_poll`,
