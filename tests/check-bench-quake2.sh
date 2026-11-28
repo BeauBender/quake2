@@ -355,7 +355,11 @@ echo "ref_metal: MetalFX supportsDevice: spatial yes, temporal ${FAKE_TEMPORAL:-
 while :; do sleep 0.1; done
 EOF
 chmod +x "$B/release/quake2"
-sed -n 2p "$B/release/quake2" | grep -q "^trap '.*' TERM$" || bad "the stand-in engine's first command is not its TERM trap"
+# the guard: line 2 of a stand-in is its TERM trap; says why on stdout if not
+standin_trap_first() {
+	sed -n 2p "$1" | grep -q "^trap '.*' TERM$" || { echo "the stand-in engine's first command is not its TERM trap"; return 1; }
+}
+_sg=$(standin_trap_first "$B/release/quake2") || bad "$_sg"
 printf '// a comment\nset timedemo 1\nset cl_lights 1\n' > "$B/scenario.cfg"
 run_fake() { # <case> [NAME=value...]: adapter_run into T/run.log
 	_fc=$1
@@ -706,6 +710,20 @@ else
 	fi
 fi
 unset Q2H_ROOT
+# the stand-in mutant (FIX221): the trap moved down one line, below the
+# FAKE_DELAY line (the only line that matches it, so it occurs once), is
+# refused by the guard's own line and not by a non-zero exit alone
+sed '2{N;s/^\(trap .*\)\n\(\[ -z "\${FAKE_DELAY:-}" \] .*\)$/\2\n\1/;}' "$B/release/quake2" > "${T:?}/standin.mut"
+if cmp -s "$B/release/quake2" "${T:?}/standin.mut"; then
+	bad "the stand-in mutant (the TERM trap below the FAKE_DELAY line) did not apply"
+else
+	_sm=$(standin_trap_first "${T:?}/standin.mut" 2> /dev/null) && _smrc=0 || _smrc=$?
+	if [ "$_smrc" -ne 0 ] && [ "$_sm" = "the stand-in engine's first command is not its TERM trap" ]; then
+		echo "$me: mutant (the TERM trap below the FAKE_DELAY line): refused by the stand-in guard"
+	else
+		bad "the mutant (the TERM trap below the FAKE_DELAY line) was not refused by the stand-in guard"
+	fi
+fi
 
 if [ "$fails" -ne 0 ]; then
 	printf '%s: %d failures\n' "$me" "$fails" >&2
