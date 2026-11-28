@@ -12,8 +12,9 @@ notice are upstream's and are unchanged ([LICENSE](LICENSE)).
   id Software's Quake II source release.
 * Fork point: upstream commit `9dbf6992` of 2026-10-15. The tree was
   byte-identical to upstream at that commit.
-* Home of the fork: <https://github.com/BeauBender/quake2>. Report problems
-  there; the project's issues and pull requests are open to its owner only.
+* Home of the fork: <https://github.com/BeauBender/quake2>. Its issues and
+  pull requests are open to its owner only, so bug reports and patches are
+  not accepted.
 
 ## The upstream remote
 
