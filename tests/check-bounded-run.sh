@@ -2252,6 +2252,22 @@ else
 	echo "$me: FAIL: mutant group-unread does not apply"
 	fails="$fails group-unread"
 fi
+# the mutant: bench_bounded's normal path drops the lost rule, so a
+# supervisor KILLed alone passes its 137 off as the command's own status,
+# and the lock shell frees the lock while the command's group runs
+if sv_stage "$W/stage-lost-unread" scripts/bench/core/common.sh '		_bb_w=126 _bb_l=$_bb_st' '		:'; then
+	sv_lockkill "$W/stage-lost-unread" sv
+	case $lk_why in
+	'the lock shell exited 137 at its supervisor'*) echo "$me: mutant lost-unread: refused by lock kill sv ($lk_why)" ;;
+	*)
+		echo "$me: FAIL: mutant lost-unread passed the lock kill sv case: ${lk_why:-held}"
+		fails="$fails lost-unread"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant lost-unread does not apply"
+	fails="$fails lost-unread"
+fi
 # An id with a leading zero is no process group (review round 2, security
 # N1, correctness N1): kill -0 -- -00 is the caller's own group and
 # kill -0 -- -01 is kill(-1, 0), every process. Only a forged lock
