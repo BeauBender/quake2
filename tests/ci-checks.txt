@@ -37,6 +37,7 @@ check-pins-latch.sh
 check-pins.sh
 check-pre-commit-hook.sh
 check-pre-push-hook.sh
+check-prune-branches.sh
 check-ref-metal.sh
 check-refrecord.sh
 check-removed-deps.sh
