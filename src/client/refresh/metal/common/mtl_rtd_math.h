@@ -34,6 +34,7 @@
 
 #include "mtl_shader_math.h"
 #include "mtl_rtao_math.h"
+#include "mtl_rtt_math.h"
 
 /* the blur's reach: 2 pixels on each side, 5 x 5 */
 #define MTL_RTD_RADIUS 2
@@ -63,12 +64,36 @@ typedef struct
 	float pad[3];
 } mtl_rtd_view_t;
 
+/*
+ * FIX222: the count's range as bit patterns, as FIX212's guards
+ * (common/mtl_rtt_math.h): MTL_RTD_COUNT_FULL and MTL_RTD_COUNT_NONE.
+ * Every pattern from the first up to, not at, the second is a positive
+ * number in [1, 16); a negative value has the sign bit and lies above
+ * both, a NaN lies above +inf.
+ */
+#define MTL_RTD_BITS_FULL 0x3f800000u   /* MTL_RTD_COUNT_FULL, 1.0f */
+#define MTL_RTD_BITS_NONE 0x41800000u   /* MTL_RTD_COUNT_NONE, 16.0f */
+
+/*
+ * 1 when a pixel of n samples (the history's weight) has a strength above
+ * 0: n in [1, 16). An integer test of the pattern, not a float compare:
+ * the shaders build with fast math, under which a float compare may be
+ * folded as if no NaN came, so a NaN count is not counted here. For
+ * every n that is not a NaN it gives (n >= 1.0f) && (n < 16.0f).
+ */
+static inline int
+mtl_rtd_counted(float n)
+{
+	const unsigned u = MTL_RTT_BITS(n);
+
+	return (u >= MTL_RTD_BITS_FULL) && (u < MTL_RTD_BITS_NONE);
+}
+
 /* the blur's strength for a pixel of n samples: 1 at 1, 0 from 16, linear between; 0 when no sample or not finite */
 static inline float
 mtl_rtd_strength(float n)
 {
-	/* written so that a NaN fails */
-	if (!(n >= MTL_RTD_COUNT_FULL) || !(n < MTL_RTD_COUNT_NONE))
+	if (!mtl_rtd_counted(n))
 	{
 		return 0.0f;
 	}
@@ -127,7 +152,7 @@ mtl_rtd_weight(int dx, int dy, float d, float dn, mtl_rtao_v3_t n, mtl_rtao_v3_t
 {
 	float w;
 
-	if ((m != mn) || !(cn >= 1.0f))
+	if ((m != mn) || !mtl_rtt_atleast1(cn))
 	{
 		return 0.0f;
 	}
@@ -181,7 +206,7 @@ mtl_rtd_result(mtl_rtd_acc_t a, float v, float n)
 	const float s = mtl_rtd_strength(n);
 	float mean;
 
-	if (!(s > 0.0f) || !(a.wsum > 0.0f))
+	if (!mtl_rtd_counted(n) || !(a.wsum > 0.0f))
 	{
 		return v;
 	}

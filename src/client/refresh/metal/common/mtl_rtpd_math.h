@@ -54,13 +54,14 @@ mtl_rtpd_acc(void)
 
 /*
  * 1 when the filter writes the pixel: a world pixel (mtl_rtp_world) whose
- * history count n leaves the blur a strength above 0 (mtl_rtd_strength:
- * 1 to under 16 samples). Every other pixel keeps the accumulation's.
+ * history count n leaves the blur a strength above 0 (mtl_rtd_counted,
+ * an integer test: 1 to under 16 samples, never a NaN). Every other pixel
+ * keeps the accumulation's.
  */
 static inline int
 mtl_rtpd_on(int world, float n)
 {
-	return world && (mtl_rtd_strength(n) > 0.0f);
+	return world && mtl_rtd_counted(n);
 }
 
 /*

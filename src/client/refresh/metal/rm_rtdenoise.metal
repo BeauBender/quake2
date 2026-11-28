@@ -117,7 +117,7 @@ rm_rtao_denoise(texture2d<float, access::read> normal [[texture(1)]],
 		const float4 hc = hist.read(px);
 		const uint m = (uint)hc.z;
 
-		if ((m != MTL_GB_MAT_WORLD) || !(mtl_rtd_strength(hc.w) > 0.0f) || !mtl_rtp_above_half(normal.read(px).a))
+		if ((m != MTL_GB_MAT_WORLD) || !mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(normal.read(px).a))
 		{
 			return;
 		}
@@ -164,7 +164,7 @@ rm_rtsun_denoise(texture2d<float, access::read> normal [[texture(1)]],
 		const float4 hc = hist.read(px);
 		const float4 nv = normal.read(px);
 
-		if (!(mtl_rtd_strength(hc.w) > 0.0f) || !mtl_rtp_above_half(nv.a))
+		if (!mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(nv.a))
 		{
 			return;
 		}

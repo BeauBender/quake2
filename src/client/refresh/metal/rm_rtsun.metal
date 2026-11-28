@@ -571,7 +571,7 @@ rm_rtsun_denoise_lo(depth2d<float, access::read> depth [[texture(0)]],
 		const float4 hc = hist.read(px);
 		const float4 nv = normal.read(rm_rtsun_lo_src(px, v.div, fw, fh));
 
-		if (!(mtl_rtd_strength(hc.w) > 0.0f) || !mtl_rtp_above_half(nv.a))
+		if (!mtl_rtd_counted(hc.w) || !mtl_rtp_above_half(nv.a))
 		{
 			return;
 		}
