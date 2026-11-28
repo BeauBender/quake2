@@ -126,6 +126,7 @@ MARKED='
 scripts/bench/core/common.sh the primitive: bench_pid_alive
 scripts/bench/core/lock.sh the lock: its holder group still has a member; it signals none
 scripts/bench/core/lock.sh the lock: a recorded group still has a member; it signals none
+scripts/bench/core/lock.sh the lock: the group its supervisor named still has a member; it signals none
 scripts/lib/supervise.sh sv_wait: its own supervisor is there
 scripts/test.sh the gate parent watch: it polls the caller, and sends TERM only
 scripts/ios-sim.sh selftest: the fake xcrun terminate, only the app it started
@@ -2164,6 +2165,22 @@ for _lkm in group sv126; do
 		echo "$me: ok   lock kill sv126: a KILLed lock shell and its supervisor's 126 keep the lock while the command's group runs (75), then it is reclaimed"
 	fi
 done
+# the mutant: the waiters no longer read the group the supervisor named
+# (bench_lock_alive drops bench_lock_group_live), so the lock is taken as
+# gone while the command runs
+if sv_stage "$W/stage-group-unread" scripts/bench/core/lock.sh '	bench_lock_group_live && return 0' '	:'; then
+	sv_lockkill "$W/stage-group-unread" group
+	case $lk_why in
+	'the lock was taken as gone while the command'*) echo "$me: mutant group-unread: refused by lock kill group ($lk_why)" ;;
+	*)
+		echo "$me: FAIL: mutant group-unread passed the lock kill group case: ${lk_why:-held}"
+		fails="$fails group-unread"
+		;;
+	esac
+else
+	echo "$me: FAIL: mutant group-unread does not apply"
+	fails="$fails group-unread"
+fi
 # A command's own 124, 125 and 126 are its own (correctness B1, round 1):
 # the supervisor passes the command's status through, so bench_bounded
 # tells its own 124 (the wall time), 125 (cannot run) and 126 (cannot empty

@@ -839,8 +839,15 @@ so each is this slice's:
   takes `SV_STDIN3`: the supervisor reads fd 3, which `bench_bounded_run` opens on its
   standard input (a closed one is `/dev/null`).
 - **The holder names the supervisor** as `child=`, through `BENCH_BOUNDED_STARTED`
-  (`bench_lock_started`), once it has started. The supervisor lives while anything of
-  the command's group runs, so the waiters take the lock as alive while it does.
+  (`bench_lock_started`), once it has started. The supervisor shares the lock shell's
+  process group, so neither pid stands for the command's group (review round 1,
+  security B1, correctness I2, spec I4). The command's group is named in the lock
+  directory instead: the lock run keeps the supervisor's events file there
+  (`BENCH_BOUNDED_EVDIR`, `<state>/lock/bench-sv.<pid>.<random>`), and the waiters read
+  the group from its `spawned ... pgid=<pgid>` line (`bench_lock_group_live`), which
+  the supervisor writes as soon as the group exists. A holder an older harness wrote
+  (`child=` the command, its group's leader) is still read as before, through
+  `kill -0 -- -<child>`.
 - **The status contract.** The command's own status; 75 for the wait; 127 for a command
   that cannot be run; on the supervisor's 126 ("could not stop") the group is recorded
   (`bench_bounded_untold`), the lock is kept while it has a member (the release waits,
@@ -942,8 +949,14 @@ instructions file outside this card, for the owner to retire.
   exit 0; on the branch exit 130. With INT at its default in the caller both give 130.
   No other `trap`, `set -m` or process-group line changed: bench.sh's `trap '' INT
   TERM HUP` is unchanged, and `set -m` went with `bench_spawn`.
-- **A KILLed lock shell** leaves no command running: the supervisor's parent watch stops
-  the group. The waiters take the lock as alive while the supervisor (`child=`) runs.
+- **A KILLed lock shell** leaves no command running when its supervisor lives: the
+  parent watch stops the group. Whatever kills the lock shell or the supervisor (a KILL
+  of the lock shell's whole process group takes both; a supervisor that then cannot
+  empty the group exits 126 with no shell left to record it), the waiters take the lock
+  as alive while the group the supervisor named in the lock directory has a member, and
+  reclaim it once the group is empty (round 1; cases `lock kill group` and `lock kill
+  sv126` in check-bounded-run, mutant `group-unread`). A pid that leads a new group under
+  the same id before the reclaim keeps the lock until it ends, as `child=` did on main.
 - **An older harness's pid record** (no `group=` or `hand=`) holds the lock while its
   pid answers `kill -0`: the start time no longer decides (fail closed).
 

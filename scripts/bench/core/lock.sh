@@ -3,8 +3,9 @@
 # The lock is the directory <state>/lock, made with mkdir (atomic: of two
 # callers, exactly one makes it). Its holder file, <state>/lock/holder,
 # carries
-#   label=<label> pid=<lock shell> child=<command> start=<UTC> token=<token>
-# one per line. The maker writes it to a temporary name and links it into
+#   label=<label> pid=<lock shell> child=<supervisor> start=<UTC> token=<token>
+# one per line (child= is the command's supervisor since TASK221 slice 3;
+# an older harness wrote the command itself there). The maker writes it to a temporary name and links it into
 # place (ln, which fails when a holder file is there already, so it never
 # replaces another maker's), then checks that the lock directory is still
 # the one it made (its inode, read right after the mkdir) and still carries
@@ -12,7 +13,7 @@
 # caller. So a maker that stalls between the mkdir and the write for longer
 # than the grace below, while a waiter reclaims the directory and a third
 # caller makes it again, backs off instead of holding the lock with it. The
-# holder then rewrites the file with the command's pid by a rename. The
+# holder then rewrites the file with the supervisor's pid by a rename. The
 # state directory is $BENCH_STATE, else $XDG_CACHE_HOME/bench-state, else
 # $HOME/.cache/bench-state: per user, the same for every repository and
 # worktree, and refused inside a git work tree.
@@ -51,7 +52,8 @@
 # caller.
 #
 # Reclaim: a lock whose holder pid and child pid are both gone (kill -0
-# fails), and whose command's process group has no member left, is
+# fails), and whose command's process group (as its supervisor named it in
+# the lock directory, or, from an older harness, child=) has no member left, is
 # reclaimed and the reclaim is logged, on standard error and in
 # <state>/lock.log. Two waiters that see the same dead holder race for the
 # guard directory <state>/reclaim.<token> (mkdir again): the winner reads
@@ -74,8 +76,14 @@
 # stopped by the terminal, and stays stopped, holding the lock, until a
 # signal stops the lock shell (74 is gone: the supervisor does not tell a
 # stopped command apart). A terminal's Ctrl-C reaches the lock shell, not
-# the command. The holder file's child= is the supervisor's pid, which
-# lives while anything of the command's group runs.
+# the command. The holder file's child= is the supervisor's pid. The
+# supervisor shares the lock shell's process group, so neither pid stands
+# for the command's group: the supervisor's events file is kept in the lock
+# directory (<state>/lock/bench-sv.<pid>.<random>, BENCH_BOUNDED_EVDIR),
+# and its "spawned ... pgid=<pgid>" line, which the supervisor writes as
+# soon as the group exists, names that group to the waiters
+# (bench_lock_group_live). The file goes with the bounded run's end, and
+# with the lock's release or reclaim.
 #
 # Release: the EXIT, INT, TERM and HUP traps of bench.sh call
 # bench_lock_release, which removes the lock only while the holder file
@@ -89,8 +97,13 @@
 # stopped the same way by the supervisor before it returns. So nothing
 # left in the command's process group outlives the lock. If the lock shell
 # itself is KILLed, the supervisor sees its parent go and stops the group
-# (parent-gone); the waiters take the lock as alive while the supervisor
-# (child=) runs.
+# (parent-gone). Whatever kills the lock shell or the supervisor (a KILL
+# of the lock shell's whole process group takes both; a supervisor that
+# then cannot empty the group exits 126 with no shell left to record it),
+# the waiters take the lock as alive while the group named in the lock
+# directory has a member (bench_lock_group_live), and reclaim it once the
+# group is empty. A pid that leads a new group under the same id before
+# the reclaim keeps the lock until it ends, as child= did before.
 #
 # Commands that could not be stopped (FIX184, TASK221): a supervisor that
 # could not empty its command's process group (its 126, "could not stop"),
@@ -309,11 +322,11 @@ bench_lock_reclaim() {
 	_lr_tok=$(bench_kv "$_lr_h" token)
 	if [ -n "$1" ]; then
 		if [ "$_lr_tok" = "$1" ] && ! bench_lock_alive "$_lr_h"; then
-			rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}"/holder.tmp.* "${BENCH_LOCK_DIR:?}"/untold.*
+			rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}"/holder.tmp.* "${BENCH_LOCK_DIR:?}"/untold.* "${BENCH_LOCK_DIR:?}"/bench-sv.*
 			if rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then _lr_st=0; fi
 		fi
-	elif [ -d "${BENCH_LOCK_DIR:?}" ] && [ ! -e "${BENCH_LOCK_DIR:?}/holder" ] && ! bench_lock_untold_live; then
-		rm -f "${BENCH_LOCK_DIR:?}"/holder.tmp.* "${BENCH_LOCK_DIR:?}"/untold.*
+	elif [ -d "${BENCH_LOCK_DIR:?}" ] && [ ! -e "${BENCH_LOCK_DIR:?}/holder" ] && ! bench_lock_untold_live && ! bench_lock_group_live; then
+		rm -f "${BENCH_LOCK_DIR:?}"/holder.tmp.* "${BENCH_LOCK_DIR:?}"/untold.* "${BENCH_LOCK_DIR:?}"/bench-sv.*
 		if rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then _lr_st=0; fi
 	fi
 	rmdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null || true
@@ -541,7 +554,7 @@ bench_lock_release() {
 	# 1): other sessions hold their work while the command may still run.
 	bench_quiet_release owned
 	if [ -n "$_rl_m" ]; then
-		rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}"/holder.tmp.* "${BENCH_LOCK_DIR:?}"/untold.*
+		rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}"/holder.tmp.* "${BENCH_LOCK_DIR:?}"/untold.* "${BENCH_LOCK_DIR:?}"/bench-sv.*
 		rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null || true
 	fi
 	return 0
@@ -727,17 +740,40 @@ bench_lock_grace() {
 	printf '%s\n' "$_lg_l"
 }
 
+# bench_lock_group_live: the command under the lock may still run: an
+# events file of its supervisor in the lock directory (bench-sv.<pid>.*,
+# the lock run's BENCH_BOUNDED_EVDIR) names its process group in a
+# "spawned" line, and that group still has a member. The supervisor
+# writes that line itself as soon as the group exists, so the lock is held
+# while the group runs whatever kills the lock shell or the supervisor
+# (review round 1, security B1). Only regular files are read, never a link
+# or a FIFO (the tap's).
+bench_lock_group_live() {
+	[ -n "${BENCH_LOCK_DIR:-}" ] || return 1
+	for _gl_f in "${BENCH_LOCK_DIR:?}"/bench-sv.*; do
+		if [ ! -f "$_gl_f" ] || [ -h "$_gl_f" ]; then continue; fi
+		_gl_p=$(awk '$1 == "spawned" { for (i = 2; i <= NF; i++) if (index($i, "pgid=") == 1) v = substr($i, 6) } END { print v }' "$_gl_f" 2> /dev/null) || continue
+		case $_gl_p in
+		'' | 0 | 1 | *[!0-9]*) continue ;;
+		esac
+		kill -0 -- "-$_gl_p" 2> /dev/null && return 0 # bounded-run: allowed: the lock: the group its supervisor named still has a member; it signals none
+	done
+	return 1
+}
+
 # bench_lock_alive <holder text>: the holder's lock shell or its child (the
-# command's supervisor, which lives while anything of the command's group
-# runs) is alive, a command recorded as one that could not be stopped may
-# still run (bench_lock_untold_live, FIX184), or, for a holder an older
-# harness wrote (child= the command itself), the command's process group
-# still has a member.
+# command's supervisor) is alive, a command recorded as one that could not
+# be stopped may still run (bench_lock_untold_live, FIX184), the command's
+# process group, as its supervisor named it in the lock directory, still
+# has a member (bench_lock_group_live), or, for a holder an older harness
+# wrote (child= the command itself, its group's leader), the group child=
+# names still has a member.
 bench_lock_alive() {
 	_lv_c=$(bench_kv "$1" child)
 	bench_pid_alive "$(bench_kv "$1" pid)" && return 0
 	bench_pid_alive "$_lv_c" && return 0
 	bench_lock_untold_live && return 0
+	bench_lock_group_live && return 0
 	case $_lv_c in
 	'' | 0 | 1 | *[!0-9]*) return 1 ;;
 	esac
@@ -788,8 +824,11 @@ bench_lock_run() {
 	BENCH_LOCK_LABEL=$_ru_label
 	BENCH_BOUNDED_STARTED=bench_lock_started
 	BENCH_BOUNDED_QUIT= BENCH_BOUNDED_UNTIL=
+	# the supervisor's events go to the lock directory, where its "spawned"
+	# line names the command's group to the waiters (bench_lock_group_live)
+	BENCH_BOUNDED_EVDIR=$BENCH_LOCK_DIR
 	bench_bounded_run "" "$(bench_lock_grace)" "$_ru_in" - "$@" || _ru_st=$?
-	BENCH_BOUNDED_STARTED=
+	BENCH_BOUNDED_STARTED= BENCH_BOUNDED_EVDIR=
 	exit "$_ru_st"
 }
 

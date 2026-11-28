@@ -281,6 +281,7 @@ BENCH_BOUNDED_UNTIL=
 BENCH_BOUNDED_EV=
 BENCH_BOUNDED_TEE=
 BENCH_BOUNDED_STARTED=
+BENCH_BOUNDED_EVDIR=
 BENCH_SV=
 
 # The process supervisor's library (scripts/lib, TASK221): beside this
@@ -557,11 +558,14 @@ bench_bounded_untold() {
 # bench_bounded_ev: makes the events file, BENCH_BOUNDED_EV: a name mktemp
 # gives (-u), set before the file is made (noclobber, mode 0600), so a
 # trap that runs at any point finds its own file by that name
-# (bench_bounded_end), and only that one (correctness N3, round 1)
+# (bench_bounded_end), and only that one (correctness N3, round 1). It is
+# made in TMPDIR, or in BENCH_BOUNDED_EVDIR when that is set: the lock run
+# keeps its events in the lock directory, where the waiters read the
+# command's group from them (bench_lock_group_live, TASK221 slice 3)
 bench_bounded_ev() {
 	_be_n=0
 	while [ "$_be_n" -lt 5 ]; do
-		BENCH_BOUNDED_EV=$(mktemp -u "${TMPDIR:-/tmp}/bench-sv.$$.XXXXXX") || BENCH_BOUNDED_EV=
+		BENCH_BOUNDED_EV=$(mktemp -u "${BENCH_BOUNDED_EVDIR:-${TMPDIR:-/tmp}}/bench-sv.$$.XXXXXX") || BENCH_BOUNDED_EV=
 		[ -n "$BENCH_BOUNDED_EV" ] || return 1
 		if (umask 077 && set -C && : > "$BENCH_BOUNDED_EV") 2> /dev/null; then return 0; fi
 		BENCH_BOUNDED_EV=
