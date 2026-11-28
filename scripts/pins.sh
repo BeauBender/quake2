@@ -500,7 +500,7 @@ build_args() {
 # group, the whole group stopped past <limit> seconds (TERM, 5 s of grace,
 # then SIGKILL), or once the function <until> (empty for none) is true. Sets
 # pb_status (the engine's status, or the primitive's) and pb_how
-# (BENCH_BOUNDED_HOW: exit, wall, stopped, until or untold). An INT, TERM or
+# (BENCH_BOUNDED_HOW: exit, wall, until or untold). An INT, TERM or
 # HUP to this script while it runs stops the group first, then exits 130,
 # 143 or 129 (pins_on_signal).
 pins_lib=
@@ -551,9 +551,6 @@ run_engine() {
     pins_bounded "$limit" "$out/engine.log" "" "$bin"
     case $pb_how in
     exit) run_status=$pb_status ;;
-    stopped)
-        run_status=$pb_status
-        echo "pins: the engine was stopped (a stop signal, or the terminal); ended it" >> "$out/engine.log" ;;
     *)
         run_timedout=1
         echo "pins: engine killed after ${limit}s (PINS_TIMEOUT)" >> "$out/engine.log" ;;
@@ -2113,7 +2110,7 @@ cmd_make_demo() {
     pins_demo_log=$log
     pins_bounded "$limit" "$log" pins_map_missing "$bin"
     case $pb_how in
-    exit|stopped) status=$pb_status ;;
+    exit) status=$pb_status ;;
     until) missing=1 ;;
     *) timedout=1 ;;
     esac

@@ -110,6 +110,36 @@
 # process that took the pid after the record was written), holds nothing:
 # the release, or a reclaim, removes it with the lock. Nothing signals a
 # recorded pid but the shell that started it.
+#
+# A group record (TASK221) is written the same way for a bounded command
+# whose supervisor could not empty its process group (its 126), under the
+# group's id <pgid>, as <state>/lock/untold.<pgid>:
+#   pid=<pgid> start=- written=<when the record is written>
+#   token=<the hold> group=<pgid>
+# It holds the lock while kill -0 -- -<pgid> answers (no process takes a
+# group's id while the group has a member, so no ps is asked), unless ps
+# shows a process with the pid <pgid> that started later than written=
+# (bench_lock_untold_reused): the group emptied, and a process that took
+# the id after the record was written leads a new group under it, which
+# then holds nothing (security I2, round 1). A ps that gives no answer, or
+# a group with no leader left, keeps the lock.
+#
+# A hand record (TASK221, review round 2) is written for a bounded command
+# whose supervisor could not empty its group (its 126) but named no group
+# (no "spawned" event: a failed events write, or its "cannot watch the
+# command"), under the supervisor's pid <id> (the bounding shell's when
+# there is none), as <state>/lock/untold.<id>:
+#   pid=<id> start=- written=<when the record is written>
+#   token=<the hold> hand=<id>
+# Nothing tells when such a command is gone, so it holds the lock until a
+# person removes the record (rm -f <state>/lock/untold.<id>); the lock
+# shell's release waits for that, and so do the waiters. Each line that
+# shows the lock names a hand record as one, with that rm -f, its path in
+# single quotes (bench_lock_hand_rm), since the record's own line can be
+# lost (a caller that sends its standard error to /dev/null, as snap.sh and
+# host.sh do; review round 3): the line bench_lock_record prints, the
+# release's keep note, the waiters' line, and lock status ("hand=<ids>" on
+# the lock line, then "hand=<id> rm -f '<path>'" for each).
 
 BENCH_STATE_DIR=
 BENCH_LOCK_DIR=
@@ -393,6 +423,11 @@ bench_lock_acquire() {
 		else
 			_la_who=free
 		fi
+		# a hand record holds it however the holder stands: named, with
+		# its removal (review round 3)
+		if [ "$_la_who" != free ] && [ -d "${BENCH_LOCK_DIR:?}" ] && bench_lock_untold_live && [ -n "$BENCH_LOCK_HAND" ]; then
+			_la_who="$_la_who; $(bench_lock_hand_note)"
+		fi
 		_la_q=
 		if [ "$BENCH_LOCK_AHEAD" -gt 0 ]; then
 			_la_q=", behind $BENCH_LOCK_AHEAD earlier waiter"
@@ -504,7 +539,9 @@ bench_lock_release() {
 	# which take it as alive (bench_lock_alive) while a record is.
 	if [ -n "$_rl_m" ] && bench_lock_untold_live; then
 		trap '' INT TERM HUP
-		bench_note "keeping the lock while recorded pid $BENCH_LOCK_UNTOLD may run: a command under it that could not be stopped"
+		_rl_n=
+		if [ -n "$BENCH_LOCK_HAND" ]; then _rl_n="; $(bench_lock_hand_note)"; fi
+		bench_note "keeping the lock while recorded pid $BENCH_LOCK_UNTOLD may run: a command under it that could not be stopped$_rl_n"
 		while bench_lock_untold_live; do bench_nap 1; done
 		bench_note "the recorded commands have ended, or their pids are no longer theirs; freeing the lock"
 	fi
@@ -523,10 +560,25 @@ bench_lock_release() {
 # <pid> is still it, with the start time bench_spawn read for it. Only under
 # a lock: the one this process holds, or the one its BENCH_LOCK_TOKEN names
 # (the lock directory is resolved here when this process has not done so).
-# Call it before the command is forgotten (bench_spawn_forget).
+# Call it before the command is forgotten (bench_spawn_forget). With
+# "group" or "hand" after <pid>, a group or hand record (see the top).
 bench_lock_record() {
-	bench_spawned "$1" || return 0
-	_lk_s=${BENCH_ID_START:-?}
+	_lk_g=
+	case ${2:-} in
+	group | hand)
+		# group: a bounded command's process group its supervisor could not
+		# empty (TASK221), live while the group has a member; hand: one
+		# whose supervisor named no group, live until it is removed by hand
+		# (bench_lock_untold_live)
+		_lk_g="$2=$1
+"
+		_lk_s=-
+		;;
+	*)
+		bench_spawned "$1" || return 0
+		_lk_s=${BENCH_ID_START:-?}
+		;;
+	esac
 	if [ -z "${BENCH_LOCK_DIR:-}" ]; then
 		[ -n "${BENCH_LOCK_TOKEN:-}" ] || return 0
 		# A subshell asks first: bench_lock_init dies on a bad setting.
@@ -552,9 +604,13 @@ bench_lock_record() {
 	# A temporary file mktemp makes (a name no other process knows ahead, so
 	# none can plant a link there), renamed into place.
 	_lk_t=$(mktemp "${BENCH_LOCK_DIR:?}/untold.tmp.XXXXXX" 2> /dev/null) || _lk_t=
-	if [ -n "$_lk_t" ] && printf 'pid=%s\nstart=%s\nwritten=%s\ntoken=%s\n' "$1" "$_lk_s" "$_lk_w" "$_lk_k" > "$_lk_t" 2> /dev/null &&
+	if [ -n "$_lk_t" ] && printf 'pid=%s\nstart=%s\nwritten=%s\ntoken=%s\n%s' "$1" "$_lk_s" "$_lk_w" "$_lk_k" "$_lk_g" > "$_lk_t" 2> /dev/null &&
 		mv -f "$_lk_t" "${BENCH_LOCK_DIR:?}/untold.$1" 2> /dev/null; then
-		bench_note "recorded pid $1 in the lock state: the lock is kept while it may still run"
+		if [ "${2:-}" = hand ]; then
+			bench_note "recorded pid $1 in the lock state with no process group to watch: the lock is kept until the record is removed by hand: $(bench_lock_hand_rm "$1")"
+		else
+			bench_note "recorded pid $1 in the lock state: the lock is kept while it may still run"
+		fi
 		return 0
 	fi
 	if [ -n "$_lk_t" ]; then rm -f "$_lk_t"; fi
@@ -609,14 +665,36 @@ bench_lock_untold_reused() {
 }
 
 BENCH_LOCK_UNTOLD=
+BENCH_LOCK_HAND=
+
+# bench_lock_hand_rm <id>: the command that removes the hand record <id>
+# by hand, its path in single quotes, a ' in it written '\'' (review round
+# 3, security N2), so a copied line cannot break
+bench_lock_hand_rm() {
+	_lh_p=$(printf '%s' "${BENCH_LOCK_DIR:?}/untold.$1" | sed "s/'/'\\\\''/g")
+	printf "rm -f '%s'" "$_lh_p"
+}
+
+# bench_lock_hand_note: names each hand record in BENCH_LOCK_HAND (set by
+# bench_lock_untold_live) with its removal, "; " apart, for the lines that
+# show the lock (review round 3, spec I1 and security I1)
+bench_lock_hand_note() {
+	_ln_o=
+	for _ln_i in $BENCH_LOCK_HAND; do
+		_ln_o="${_ln_o:+$_ln_o; }hand record $_ln_i, held until it is removed by hand: $(bench_lock_hand_rm "$_ln_i")"
+	done
+	printf '%s' "$_ln_o"
+}
 
 # bench_lock_untold_live: a command recorded in the lock directory
 # (bench_lock_record) may still run: its pid answers kill -0, and ps shows
 # it with the recorded start time, not a zombie, or cannot tell
 # (bench_proc_same 0 or 2). Sets BENCH_LOCK_UNTOLD to those pids, one blank
-# apart. Only regular files are read, never a link.
+# apart, and BENCH_LOCK_HAND to the hand records among them. Only regular
+# files are read, never a link.
 bench_lock_untold_live() {
 	BENCH_LOCK_UNTOLD=
+	BENCH_LOCK_HAND=
 	[ -n "${BENCH_LOCK_DIR:-}" ] || return 1
 	for _lu_f in "${BENCH_LOCK_DIR:?}"/untold.[0-9]*; do
 		if [ ! -f "$_lu_f" ] || [ -h "$_lu_f" ]; then continue; fi
@@ -626,6 +704,23 @@ bench_lock_untold_live() {
 		'' | 0 | 1 | *[!0-9]*) continue ;;
 		esac
 		_lu_s=$(bench_kv "$_lu_h" start)
+		# a hand record (TASK221, review round 2): no group to watch, so it
+		# is live until it is removed by hand
+		if [ "$(bench_kv "$_lu_h" hand)" = "$_lu_p" ]; then
+			BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"
+			BENCH_LOCK_HAND="${BENCH_LOCK_HAND:+$BENCH_LOCK_HAND }$_lu_p"
+			continue
+		fi
+		# a group record (TASK221): no process takes a group's id while the
+		# group has a member, so no ps is asked
+		if [ "$(bench_kv "$_lu_h" group)" = "$_lu_p" ]; then
+			kill -0 -- "-$_lu_p" 2> /dev/null || continue # bounded-run: allowed: the lock: a recorded group still has a member; it signals none
+			# a later group under the same id: its leader started after the
+			# record was written (security I2, round 1)
+			if bench_lock_untold_reused "$_lu_p" "$(bench_kv "$_lu_h" written)"; then continue; fi
+			BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"
+			continue
+		fi
 		_lu_r=0
 		bench_proc_same "$_lu_p" "$_lu_s" || _lu_r=$?
 		case $_lu_r in
@@ -798,23 +893,28 @@ bench_lock_status() {
 		echo lock=free
 	else
 		_ls_h=$(bench_lock_holder)
+		# The recorded commands that may still run (FIX184), when any, and
+		# the hand records among them: "hand=<ids>" on the lock line, then
+		# a line "hand=<id> rm -f '<path>'" for each (review round 3)
+		_ls_u= _ls_k=
+		if bench_lock_untold_live; then
+			_ls_u=" untold=$(printf '%s' "$BENCH_LOCK_UNTOLD" | tr ' ' ,)"
+			_ls_k=$BENCH_LOCK_HAND
+		fi
+		if [ -n "$_ls_k" ]; then _ls_u="$_ls_u hand=$(printf '%s' "$_ls_k" | tr ' ' ,)"; fi
 		if [ -z "$_ls_h" ]; then
 			# Held only by a recorded command that may still run (FIX184,
 			# round 1), when any.
-			_ls_u=
-			if bench_lock_untold_live; then _ls_u=" untold=$(printf '%s' "$BENCH_LOCK_UNTOLD" | tr ' ' ,)"; fi
 			echo "lock=held label=none holder=unwritten$_ls_u"
 		else
 			_ls_p=$(bench_kv "$_ls_h" pid)
 			_ls_c=$(bench_kv "$_ls_h" child)
 			_ls_a=no
 			if bench_lock_alive "$_ls_h"; then _ls_a=yes; fi
-			# The recorded commands that may still run (FIX184), when any.
-			_ls_u=
-			if bench_lock_untold_live; then _ls_u=" untold=$(printf '%s' "$BENCH_LOCK_UNTOLD" | tr ' ' ,)"; fi
 			printf 'lock=held label=%s pid=%s child=%s alive=%s since=%s%s\n' \
 				"$(bench_kv "$_ls_h" label)" "$_ls_p" "${_ls_c:-none}" "$_ls_a" "$(bench_kv "$_ls_h" start)" "$_ls_u"
 		fi
+		for _ls_x in $_ls_k; do printf 'hand=%s %s\n' "$_ls_x" "$(bench_lock_hand_rm "$_ls_x")"; done
 	fi
 	_ls_i=0
 	for _ls_f in "${BENCH_LOCK_QUEUE:?}"/w.*; do

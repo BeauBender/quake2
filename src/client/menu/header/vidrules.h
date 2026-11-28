@@ -220,9 +220,14 @@ vidrule_t VidRules_PresentationMode(int mode, const char *renderer, int availabl
 /*
  * The ray-tracing screen's switches under the presentation in use (the
  * plan's section 2.3). VidRules_RTOverridden: whether the mode decides
- * switch i (Enhanced: shadows, sun, ambient occlusion, water).
- * VidRules_RTEffective: the switch as the renderer runs it, 1 when the
- * mode decides it, else user (the cvar's value) not 0. VidRules_RTRow is
+ * row i (Enhanced: shadows, sun, ambient occlusion, water), read from the
+ * renderer's own table (src/client/refresh/metal/common/rm_pres_table.h,
+ * TASK237) where the renderer runs the mode.
+ * VidRules_RTEffective: the switch as the renderer runs it, the mode's
+ * value not 0 when the mode decides it, else user (the cvar's value) not
+ * 0. tests/metal/rm_pres_parity_test.c holds both to the renderer's
+ * rm_pres_value. The VIDPRES_ values are the renderer's RM_PRES_ ones.
+ * VidRules_RTRow is
  * VidRules_RTItem under the mode: a switch the mode decides is greyed
  * "set by the presentation", a slider is live while its effect is on as
  * run, effect_user being the cvar of its switch. Mode 0 is VidRules_RTItem.
