@@ -344,6 +344,7 @@ B=${T:?}/build
 mkdir -p "$B/release/baseq2"
 cat > "$B/release/quake2" << 'EOF'
 #!/bin/sh
+trap 'echo "ref_metal: metal_stats: 10 frames, 2 without a drawable, 0 skipped, 0 failed command buffers, 0 readbacks"; exit 0' TERM
 [ -z "${FAKE_DELAY:-}" ] || sleep "$FAKE_DELAY"
 for a; do printf 'arg %s\n' "$a"; done
 [ ! -f "$(dirname "$0")/baseq2/config.cfg" ] || echo "a saved configuration was read"
@@ -351,10 +352,10 @@ echo "Loading library: ${FAKE_LIB:-ref_metal.dylib}"; echo "Loading library: gam
 [ -n "${FAKE_NORT:-}" ] || echo "Metal supportsRaytracing: yes, supportsRaytracingFromRender: yes"
 echo "ref_metal: MetalFX supportsDevice: spatial yes, temporal ${FAKE_TEMPORAL:-yes}, temporal denoised no, frame interpolator no (r_metalfx_modes 7)"
 [ -z "${FAKE_EXIT:-}" ] || exit "$FAKE_EXIT"
-trap 'echo "ref_metal: metal_stats: 10 frames, 2 without a drawable, 0 skipped, 0 failed command buffers, 0 readbacks"; exit 0' TERM
 while :; do sleep 0.1; done
 EOF
 chmod +x "$B/release/quake2"
+sed -n 2p "$B/release/quake2" | grep -q "^trap '.*' TERM$" || bad "the stand-in engine's first command is not its TERM trap"
 printf '// a comment\nset timedemo 1\nset cl_lights 1\n' > "$B/scenario.cfg"
 run_fake() { # <case> [NAME=value...]: adapter_run into T/run.log
 	_fc=$1
