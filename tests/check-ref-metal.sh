@@ -4443,18 +4443,24 @@ seg 7.89 "; AO's fallback count and the upsample lines $aofb_pins pins with $aof
 # src/client/refresh/metal/ and in the headers that test a G-buffer value for a kernel
 # (common/mtl_rtp_math.h, mtl_rtpd_math.h, mtl_rtmt_math.h and mtl_rtw_math.h), no <, >, <= or >= has a
 # depth name on one side and a float literal on the other: d, ds, qd, depth or a depth.read(...), the
-# names the kernels give the G-buffer's depth; nor a normal alpha name: a .a of a vector whose name
-# starts with n (nn, ns, nv, ncv), normal_a, nn_a or a normal.read(...).a. mtl_rtw_alpha_level's own
-# alpha is the parameter a, a name too short for the rule, so it is pinned by itself. A new kernel
-# that names its depth or normal otherwise is not seen: keep to these names. Each failure prints its
+# names the kernels give the G-buffer's depth; nor a normal alpha name: a .a or .w of a vector whose
+# name starts with n (nn, ns, nv, ncv), normal_a, nn_a or a normal.read(...).a or .w. The literal is
+# an integer, a leading-dot, a decimal or an exponent form, with an f, F, h or H suffix; the name, or
+# the literal, may sit in a parenthesis or behind a (float) or (half) cast or a half(...) call, and a
+# .read(...) may hold one level of nested parentheses. mtl_rtw_alpha_level's own alpha is the
+# parameter a, a name too short for the rule, so it is pinned by itself. Out of scope, by design: a
+# compare against a variable (d < far), step() and select() with a variable, and a depth or normal
+# alpha held under a name other than these (a new kernel keeps to these names). Each failure prints its
 # own line, naming the file. Each mutant puts back one of main's compares (the kernel ones are main's
 # text, which compiled), so only this pin sees it, and each must be refused by its own line.
-gbf_num='[0-9]+\.[0-9]*f?'
-gbf_dep='(d|ds|qd|depth|depth\.read\([^()]*\))'
-gbf_nrm='(n[a-z]*\.a|normal_a|nn_a|normal\.read\([^()]*\)\.a)'
+gbf_num='([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?[fFhH]?'
+gbf_dep='(d|ds|qd|depth|depth[.]read[(]([^()]|[(][^()]*[)])*[)])'
+gbf_nrm='(n[a-z]*[.][aw]|normal_a|nn_a|normal[.]read[(]([^()]|[(][^()]*[)])*[)][.][aw])'
+gbf_pre='([(](float|half)[)]|(float|half)?[(])?'	# an optional cast or parenthesis before the name
+gbf_lit='[(]*([(](float|half)[)])?-?'	# the same before the literal
 gbf_pat() { # <name pattern>: a float compare of the name against a float literal, either side
-	printf '(^|[^A-Za-z0-9_.])%s[[:space:]]*[<>]=?[[:space:]]*-?%s|%s[[:space:]]*[<>]=?[[:space:]]*%s([^A-Za-z0-9_.(]|$)' \
-		"$1" "$gbf_num" "$gbf_num" "$1"
+	printf '(^|[^A-Za-z0-9_.])%s%s[)]?[[:space:]]*[<>]=?[[:space:]]*%s%s|(^|[^A-Za-z0-9_.])%s%s[)]?[[:space:]]*[<>]=?[[:space:]]*%s%s[)]?([^A-Za-z0-9_.(]|$)' \
+		"$gbf_pre" "$1" "$gbf_lit" "$gbf_num" "$gbf_lit" "$gbf_num" "$gbf_pre" "$1"
 }
 gbf_dpat=$(gbf_pat "$gbf_dep")
 gbf_npat=$(gbf_pat "$gbf_nrm")
