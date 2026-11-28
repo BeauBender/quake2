@@ -22,7 +22,9 @@
  * into another session or group is named (escaped) and never signalled; a
  * process that does so before this program sees it is not seen at all.
  * A signal ignored when this program starts stays ignored: it is named
- * (ignored) and not forwarded.
+ * (ignored) and not forwarded. The caller (the parent) is watched too: its
+ * exit starts a stop as a TERM does (parent-gone, TASK221), so a caller
+ * that is KILLed leaves nothing of the group running.
  *
  * Status: the command's own (128+n when a signal this program did not send
  * ended it); 124 when the deadline stopped it; 128+n when a forwarded
@@ -34,7 +36,8 @@
  * Events, with --events FD, one line each: "spawned pid=P pgid=P",
  * "exited status=S" (the leader's exit, seen), "deadline",
  * "signal name=N", "ignored name=N", "term-sent name=N", "grace-end",
- * "kill-sent", "escaped pid=Q", "group-empty", "group-left count=K" and
+ * "kill-sent", "escaped pid=Q", "parent-gone pid=Q", "group-empty",
+ * "group-left count=K" and
  * "reaped status=S". On standard error it writes only its own lines, each
  * starting "supervise: " (a control byte in an argument it names is
  * written as \ooo), and never a job notice: it exits with a status
@@ -93,6 +96,7 @@ static int sv_exited;      /* the leader's exit has been seen */
 static int sv_status;      /* and its status: the exit code, or 128+n */
 static int sv_lost;        /* the errno of a failed peek at the leader's exit */
 static int sv_woke = 1;    /* the last batch held more than probes: the state is looked at again */
+static pid_t sv_parent;    /* the caller, watched for its exit; 0 once gone (TASK221) */
 
 /* the processes watched: the leader and the members seen; gone once their exit is seen */
 static pid_t sv_known[SV_MAXPIDS];
@@ -828,6 +832,17 @@ sv_batch(const struct kevent *evs, int n)
 				pid_t p = (pid_t)e->ident;
 				int k = sv_index(p);
 
+				if (p == sv_parent && sv_parent > 0)
+				{
+					/* the caller is gone: the group is stopped as on a TERM */
+					sv_emit("parent-gone pid=%d", (int)p);
+					sv_parent = 0;
+					if (sv_phase == PH_RUN && !sv_exited && sv_why == 0)
+					{
+						sv_why = 128 + SIGTERM;
+					}
+					continue;
+				}
 				if ((e->fflags & NOTE_FORK) && !(e->fflags & NOTE_EXIT))
 				{
 					static pid_t kids[SV_MAXPIDS];
@@ -1026,6 +1041,21 @@ main(int argc, char **argv)
 		if (kevent(sv_kq, &ev, 1, NULL, 0, NULL) < 0)
 		{
 			sv_say("cannot watch %s: %s", sv_signame(sv_watch[i]), strerror(errno));
+			return 125;
+		}
+	}
+	/*
+	 * the caller's exit: watched before the spawn, so a caller that dies at
+	 * any point after this stops the group; one gone already (re-parented)
+	 * or that cannot be watched runs nothing
+	 */
+	sv_parent = getppid();
+	if (sv_parent > 1)
+	{
+		EV_SET(&ev, sv_parent, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+		if (kevent(sv_kq, &ev, 1, NULL, 0, NULL) < 0 || getppid() != sv_parent)
+		{
+			sv_say("the caller %d is gone, or cannot be watched", (int)sv_parent);
 			return 125;
 		}
 	}

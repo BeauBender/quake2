@@ -122,6 +122,11 @@ start(struct run *r, const char *form, const char **opts, const char *cmd, const
 	{
 		script = "exec \"$@\" <&- >&- 2>&-";
 	}
+	else if (strcmp(form, "bg") == 0)
+	{
+		/* the supervisor a child of the caller shell, which the case can kill (parent-gone) */
+		script = "\"$@\" & wait \"$!\"";
+	}
 	else if (strcmp(form, "sandbox") == 0)
 	{
 		script = "exec /usr/bin/sandbox-exec -p '(version 1)(allow default)(deny signal)' \"$@\"";
@@ -1380,6 +1385,55 @@ c_events_twice(struct run *r)
 	return 0;
 }
 
+/*
+ * the caller is KILLed while the command runs (TASK221 slice 3): the
+ * supervisor sees its parent's exit, says so and stops the group as on a
+ * TERM, so nothing of the group outlives the shell that started it
+ */
+static int
+c_parent_gone(struct run *r)
+{
+	struct chan *l;
+	int st = 0;
+
+	if (start(r, "bg", NULL, NULL, NULL) || (l = leader(r)) == NULL)
+	{
+		return 1;
+	}
+	if (l->ppid == r->shell)
+	{
+		return fail(r, "the command's parent is the caller shell, not the supervisor");
+	}
+	kill(r->shell, SIGKILL);
+	/* once the shell is reaped its exit is posted: the probe comes after it is handled */
+	while (waitpid(r->shell, &st, 0) < 0 && errno == EINTR)
+	{
+	}
+	r->shell = 0;
+	if (!probe(r) || at(r, "parent-gone") < 0 || at(r, "term-sent") < 0)
+	{
+		return fail(r, "the caller's death stopped nothing (events: %s)", r->log);
+	}
+	if (expect_line(r, l, "sig=TERM", "the leader") || expect_gone(r, l, "the leader"))
+	{
+		return 1;
+	}
+	if (ev_wait(r, "group-empty") == NULL || ev_wait(r, "reaped") == NULL)
+	{
+		return fail(r, "no group-empty and reaped events: %s", r->log);
+	}
+	finish(r);
+	if (!WIFSIGNALED(st) || WTERMSIG(st) != SIGKILL)
+	{
+		return fail(r, "the caller shell was not ended by the KILL");
+	}
+	if (kill(-r->pgid, 0) == 0 || (errno != ESRCH && errno != EPERM))
+	{
+		return fail(r, "something of the group %d is left", (int)r->pgid);
+	}
+	return 0;
+}
+
 static const struct
 {
 	const char *name;
@@ -1406,6 +1460,7 @@ static const struct
 	{ "stderr", c_stderr, 0 },
 	{ "stderr-escape", c_stderr_escape, 0 },
 	{ "events-twice", c_events_twice, 0 },
+	{ "parent-gone", c_parent_gone, 1 },
 };
 
 int

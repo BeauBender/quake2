@@ -22,7 +22,7 @@
 #             caller shell, the cases that need no test clock against the
 #             release build, and every case against the table of 8.
 #   sanitizer the same cases built with -fsanitize=address,undefined.
-#   mutants   six one-line changes to a copy of supervise.c, each built
+#   mutants   nine one-line changes to a copy of supervise.c, each built
 #             as the test build (no-forget with the table of 8): each must
 #             fail its own case, for its own reason (the runner's FAIL line
 #             names both).
@@ -289,6 +289,11 @@ mutant no-forget cap "the last member's exit woke nothing" \
 	's/^	return sv_known\[k\] != sv_leader \&\& sv_gone\[k\]/	return 0 \&\& sv_gone[k]/' -DSV_MAXPIDS=8
 mutant no-relist untracked "group-empty came while the child of an unwatched member ran" \
 	's/more |= j == nseen;/more |= 0;/' -DSV_MAXPIDS=8
+# TASK221 slice 3: the caller's exit not watched, and seen but not acted on
+mutant no-parent-watch parent-gone "the caller's death stopped nothing" \
+	's/^	if (sv_parent > 1)$/	if (0)/'
+mutant parent-no-stop parent-gone "the caller's death stopped nothing" \
+	's/^\(						\)sv_why = 128 + SIGTERM;$/\1;/'
 
 # shape: no wait on time in the cases. The words are put together so that
 # this line does not match itself.
