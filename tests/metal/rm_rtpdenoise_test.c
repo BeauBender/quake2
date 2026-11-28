@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include "../../src/client/refresh/metal/common/mtl_rtpd_math.h"
+#include "rm_gbuf_edges.h"
 
 static int checks, failures;
 
@@ -328,9 +329,58 @@ test_image(void)
 	CHECK(same);
 }
 
+/*
+ * FIX219: the neighbour's normal alpha over the shared edges and the
+ * 2^12-stride sweep: the weight is RT7's where the old compare
+ * (nn_a > 0.5f, here without fast math) holds and 0 elsewhere, bit for bit,
+ * and 0 for a NaN.
+ */
+static int
+gbe_weight_one(unsigned u)
+{
+	const float a = gbe_float(u);
+	const float got = mtl_rtpd_weight(0, 1, 100.0f, 100.0f, up, up, MTL_GB_MAT_WORLD, MTL_GB_MAT_WORLD, 3.0f, a);
+	const float ref = mtl_rtd_weight(0, 1, 100.0f, 100.0f, up, up, MTL_GB_MAT_WORLD, MTL_GB_MAT_WORLD, 3.0f);
+	unsigned gb, rb;
+
+	if (gbe_is_nan(u) || !(a > 0.5f))
+	{
+		return got == 0.0f;
+	}
+
+	memcpy(&gb, &got, sizeof(gb));
+	memcpy(&rb, &ref, sizeof(rb));
+	return (gb == rb) && (ref > 0.0f);
+}
+
+static void
+test_weight_edges(void)
+{
+	unsigned i;
+	int j, bad = 0;
+
+	for (j = 0; j < GBE_NEDGE; j++)
+	{
+		const int on = mtl_rtpd_weight(0, 1, 100.0f, 100.0f, up, up, MTL_GB_MAT_WORLD, MTL_GB_MAT_WORLD, 3.0f,
+			gbe_float(gbe_edges[j].bits)) > 0.0f;
+
+		printf("gbe: mtl_rtpd_weight nn_a %-22s 0x%08x: %d\n", gbe_edges[j].name, gbe_edges[j].bits, on);
+		CHECK(gbe_weight_one(gbe_edges[j].bits));
+	}
+
+	for (i = 0u; i < GBE_SWEEP_N; i++)
+	{
+		bad += !gbe_weight_one(i << GBE_SWEEP_SHIFT);
+	}
+
+	printf("gbe: mtl_rtpd_weight sweep %u patterns, %d wrong\n", GBE_SWEEP_N, bad);
+	CHECK(bad == 0);
+}
+
 int
 main(void)
 {
+	test_weight_edges();
 	test_on();
 	test_weight();
 	test_channels();

@@ -46,6 +46,7 @@
 #include "../../src/client/refresh/metal/header/rm_rtshadow.h"
 #include "../../src/client/refresh/metal/header/rm_rt.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
+#include "rm_gbuf_edges.h"
 
 /*
  * FIX92's mutants, built by hand for its runbook (cc -DRTW_MUTANT=1 or 2):
@@ -2028,9 +2029,52 @@ test_gbuf_mark(void)
 	CHECK(any_list);
 }
 
+/*
+ * FIX219: the water mark's level of the normal attachment's alpha over the
+ * shared edges and the 2^12-stride sweep, against the old rule (a float
+ * compare a > 0.0f, here without fast math, then the level): the same
+ * level on every input with no NaN, and level 0 (no mark) for a NaN.
+ */
+static unsigned
+ref_alpha_level(float a)
+{
+	return !(a > 0.0f) ? 0u : (unsigned)(mtl_clamp01(a) * 3.0f + 0.5f);
+}
+
+static int
+gbe_level_one(unsigned u)
+{
+	const float a = gbe_float(u);
+
+	return mtl_rtw_alpha_level(a) == (gbe_is_nan(u) ? 0u : ref_alpha_level(a));
+}
+
+static void
+test_alpha_level_edges(void)
+{
+	unsigned i;
+	int j, bad = 0;
+
+	for (j = 0; j < GBE_NEDGE; j++)
+	{
+		printf("gbe: mtl_rtw_alpha_level %-22s 0x%08x: %u\n", gbe_edges[j].name, gbe_edges[j].bits,
+			mtl_rtw_alpha_level(gbe_float(gbe_edges[j].bits)));
+		CHECK(gbe_level_one(gbe_edges[j].bits));
+	}
+
+	for (i = 0u; i < GBE_SWEEP_N; i++)
+	{
+		bad += !gbe_level_one(i << GBE_SWEEP_SHIFT);
+	}
+
+	printf("gbe: mtl_rtw_alpha_level sweep %u patterns, %d wrong\n", GBE_SWEEP_N, bad);
+	CHECK(bad == 0);
+}
+
 int
 main(void)
 {
+	test_alpha_level_edges();
 	test_mask();
 	test_turb();
 	test_axes();

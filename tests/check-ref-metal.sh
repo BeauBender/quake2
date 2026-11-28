@@ -2620,7 +2620,7 @@ rtp_tree() { # <dir>: a copy of the test and the headers, laid out as the test i
 	mkdir -p "$1/src/client/refresh/metal/common" "$1/tests/metal"
 	cp "$rm_dir/common/mtl_rtp_math.h" "$rm_dir/common/mtl_rtt_math.h" "$rm_dir/common/mtl_shader_math.h" \
 		"$rm_dir/common/mtl_gbuf_math.h" "$1/src/client/refresh/metal/common/"
-	cp tests/metal/rm_rtptemporal_test.c "$1/tests/metal/"
+	cp tests/metal/rm_gbuf_edges.h tests/metal/rm_rtptemporal_test.c "$1/tests/metal/"
 }
 rtp_build() { # <tree>: 0 when the tree's test builds
 	# shellcheck disable=SC2086 # flags is a word list
@@ -3087,7 +3087,7 @@ rmt_tree() { # <dir>: a copy of the test and the headers, laid out as the test i
 	cp "$rm_dir/common/mtl_rtmt_math.h" "$rm_dir/common/mtl_rtp_math.h" "$rm_dir/common/mtl_rtt_math.h" \
 		"$rm_dir/common/mtl_rtm_math.h" "$rm_dir/common/mtl_shader_math.h" "$rm_dir/common/mtl_gbuf_math.h" \
 		"$1/src/client/refresh/metal/common/"
-	cp tests/metal/rm_rtmtemporal_test.c "$1/tests/metal/"
+	cp tests/metal/rm_gbuf_edges.h tests/metal/rm_rtmtemporal_test.c "$1/tests/metal/"
 }
 rmt_build() { # <tree>: 0 when the tree's test builds
 	# shellcheck disable=SC2086 # flags is a word list
@@ -3296,7 +3296,7 @@ rtpd_tree() { # <dir>: a copy of the test and the headers, laid out as the test 
 	cp "$rm_dir/common/mtl_rtpd_math.h" "$rm_dir/common/mtl_rtp_math.h" "$rm_dir/common/mtl_rtd_math.h" \
 		"$rm_dir/common/mtl_rtao_math.h" "$rm_dir/common/mtl_rtt_math.h" "$rm_dir/common/mtl_shader_math.h" \
 		"$rm_dir/common/mtl_gbuf_math.h" "$1/src/client/refresh/metal/common/"
-	cp tests/metal/rm_rtpdenoise_test.c "$1/tests/metal/"
+	cp tests/metal/rm_gbuf_edges.h tests/metal/rm_rtpdenoise_test.c "$1/tests/metal/"
 }
 rtpd_build() { # <tree>: 0 when the tree's test builds
 	# shellcheck disable=SC2086 # flags is a word list
@@ -4433,6 +4433,97 @@ else
 	fi
 fi
 seg 7.89 "; AO's fallback count and the upsample lines $aofb_pins pins with $aofb_mut mutants${aofb_metal:+ compiled and} refused"
+
+# FIX219: no float compare of a G-buffer depth or normal alpha in any kernel. Metal compiles a float
+# compare as "fcmp fast", whose nnan lets a NaN pass a compare written so that a NaN fails, so every
+# kernel takes the depth's "short of the far plane" (depth < 1) and the normal's "written" (alpha > 0.5)
+# through the shared integer helpers mtl_rtp_below1 and mtl_rtp_above_half (common/mtl_rtp_math.h,
+# FIX213), and the water mark's level its "alpha > 0" through mtl_rtt_positive (common/mtl_rtt_math.h,
+# FIX212). The rule, read as text with comments and literals blanked: in every .metal file under
+# src/client/refresh/metal/ and in the headers that test a G-buffer value for a kernel
+# (common/mtl_rtp_math.h, mtl_rtpd_math.h, mtl_rtmt_math.h and mtl_rtw_math.h), no <, >, <= or >= has a
+# depth name on one side and a float literal on the other: d, ds, qd, depth or a depth.read(...), the
+# names the kernels give the G-buffer's depth; nor a normal alpha name: a .a of a vector whose name
+# starts with n (nn, ns, nv, ncv), normal_a, nn_a or a normal.read(...).a. mtl_rtw_alpha_level's own
+# alpha is the parameter a, a name too short for the rule, so it is pinned by itself. A new kernel
+# that names its depth or normal otherwise is not seen: keep to these names. Each failure prints its
+# own line, naming the file. Each mutant puts back one of main's compares (the kernel ones are main's
+# text, which compiled), so only this pin sees it, and each must be refused by its own line.
+gbf_num='[0-9]+\.[0-9]*f?'
+gbf_dep='(d|ds|qd|depth|depth\.read\([^()]*\))'
+gbf_nrm='(n[a-z]*\.a|normal_a|nn_a|normal\.read\([^()]*\)\.a)'
+gbf_pat() { # <name pattern>: a float compare of the name against a float literal, either side
+	printf '(^|[^A-Za-z0-9_.])%s[[:space:]]*[<>]=?[[:space:]]*-?%s|%s[[:space:]]*[<>]=?[[:space:]]*%s([^A-Za-z0-9_.(]|$)' \
+		"$1" "$gbf_num" "$gbf_num" "$1"
+}
+gbf_dpat=$(gbf_pat "$gbf_dep")
+gbf_npat=$(gbf_pat "$gbf_nrm")
+gbf_why() { # <metal dir>: one line per file and kind of float compare it holds, none when it holds none
+	gbf_n=0
+	for f in "$1"/*.metal "$1/common/mtl_rtp_math.h" "$1/common/mtl_rtpd_math.h" "$1/common/mtl_rtmt_math.h" \
+		"$1/common/mtl_rtw_math.h"; do
+		[ -f "$f" ] || { echo "gbf: ${f#"$1"/} is missing"; continue; }
+		gbf_n=$((gbf_n + 1))
+		strip "$f" > "${tmp:?}/gbf.c"
+		if grep -qE "$gbf_dpat" "${tmp:?}/gbf.c"; then
+			echo "gbf: a float compare of a G-buffer depth in ${f#"$1"/}"
+		fi
+		if grep -qE "$gbf_npat" "${tmp:?}/gbf.c"; then
+			echo "gbf: a float compare of a G-buffer normal alpha in ${f#"$1"/}"
+		fi
+	done
+	strip "$1/common/mtl_rtw_math.h" | awk '/^mtl_rtw_alpha_level\(float a\)$/ { b = 1 } b { print } b && /^}/ { exit }' \
+		> "${tmp:?}/gbf.lvl"
+	if ! grep -qF 'if (!mtl_rtt_positive(a))' "${tmp:?}/gbf.lvl" ||
+			grep -qE "(^|[^A-Za-z0-9_.])a[[:space:]]*[<>]=?[[:space:]]*-?$gbf_num" "${tmp:?}/gbf.lvl"; then
+		echo "gbf: mtl_rtw_alpha_level does not test its alpha with mtl_rtt_positive alone"
+	fi
+	[ "$gbf_n" -ge 22 ] || echo "gbf: read $gbf_n files, fewer than the 22 it should"
+	return 0
+}
+gbf_sub() { # <file> <old> <new>: the file with the first <old> replaced by <new>, on stdout
+	awk -v o="$2" -v n="$3" '!done && (i = index($0, o)) { $0 = substr($0, 1, i - 1) n substr($0, i + length(o)); done = 1 } { print }' "$1"
+}
+gbf_mutants=0
+gbf_why "$rm_dir" > "${tmp:?}/gbf.out"
+gbf_files=$gbf_n
+if [ -s "${tmp:?}/gbf.out" ]; then
+	cat "${tmp:?}/gbf.out"
+	bad "a kernel compares a G-buffer depth or normal alpha with a float compare (FIX219): use mtl_rtp_below1, mtl_rtp_above_half or mtl_rtt_positive"
+fi
+for m in aodepth dirnormal readnormal reversed pdnormal mtnormal alphalevel; do
+	rm -rf "${tmp:?}/gbfm"
+	cp -R "$rm_dir" "${tmp:?}/gbfm"
+	case $m in
+		aodepth) f=rm_rtao.metal o='mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a)' n='(d < 1.0f) && mtl_rtp_above_half(nn.a)'
+			want="gbf: a float compare of a G-buffer depth in rm_rtao.metal" ;;
+		dirnormal) f=rm_rtdir.metal o='mtl_rtp_above_half(nn.a)' n='(nn.a > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdir.metal" ;;
+		readnormal) f=rm_rtdenoise.metal o='!mtl_rtp_above_half(normal.read(px).a)' n='!(normal.read(px).a > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in rm_rtdenoise.metal" ;;
+		reversed) f=rm_rtwater.metal o='mtl_rtp_below1(qd)' n='(1.0f > qd)'
+			want="gbf: a float compare of a G-buffer depth in rm_rtwater.metal" ;;
+		pdnormal) f=common/mtl_rtpd_math.h o='!mtl_rtp_above_half(nn_a)' n='!(nn_a > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in common/mtl_rtpd_math.h" ;;
+		mtnormal) f=common/mtl_rtmt_math.h o='mtl_rtp_above_half(normal_a)' n='(normal_a > 0.5f)'
+			want="gbf: a float compare of a G-buffer normal alpha in common/mtl_rtmt_math.h" ;;
+		alphalevel) f=common/mtl_rtw_math.h o='if (!mtl_rtt_positive(a))' n='if (!(a > 0.0f))'
+			want="gbf: mtl_rtw_alpha_level does not test its alpha with mtl_rtt_positive alone" ;;
+	esac
+	gbf_sub "$rm_dir/$f" "$o" "$n" > "${tmp:?}/gbfm/$f"
+	gbf_why "${tmp:?}/gbfm" > "${tmp:?}/gbf.out"
+	if cmp -s "$rm_dir/$f" "${tmp:?}/gbfm/$f"; then
+		bad "the G-buffer compare mutant ($m) changed nothing"
+	elif ! grep -qxF "$want" "${tmp:?}/gbf.out"; then
+		cat "${tmp:?}/gbf.out"
+		bad "the G-buffer compare pin does not refuse its mutant ($m) by its own line ($want)"
+	else
+		gbf_mutants=$((gbf_mutants + 1))
+	fi
+done
+rm -rf "${tmp:?}/gbfm"
+[ "$gbf_mutants" = 7 ] || bad "the G-buffer compare pin refused $gbf_mutants of its 7 mutants by their own lines"
+seg 7.97 "; no G-buffer depth or normal float compare in $gbf_files files, $gbf_mutants mutants refused by their own lines"
 
 if [ "$fail" = 0 ]; then
 	echo "check-ref-metal: ok ($(sort -n "${tmp:?}/summary" | cut -f2- | tr -d '\n'))"
