@@ -36,7 +36,7 @@ is left for the ray-traced path. Its slices:
 - **Not here.**
   - Mode 3's `rm_fx_run(..., 0, ...)` belongs to TASK113.
   - The RT-primary overlay row and its denoiser belong to TASK190.
-  - The measurement is slice 4.
+  - The measurement was slice 4's; it moved to TASK243 (#835).
 
 ## Host checks (no lock)
 
@@ -219,28 +219,114 @@ No engine code changed. The one red test is `t_argcount` in
 on the trimmed one, and its mutant (`argc-restated-defaults`, the ten lines put back) is
 caught.
 
-## Slice 4: the measurement
+## Slice 4: the two open code lines
 
-Slice 4 records the cost table in `docs/audits/rt-performance.md` (the file does not exist
-yet), from #263's plan. For each effect alone and for every effect on at the default scale,
-on the card's T1 and T2 hosts, it records:
+Slice 4 closes the two acceptance lines of #263 that needed code or a test. The third open
+line, the cost table in `docs/audits/rt-performance.md`, moved to TASK243 (#835), which
+measures the RT cost tables of TASK109, TASK126, TASK190 and TASK191 once in the owner's
+quiet window. This runbook no longer tracks it.
 
-- the GPU time per presented frame;
-- the `timedemo` rate;
-- the scaler's GPU time at each host's output;
-- the internal and output sizes.
+### What it adds
 
-The M1 cells are informational and are recorded when a device is available. The slice is
-docs only and runs in the owner's quiet window with the screen unlocked. It has not run
-yet.
+- **`rm_fx_view_mode`** (`rm_metalfx.c`, pure). `RM_FX_Read` used to set the world views'
+  mode from `rm_fx_run(got, 0, fx_has)`, with `got` being
+  `rm_fx_supported(rm_fx_mode_of(asked_v), fx_has)`. `rm_fx_view_mode(asked_v, has)` is
+  that chain as one function, and `RM_FX_Read` calls it. `RM_FX_Begin` makes no scaler
+  for `RM_FX_OFF`: it frees one left from before and draws the view at its output's size.
+  Behaviour is unchanged.
+- **`tests/metal/rm_fxgate_test.c`.** It links `rm_metalfx.c`, `rm_rtgate.c` and
+  `rm_rtfx.c`, so the presentation's rules and the scaler's decision are tested together.
+  `view_size` in the test restates `RM_FX_Begin`'s size rule: the output's size for
+  `RM_FX_OFF`, else `rm_fx_sizes` at `rm_fx_scale`.
+  - `test_no_scaler`: stock, with the user's `r_metalfx` at 0, -0, 0.25, 0.99, -1, -inf
+    and NaN. These are tried on every one of the 32 combinations of the `RM_FX_HAS` bits,
+    with and without the temporal scaler, a development view and a view below its output.
+    The result is `RM_FX_OFF` and the output's size at `r_metalfx_scale` 0, 0.5 and 0.75.
+    The test also checks that each mode the device has is still made when asked for, and
+    that Retro reads off.
+  - `test_no_temporal`: RT-primary on a device that traces rays (apple7, compute path)
+    but has the spatial scaler only, or no scaler. `r_metalfx` reads 0 for every user
+    value from 0 to 3, below the output or not. The view is drawn at its output's size,
+    and the start-up line is
+    `ref_metal: presentation: ray traced: r_metalfx reads 0 (off): no MetalFX temporal scaler on this device`.
+  - `test_unsupported`: the user's `r_metalfx` 1, 2 or 3 on a device with no MetalFX
+    scaler reads 0, and the view is drawn at its output's size. `RM_FX_Read`'s line is
+    `ref_metal: r_metalfx 2 (temporal) is not supported on this device, it reads 0 (off)`.
+  - `test_no_rt`: the VM (no Apple family, the spatial scaler only). Enhanced and
+    RT-primary read stock with
+    `ref_metal: presentation: stock; r_presentation 3 (ray traced) reads 0: no ray tracing on this device`
+    (and its Enhanced twin). The gate prints `ray tracing: none (...); the ray-tracing
+    effects read 0` and
+    `ref_metal: ray tracing: none on this device: the effect scales do nothing`, and each
+    effect switch prints `ref_metal: r_rt_ao reads 0: no ray tracing on this device (no
+    Apple GPU family reported)`. At `r_metalfx 0` no scaler is made and the view is drawn
+    at its output's size.
+- **`tests/check-ref-metal.sh`** (segment 10.1) builds and runs the test with the
+  sanitizers, then runs four scratch mutants. Each mutant must compile and fail, each is
+  named on its own line, and all four must be refused:
+  - `forceon`: `rm_fx_view_mode` asks for at least the temporal scaler, so the scaler is
+    forced on;
+  - `fallbackdrop`: `rm_fx_supported` no longer falls back, so a mode the device lacks
+    runs;
+  - `rtpclampdrop`: RT-primary's clamp to off without the temporal scaler is dropped
+    (`!temporal || show` becomes `!temporal && show`);
+  - `nortdrop`: the presentation no longer falls to stock without ray tracing.
 
-### Open lines
+### The two lines, as met
 
-Two of #263's acceptance lines are not met and need code or a recorded run:
+- **No scaler is created with every effect off** (restated for `r_metalfx 0`). Met by
+  `test_no_scaler` and the `forceon` mutant. The gl1 half is the stock pins, unchanged in
+  the holds of #742 and #775.
+- **The scale reads 1 with a report line where the scaler is unsupported or the device
+  has no ray tracing** (restated for `r_metalfx_scale` and `r_metalfx 0`). Met by
+  `test_no_temporal`, `test_unsupported` and `test_no_rt`, and by the `fallbackdrop`,
+  `rtpclampdrop` and `nortdrop` mutants.
+  - A caveat, by design and left as it is: the scaler is a property of the 3D view, with
+    or without ray tracing (the owner's direction of 2026-11-14). So on the VM, which has
+    the spatial scaler, a user's `r_metalfx 1` or `2` still runs the spatial scaler at
+    `r_metalfx_scale`, with the line `r_metalfx 2 (temporal) is not supported on this
+    device, it reads 1 (spatial)`. The scale reads 1 there only at `r_metalfx 0`, which
+    is how the rescope restates the line.
 
-- **No scaler is created with every effect off** (restated for `r_metalfx 0`). A
-  `metal_stats 1` line, or a host test, showing that no scaler exists would prove it.
-- **The fallback line** where the scaler is unsupported or the device has no ray tracing
-  (restated for `r_metalfx_scale` reading 1 with a report line). A run on the VM (T0) or on
-  a device with no ray tracing, with its output in this runbook, or a host test of the
-  fallback line, would show it.
+### Commits
+
+| Commit | What |
+|---|---|
+| `63013904` | the test, red: `rm_fx_view_mode` does not exist yet, so the test does not link (`ld: symbol(s) not found`) |
+| `db6e972f` | `rm_fx_view_mode` extracted and called by `RM_FX_Read`; green: `rm_fxgate_test: 2080 checks, 0 failed` |
+| `604ea554` | `tests/check-ref-metal.sh` segment 10.1, with the four mutants |
+
+### Host checks (no lock)
+
+| Check | Result |
+|---|---|
+| `tests/metal/rm_fxgate_test.c` with ASAN and UBSAN | `rm_fxgate_test: 2080 checks, 0 failed` |
+| segment 10.1 alone (extracted from `tests/check-ref-metal.sh`) | `scaler decision 2080 checks, 0 failed, 4 mutants refused` |
+| `tests/metal/rm_fx_test.c` over the changed `rm_metalfx.c` | `rm_fx_test: 394 checks, 0 failed` |
+| `bash -n tests/check-ref-metal.sh` | ok |
+
+### The hold
+
+The orchestrator runs this under the bench lock, from the lane's worktree. It uses no
+scratch directory; everything goes to standard output.
+
+```bash
+#!/bin/bash
+# TASK109 slice 4: the full checks, run under the bench lock
+cd "$(git rev-parse --show-toplevel)" || exit 1
+git log -1 --format='%h %s'
+git status --porcelain
+bash -n tests/check-ref-metal.sh || exit 1
+tests/check-ref-metal.sh 2>&1 | tail -n 5
+tests/check-doc-links.sh && tests/check-runbook-index.sh && tests/check-pin-chars.sh
+scripts/test.sh 2>&1 | tail -n 5
+```
+
+What to read in its output:
+
+- the check's summary names `scaler decision 2080 checks, 0 failed, 4 mutants refused`,
+  and `MetalFX 394 checks, 0 failed, 3 reset mutants refused`;
+- `ok` from the check and from each doc check;
+- `scripts/test.sh` green.
+
+The results go here when the hold has run.
