@@ -986,3 +986,70 @@ It found three faults.
 | the first hold's `rt-all-e` stats log, read line by line | the sun 354398 of 211046400, the water 11036 of 211046400 |
 | the same log, rejoined | each of the four effects equal to its summary total |
 | the second hold | at `dc3f29fd`: every check passed, each cell of the slice 6 hold table above (#817, "The hold") |
+
+## Slice 8: the open acceptance lines
+
+The plan's slice 7, the measurement, moved to TASK243 (#835). This slice settles three acceptance lines
+that slices 1 to 6 left open. It changes no engine file.
+
+- **AO's history on a change of `r_rt_ao_scale`.** AO keeps a history, and a scale change does not
+  make it stale: the history is at the render size, and the scale changes only the size AO's rays
+  are traced at.
+  - The history is two RGBA32Float textures, `t_hist` in `rmb_rtao.m`. `rmb_rtao_temporal` makes
+    them at `w` x `h`. `RM_RTAO_View` (`rm_rtaoscene.c`) passes `RM_GB_TargetSize` for that size,
+    the render size, whatever `r_rt_ao_scale` is. The divisor goes only to `rmb_rtao_prepare`, whose
+    `rmb_rtao_prepare_lo` makes `t_ao_lo` at the traced size. Neither touches `t_hist`.
+  - In `rmb_rtao_trace` the rays write `t_ao_lo`. `up_pipe` then writes `t_ao` at the render size.
+    The accumulation (`rm_rtao_temporal`, `tmp_pipe`) runs after that. It reads `t_ao` and the
+    histories, dispatches `w` x `h`, and runs only when `t_hist[0]` is `w` x `h`, `w` and `h` being
+    the depth texture's size. This is the plan's "its RT7 runs after the upsample, at the render
+    size".
+  - So the texels a view reads from the history hold the same drawn pixels at every AO scale. A
+    scale change changes how noisy the input to the blend is, not what a texel means, as a change of
+    `r_rt_ao_rays` does, which resets nothing either. The sun and the shadows are different. Their
+    RT7 runs at the traced size (`rmb_rtsun_encode_lo`, and the shadows' take below the render size
+    in `rmb_rtshadow.m`), so a history taken at one divisor does not hold the pixels of another. That
+    is why they take with `rm_rtt_hist_take_at` and the divisor.
+  - AO takes with `rm_rtt_hist_take`, the take at divisor 1. Slice 2 left it so: "the shadows' and
+    the AO's takes are unchanged". So AO prints no `reset: ao scale` line, and nothing changes here.
+  - The design's section 2 says the history resets "also on a change of that effect's scale". For
+    AO that reading is the owner's to accept, on the grounds above. If the owner wants AO to reset
+    anyway, the change is `rm_rtt_hist_take_at(&thist, &tview, view.div)` in `rmb_rtao_trace`,
+    with the sun's `scale_reset` latch and its line in `rm_rtaoscene.c`.
+- **The double count's scope.** Design section 5, item 4, states the invariant: "the double-count
+  invariant (a pixel with no dlight in range and no sun visibility must equal the RT-off pixel within
+  1/255, checked by a `framediff` run between the RT-off frame and the RT-on frame masked by the
+  visibility buffer, a `--mask` option RT2 adds)". It names the dlights and the sun only.
+  - The plan anchor, RT13's row in section 6, says "section 5's double-count invariant holds at the
+    output pixels" and adds no effect to it. The card list (`docs/plans/metal-port-cards.md`, row
+    RT13) words it the same way.
+  - The water and AO are outside it because they add no light that a lightmap also holds. Section 2's
+    table says so in each row. Water: "Blended over the stock water texture at
+    `r_rt_water_reflect` default 0.5 (the stock `SURF_TRANS` alpha stays)". AO: "Multiplies the
+    **lightmap term only** (not dlight, not sun), clamped to `[r_rt_ao_min, 1]`". The two rows that
+    add light each say how they avoid counting it twice. The shadows: "Static lightmap untouched, so
+    no double count". The sun: "A new term, so no double count".
+  - So no water case is added. The shadows' and the sun's checks in slice 6 are the whole
+    invariant.
+- **The gl1 pins** ("every effect off: all gl1 pins unchanged"). No hold of slices 1 to 6 recorded
+  `gl1`. By file list none of #809, #811, #814, #815 and #817 touches `refresh/gl1`, `src/common`,
+  `src/game` or `src/server`. The hold of this slice records the `gl1` pins on this branch's head
+  and compares each with its stored reference through `scripts/pins.sh compare`. It also runs
+  `tests/check-ref-metal.sh`.
+
+### Host checks (no lock)
+
+| Check | Result |
+|---|---|
+| engine files changed against main | none |
+| `bash -n tests/check-ref-metal.sh` | ok |
+| `tests/check-runbook-index.sh`, `tests/check-doc-links.sh` | ok, each |
+
+### The hold of slice 8 (M6, under the timing lock)
+
+| Check | Result |
+|---|---|
+| base and branch | to be filled from the hold's summary |
+| `make`, with `ref_gl1` | to be filled |
+| every scenario with a stored `gl1` reference: recorded by `gl1` on the head, `pins.sh compare gl1` against it | to be filled |
+| `tests/check-ref-metal.sh` | to be filled |
