@@ -28,7 +28,9 @@
  *
  * Status: the command's own (128+n when a signal this program did not send
  * ended it); 124 when the deadline stopped it; 128+n when a forwarded
- * signal n stopped it; 125 when it cannot be run (or the usage is wrong);
+ * signal n stopped it; 125 when it cannot be run (or the usage is wrong,
+ * or its caller is gone before the command starts: re-parented, or gone
+ * before its exit is watched; nothing is run then);
  * 126 when the group is not empty --after-kill seconds after the KILL, or
  * this program cannot go on watching: the command may still run, and the
  * caller must not free what it holds.
@@ -50,7 +52,10 @@
  * is set is kept for it), and P answers "probe" once everything the kernel
  * posted before it has been handled; a probe only observes, so a batch of
  * probes alone does not count the group again. H makes the next listing of
- * the group say "held" and wait for the byte L. SV_MAXPIDS, the size of the
+ * the group say "held" and wait for the byte L. With
+ * SUPERVISE_TEST_PARENT_HOLD, a descriptor, it says "parent-hold pid=Q"
+ * between its read of the caller's pid and the watch, and waits there for
+ * a byte (the case parent-race). SV_MAXPIDS, the size of the
  * watch table (4096), can be set smaller for a test. Built on first use by
  * scripts/lib/supervise.sh; tested by tests/check-supervise.sh.
  */
@@ -1046,18 +1051,38 @@ main(int argc, char **argv)
 	}
 	/*
 	 * the caller's exit: watched before the spawn, so a caller that dies at
-	 * any point after this stops the group; one gone already (re-parented)
-	 * or that cannot be watched runs nothing
+	 * any point after this stops the group; one gone already (re-parented
+	 * to launchd, pid 1: macOS has no other reaper) or that cannot be
+	 * watched runs nothing (review round 1, security I1)
 	 */
 	sv_parent = getppid();
-	if (sv_parent > 1)
+	if (sv_parent <= 1)
 	{
-		EV_SET(&ev, sv_parent, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
-		if (kevent(sv_kq, &ev, 1, NULL, 0, NULL) < 0 || getppid() != sv_parent)
+		sv_say("the caller is gone already");
+		return 125;
+	}
+#ifdef SUPERVISE_TEST
+	if (getenv("SUPERVISE_TEST_PARENT_HOLD") != NULL)
+	{
+		/* the case parent-race: a hold here, until a byte comes */
+		char b;
+		int hfd = sv_fd(getenv("SUPERVISE_TEST_PARENT_HOLD"));
+
+		if (hfd < 0)
 		{
-			sv_say("the caller %d is gone, or cannot be watched", (int)sv_parent);
-			return 125;
+			return sv_usage("SUPERVISE_TEST_PARENT_HOLD is no open descriptor above 2");
 		}
+		sv_emit("parent-hold pid=%d", (int)sv_parent);
+		while (read(hfd, &b, 1) < 0 && errno == EINTR)
+		{
+		}
+	}
+#endif
+	EV_SET(&ev, sv_parent, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+	if (kevent(sv_kq, &ev, 1, NULL, 0, NULL) < 0 || getppid() != sv_parent)
+	{
+		sv_say("the caller %d is gone, or cannot be watched", (int)sv_parent);
+		return 125;
 	}
 	if (sigprocmask(SIG_BLOCK, &block, NULL) < 0 || sigpending(&pend) < 0)
 	{

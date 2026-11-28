@@ -22,7 +22,7 @@
 #             caller shell, the cases that need no test clock against the
 #             release build, and every case against the table of 8.
 #   sanitizer the same cases built with -fsanitize=address,undefined.
-#   mutants   nine one-line changes to a copy of supervise.c, each built
+#   mutants   eleven one-line changes to a copy of supervise.c, each built
 #             as the test build (no-forget with the table of 8): each must
 #             fail its own case, for its own reason (the runner's FAIL line
 #             names both).
@@ -289,11 +289,19 @@ mutant no-forget cap "the last member's exit woke nothing" \
 	's/^	return sv_known\[k\] != sv_leader \&\& sv_gone\[k\]/	return 0 \&\& sv_gone[k]/' -DSV_MAXPIDS=8
 mutant no-relist untracked "group-empty came while the child of an unwatched member ran" \
 	's/more |= j == nseen;/more |= 0;/' -DSV_MAXPIDS=8
-# TASK221 slice 3: the caller's exit not watched, and seen but not acted on
-mutant no-parent-watch parent-gone "the caller's death stopped nothing" \
-	's/^	if (sv_parent > 1)$/	if (0)/'
-mutant parent-no-stop parent-gone "the caller's death stopped nothing" \
+# TASK221 slice 3: the caller's exit not watched, and seen but not acted
+# on, each refused by its own line (review round 1, security N4); a caller
+# gone already (re-parented, ppid 1) watched as launchd and run again (the
+# round's "> 1"), and a caller gone between the read of its pid and the
+# watch run anyway (correctness N1)
+mutant no-parent-watch parent-gone "the caller's death was not seen" \
+	's/EV_SET(&ev, sv_parent, EVFILT_PROC, EV_ADD,/EV_SET(\&ev, sv_parent, EVFILT_PROC, EV_ADD | EV_DISABLE,/'
+mutant parent-no-stop parent-gone "the caller's death sent the group no TERM" \
 	's/^\(						\)sv_why = 128 + SIGTERM;$/\1;/'
+mutant orphan-runs orphan "a supervisor whose caller is gone ran its command" \
+	's/^	if (sv_parent <= 1)$/	if (sv_parent < 1)/'
+mutant parent-race-runs parent-race "a supervisor whose caller is gone ran its command" \
+	'/the caller %d is gone, or cannot be watched/{n;s/return 125;/;/;}'
 
 # shape: no wait on time in the cases. The words are put together so that
 # this line does not match itself.

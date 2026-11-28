@@ -867,16 +867,30 @@ so each is this slice's:
 `supervise.c` had none: a KILLed lock shell left the supervisor running its command.
 The smallest change that works, outside the card's file list because the card's
 "What remains" names the watch: the supervisor reads `getppid()` before the spawn
-and watches that pid's exit on its kqueue (`EVFILT_PROC`, `NOTE_EXIT`). A parent
-gone before the watch is set (`getppid()` no longer that pid, or the `kevent`
-fails) runs nothing (125, "the caller <pid> is gone, or cannot be watched"). The
+and watches that pid's exit on its kqueue (`EVFILT_PROC`, `NOTE_EXIT`). A caller
+gone before the supervisor reads it (re-parented: `getppid()` is 1) runs nothing
+(125, "the caller is gone already"; review round 1, security I1, correctness I1,
+spec I5: the first form skipped the watch for a ppid of 1 and ran the command
+unwatched). A caller gone between that read and the watch (`getppid()` no longer
+that pid, or the `kevent` fails) runs nothing too (125, "the caller <pid> is gone,
+or cannot be watched"). The
 parent's exit emits `parent-gone pid=<pid>` and starts a stop as a TERM does
 (status 143). Case `parent-gone` in `tests/supervise/supervise_test.c` (a caller
 shell that runs the supervisor in the background, KILLed; a probe on the test
 clock after the shell is reaped): red on main ("the caller's death stopped
 nothing (events: spawned ... probe)"), ok on the branch. Mutants
-`no-parent-watch` (the watch never set) and `parent-no-stop` (the event seen, no
-stop) each fail it with that line. The watch covers every supervisor caller: the
+`no-parent-watch` (the watch set disabled) and `parent-no-stop` (the event seen, no
+stop) each fail it with a line of its own since round 1 ("the caller's death was
+not seen", "the caller's death sent the group no TERM"; security N4). Round 1's
+cases: `orphan` (the caller shell exits and is reaped, then its subshell execs the
+supervisor, re-parented) and `parent-race` (the test build holds between its read of
+the caller and the watch, `SUPERVISE_TEST_PARENT_HOLD`, while the case KILLs and
+reaps the caller; correctness N1). Each wants no `spawned` event, end of file on the
+events and the 125 line; on `0d5ae74c` orphan ran its command ("a supervisor whose
+caller is gone ran its command"), and parent-race had no hold. Mutants
+`orphan-runs` (`sv_parent < 1`: a ppid of 1 is watched as launchd and run, as the
+round's `> 1` ran it) and `parent-race-runs` (that `return 125` dropped) each fail
+their case with "a supervisor whose caller is gone ran its command". The watch covers every supervisor caller: the
 gate's checks (slice 1), `bench_bounded`, the lock run and ios-sim's launch client.
 
 ### ios-sim.sh's launch client
@@ -967,6 +981,8 @@ instructions file outside this card, for the owner to retire.
 | `lock run term` (check-bounded-run) | a TERM to the lock shell while its command ignores TERM (set before it says `ready`): `signal name=TERM` and `term-sent` reach the tap, lock status shows the lock held at `term-sent` (the group ignores TERM and is KILLed only after the 10 s grace, so held by construction), then `reaped`, end of file, exit 143, the lock free | FAIL: "no spawned event from the lock run's supervisor within 60 s" | ok, 10 s |
 | `lock run int` (check-bounded-run) | an INT to the lock shell at `spawned`: exit 130, the lock free, the command's group gone, TMPDIR empty | FAIL: "no spawned event from the lock run's supervisor within 60 s" | ok, 0 s |
 | `parent-gone` (check-supervise) | above | FAIL | ok |
+| `orphan`, `parent-race` (check-supervise, round 1) | a caller gone before the supervisor reads it (ppid 1), or between that read and the watch: no `spawned`, end of file on the events, the 125 line | on `0d5ae74c`: FAIL, "a supervisor whose caller is gone ran its command"; parent-race "no parent-hold event" | ok |
+| `lock kill group`, `lock kill sv126` (check-bounded-run, round 1) | a KILL of the lock shell's whole group (the lock shell, the supervisor and its tee), or a KILLed lock shell whose supervisor (a stand-in) then exits 126 with the group left: while the command runs, lock status `alive=yes` and a second lock run with `BENCH_LOCK_WAIT=1` exits 75; once it ends, a lock run reclaims the lock (0) and the lock is free | on `0d5ae74c`: FAIL, "the lock was taken as gone while the command's group ran: ... alive=no; a second lock run exited 0 while the command ran, not 75" (both) | ok |
 | `probe <caller> kill` (check-bounded-run, its verdict changed) | after a KILL of pins.sh, ios-sim.sh or ios-device.sh, the stand-ins are gone within 10 s while the flag that would end them is still there: the parent watch stopped them | "child runs; grandchild runs" (the old wanted line) | "child gone; grandchild gone" |
 | `stop shim` (check-bounded-run, replaces `poll-end`) | `bench_stop_group` on another pid sends nothing and returns 0; in the window before the start it removes its own events file and leaves a sibling's | ok (as today) | ok (as today) |
 | `t_lock_defer` (check-bench) | a TERM in `sv_start`'s fork window (a `sleep 1` before `SV_PID=$!` in a copy of scripts/lib) stops the command; exit 143, the lock free | (the stall applied to `bench_spawn`) | ok (as today) |
@@ -983,7 +999,11 @@ Both new lock run cases wait on the supervisor's events through `BENCH_BOUNDED_T
 | `lock-freed-before-reaped` | bench.sh: the trap releases the lock before its stop | lock run term: "the lock was freed before reaped: at term-sent, lock=free" |
 | `lock-freed-on-126` | common.sh: no group record on a 126 (`*) return 0 ;;`) | sv 126: "the lock was not kept for the group the supervisor could not empty" |
 | `sv-run-no-term` | supervise.sh: `sv_term` sends no TERM | lock run term: "sv_run did not forward TERM: no signal name=TERM within 60 s" |
-| `no-parent-watch`, `parent-no-stop` | supervise.c | parent-gone: "the caller's death stopped nothing" |
+| `no-parent-watch` | supervise.c | parent-gone: "the caller's death was not seen" (round 1) |
+| `parent-no-stop` | supervise.c | parent-gone: "the caller's death sent the group no TERM" (round 1) |
+| `orphan-runs` | supervise.c | orphan: "a supervisor whose caller is gone ran its command" (round 1) |
+| `parent-race-runs` | supervise.c | parent-race: "a supervisor whose caller is gone ran its command" (round 1) |
+| `group-unread` | lock.sh | check-bounded-run lock kill group: "the lock was taken as gone while the command's group ran" (round 1) |
 | `start-read-local` (moved) | lock.sh: `bench_lock_untold_reused` reads ps in the local zone | t_core_id: "record: TZ UTC then Asia/Tokyo: a live group record did not keep the lock alive" |
 | `nap-quiet-wait` (moved) | common.sh: a group around the nap's `wait` with standard error on /dev/null (on the `wait` alone the mutant passed: bash runs the trap after the builtin's redirection is undone) | nap trap: "nap trap: exit 143; stderr []" |
 | `hand-not-recorded` (retargeted) | common.sh: `_bu_k=hand` made `return 0` | sv 126 nospawn: "the lock was not kept" |
