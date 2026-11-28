@@ -344,6 +344,7 @@ B=${T:?}/build
 mkdir -p "$B/release/baseq2"
 cat > "$B/release/quake2" << 'EOF'
 #!/bin/sh
+[ -z "${FAKE_DELAY:-}" ] || sleep "$FAKE_DELAY"
 for a; do printf 'arg %s\n' "$a"; done
 [ ! -f "$(dirname "$0")/baseq2/config.cfg" ] || echo "a saved configuration was read"
 echo "Loading library: ${FAKE_LIB:-ref_metal.dylib}"; echo "Loading library: game.dylib"
@@ -377,6 +378,11 @@ if run_fake "${T:?}/run.case"; then
 else
 	bad "a run of the stand-in engine failed: $(cat "${T:?}/run.err")"
 fi
+# the TERM trap is the stand-in's first command: an engine slow to start
+# (FAKE_DELAY, longer than seconds=) still tears down and exits 0 (FIX221)
+run_fake "${T:?}/run.case" FAKE_DELAY=2 > /dev/null 2>&1 || true
+grep -q 'metal_stats: 10 frames' "${T:?}/run.log" || bad "a stand-in still starting at the TERM did not tear down: $(cat "${T:?}/run.err")"
+! grep -q 'exited with status 143' "${T:?}/run.err" || bad "a stand-in still starting at the TERM died of it: $(cat "${T:?}/run.err")"
 run_fake "${T:?}/run.case" FAKE_LIB=ref_gl1.dylib && bad "a run on another renderer was accepted"
 grep -q "ran the renderer 'ref_gl1', not metal" "${T:?}/run.err" || bad "a wrong renderer is not named: $(cat "${T:?}/run.err")"
 run_fake "${T:?}/run.case" FAKE_NORT=1 && bad "a run whose engine reports no ray tracing was accepted"
