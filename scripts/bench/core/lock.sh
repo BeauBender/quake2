@@ -700,8 +700,10 @@ bench_lock_untold_live() {
 		if [ ! -f "$_lu_f" ] || [ -h "$_lu_f" ]; then continue; fi
 		_lu_h=$(cat "$_lu_f" 2> /dev/null) || continue
 		_lu_p=$(bench_kv "$_lu_h" pid)
+		# a leading zero is no id: kill -0 -- -01 is kill(-1, 0) (review
+		# round 2, security N1)
 		case $_lu_p in
-		'' | 0 | 1 | *[!0-9]*) continue ;;
+		'' | 0* | 1 | *[!0-9]*) continue ;;
 		esac
 		# a hand record (TASK221, review round 2): no group to watch, so it
 		# is live until it is removed by hand
@@ -753,8 +755,9 @@ bench_lock_group_live() {
 	for _gl_f in "${BENCH_LOCK_DIR:?}"/bench-sv.*; do
 		if [ ! -f "$_gl_f" ] || [ -h "$_gl_f" ]; then continue; fi
 		_gl_p=$(awk '$1 == "spawned" { for (i = 2; i <= NF; i++) if (index($i, "pgid=") == 1) v = substr($i, 6) } END { print v }' "$_gl_f" 2> /dev/null) || continue
+		# a leading zero is no id: kill -0 -- -00 is this shell's own group
 		case $_gl_p in
-		'' | 0 | 1 | *[!0-9]*) continue ;;
+		'' | 0* | 1 | *[!0-9]*) continue ;;
 		esac
 		kill -0 -- "-$_gl_p" 2> /dev/null && return 0 # bounded-run: allowed: the lock: the group its supervisor named still has a member; it signals none
 	done
@@ -775,7 +778,7 @@ bench_lock_alive() {
 	bench_lock_untold_live && return 0
 	bench_lock_group_live && return 0
 	case $_lv_c in
-	'' | 0 | 1 | *[!0-9]*) return 1 ;;
+	'' | 0* | 1 | *[!0-9]*) return 1 ;;
 	esac
 	kill -0 -- "-$_lv_c" 2> /dev/null # bounded-run: allowed: the lock: its holder group still has a member; it signals none
 }

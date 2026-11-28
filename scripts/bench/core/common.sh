@@ -220,10 +220,11 @@ bench_outside_repo() {
 }
 
 # bench_pid_alive <pid>: kill -0 succeeds. An empty, zero or non-numeric
-# pid is not alive.
+# pid is not alive, nor one with a leading zero: kill -0 00 is kill(0, 0),
+# this shell's own group (TASK221 slice 3, review round 2, security N1).
 bench_pid_alive() {
 	case $1 in
-	'' | 0 | *[!0-9]*) return 1 ;;
+	'' | 0* | *[!0-9]*) return 1 ;;
 	esac
 	kill -0 "$1" 2> /dev/null # bounded-run: allowed: the primitive: bench_pid_alive
 }
@@ -567,10 +568,10 @@ bench_bounded_lost() {
 bench_bounded_untold() {
 	_bu_g=$(bench_bounded_event spawned pgid) || _bu_g=
 	case $_bu_g in
-	'' | 0 | 1 | *[!0-9]*)
+	'' | 0* | 1 | *[!0-9]*)
 		bench_note "the supervisor named no process group to watch"
 		_bu_g=${BENCH_BOUNDED_PID:-}
-		case $_bu_g in '' | 0 | 1 | *[!0-9]*) _bu_g=$$ ;; esac
+		case $_bu_g in '' | 0* | 1 | *[!0-9]*) _bu_g=$$ ;; esac
 		_bu_k=hand
 		;;
 	*) _bu_k=group ;;
