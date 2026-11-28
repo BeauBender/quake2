@@ -266,11 +266,12 @@ slice 2 at b49fb42. The results above were taken before it, at 25e2ce98.
   takes `RM_RTModel_ShowAsked`, which returns 0: its view is the direct light's, which
   `RM_RTDir_ShowAsked` already reports.
 - **The order.** The model pass still runs after RT-primary's accumulation and its 5 x 5
-  filter, which share the direct light's encoder. Only the filter writes world pixels
-  only (`mtl_rtp_world`). The accumulation passes every other pixel through with a zero
-  history. The model pass writes the light the resolve reads and never the history, so
+  filter, which share the direct light's encoder. Only the filter is limited to world
+  pixels (`mtl_rtp_world`). The accumulation runs over every pixel and passes the pixels
+  that are not world pixels through with a zero history. The model pass writes the light the resolve reads and never the history, so
   model pixels still pass through TASK190 untouched. (Slice 3 fixes this wording: it said
-  that both write world pixels only, and named the merge as ba5e4dff.)
+  that both write world pixels only, and named the merge as ba5e4dff; #538's comment gives
+  b49fb42, which is the merge at line 260 above.)
 - **The hold.** The merge's hold compares the stock scenarios and every RT-primary record
   with main d7817081, and records the three `rtprimary-models` scenarios three times each.
 
@@ -705,7 +706,18 @@ binary that only the renderer's headers changed. It records:
   accumulation is main's, and every model is stock-lit);
 - the `r_rt_stats 2` model and temporal lines, and no refusal line.
 
-Results: (the hold's numbers go here.)
+Results, from #808's body (the hold ran on fb77ec7 against main 9a81cce):
+
+- **Builds and checks.** `make`, `make ref_metal`, `make test` (591 tests, 0 failed) and
+  check-ref-metal (13162 checks, 0 failed). The model accumulation segment ran 2707 checks
+  with 0 failed; 5 rule mutants, 11 kernel mutants and 3 back-end mutants were refused.
+  The 30 stock scenarios: 0 failed.
+- **RT-primary records.** All 20 existing records are byte-identical to main.
+- **`rtprimary-models-temporal`.** Three runs are deterministic (0 of 23 frames differ).
+  Against main's binary 22 of 23 frames differ. Against its `r_rt_direct_models 0` copy
+  23 of 23 differ. The off copy is byte-identical to main.
+- **`r_rt_stats 2`.** 76.5% of model pixels kept their history over the run (17951575 of
+  23470302). The model pass took 0.301 to 1.112 ms.
 
 ## Left to the next slices
 
