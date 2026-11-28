@@ -2,11 +2,12 @@
 # tests/check-bounded-run.sh -- one bounded-run primitive in the harness
 # (FIX122, finding AR-14 of docs/reviews/2026-11-17-fork-window.md).
 #
-# bench_bounded and bench_stop_group, with its list form bench_stop_groups
-# (scripts/bench/core/common.sh), are meant to be the only code under
-# scripts/ that runs a command with a wall time and stops it with TERM, a
-# grace period and KILL; the gate's scheduler (scripts/gate-checks.sh)
-# stops its checks through bench_stop_groups (FIX186). This check holds
+# bench_bounded and bench_stop_group (scripts/bench/core/common.sh), over
+# the process supervisor (scripts/lib/supervise.c, TASK221), are meant to
+# be the only code under scripts/ that runs a command with a wall time and
+# stops it with TERM, a grace period and KILL; the gate's scheduler
+# (scripts/gate-checks.sh) runs its checks under the supervisor too. This
+# check holds
 # that in three parts:
 #
 #   guard   a lint over the common spellings, which a reviewer keeps
@@ -67,8 +68,8 @@
 # line, comments included: the guard cannot trace what the variable holds,
 # and it can hold KILL (card FIX186, #699), so every one outside the
 # primitive is refused unless marked. The word is matched wherever it
-# stands, so a KILL passed to a function (bench_signal_group KILL "$p") is
-# refused too, and the primitive's one such line is marked. A group after --
+# stands, so a KILL passed to a function (signal_it KILL "$p") is refused
+# too. A group after --
 # (kill -s TERM -- "-$pgid") is no signal; pkill's -s (a session) is
 # refused too.
 # A marker followed by a quote is in a string, so it is no marker;
@@ -123,11 +124,6 @@ here=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
 # There is no whole-file entry.
 MARKED='
 scripts/bench/core/common.sh the primitive: bench_pid_alive
-scripts/bench/core/common.sh the primitive: the group a spawn made
-scripts/bench/core/common.sh the primitive: a group still has a member
-scripts/bench/core/common.sh the primitive: bench_signal_group, to the group
-scripts/bench/core/common.sh the primitive: bench_signal_group, to the pid
-scripts/bench/core/common.sh the primitive: bench_stop_groups, the KILL after the grace
 scripts/bench/core/lock.sh the lock: its holder group still has a member; it signals none
 scripts/bench/core/lock.sh the lock: a recorded group still has a member; it signals none
 scripts/lib/supervise.sh sv_wait: its own supervisor is there
@@ -643,29 +639,6 @@ probe() {
 	probe_late "$1"
 }
 
-# stage_root <dir> [<old> <new>]: a copy of scripts/ in <dir> in which the
-# primitive's ps read (bench_proc_read), once $FAKE_STATE/stage-<field>
-# exists (stat: a poll of the watch; pgid: the record of a spawn), closes
-# its output once ps has answered and lingers, INT ignored, until
-# $FAKE_STATE/sent exists (10 s at most), once: the window in which bash
-# 3.2 drops an INT, between the end of a command substitution's output and
-# its reap, opened at will (FIX192). With <old> and <new>, one more edit of
-# the copy's common.sh (a mutant). False when an edit does not apply.
-STAGE_OLD='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null) || return 1'
-STAGE_NEW='	_pq_o=$(TZ=UTC0 ps -o "${2:-stat}=" -o lstart= -p "$1" 2> /dev/null; _st=$?; exec >&-; if rm "${FAKE_STATE:-/nonexistent}/stage-${2:-stat}" 2> /dev/null; then trap "" INT; : > "$FAKE_STATE/at-ps"; _n=0; while [ ! -e "$FAKE_STATE/sent" ] && [ "$_n" -lt 100 ]; do sleep 0.1; _n=$((_n + 1)); done; fi; exit "$_st") || return 1'
-stage_root() {
-	rm -rf "$1"
-	mkdir -p "$1" && cp -R "$here/scripts" "$1/scripts" || return 1
-	python3 -I -c 'import sys
-p = sys.argv[1]
-s = open(p).read()
-a = sys.argv[2:]
-for old, new in zip(a[0::2], a[1::2]):
-    if s.count(old) != 1: sys.exit("the stage does not apply: %d" % s.count(old))
-    s = s.replace(old, new)
-open(p, "w").write(s)' "$1/scripts/bench/core/common.sh" "$STAGE_OLD" "$STAGE_NEW" ${2+"$2" "$3"}
-}
-
 # ---- the Python helper's disposition probe (FIX186, slice 2) -------------
 
 # mk_pystandin <file>: the stand-in of the Python probe: stand-in <dir>
@@ -985,10 +958,10 @@ fi
 
 # 2. the mutants: each must be refused in its file, for its rule
 K='a KILL outside'
-mutant ios-sim-kill9 scripts/ios-sim.sh "$K" '	bench_spawn_forget "$1"
-}' '	kill -9 "$1" 2>/dev/null
-	bench_spawn_forget "$1"
-}'
+mutant ios-sim-kill9 scripts/ios-sim.sh "$K" '	SV_PID=$1
+' '	kill -9 "$1" 2>/dev/null
+	SV_PID=$1
+'
 mutant pins-kill9 scripts/pins.sh "$K" '    trap '"''"' HUP INT TERM
     if [ -n "${BENCH_BOUNDED_PID:-}" ]; then' '    trap '"''"' HUP INT TERM
     kill -9 "${BENCH_BOUNDED_PID:-0}" 2>/dev/null
@@ -996,10 +969,10 @@ mutant pins-kill9 scripts/pins.sh "$K" '    trap '"''"' HUP INT TERM
 mutant pins-kill-s-KILL scripts/pins.sh "$K" '    pb_how=$BENCH_BOUNDED_HOW' '    pb_how=$BENCH_BOUNDED_HOW; kill -s KILL "$$" 2>/dev/null'
 mutant pins-kill-s-kill scripts/pins.sh "$K" '    pb_how=$BENCH_BOUNDED_HOW' '    pb_how=$BENCH_BOUNDED_HOW; kill -s kill "$$" 2>/dev/null'
 mutant pins-kill-n-9 scripts/pins.sh "$K" '    pb_how=$BENCH_BOUNDED_HOW' '    pb_how=$BENCH_BOUNDED_HOW; kill -n 9 "$$" 2>/dev/null'
-mutant sim-pkill-9 scripts/ios-sim.sh "$K" '	bench_spawn_forget "$1"
-}' '	pkill -9 -g "$1"
-	bench_spawn_forget "$1"
-}'
+mutant sim-pkill-9 scripts/ios-sim.sh "$K" '	SV_PID=$1
+' '	pkill -9 -g "$1"
+	SV_PID=$1
+'
 mutant mfx-os-kill scripts/metalfx-report/mfx.py "$K" 'def parse_scenario(path):
 ' 'def parse_scenario(path):
     os.kill(os.getpid(), signal.SIGKILL)
@@ -1214,16 +1187,14 @@ mutant unreadable-dir scripts 'cannot list every file'
 # 2b. a misspelled until test is refused before the command starts
 u=$(sh -c '. "$1/scripts/bench/core/common.sh"; BENCH_BOUNDED_UNTIL=no_such_test bench_bounded 5 true' sh "$here" 2>&1)
 ust=$?
-w=$(sh -c '. "$1/scripts/bench/core/common.sh"; st=0; bench_watch "$$" "" 1 no_such_test || st=$?; echo "status $st"' sh "$here" 2>&1)
-if [ "$ust" -eq 2 ] && printf '%s\n' "$u" | grep -F 'BENCH_BOUNDED_UNTIL names no function: no_such_test' > /dev/null &&
-	printf '%s\n' "$w" | grep -F 'status 4' > /dev/null && printf '%s\n' "$w" | grep -F 'until test no_such_test is not defined' > /dev/null; then
-	echo "$me: ok   until: an undefined test is refused (bench_bounded status 2, bench_watch status 4)"
+if [ "$ust" -eq 2 ] && printf '%s\n' "$u" | grep -F 'BENCH_BOUNDED_UNTIL names no function: no_such_test' > /dev/null; then
+	echo "$me: ok   until: an undefined test is refused (bench_bounded status 2)"
 else
-	echo "$me: FAIL: until: an undefined test must be refused; got $ust: $u / $w"
+	echo "$me: FAIL: until: an undefined test must be refused; got $ust: $u"
 	fails="$fails until"
 fi
-# an until test gone by a later poll (bench_watch status 4: the test unsets
-# itself, the quit time starts a second watch) is refused, never "wall"
+# an until test gone by a later poll (the test unsets itself, with a quit
+# time set too) is refused, never "wall"
 g=$(sh -c '. "$1/scripts/bench/core/common.sh"; gone() { unset -f gone; return 1; }; BENCH_STOP_GRACE=1; BENCH_BOUNDED_QUIT=1; BENCH_BOUNDED_UNTIL=gone
 st=0; bench_bounded 30 sleep 30 || st=$?; echo "status $st how $BENCH_BOUNDED_HOW"' sh "$here" 2>&1)
 gst=$?
@@ -1525,8 +1496,10 @@ sv_lock126() {
 	# the lock shell's lines go to the FIFO too; the command says
 	# "command-ended" there as it ends, so the lock shell's last line
 	# ("... have ended ...; freeing the lock") must come after it
-	env TMPDIR="$_ld/tmp" SUPERVISE_CACHE="$_ld/cache" BENCH_STATE="$_ld/state" FAKE_TAP="$_ld/fifo" FAKE_NOSPAWN="$_lns" \
-		sh "$1/scripts/bench/bench.sh" lock run t126 -- env PATH="$_lpath" sh -c '. "$1/scripts/bench/core/common.sh"; . "$1/scripts/bench/core/lock.sh"
+	# the stand-in is the bounded call's supervisor only: the lock run's own
+	# (TASK221 slice 3) is the real one, from the check's cache
+	env TMPDIR="$_ld/tmp" BENCH_STATE="$_ld/state" FAKE_TAP="$_ld/fifo" FAKE_NOSPAWN="$_lns" \
+		sh "$1/scripts/bench/bench.sh" lock run t126 -- env PATH="$_lpath" SUPERVISE_CACHE="$_ld/cache" sh -c '. "$1/scripts/bench/core/common.sh"; . "$1/scripts/bench/core/lock.sh"
 trap '\''trap "" TERM; bench_stop_group "$BENCH_BOUNDED_PID" || :; echo "caller trapped 143"; exit 143'\'' TERM
 st=0; bench_bounded 30 sh -c "read x < \"\$0\"; echo command-ended >> \"\$1\"" "$2" "$3" || st=$?; echo "caller bounded $st $BENCH_BOUNDED_HOW"' x "$1" "$_ld/hold" "$_ld/fifo" < /dev/null > "$_ld/fifo" 2>&1 &
 	_lp=$!
@@ -1640,7 +1613,7 @@ else
 	# not recorded on a 126; the record not written; the lock shell's
 	# release not waiting for it (FIX184's two, moved here from check-bench)
 	for _lm in \
-		'lock-freed-on-126|scripts/bench/core/common.sh|	*) bench_record_untold "$_bu_g" group ;;|	*) : ;;' \
+		'lock-freed-on-126|scripts/bench/core/common.sh|	*) _bu_k=group ;;|	*) return 0 ;;' \
 		'record-not-written|scripts/bench/core/lock.sh|mv -f "$_lk_t" "${BENCH_LOCK_DIR:?}/untold.$1"|false' \
 		'release-no-wait|scripts/bench/core/lock.sh|while bench_lock_untold_live; do bench_nap 1; done|:'; do
 		_lmn=${_lm%%|*} _lmr=${_lm#*|}
@@ -1683,7 +1656,7 @@ else
 	# 3): the term case's "spawned" event records the group without the
 	# collected status.
 	for _lm in \
-		'nospawn|the lock was not kept|hand-not-recorded|scripts/bench/core/common.sh|		bench_record_untold "$_bu_g" hand|		:' \
+		'nospawn|the lock was not kept|hand-not-recorded|scripts/bench/core/common.sh|		_bu_k=hand|		return 0' \
 		'nospawn|the hand record was not named in lock status|status-hand-unmarked|scripts/bench/core/lock.sh|		_ls_k=$BENCH_LOCK_HAND|		_ls_k='; do
 		_lmc=${_lm%%|*} _lmr=${_lm#*|}
 		_lmx=${_lmr%%|*} _lmr=${_lmr#*|}
@@ -1727,7 +1700,7 @@ cat > "$W/svwindow" << 'EOF'
 r=$1 at=$2 evs=$3
 . "$r/scripts/lib/supervise.sh"
 . "$r/scripts/bench/core/common.sh"
-bench_record_untold() { echo "recorded $2"; }
+bench_lock_record() { echo "recorded $2"; }
 sv_term() {
 	sv_pid
 	[ -z "$SV_PID" ] || echo term
@@ -1937,77 +1910,123 @@ else
 	echo "$me: ok   sv endgroup order: no TERM line, in any order of trap 130 and group-empty, gives the one refusal; a TERM line after group-empty, trap 130 or grace-end gives none"
 fi
 
-# The lock run's watch, with ps silent (correctness I2, round 1): the
-# command leads its own group, so the watch says a stop goes to that group
-# while it has a member (bench_watch's leader note), and a TERM to the lock
-# shell stops the command before the lock is free. ps is a stand-in that
-# exits 1 and prints nothing; the lock state is the case's own. The lock
-# shell's lines and the command's "cmd <pid>" go to a FIFO. Sets ln_why.
-sv_leadnote() {
-	_nd=$W/sv-note-$(basename "$1")
-	ln_why=
-	rm -rf "$_nd"
-	mkdir -p "$_nd/shim" "$_nd/state" && mkfifo "$_nd/fifo" || return 1
-	printf '#!/bin/sh\nexit 1\n' > "$_nd/shim/ps" && chmod +x "$_nd/shim/ps" || return 1
-	proc_open "$_nd/fifo"
-	env PATH="$_nd/shim:$PATH" BENCH_STATE="$_nd/state" sh "$1/scripts/bench/bench.sh" lock run tnote -- sh -c 'echo "cmd $$"; exec sleep 30' < /dev/null > "$_nd/fifo" 2>&1 &
-	_np=$!
-	_ng=
-	if ! proc_await 'cmd *'; then
-		ln_why="the command did not start"
+# The lock run under the supervisor (TASK221 slice 3): bench.sh lock run
+# runs its command through bench_bounded_run, so its events reach
+# BENCH_BOUNDED_TAP, and each case waits on them (tests/lib/proc.sh, a
+# failure bound of 60 s): no sleep, no ps. The lock shell starts with SIGINT
+# at its default (python3, as sv_case does), its lines go to a file, and
+# end of file on the FIFO means the supervisor (and its tee) are gone.
+# sv_lockrun <root> <mode> sets lr_why (empty: it held):
+#   term  the command ignores TERM from its start, then says "ready" on the
+#         FIFO; a TERM goes to the lock shell. The supervisor must be sent
+#         TERM ("signal name=TERM"), and at "term-sent" lock status must
+#         still show the lock held: the group ignores TERM and is KILLed
+#         only after the lock's grace (10 s, BENCH_STOP_GRACE=5), so the
+#         lock is held there by construction. Then "reaped", end of file,
+#         exit 143, and the lock free.
+#   int   an INT goes to the lock shell at "spawned": exit 130, the lock
+#         free, the command's group gone and no scratch file in TMPDIR.
+sv_lockrun() {
+	_rd=$W/sv-lr-$2-$(basename "$1")
+	lr_why=
+	rm -rf "$_rd"
+	mkdir -p "$_rd/tmp" "$_rd/state" && mkfifo "$_rd/fifo" || return 1
+	_rb=$PROC_BOUND
+	PROC_BOUND=60
+	proc_open "$_rd/fifo"
+	if [ "$2" = term ]; then
+		_rc='trap "" TERM; echo ready >> "$0"; exec sleep 120'
 	else
-		_ng=${PROC_LINE#cmd }
+		_rc='exec sleep 120'
+	fi
+	env TMPDIR="$_rd/tmp" BENCH_STATE="$_rd/state" BENCH_BOUNDED_TAP="$_rd/fifo" BENCH_STOP_GRACE=5 python3 -I -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])' sh "$1/scripts/bench/bench.sh" lock run lr -- sh -c "$_rc" "$_rd/fifo" < /dev/null > "$_rd/out" 2>&1 &
+	_rp=$!
+	_rg=
+	if ! proc_await 'spawned *'; then
+		lr_why="no spawned event from the lock run's supervisor within $PROC_BOUND s"
+	else
+		_rg=${PROC_LINE##*pgid=}
 		proc_alone
-		if ! proc_await '*cannot tell whether pid*'; then
-			ln_why="the watch said nothing of a silent ps"
+		if [ "$2" = int ]; then
+			kill -s INT "$_rp"
+		elif ! proc_await ready; then
+			lr_why="the command did not say it ignores TERM"
 		else
-			case $PROC_LINE in
-			*'a stop goes to its process group while that has a member'*) ;;
-			*) ln_why="the watch did not say the stop goes to the command's group: $PROC_LINE" ;;
-			esac
+			kill -s TERM "$_rp"
+			if ! proc_await 'signal name=TERM'; then
+				lr_why="sv_run did not forward TERM: no signal name=TERM within $PROC_BOUND s"
+			elif ! proc_await 'term-sent *'; then
+				lr_why="the supervisor sent its group no TERM"
+			else
+				_rl=$(env BENCH_STATE="$_rd/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
+				case $_rl in
+				lock=held*) ;;
+				*) lr_why="the lock was freed before reaped: at term-sent, $_rl" ;;
+				esac
+				if [ -z "$lr_why" ] && ! proc_await 'reaped *'; then lr_why="no reaped event"; fi
+			fi
 		fi
 	fi
-	kill -s TERM "$_np" 2> /dev/null
-	proc_eof || {
-		ln_why=${ln_why:-"the lock shell or its command outlived the TERM by $PROC_BOUND s"}
-		kill -s KILL "$_np" 2> /dev/null
-	}
-	case $_ng in '' | *[!0-9]*) ;; *)
-		if kill -0 -- "-$_ng" 2> /dev/null; then
-			ln_why=${ln_why:-"the command's group outlived the lock shell"}
-			kill -s KILL -- "-$_ng" 2> /dev/null
-		fi
-		;;
-	esac
-	wait "$_np" 2> /dev/null
+	if [ -z "$lr_why" ] && ! proc_eof; then lr_why="the supervisor outlived the stop by $PROC_BOUND s"; fi
+	if [ -n "$lr_why" ]; then
+		kill -s KILL "$_rp" 2> /dev/null
+		case $_rg in '' | *[!0-9]*) ;; *) kill -s KILL -- "-$_rg" 2> /dev/null ;; esac
+	fi
+	_rs=0
+	wait "$_rp" 2> /dev/null || _rs=$?
 	proc_close
-	if [ -z "$ln_why" ]; then
-		_nl=$(env BENCH_STATE="$_nd/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
-		[ "$_nl" = lock=free ] || ln_why="the lock was not freed: $_nl"
-	fi
-}
-sv_leadnote "$here"
-if [ -n "$ln_why" ]; then
-	echo "$me: FAIL: lock note: $ln_why"
-	fails="$fails lock-note"
-else
-	echo "$me: ok   lock note: ps silent, the watch says the stop goes to the group, and TERM stops it"
-fi
-# the mutant: the watch never says the stop goes to the group
-if sv_stage "$W/stage-note" scripts/bench/core/common.sh 'if [ "$BENCH_ID_GROUP" = "$_bw_p" ]; then' 'if false; then'; then
-	sv_leadnote "$W/stage-note"
-	case $ln_why in
-	'the watch did not say'*) echo "$me: mutant watch-leader-note: refused ($ln_why)" ;;
-	*)
-		echo "$me: FAIL: mutant watch-leader-note passed the lock note case: ${ln_why:-held}"
-		fails="$fails watch-leader-note"
+	PROC_BOUND=$_rb
+	[ -n "$lr_why" ] && return 0
+	_rw=143
+	[ "$2" = term ] || _rw=130
+	[ "$_rs" -eq "$_rw" ] || lr_why="the lock shell exited $_rs, not $_rw ($(tr '\n' '|' < "$_rd/out" | cut -c1-300))"
+	_rl=$(env BENCH_STATE="$_rd/state" sh "$1/scripts/bench/bench.sh" lock status 2>&1)
+	[ "$_rl" = lock=free ] || lr_why="${lr_why:+$lr_why; }the lock was not freed: $_rl"
+	case $_rg in '' | *[!0-9]*) ;; *)
+		if kill -0 -- "-$_rg" 2> /dev/null; then lr_why="${lr_why:+$lr_why; }the command's group $_rg runs"; fi
 		;;
 	esac
-else
-	echo "$me: FAIL: mutant watch-leader-note does not apply"
-	fails="$fails watch-leader-note"
-fi
-
+	if [ -n "$(ls -A "$_rd/tmp")" ]; then lr_why="${lr_why:+$lr_why; }scratch files: $(ls -A "$_rd/tmp" | tr '\n' ' ')"; fi
+}
+for _lrm in term int; do
+	sv_lockrun "$here" "$_lrm"
+	if [ -n "$lr_why" ]; then
+		echo "$me: FAIL: lock run $_lrm: $lr_why"
+		fails="$fails lock-run-$_lrm"
+	elif [ "$_lrm" = term ]; then
+		echo "$me: ok   lock run term: a TERM to the lock shell while its command ignores TERM keeps the lock until reaped, then frees it (exit 143)"
+	else
+		echo "$me: ok   lock run int: an INT at spawned: exit 130, the lock free, nothing left"
+	fi
+done
+# the mutants, each refused by its own line in the term case: the lock
+# freed before the stop (bench.sh's trap releases first), and sv_run's
+# stop sending no TERM (the supervisor is then never told, and the case's
+# bound ends it)
+for _lm in \
+	'lock-freed-before-reaped^scripts/bench/bench.sh^	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group^	bench_lock_release; if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group^the lock was freed before reaped' \
+	'sv-run-no-term^scripts/lib/supervise.sh^	[ -z "$SV_PID" ] || kill -s TERM "$SV_PID" 2> /dev/null || :^	:^sv_run did not forward TERM'; do
+	# fields apart by ^, since the edits hold |
+	_lmn=${_lm%%^*} _lmr=${_lm#*^}
+	_lmf=${_lmr%%^*} _lmr=${_lmr#*^}
+	_lmo=${_lmr%%^*} _lmr=${_lmr#*^}
+	_lmw=${_lmr%%^*} _lmx=${_lmr#*^}
+	if sv_stage "$W/stage-$_lmn" "$_lmf" "$_lmo" "$_lmw"; then
+		sv_lockrun "$W/stage-$_lmn" term
+		case $lr_why in
+		"$_lmx"*) echo "$me: mutant $_lmn: refused by lock run term ($lr_why)" ;;
+		*)
+			echo "$me: FAIL: mutant $_lmn passed the lock run term case: ${lr_why:-held}"
+			fails="$fails $_lmn"
+			;;
+		esac
+	else
+		echo "$me: FAIL: mutant $_lmn does not apply"
+		fails="$fails $_lmn"
+	fi
+done
 # A command's own 124, 125 and 126 are its own (correctness B1, round 1):
 # the supervisor passes the command's status through, so bench_bounded
 # tells its own 124 (the wall time), 125 (cannot run) and 126 (cannot empty
@@ -2068,22 +2087,27 @@ else
 	echo "$me: FAIL: tap: wanted \"status 124 how wall\", a deadline line in the tap and an empty TMPDIR; got \"$_to\", tap [$(tr '\n' '|' < "$_td/tap" 2> /dev/null)], TMPDIR [$(ls -A "$_td/tmp" | tr '\n' ' ')]"
 	fails="$fails tap"
 fi
-# bench_poll_end removes its own bounded run's events file only (round 1,
-# N3): a sibling subshell's has the same $$ in its name
+# bench_stop_group, a two-line shim since TASK221 slice 3 (as today, its
+# verdicts unchanged): a pid that is not the bounded command's gets no
+# signal and the call returns 0; the bounded pid in the window before the
+# supervisor starts (BENCH_BOUNDED_PID "starting", the events file made)
+# removes that one file, by its name, and signals nothing: a sibling
+# subshell's file, with the same $$ in its name, is left (round 1, N3)
 mkdir -p "$_td/sib" || exit 1
-_tp=$(env TMPDIR="$_td/sib" sh -c '. "$1/scripts/bench/core/common.sh"; : > "$TMPDIR/bench-sv.$$.sibling"; bench_poll_end; ls -A "$TMPDIR"' sh "$here" 2>&1)
+_tp=$(env TMPDIR="$_td/sib" sh -c '. "$1/scripts/bench/core/common.sh"; bench_sv; : > "$TMPDIR/bench-sv.$$.sibling"; sleep 30 & o=$!; st=0; bench_stop_group "$o" || st=$?; kill -0 "$o" && echo "other $st"; kill "$o"; wait "$o"; BENCH_BOUNDED_PID=starting; bench_bounded_ev; bench_stop_group starting; echo "pid [$BENCH_BOUNDED_PID]"; ls -A "$TMPDIR"' sh "$here" 2> /dev/null | tr '\n' '|')
 case $_tp in
-*'bench-sv.'*'.sibling') echo "$me: ok   poll-end: a sibling's events file is left" ;;
+'other 0|pid []|bench-sv.'*'.sibling|') echo "$me: ok   stop shim: another pid gets nothing, and the window's stop removes only its own events file" ;;
 *)
-	echo "$me: FAIL: poll-end: bench_poll_end removed a sibling's events file: [$_tp]"
-	fails="$fails poll-end-sibling"
+	echo "$me: FAIL: stop shim: wanted [other 0|pid []|bench-sv.<pid>.sibling|], got [$_tp]"
+	fails="$fails stop-shim"
 	;;
 esac
 
 # a trap that runs in a bare nap prints its lines (FIX192, round 2): with fd
 # 8 closed, a TERM in bench_nap runs the caller's trap and its EXIT trap,
 # and both lines reach standard error. The mutant puts the nap's /dev/null
-# back on the bench_poll call, which then covers the wait the trap runs in
+# on its wait (TASK221 slice 3: the nap waits for its sleep itself), which
+# then covers the trap that runs in it
 nap_trap() {
 	_nt_d=$W/nap-$(basename "$1")
 	rm -rf "$_nt_d"
@@ -2115,12 +2139,12 @@ nout=$(nap_trap "$here")
 echo "$me: $nout"
 [ "$nout" = "nap trap: exit 143; stderr [on_signal: stopping|cleanup ran|]" ] ||
 	{ echo "$me: FAIL: nap trap: a trap in a bare nap must print its lines and its EXIT trap's to standard error"; fails="$fails nap-trap"; }
-if stage_root "$W/stage-nap" '	bench_poll bench_sleep_quiet "${1:-1}" || _bn_st=$?' '	bench_poll sleep "${1:-1}" 2> /dev/null || _bn_st=$?'; then
+if sv_stage "$W/stage-nap" scripts/bench/core/common.sh '	wait "$!" || _bn_st=$?' '	wait "$!" 2> /dev/null || _bn_st=$?'; then
 	mout=$(nap_trap "$W/stage-nap")
 	case $mout in
 	"nap trap: exit 143; stderr []") echo "$me: mutant nap-quiet-wait: refused ($mout)" ;;
 	*)
-		echo "$me: FAIL: mutant nap-quiet-wait (the nap's /dev/null on the bench_poll call) passed the nap trap case: $mout"
+		echo "$me: FAIL: mutant nap-quiet-wait (the nap's /dev/null on its wait) passed the nap trap case: $mout"
 		fails="$fails nap-quiet-wait"
 		;;
 	esac
