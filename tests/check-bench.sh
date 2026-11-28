@@ -12,15 +12,18 @@
 #     and HUP; the stop of the command's whole process group, before the
 #     lock is free, on TERM and on INT to the lock shell's group (Ctrl-C),
 #     a grandchild and a command that catches TERM included, with the
-#     lock's grace floor; a TERM held in the window before the pid is
-#     stored; a stopped command (a STOP to its group, and stty on a pty
-#     from script when there is one) said and ended with 74; work a
-#     command leaves running on a normal exit stopped before the lock is
-#     free, with the same grace floor when it catches TERM; no line but
-#     the lock shell's own on its output (the lines found shown; the
-#     fixture's own shells silenced, and a probe that they are); the fork
-#     of the command with its standard error on /dev/null (seen with
-#     xtrace), the command with the caller's; the command's own INT trap;
+#     lock's grace floor; a TERM in the supervisor's fork window, before
+#     its pid is stored; a stopped command (a STOP to its group, and stty
+#     on a pty from script when there is one) ended by a TERM to the lock
+#     shell, with the lock freed (TASK221 slice 3: no longer told apart);
+#     work a command leaves running on a normal exit stopped before the
+#     lock is free, with the same grace floor when it catches TERM; no line
+#     but the lock shell's own on its output (the lines found shown; the
+#     fixture's own shells silenced, and a probe that they are); the
+#     command with the caller's standard error and standard input
+#     (/dev/null when either is closed); the command's own INT trap; the
+#     lock state's records (group, hand and an older harness's pid
+#     records, in UTC whatever the TZ);
 #     reclaim of a dead holder, logged, and of two waiters that reclaim at
 #     once exactly one gets the lock; a held reclaim guard, a holder whose
 #     command's group still runs, and a holder-less lock inside its grace
@@ -84,13 +87,12 @@
 #     the gate without a pre-warm, and the readers (snap.source,
 #     freq.source) in the run file, drift and compare.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then sixty-four mutants, each applied to a
-# copy of scripts/bench/ and each required to fail the test it targets: the
-# lock made neither exclusively nor linked, the holder renamed over
-# another's, the command spawned without its own process group, its fork
-# left with the caller's standard error (with standard input open, and
-# closed) or a closed one not given /dev/null, a signal
-# in the spawn window dropped, or acted on at once, re-entry accepts any
+# system_profiler (fast_profiler). Then seventy-five mutants, each applied to
+# a copy of scripts/bench/ (or scripts/lib/) and each required to fail the
+# test it targets: the lock made neither exclusively nor linked, the holder
+# renamed over another's, the records' rules (a record not honoured, its
+# written= ignored or not written, a start time or written= in the local
+# zone, lock status not naming a record), re-entry accepts any
 # token, the drift rule drops t, the core names a game, the reclaim guard
 # made with mkdir -p, the holder-less grace dropped, the queue with no
 # ticket check, ordered by pid, its ticket left on give-up, a dead or a
@@ -1140,27 +1142,25 @@ t_lock_stop() {
 	else
 		echo "$me: SIGINT is ignored where this check runs, so the INT tests are skipped"
 	fi
-	# A command that stops (a STOP to its group here; at a terminal, one
-	# that touches it from its background process group) is said, stopped
-	# with its group, and the lock freed with 74: never a wait without end.
+	# A command that stops (a STOP to its group here) is no longer told
+	# apart (TASK221 slice 3: 74 is gone with the shell watch): it holds the
+	# lock until a signal stops the lock shell, whose supervisor sends the
+	# group TERM and CONT, so the stop ends it and frees the lock, never a
+	# wait without end once the lock shell is signalled.
 	start env BENCH_STOP_GRACE=0 sh "$R/bench.sh" lock run stopped -- sh "${E:?}/gc.sh" "${E:?}/gc.stop" "${E:?}/log" stopped 30 > "${E:?}/stopped.out" 2>&1
 	_h=$BG
 	wait_held 5 stopped || bad "stop: the stopped command's holder never showed"
 	wait_file 5 "${E:?}/gc.stop" || bad "stop: the stopped command's grandchild never started"
-	# the group leader read with its identity, and the group stopped only
-	# while the leader still has it (FIX171), after the decoy runs, as for
-	# the lock shell above
-	_c=$(sed -n 's/^child=//p' "${E:?}/state/lock/holder")
-	_ci=$(pid_id "$_c") || _ci=
-	for _how in other none nops own; do
-		decoy "$_how" "$_ci"
-		{ pid_same "$_c" "$_id" && kill -s STOP -- "-$_c"; } || [ "$_how" != own ] || bad "stop: the stopped command's group leader is gone, or ps gave no answer for it"
-		decoy_end "$_how" "stop: the STOP to the stopped command's group"
-	done
+	_gs=$(cat "${E:?}/gc.stop" 2> /dev/null) || _gs=
+	_c=$(ps -o pgid= -p "$_gs" 2> /dev/null | tr -d ' ') || _c=
+	case $_c in
+	'' | *[!0-9]*) bad "stop: no process group read for the stopped command's grandchild" ;;
+	*) kill -s STOP -- "-$_c" ;;
+	esac
+	kill -TERM "$_h"
 	_st=0
-	if ended 10 "$_h" "stop: lock run still waits on a stopped command"; then collect "$_h" || _st=$?; fi
-	[ "$_st" -eq 74 ] || bad "stop: wanted exit 74 from a stopped command, got $_st"
-	grep -q '^bench: the command stopped' "${E:?}/stopped.out" || bad "stop: a stopped command was not said"
+	if ended 10 "$_h" "stop: lock run still waits on a stopped command after a TERM"; then collect "$_h" || _st=$?; fi
+	[ "$_st" -eq 143 ] || bad "stop: wanted exit 143 from a stopped command's lock shell on TERM, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "stop: a stopped command's lock was not released"
 	outlived "$(cat "${E:?}/gc.stop")" "stop: the stopped command's grandchild outlived the lock"
 	# A command that exits and leaves work running in its group (its line
@@ -1173,25 +1173,34 @@ t_lock_stop() {
 	grep -q '^bench: stopped what the command left running' "${E:?}/left.err" || bad "stop: the work a command left running was not said"
 	_tl=$(date +%s)
 	# A command that exits and leaves one that catches TERM running in its
-	# group: after the 1 to 2 s it is given, the leftover gets the same grace
-	# floor as on a signal (at least BENCH_STOP_GRACE + 5 s, even when that
-	# is 0), so a nested bench.sh left running stops its own bounded group
-	# first. Under a lock of its own (l2), checked below with s2.
+	# group: the leftover gets TERM at once (the supervisor's stop at the
+	# leader's exit, TASK221 slice 3; it was given 1 to 2 s first) and the
+	# same grace floor as on a signal (at least BENCH_STOP_GRACE + 5 s, even
+	# when that is 0), so a nested bench.sh left running stops its own
+	# bounded group first. The command exits once the leftover has set its
+	# trap (its pid file). Under a lock of its own (l2), checked below with s2.
 	mkdir "${E:?}/l2"
-	printf '%s\n' 'sh "$1" "$2" "$3" & exit 0' > "${E:?}/leave.sh"
+	printf '%s\n' 'sh "$1" "$2" "$3" & _n=0; while [ ! -s "$2" ] && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done; exit 0' > "${E:?}/leave.sh"
 	_t2=$(date +%s)
 	start sh -c 'st=0; env BENCH_STATE="$1/state" BENCH_STOP_GRACE=0 sh "$2/bench.sh" lock run left2 -- sh "$4" "$3" "$1/pid" "$1/log" > "$1/out" 2>&1 || st=$?; echo "$st" > "$1/st"; date +%s > "$1/end"' x "${E:?}/l2" "$R" "${E:?}/stubborn.sh" "${E:?}/leave.sh"
 	# At a terminal (a pty from script, when there is one): a command that
-	# touches it from its background process group is said and stopped.
+	# touches it from its background process group is stopped by the
+	# terminal and holds the lock (TASK221 slice 3: no longer said, nor
+	# ended with 74) until a TERM to the lock shell, which ends it and frees
+	# the lock.
 	if script -q /dev/null true < /dev/null > /dev/null 2>&1; then
 		printf '%s\n' 'st=0; sh "$1/bench.sh" lock run tty -- sh -c "stty -echo < /dev/tty; echo after-stty" > "$2/tty.out" 2>&1 || st=$?; echo "$st" > "$2/tty.st"' > "${E:?}/tty.sh"
 		start env BENCH_STOP_GRACE=0 script -q /dev/null sh "${E:?}/tty.sh" "$R" "${E:?}" < /dev/null > /dev/null 2>&1
 		_h=$BG
-		ended 15 "$_h" "stop: a command that touched the terminal held the lock" || true
+		wait_held 5 tty || bad "stop: the terminal command's holder never showed"
+		_tp=$(sed -n 's/^pid=//p' "${E:?}/state/lock/holder" 2> /dev/null) || _tp=
+		case $_tp in
+		'' | *[!0-9]*) bad "stop: no lock shell read for the terminal command" ;;
+		*) kill -TERM "$_tp" ;;
+		esac
+		ended 15 "$_h" "stop: a command that touched the terminal held the lock after a TERM" || true
 		wait_file 10 "${E:?}/tty.st" || bad "stop: the terminal test never ended"
-		[ "$(cat "${E:?}/tty.st" 2> /dev/null)" = 74 ] || bad "stop: a command that touched the terminal: wanted 74, got $(cat "${E:?}/tty.st" 2> /dev/null)"
-		grep -q '^bench: the command stopped' "${E:?}/tty.out" || bad "stop: a command that touched the terminal was not said"
-		grep -q after-stty "${E:?}/tty.out" && bad "stop: a command that touched the terminal went on"
+		[ "$(cat "${E:?}/tty.st" 2> /dev/null)" = 143 ] || bad "stop: a command that touched the terminal: wanted 143 on TERM, got $(cat "${E:?}/tty.st" 2> /dev/null)"
 		[ "$(B lock status)" = lock=free ] || bad "stop: a command that touched the terminal left the lock held"
 	else
 		[ "${CHECK_BENCH_TTY_REQUIRE:-0}" != 1 ] || { bad "stop: CHECK_BENCH_TTY_REQUIRE=1 and there is no working script(1) for the terminal test"; return 1; }
@@ -1211,7 +1220,7 @@ t_lock_stop() {
 	wait_file 20 "${E:?}/l2/end" || bad "stop: lock run did not return after a command left one that ignores TERM running"
 	_t3=$(cat "${E:?}/l2/end" 2> /dev/null || echo 0)
 	[ "$(cat "${E:?}/l2/st" 2> /dev/null)" = 0 ] || bad "stop: wanted exit 0 from a command that left one that ignores TERM running, got $(cat "${E:?}/l2/st" 2> /dev/null)"
-	[ $((_t3 - _t2)) -ge 6 ] || bad "stop: with BENCH_STOP_GRACE=0 the work a command left running was killed after $((_t3 - _t2)) s, under the 1 s it is given and the floor of 5 s"
+	[ $((_t3 - _t2)) -ge 4 ] || bad "stop: with BENCH_STOP_GRACE=0 the work a command left running was killed after $((_t3 - _t2)) s, under the floor of 5 s"
 	[ "$(env BENCH_STATE="${E:?}/l2/state" sh "$R/bench.sh" lock status)" = lock=free ] || bad "stop: the lock was not released after a command left one that ignores TERM running"
 	grep -q got-term "${E:?}/l2/log" || bad "stop: the work a command left running never got TERM"
 	outlived "$(cat "${E:?}/l2/pid" 2> /dev/null)" "stop: the work a command left running, which ignores TERM, outlived the lock"
@@ -1227,28 +1236,15 @@ t_lock_stop() {
 	[ "$fails" -eq 0 ]
 }
 
-# The fork of the command (bench_spawn) runs with standard error on
-# /dev/null, so nothing the forked shell says before it becomes the command
-# reaches the caller: under load, bash's "child setpgid (<pid> to <pid>):
-# Operation not permitted" (FIX83). It is seen here with xtrace, which bash
-# prints in the forked shell, for the command, on that standard error
-# before the command's own redirections; with standard input open and
-# closed (the two forms of the fork). The command itself gets the caller's
-# standard error, fds 3 and 9 closed (standard input open), and /dev/null
-# when standard error is closed.
+# The command under the lock (its supervisor's spawn since TASK221 slice
+# 3; FIX83's forked shell is gone with the shell spawn) gets the caller's
+# standard error, fds 3 and 9 closed, /dev/null when standard error is
+# closed, and the caller's standard input, or /dev/null when that is closed.
 t_spawn_stderr() {
 	fresh spawn
-	for _in in open closed; do
-		_st=0
-		if [ "$_in" = open ]; then
-			env PS4='+ ' sh -x "$R/bench.sh" lock run xt -- sh -c ': fork-probe' < /dev/null > /dev/null 2> "${E:?}/xt.$_in" || _st=$?
-		else
-			env PS4='+ ' sh -x "$R/bench.sh" lock run xt -- sh -c ': fork-probe' <&- > /dev/null 2> "${E:?}/xt.$_in" || _st=$?
-		fi
-		[ "$_st" -eq 0 ] || bad "spawn: the xtrace run (standard input $_in) exited $_st"
-		grep -q 'bench_spawn sh -c .*fork-probe' "${E:?}/xt.$_in" || bad "spawn: the xtrace run (standard input $_in) shows no call of bench_spawn, so it shows nothing"
-		if grep -q "^+* sh -c '*: fork-probe'*\$" "${E:?}/xt.$_in"; then bad "spawn: the forked shell's own lines reach the caller's standard error (standard input $_in)"; fi
-	done
+	_st=0
+	_out=$(B lock run in -- sh -c 'st=0; read x || st=$?; echo "got $x"; exit "$st"' <&-) || _st=$?
+	[ "$_st" -eq 1 ] && [ "$_out" = "got " ] || bad "spawn: with standard input closed, wanted the command to read /dev/null (status 1, an empty read), got status $_st: $_out"
 	_out=$(B lock run err -- sh -c 'echo to-stderr >&2; (: >&3) 2> /dev/null && echo fd3-open; (: >&9) 2> /dev/null && echo fd9-open' < /dev/null 2>&1 3< /dev/null 9> /dev/null)
 	[ "$_out" = to-stderr ] || bad "spawn: wanted the command's standard error and fds 3 and 9 closed, got: $_out"
 	_st=0
@@ -1277,13 +1273,18 @@ t_lock_defer() {
 	fresh defer
 	grandchild "${E:?}"
 	: > "${E:?}/log"
-	# A TERM that arrives between the "&" and the stored pid is held and
-	# acted on once the pid is stored: the command is stopped, not lost.
-	_s=${tmp:?}/defer-bench
-	rm -rf "${_s:?}"
+	# A TERM that arrives between the supervisor's fork and the stored pid
+	# (sv_start's window, TASK221 slice 3; it was the shell spawn's) finds the
+	# supervisor as $! (sv_pid), and the command is stopped, not lost (as
+	# today). The stall is in a copy of scripts/bench and scripts/lib, side
+	# by side, so the copy finds its own supervise.sh.
+	_s=${tmp:?}/defer-tree/bench
+	rm -rf "${tmp:?}/defer-tree"
+	mkdir -p "${tmp:?}/defer-tree"
 	cp -R "$R" "$_s"
-	lit "${_s:?}/core/common.sh" 'BENCH_SPAWN_PID=$!' 'sleep 1; BENCH_SPAWN_PID=$!' || bad "defer: the injected stall does not apply"
-	start env BENCH_STOP_GRACE=1 sh "$_s/bench.sh" lock run defer -- sh "${E:?}/gc.sh" "${E:?}/d.gc" "${E:?}/log" defer 4 > "${E:?}/defer.out" 2>&1
+	cp -R "$BENCH_SV_LIB" "${tmp:?}/defer-tree/lib"
+	lit "${tmp:?}/defer-tree/lib/supervise.sh" 'SV_PID=$!' 'sleep 1; SV_PID=$!' || bad "defer: the injected stall does not apply"
+	start env BENCH_STOP_GRACE=1 BENCH_SV_LIB= sh "$_s/bench.sh" lock run defer -- sh "${E:?}/gc.sh" "${E:?}/d.gc" "${E:?}/log" defer 4 > "${E:?}/defer.out" 2>&1
 	_h=$BG
 	wait_file 5 "${E:?}/d.gc" || bad "defer: the grandchild never started"
 	kill -TERM "$_h"
@@ -1357,29 +1358,27 @@ t_bounded() {
 	[ "$fails" -eq 0 ]
 }
 
-# FIX172: the core signals only the command bench_spawn started, or the
-# process group it led at spawn. core_decoy <name> [deaf] starts a shell of
-# this check's own, as bench_spawn starts a command (the leader of its own
-# process group), with a sleep in that group, from a subshell that exits at
-# once, so it is no child of this shell, as a process that took a reused
-# pid would not be. Both end by themselves within 30 s; "deaf" ones ignore
-# TERM. It sets _dp (the shell), _dm (the sleep) and _ds (the shell's start
-# time, bench_proc_read's form), and records both pids.
+# core_decoy <name>: starts a shell of this check's own as the leader of a
+# process group of its own (python3's setpgid, no job control), with a
+# sleep in that group, from a subshell that exits at once, so it is no
+# child of this shell. Both end by themselves within 30 s. It sets _dp (the
+# shell), _dm (the sleep) and _ds (the shell's start time, ps's lstart in
+# UTC, its words one blank apart), and records both pids.
 core_decoy() {
 	rm -f "${E:?}/m.$1" "${E:?}/d.$1"
-	_dt=
-	if [ "${2:-}" = deaf ]; then _dt='trap "" TERM; '; fi
 	(
-		bench_spawn sh -c "$_dt"'sleep 30 & printf "%s\n" "$!" > "$1"; wait' x "${E:?}/m.$1"
-		printf '%s\n' "$BENCH_SPAWN_PID" > "${E:?}/d.$1"
+		python3 -I -c 'import os, sys
+os.setpgid(0, 0)
+os.execvp("sh", ["sh", "-c", "sleep 30 & printf \"%s\\n\" \"$!\" > \"$1\"; wait", "x", sys.argv[1]])' "${E:?}/m.$1" &
+		printf '%s\n' "$!" > "${E:?}/d.$1"
 	) < /dev/null > /dev/null 2>&1
 	wait_file 5 "${E:?}/m.$1" && wait_file 5 "${E:?}/d.$1" || return 1
 	_dp=$(cat "${E:?}/d.$1")
 	_dm=$(cat "${E:?}/m.$1")
 	record "$_dp"
 	record "$_dm"
-	bench_proc_read "$_dp" || return 1
-	_ds=$BENCH_PS_START
+	_ds=$(LC_ALL=C TZ=UTC0 ps -o lstart= -p "$_dp" 2> /dev/null | awk '{ $1 = $1; print }') || return 1
+	[ -n "$_ds" ]
 }
 # core_decoy_end <pid>...: KILLs each pid that is still the process recorded
 # (listed_same), and waits for it to go.
@@ -1389,16 +1388,18 @@ core_decoy_end() {
 		wait_gone 5 "$_de" || nok "a decoy ($_de) still ran 5 s after its KILL"
 	done
 }
-# t_core_id: a pid whose identity is not the one bench_spawn recorded (a
-# decoy given the slot with another start time, with none, or while ps is
-# silent) gets no signal from bench_watch, bench_stop_group, bench_end_group
-# or bench_lock_stop_child, and the watch and the stop say when they cannot
-# tell; the command's own pid and group are still stopped, as a group when
-# it leads one, and by its pid alone when it leads none. kill only notes
-# what it sends, and sends it: every process here is this check's own.
+# t_core_id: the lock state's records (FIX184, TASK221). Since TASK221
+# slice 3 the core reads no start time of its own commands (the
+# supervisor owns their reap), so what is left here is the lock's side: a
+# group record holds the lock while its group has a member and no later
+# group has its id, in UTC whatever the TZ of the writer and the reader;
+# a record of an older harness (pid=, no group= or hand=) holds while its
+# pid answers kill -0 (fail closed: a start time no longer decides); lock
+# status names a record that alone holds the lock; the release frees a
+# lock whose record holds nothing at once; and bench_bounded_untold writes
+# its group record with the time it was written.
 t_core_id() {
 	fresh coreid
-	: > "${E:?}/sig"
 	(
 		BENCH_ROOT=$R
 		. "$R/core/common.sh"
@@ -1410,220 +1411,34 @@ t_core_id() {
 			_f=$((_f + 1))
 			if [ -n "$MUTANT" ]; then exit 1; fi
 		}
-		# sig_none <case>: no signal went out since the last check.
-		sig_none() {
-			if [ -s "${E:?}/sig" ]; then nok "$1: a signal went out: $(tr '\n' ' ' < "${E:?}/sig")"; fi
-			: > "${E:?}/sig"
-		}
-		_other='Thu Jan 1 00:00:00 1970'
-		if bench_proc_read 1; then _other=$BENCH_PS_START; fi
-		core_decoy d1 || { echo "$me: core-id: the first decoy did not start"; exit 1; }
+		core_decoy d1 || { echo "$me: core-id: the decoy did not start"; exit 1; }
 		_d=$_dp _dm1=$_dm _ds1=$_ds
-		core_decoy d2 || { echo "$me: core-id: the second decoy did not start"; exit 1; }
-		_d2=$_dp _dm2=$_dm _ds2=$_ds
-		core_decoy d3 deaf || { echo "$me: core-id: the deaf decoy did not start"; exit 1; }
-		_d3=$_dp _dm3=$_dm _ds3=$_ds
-		core_decoy d4 deaf || { echo "$me: core-id: the second deaf decoy did not start"; exit 1; }
-		_d4=$_dp _dm4=$_dm _ds4=$_ds
-		[ "$_ds1" != "$_other" ] || { echo "$me: core-id: the decoy has PID 1's start time"; exit 1; }
-		kill() {
-			case $1 in
-			-0) ;;
-			*) printf '%s\n' "$*" >> "${E:?}/sig" ;;
-			esac
-			command kill "$@"
-		}
+		_other='Thu Jan 1 00:00:00 1970'
 
-		# The command's own identity at spawn, and the lock's stop of it:
-		# TERM to its group, nothing to its pid alone. The table holds an
-		# entry before the command's and one after it (pids above any the
-		# system gives, never signalled), so the stop's forget is seen to
-		# take out the command's entry alone (TASK221 slice 2 hold).
-		BENCH_SPAWNED=";999991|-|$_other"
-		bench_spawn sh -c 'sleep 30 & printf "%s\n" "$!" > "$1"; wait' x "${E:?}/m.own" < /dev/null
-		_o=$BENCH_SPAWN_PID
-		record "$_o"
-		wait_file 5 "${E:?}/m.own" || nok "spawn: the command's group member never started"
-		_om=$(cat "${E:?}/m.own" 2> /dev/null) || _om=
-		record "$_om"
-		bench_proc_read "$_o" || nok "spawn: ps gave no start time for the command"
-		[ "$BENCH_SPAWN_START" = "$BENCH_PS_START" ] || nok "spawn: the start time recorded ($BENCH_SPAWN_START) is not the command's ($BENCH_PS_START)"
-		[ "$BENCH_SPAWN_GROUP" = "$_o" ] || nok "spawn: the group recorded ($BENCH_SPAWN_GROUP) is not the one the command leads ($_o)"
-		case $BENCH_SPAWNED in
-		*";$_o|$_o|$BENCH_PS_START") ;;
-		*) nok "spawn: BENCH_SPAWNED does not end with the command's entry: $BENCH_SPAWNED" ;;
-		esac
-		BENCH_SPAWNED="$BENCH_SPAWNED;999992|-|$_other"
-		_st=0
-		bench_watch "$_o" "$(($(date +%s) - 1))" 0.05 || _st=$?
-		[ "$_st" -eq 1 ] || nok "watch: own: the running command was not seen running past its end (status $_st)"
-		: > "${E:?}/sig"
-		BENCH_LOCK_CHILD=$_o
-		BENCH_LOCK_REAPED=
-		bench_lock_stop_child
-		wait_gone 5 "$_o" || nok "lock: own: the command was not stopped"
-		wait_gone 5 "$_om" || nok "lock: own: the command's group member outlived the stop"
-		grep -qx -- "-s TERM -- -$_o" "${E:?}/sig" || nok "lock: own: no TERM went to the command's group: $(tr '\n' ' ' < "${E:?}/sig")"
-		if grep -q -- "^-s [A-Z]* $_o\$" "${E:?}/sig"; then nok "lock: own: a signal went to the command's pid alone"; fi
-		# The lock run's spawn table: the stopped child leaves it, and the
-		# entries before and after it stay (bench_spawn_forget).
-		if bench_spawned "$_o"; then nok "lock: own: the stopped child's entry was left in the spawn table: $BENCH_SPAWNED"; fi
-		[ "$BENCH_SPAWNED" = ";999991|-|$_other;999992|-|$_other" ] || nok "lock: own: the stop did not take the child's entry alone out of the spawn table: $BENCH_SPAWNED"
-		BENCH_SPAWNED=
-		: > "${E:?}/sig"
-
-		# A decoy in the slot, with another start time: gone to the watch,
-		# and no signal from any stop, with or without a group, reaped or
-		# not, nor from the lock's stop, nor for a pid never spawned.
-		BENCH_SPAWNED=";$_d|$_d|$_other"
-		_t0=$(date +%s)
-		_st=0
-		bench_watch "$_d" "$((_t0 + 3))" 0.05 || _st=$?
-		[ "$_st" -eq 0 ] || nok "watch: other: a pid with another start time was not taken as gone (status $_st)"
-		bench_stop_group "$_d"
-		sig_none "stop: other"
-		_st=0
-		bench_end_group "$_d" 1 || _st=$?
-		[ "$_st" -eq 0 ] || nok "end-group: other: a group led by a pid with another start time was taken as the command's (status $_st)"
-		sig_none "end-group: other"
-		BENCH_LOCK_CHILD=$_d
-		BENCH_LOCK_REAPED=
-		bench_lock_stop_child
-		sig_none "lock: other"
-		BENCH_SPAWNED=";$_d|-|$_other"
-		bench_stop_group "$_d"
-		sig_none "stop: other, no group"
-		BENCH_SPAWNED=";$_d|-|$_ds1"
-		bench_stop_group "$_d" "" group
-		sig_none "stop: no group, reaped"
-		_st=0
-		bench_end_group "$_d" 1 || _st=$?
-		[ "$_st" -eq 0 ] || nok "end-group: no group: a pid that led no group at spawn had its group stopped (status $_st)"
-		sig_none "end-group: no group"
-		BENCH_SPAWNED=
-		bench_stop_group "$_d"
-		sig_none "stop: never spawned"
-
-		# Cannot tell, for a command that led no group: no start time read
-		# at spawn, or ps silent now. The watch says so and goes on to its
-		# end; the stop says so at once, sends nothing and returns 2.
-		for _how in none nops; do
-			if [ "$_how" = none ]; then
-				BENCH_SPAWNED=";$_d|-|?"
-			else
-				BENCH_SPAWNED=";$_d|-|$_ds1"
-				ps() { return 1; }
-			fi
-			_st=0
-			bench_watch "$_d" "$(($(date +%s) - 1))" 0.05 2> "${E:?}/w.$_how" || _st=$?
-			[ "$_st" -eq 1 ] || nok "watch: $_how: wanted 1 at its end, got $_st"
-			grep -q 'cannot tell whether pid.*it is not signalled while that lasts' "${E:?}/w.$_how" || nok "watch: $_how: the watch did not say it cannot tell, and sends nothing"
-			_t0=$(date +%s)
-			_st=0
-			bench_stop_group "$_d" 5 2> "${E:?}/s.$_how" || _st=$?
-			_t1=$(date +%s)
-			unset -f ps
-			[ "$_st" -eq 2 ] || nok "stop: $_how: wanted 2 (could not tell), got $_st"
-			grep -q 'cannot tell whether pid' "${E:?}/s.$_how" || nok "stop: $_how: the stop did not say it cannot tell"
-			[ $((_t1 - _t0)) -lt 3 ] || nok "stop: $_how: the stop took $((_t1 - _t0)) s of its 5 s grace after it could not tell"
-			sig_none "stop: $_how"
-		done
-		pid_running "$_d" || nok "decoy: the first decoy was ended"
-		pid_running "$_dm1" || nok "decoy: the first decoy's group member was ended"
-
-		# A command that led no group, still itself: TERM to its pid alone.
-		BENCH_SPAWNED=";$_d2|-|$_ds2"
-		bench_stop_group "$_d2"
-		grep -qx -- "-s TERM $_d2" "${E:?}/sig" || nok "stop: no group: no TERM went to the pid: $(tr '\n' ' ' < "${E:?}/sig")"
-		if grep -q -- " -$_d2\$" "${E:?}/sig"; then nok "stop: no group: a signal went to a group"; fi
-		wait_gone 5 "$_d2" || nok "stop: no group: the pid was not stopped"
-		pid_running "$_dm2" || nok "stop: no group: a process in the pid's group was ended"
-		: > "${E:?}/sig"
-
-		# ps goes silent once the TERM has gone to the pid of a command
-		# that led no group and ignores it: no KILL, it is said, and the
-		# stop returns 2.
-		BENCH_SPAWNED=";$_d3|-|$_ds3"
-		ps() {
-			if grep -q TERM "${E:?}/sig"; then return 1; fi
-			command ps "$@"
-		}
-		_st=0
-		bench_stop_group "$_d3" 1 2> "${E:?}/k.err" || _st=$?
-		unset -f ps
-		[ "$_st" -eq 2 ] || nok "stop: deaf: wanted 2 (could not tell), got $_st"
-		grep -qx -- "-s TERM $_d3" "${E:?}/sig" || nok "stop: deaf: no TERM went to the pid: $(tr '\n' ' ' < "${E:?}/sig")"
-		if grep -q KILL "${E:?}/sig"; then nok "stop: deaf: a KILL went out once ps was silent"; fi
-		grep -q 'cannot tell whether pid' "${E:?}/k.err" || nok "stop: deaf: the stop did not say it cannot tell before its KILL"
-		pid_running "$_d3" || nok "stop: deaf: the deaf decoy was ended"
-		: > "${E:?}/sig"
-
-		# The same with a command that leads its own group (FIX172, round
-		# 1): the group is the command's while it has a member, so the
-		# KILL still goes to it once ps is silent, and the group is gone.
-		BENCH_SPAWNED=";$_d4|$_d4|$_ds4"
-		ps() {
-			if grep -q TERM "${E:?}/sig"; then return 1; fi
-			command ps "$@"
-		}
-		_st=0
-		bench_stop_group "$_d4" 1 2> "${E:?}/k4.err" || _st=$?
-		unset -f ps
-		[ "$_st" -eq 0 ] || nok "stop: deaf group: wanted 0 (stopped), got $_st"
-		grep -qx -- "-s KILL -- -$_d4" "${E:?}/sig" || nok "stop: deaf group: no KILL went to the group once ps was silent: $(tr '\n' ' ' < "${E:?}/sig")"
-		if grep -q -- "^-s [A-Z]* $_d4\$" "${E:?}/sig"; then nok "stop: deaf group: a signal went to the pid alone"; fi
-		if grep -q 'cannot tell whether pid' "${E:?}/k4.err"; then nok "stop: deaf group: the stop said it sends nothing more, and it went on"; fi
-		wait_gone 5 "$_d4" || nok "stop: deaf group: the leader outlived the KILL"
-		wait_gone 5 "$_dm4" || nok "stop: deaf group: the group member outlived the KILL"
-		: > "${E:?}/sig"
-
-		# A command that exits before the spawn's first ps reads it
-		# (correctness I1; a slow ps under load): its group is recorded
-		# while it has a member, and bench_end_group stops what it left.
-		ps() {
-			sleep 0.3
-			command ps "$@"
-		}
-		bench_spawn sh -c 'sleep 20 & printf "%s\n" "$!" > "$1"; exit 0' x "${E:?}/e.pid" < /dev/null
-		_ep=$BENCH_SPAWN_PID
-		unset -f ps
-		bench_undefer
-		wait "$_ep" 2> /dev/null || :
-		wait_file 5 "${E:?}/e.pid" || nok "end-group: gone: the command's group member never started"
-		_em=$(cat "${E:?}/e.pid" 2> /dev/null) || _em=
-		record "$_em"
-		[ "$BENCH_SPAWN_GROUP" = "$_ep" ] || nok "spawn: gone: the group of a command that exited before ps read it was not recorded ($BENCH_SPAWN_GROUP|$BENCH_SPAWN_START)"
-		_st=0
-		bench_end_group "$_ep" 1 || _st=$?
-		[ "$_st" -eq 1 ] || nok "end-group: gone: wanted 1 (it stopped what was left), got $_st"
-		wait_gone 5 "$_em" || nok "end-group: gone: the group member outlived bench_end_group"
-		: > "${E:?}/sig"
-
-		unset -f kill
-
-		# The record (FIX184): a command recorded as one that could not be
-		# stopped keeps the lock alive while its pid answers kill -0 and ps
-		# shows it with the recorded start time, or cannot tell; a stale
-		# record (its pid gone, or another start time) holds nothing, and
-		# goes with the lock. The holder's shell and command here are a pid
+		# The record (FIX184): the holder's shell and command here are a pid
 		# that has exited, so the record alone decides.
 		bench_lock_init
 		sh -c 'exit 0' &
 		_gp=$!
 		wait "$_gp" 2> /dev/null || :
-		# srec <token> <pid> <start> [<written>]: a lock held by <token>, with
-		# one record, written at <written> (bench_proc_read's form; the
-		# recorded command's own start when not given, empty when empty).
+		# srec <token> <pid> <start> [<written> [<kind>]]: a lock held by
+		# <token>, with one record, written at <written> (the decoy's own
+		# start when not given, empty when empty); <kind> group writes a
+		# group record (group=<pid>), else an older harness's pid record.
 		srec() {
 			mkdir -p "${BENCH_LOCK_DIR:?}"
 			rm -f "${BENCH_LOCK_DIR:?}"/untold.*
 			printf 'label=stale\npid=%s\nchild=%s\nstart=x\ntoken=%s\n' "$_gp" "$_gp" "$1" > "${BENCH_LOCK_DIR:?}/holder"
-			printf 'pid=%s\nstart=%s\nwritten=%s\ntoken=%s\n' "$2" "$3" "${4-$_ds1}" "$1" > "${BENCH_LOCK_DIR:?}/untold.$2"
+			_sk=
+			if [ "${5:-}" = group ]; then _sk="group=$2
+"; fi
+			printf 'pid=%s\nstart=%s\nwritten=%s\ntoken=%s\n%s' "$2" "$3" "${4-$_ds1}" "$1" "$_sk" > "${BENCH_LOCK_DIR:?}/untold.$2"
 		}
-		# unknown: a record with no start time, written when its pid's
-		# process had started (not later than that), holds; so does one with
-		# no written time (FIX184, round 1).
-		for _how in same unknown unwritten nops; do
+		# A live pid record holds, whatever its start time says (TASK221
+		# slice 3: the start time no longer decides, so another start, an
+		# unknown one, a written time before it and a silent ps all hold),
+		# and so does a live group record.
+		for _how in same unknown unwritten nops other reused group; do
 			case $_how in
 			same) srec t-stale "$_d" "$_ds1" ;;
 			unknown) srec t-stale "$_d" '?' ;;
@@ -1632,12 +1447,15 @@ t_core_id() {
 				srec t-stale "$_d" "$_ds1"
 				ps() { return 1; }
 				;;
+			other) srec t-stale "$_d" "$_other" ;;
+			reused) srec t-stale "$_d" '?' 'Sat Jan 1 00:00:00 2000' ;;
+			group) srec t-stale "$_d" - "$(bench_lock_now)" group ;;
 			esac
-			bench_lock_alive "$(bench_lock_holder)" || nok "record: $_how: a live recorded pid did not keep the lock alive"
-			if bench_lock_reclaim t-stale 2> /dev/null; then nok "record: $_how: a waiter reclaimed the lock while a recorded pid may still run"; fi
-			[ -d "$BENCH_LOCK_DIR" ] || nok "record: $_how: the lock was removed while a recorded pid may still run"
+			bench_lock_alive "$(bench_lock_holder)" || nok "record: $_how: a live record did not keep the lock alive"
+			if bench_lock_reclaim t-stale 2> /dev/null; then nok "record: $_how: a waiter reclaimed the lock while a recorded command may still run"; fi
+			[ -d "$BENCH_LOCK_DIR" ] || nok "record: $_how: the lock was removed while a recorded command may still run"
 			rm -f "${BENCH_LOCK_DIR:?}/holder"
-			if bench_lock_reclaim "" 2> /dev/null; then nok "record: $_how: a lock with no holder file was reclaimed while a recorded pid may still run"; fi
+			if bench_lock_reclaim "" 2> /dev/null; then nok "record: $_how: a lock with no holder file was reclaimed while a recorded command may still run"; fi
 			unset -f ps
 		done
 		srec t-stale "$_d" "$_ds1"
@@ -1655,39 +1473,33 @@ t_core_id() {
 		"lock=held label=none holder=unwritten untold=$_d") ;;
 		*) nok "record: lock status does not name the record that holds a lock with no holder file: $_l" ;;
 		esac
-		# reused (FIX184, round 1): a record with no start time, written
-		# before its pid's process started, while ps answers: that process
-		# is not the recorded command (the lock shell was KILLed, and the
-		# pid taken again), and the record holds nothing.
-		for _how in other gone reused; do
+		# A stale record holds nothing and goes with the reclaim: a pid
+		# record whose pid has gone, a group record whose group has none, and
+		# one whose leader started after written= (another group under the id).
+		for _how in gone groupgone reused; do
 			case $_how in
-			other) srec t-stale "$_d" "$_other" ;;
 			gone) srec t-stale "$_gp" "$_ds1" ;;
-			reused) srec t-stale "$_d" '?' 'Sat Jan 1 00:00:00 2000' ;;
+			groupgone) srec t-stale "$_gp" - "$(bench_lock_now)" group ;;
+			reused) srec t-stale "$_d" - 'Sat Jan 1 00:00:00 2000' group ;;
 			esac
 			if bench_lock_alive "$(bench_lock_holder)"; then nok "record: $_how: a stale record kept the lock alive"; fi
 			bench_lock_reclaim t-stale 2> /dev/null || nok "record: $_how: a lock kept only by a stale record was not reclaimed"
 			[ ! -e "$BENCH_LOCK_DIR" ] || nok "record: $_how: the reclaim left the lock directory: $(ls "$BENCH_LOCK_DIR" | tr '\n' ' ')"
 		done
-		# Time zones (FIX184, round 2): a record written under one TZ and
-		# read under another, while the recorded command runs, holds: every
-		# start time and written= is in UTC, whatever the caller's TZ. A
-		# reader east of the writer would see the command start after
-		# written=, one west of it would write written= before the command's
-		# start, and a start time in another zone matches no ps answer.
+		# Time zones (FIX184, round 2): a group record written under one TZ
+		# and read under another, while its group runs, holds: written= and
+		# the leader's start are both in UTC, whatever the caller's TZ. A
+		# reader east of the writer that read the start in its own zone
+		# would see the leader start after written=; a writer west of the
+		# reader that wrote written= in its own zone would write it before
+		# the leader's start.
 		for _zz in UTC,Asia/Tokyo UTC,America/Los_Angeles America/Los_Angeles,UTC; do
 			_zw=${_zz%%,*} _zr=${_zz#*,}
 			_zt=$(TZ=$_zw && export TZ && bench_lock_now)
-			_zs=$(TZ=$_zw && export TZ && bench_proc_read "$_d" && printf '%s' "$BENCH_PS_START") || _zs=
-			for _how in unknown same; do
-				case $_how in
-				unknown) srec t-stale "$_d" '?' "$_zt" ;;
-				same) srec t-stale "$_d" "$_zs" "$_zt" ;;
-				esac
-				(TZ=$_zr && export TZ && bench_lock_alive "$(bench_lock_holder)") || nok "record: TZ $_zw then $_zr: $_how: a live recorded pid did not keep the lock alive"
-				if (TZ=$_zr && export TZ && bench_lock_reclaim t-stale 2> /dev/null); then nok "record: TZ $_zw then $_zr: $_how: a waiter reclaimed the lock while the recorded command runs"; fi
-				[ -d "$BENCH_LOCK_DIR" ] || nok "record: TZ $_zw then $_zr: $_how: the lock was removed while the recorded command runs"
-			done
+			srec t-stale "$_d" - "$_zt" group
+			(TZ=$_zr && export TZ && bench_lock_alive "$(bench_lock_holder)") || nok "record: TZ $_zw then $_zr: a live group record did not keep the lock alive"
+			if (TZ=$_zr && export TZ && bench_lock_reclaim t-stale 2> /dev/null); then nok "record: TZ $_zw then $_zr: a waiter reclaimed the lock while the recorded group runs"; fi
+			[ -d "$BENCH_LOCK_DIR" ] || nok "record: TZ $_zw then $_zr: the lock was removed while the recorded group runs"
 		done
 		rm -rf "${BENCH_LOCK_DIR:?}"
 		# This shell's own lock, with a stale record: the release frees it
@@ -1705,12 +1517,12 @@ t_core_id() {
 		rm -rf "${BENCH_LOCK_DIR:?}"
 		# The record bench_lock_record writes, on today's path (TASK221
 		# slice 2 hold): after a supervisor's 126, bench_bounded_untold
-		# records the group its "spawned" event names (here the first
-		# decoy's, which still has a member) under this shell's lock. The
-		# record carries the time it was written (bench_lock_now), and the
-		# reader compares the group leader's start with it: written with
-		# the clock at 2000, the leader started after written=, so it is
-		# another group under the id and the record holds nothing.
+		# records the group its "spawned" event names (here the decoy's,
+		# which still has a member) under this shell's lock. The record
+		# carries the time it was written (bench_lock_now), and the reader
+		# compares the group leader's start with it: written with the clock
+		# at 2000, the leader started after written=, so it is another group
+		# under the id and the record holds nothing.
 		mkdir -p "${BENCH_LOCK_DIR:?}"
 		BENCH_LOCK_OWNED=1 BENCH_LOCK_MINE=t-rec
 		printf 'spawned pgid=%s\n' "$_d" > "${E:?}/rec.ev"
@@ -1741,82 +1553,11 @@ t_core_id() {
 		BENCH_BOUNDED_EV= BENCH_LOCK_OWNED= BENCH_LOCK_MINE=
 		rm -rf "${BENCH_LOCK_DIR:?}"
 
-		# lock run, ps silent (FIX172, round 1, security I1): the command
-		# leads its own group, so a TERM to the lock shell stops it before
-		# the lock is free.
-		psshim 1
-		start env PATH="$E/shim:$PATH" sh "$R/bench.sh" lock run psg -- sh -c 'printf "%s\n" "$$" > "$1"; exec sleep 23' x "${E:?}/l.pid" > "${E:?}/l.out" 2>&1
-		_lh=$BG
-		wait_file 5 "${E:?}/l.pid" || nok "lock: ps silent: the command never started"
-		_lp=$(cat "${E:?}/l.pid" 2> /dev/null) || _lp=
-		record "$_lp"
-		command kill -TERM "$_lh"
-		wait_gone 15 "$_lh" || nok "lock: ps silent: the lock shell did not exit on TERM"
-		_st=0
-		collect "$_lh" || _st=$?
-		[ "$_st" -eq 143 ] || nok "lock: ps silent: wanted 143 on TERM, got $_st"
-		outlived "$_lp" "lock: ps silent: the command outlived the lock" nok
-		[ "$(B lock status)" = lock=free ] || nok "lock: ps silent: TERM did not release the lock"
-		wait_gone 2 "$_lp" || :
-
-		# A stand-in for a command that must outlive every check of it
-		# (FIX184, round 1): it writes its pid to $1, then runs while the
-		# flag file $2 is there, 30 s at most. Each case below removes its
-		# flag once its checks of the running command are done, so no
-		# verdict hangs on how fast the machine runs; the stand-ins for
-		# system_profiler do the same with a flag in the environment.
-		printf '#!/bin/sh\nprintf "%%s\\n" "$$" > "$1"\n_i=0\nwhile [ -e "$2" ] && [ "$_i" -lt 150 ]; do sleep 0.2; _i=$((_i + 1)); done\n' > "${E:?}/standin"
-
-		# lock run, ps silent, and the command leads no group (dash with no
-		# terminal): it is never signalled, the stop says so on the signal
-		# path too (security N1), and the lock is kept until it ends.
-		: > "${E:?}/n.life"
-		start env PATH="$E/shim:$PATH" dash "$R/bench.sh" lock run psn -- sh "${E:?}/standin" "${E:?}/n.pid" "${E:?}/n.life" > "${E:?}/n.out" 2>&1
-		_nh=$BG
-		wait_file 5 "${E:?}/n.pid" || nok "lock: no group: the command never started"
-		_np=$(cat "${E:?}/n.pid" 2> /dev/null) || _np=
-		record "$_np"
-		# The TERM comes while the lock shell watches the command, so its
-		# trap runs with the watch's standard error on /dev/null.
-		_n=0
-		while ! grep -q 'it is not signalled while that lasts' "${E:?}/n.out" && [ "$_n" -lt 50 ]; do
-			sleep 0.1
-			_n=$((_n + 1))
-		done
-		command kill -TERM "$_nh"
-		# At most 1.5 s for the hold's line; the command runs until its flag
-		# goes, so the lock is looked at while it runs.
-		_n=0
-		while ! grep -q 'keeping the lock while pid' "${E:?}/n.out" && pid_running "$_nh" && [ "$_n" -lt 15 ]; do
-			sleep 0.1
-			_n=$((_n + 1))
-		done
-		_l=$(B lock status)
-		if pid_running "$_np"; then
-			case $_l in
-			lock=held*) ;;
-			*) nok "lock: no group: the lock was freed while the command it could not stop still ran: $_l" ;;
-			esac
-		else
-			nok "lock: no group: the command was gone before the check of the lock"
-		fi
-		rm -f "${E:?}/n.life"
-		wait_gone 15 "$_nh" || nok "lock: no group: the lock shell did not exit after the command ended"
-		_st=0
-		collect "$_nh" || _st=$?
-		[ "$_st" -eq 143 ] || nok "lock: no group: wanted 143 on TERM, got $_st"
-		outlived "$_np" "lock: no group: the lock was freed while the command still ran" nok
-		[ "$(B lock status)" = lock=free ] || nok "lock: no group: the lock was not freed once the command ended"
-		grep -q 'cannot tell whether pid.*so the stop sends it no more signals' "${E:?}/n.out" || nok "lock: no group: the stop's line did not reach the lock shell's standard error: $(tr '\n' '|' < "${E:?}/n.out")"
-		grep -q 'keeping the lock while pid' "${E:?}/n.out" || nok "lock: no group: the hold was not said"
-		wait_gone 2 "$_np" || :
-
-		core_decoy_end "$_d" "$_dm1" "$_dm2" "$_d3" "$_dm3" "$_d4" "$_dm4"
+		core_decoy_end "$_d" "$_dm1"
 		[ "$_f" -eq 0 ]
-	) || bad "core-id: the core signals a process that is not the command it started, or does not stop the command (above)"
+	) || bad "core-id: the lock state's records do not hold as they should (above)"
 	[ "$fails" -eq 0 ]
 }
-
 t_lock_reclaim() {
 	fresh reclaim
 	mkdir -p "${E:?}/state"
@@ -3756,53 +3497,8 @@ t_cant_tell() {
 	[ "$fails" -eq 0 ]
 }
 
-# A signal to bench.sh in the instant its poll exits (FIX196): the shell has
-# reaped the poll (bash when it exits, dash in its next wait for any child,
-# the wait the signal came in) and no wait has collected it, so its pid is
-# gone. bench_on_signal calls bench_poll_end as a plain command under
-# set -eu, as this trap does: the trap goes on to its stop and its own exit
-# status; a TERM that fails there must not end the shell first (status 1),
-# which left the bounded command unrecorded and the lock freed while it
-# ran. Staged with no race: the poll is a "true" job, and the shell signals
-# itself only once kill -0 fails for that pid (a foreground sleep is a wait
-# for any child in dash). In dash, in bash 3.2, and in bash as sh.
-t_poll_end_reaped() {
-	fresh poll-end
-	printf '%s\n' \
-		'set -eu' \
-		'. "$1/core/common.sh"' \
-		'exec 8>&-' \
-		'on_signal() {' \
-		'	trap "" TERM' \
-		'	bench_poll_end' \
-		'	echo "the stop ran" >&2' \
-		'	exit 143' \
-		'}' \
-		'trap on_signal TERM' \
-		'true &' \
-		'BENCH_POLL_PID=$!' \
-		'_n=0' \
-		'while kill -0 "$BENCH_POLL_PID" 2> /dev/null; do' \
-		'	[ "$_n" -lt 200 ] || { echo "the poll was never reaped" >&2; exit 3; }' \
-		'	sleep 0.05' \
-		'	_n=$((_n + 1))' \
-		'done' \
-		'kill -s TERM "$$"' \
-		'echo "the trap did not run" >&2' \
-		'exit 4' > "${E:?}/reaped.sh"
-	for _sh in dash /bin/bash /bin/sh; do
-		_st=0
-		"$_sh" "${E:?}/reaped.sh" "$R" > "${E:?}/reaped.out" 2>&1 || _st=$?
-		_o=$(tr '\n' '|' < "${E:?}/reaped.out")
-		if [ "$_st" -ne 143 ] || [ "$_o" != "the stop ran|" ]; then
-			bad "poll end: $_sh: a TERM to a poll reaped already ended the trap before its stop: exit $_st (wanted 143), output [$_o] (wanted [the stop ran|])"
-		fi
-	done
-	[ "$fails" -eq 0 ]
-}
-
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_core_id t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_sv_path t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle t_cant_tell t_poll_end_reaped"
+all="t_hygiene t_generic t_cleanup_id t_reap_id t_reap_wait t_decoy_term t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_core_id t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_sv_path t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle t_cant_tell"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -3870,12 +3566,6 @@ mfail=0
 mutant lock-not-exclusive core/lock.sh 'if mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then' 'if mkdir -p "${BENCH_LOCK_DIR:?}" 2> /dev/null; then' t_lock_exclusion \
 	'ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' 'mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' || mfail=1
 mutant holder-replaced core/lock.sh 'ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' 'mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' t_lock_stall || mfail=1
-mutant spawn-no-group core/common.sh '	set -m' '	set +m' t_lock_stop || mfail=1
-# The fork's standard error (FIX83): left on the caller's, in either form of
-# the fork, or a closed one not given /dev/null (the command never starts).
-mutant fork-stderr core/common.sh '{ "$@" <&3 3<&- 2>&9 9>&- & } 3<&0 9>&2 2> /dev/null' '{ "$@" <&3 3<&- & } 3<&0' t_spawn_stderr || mfail=1
-mutant fork-stderr-nostdin core/common.sh '{ "$@" < /dev/null 2>&9 9>&- & } 9>&2 2> /dev/null' '"$@" < /dev/null &' t_spawn_stderr || mfail=1
-mutant fork-stderr-closed core/common.sh '{ :; } 9>&2 2> /dev/null || exec 2> /dev/null' ':' t_spawn_stderr || mfail=1
 # The test's own fixture (FIX83): gc.sh with its standard error left open
 # prints the job notice of a grandchild that TERM ends before it.
 if (GC_QUIET=: MUTANT=1 && cd "$REAL/../.." && t_lock_stop) > "${tmp:?}/mutant.gc-notice.out" 2>&1; then
@@ -3884,51 +3574,26 @@ if (GC_QUIET=: MUTANT=1 && cd "$REAL/../.." && t_lock_stop) > "${tmp:?}/mutant.g
 else
 	echo "$me: mutant gc-notice: caught by t_lock_stop ($(grep -v "^$me:   " "${tmp:?}/mutant.gc-notice.out" | sed -n 1p | sed "s/^$me: //"))"
 fi
-# A signal in the window between the "&" and the stored pid: dropped by
-# bench_undefer, or acted on at once (the command is left running).
-mutant defer-signal-lost core/common.sh 'bench_on_signal "$_ud_s"' ':' t_lock_defer || mfail=1
-mutant defer-off bench.sh 'if [ -n "${BENCH_DEFER:-}" ]; then' 'if false; then' t_lock_defer || mfail=1
 mutant reentry-any-token core/lock.sh '[ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_TOKEN" ]' '[ -n "$BENCH_LOCK_TOKEN" ]' t_lock_tokens || mfail=1
 mutant drift-no-t core/stats.sh 'lo = mn - t; hi = mx + t' 'lo = mn; hi = mx' t_drift || mfail=1
 mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || mfail=1
-# FIX172: each site that reads the command's identity, put back to its
-# form before it (the watch and the signal as on origin/main, the stop and
-# the end of a group taking no notice of what the signal could not send).
-mutant spawn-no-id core/common.sh '	bench_spawn_id "$BENCH_SPAWN_PID"' '	:' t_core_id || mfail=1
-mutant watch-no-id core/common.sh 'bench_proc_same "$1" "$2" || _wr_r=$?' 'bench_pid_alive "$1" || _wr_r=1; BENCH_PS_F=$(ps -o stat= -p "$1") || :' t_core_id || mfail=1
-mutant signal-no-id core/common.sh '	bench_spawned "$2" || return 1' '	kill -s "$1" -- "-$2" 2> /dev/null && return 0; [ "${3:-}" = group ] || kill -s "$1" "$2" 2> /dev/null || true; return 0' t_core_id || mfail=1
-mutant stop-term-untold core/common.sh '	bench_signal_group TERM "$_sg_p" "$_sg_o" || _sg_r=$?' '	bench_signal_group TERM "$_sg_p" "$_sg_o" || :' t_core_id || mfail=1
-mutant stop-kill-untold core/common.sh '		bench_signal_group KILL "$_sg_p" "$_sg_o" || _sg_r=$?' '		bench_signal_group KILL "$_sg_p" "$_sg_o" || :' t_core_id || mfail=1
-mutant alive-slot-taken core/common.sh '		[ "$_ga_r" -ne 3 ] || return 1' '		:' t_core_id || mfail=1
-# FIX196: the poll's TERM unguarded again, as on 3812dba2.
-mutant poll-end-kill-fails core/common.sh '		kill -s TERM "$_pe_p" || :' '		kill -s TERM "$_pe_p"' t_poll_end_reaped || mfail=1
-mutant end-group-any core/common.sh '	bench_group_alive "$1" group || return 0' '	kill -0 -- "-$1" 2> /dev/null || return 0' t_core_id \
-	'	while bench_group_alive "$1" group; do' '	while kill -0 -- "-$1" 2> /dev/null; do' || mfail=1
-# FIX172, round 1: a leader's group still stopped while ps is silent, the
-# group of a command gone before the first ps, the table's entries leaving,
-# and a command that leads no group kept under the lock, said, and not
-# reported stopped.
-mutant spawn-gone-group core/common.sh 'if kill -0 -- "-$1" 2> /dev/null; then BENCH_SPAWN_GROUP=$1; else BENCH_SPAWN_GROUP=-; fi' 'BENCH_SPAWN_GROUP=-' t_core_id || mfail=1
-mutant signal-leader-untold core/common.sh '		[ "$_sg2_r" -ne 3 ] || return 1' '		case $_sg2_r in 2 | 3) return "$_sg2_r" ;; esac' t_core_id || mfail=1
-mutant forget-none core/common.sh '	BENCH_SPAWNED=$_sf_h$_sf_t' '	:' t_core_id || mfail=1
-mutant lock-no-hold core/lock.sh 'if [ "$_lc_r" -eq 2 ]; then bench_lock_hold_untold' 'if false; then bench_lock_hold_untold' t_core_id || mfail=1
-mutant hold-ends-early core/lock.sh '		2) ;;' '		2) break ;;' t_core_id || mfail=1
-mutant trap-no-fd8 bench.sh 'if (: >&8) 2> /dev/null; then exec 2>&8; fi' ':' t_core_id || mfail=1
+# (The FIX172, FIX196 and FIX83 fork mutants went with the shell watch,
+# spawn and poll in TASK221 slice 3; docs/runbook/TASK221.md lists them.)
 # FIX184: a command recorded in the lock state keeps the lock while it
 # may run: bench_lock_alive not honouring the record. (The record written
 # and the lock shell's release waiting for it are tests/check-bounded-run.sh's
 # 126 case since TASK221.)
 mutant alive-no-record core/lock.sh '	bench_lock_untold_live && return 0' '	:' t_core_id || mfail=1
-# FIX184, round 1: a record with no start time expires once ps shows a
-# process with its pid that started after the record was written: the
-# reader ignoring written=, and the record written without it. lock status
+# FIX184, round 1: a group record expires once ps shows a process with its
+# id that started after the record was written: the reader ignoring
+# written=, and the record written without it. lock status
 # names a record that alone holds a lock with no holder file.
 mutant record-ignores-written core/lock.sh 'if bench_lock_untold_reused "$_lu_p" "$(bench_kv "$_lu_h" written)"; then continue; fi' ':' t_core_id || mfail=1
 mutant record-no-written core/lock.sh '_lk_w=$(bench_lock_now)' '_lk_w=' t_core_id || mfail=1
 # FIX184, round 2: every start time and written= is in UTC, whatever the
 # caller's TZ: the start time read in the caller's zone, and written=
 # written in it.
-mutant start-read-local core/common.sh '_pq_o=$(TZ=UTC0 ps ' '_pq_o=$(ps ' t_core_id || mfail=1
+mutant start-read-local core/lock.sh '_ur_n=$(LC_ALL=C TZ=UTC0 ps ' '_ur_n=$(LC_ALL=C ps ' t_core_id || mfail=1
 mutant written-local core/lock.sh "$(printf '\t\t')TZ=UTC0" "$(printf '\t\t'):" t_core_id || mfail=1
 mutant status-unwritten-no-record core/lock.sh 'echo "lock=held label=none holder=unwritten$_ls_u"' 'echo "lock=held label=none holder=unwritten"' t_core_id || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1

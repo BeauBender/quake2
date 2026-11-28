@@ -246,13 +246,21 @@ sv_run() {
 
 # sv_start <binary> <options> -- cmd args...: forks the supervisor; SV_PID is
 # its pid. A trap that runs between the fork and that store finds it as $!
-# (sv_pid), by SV_FORK and SV_LAST ($! before the fork).
+# (sv_pid), by SV_FORK and SV_LAST ($! before the fork). An asynchronous
+# list without job control reads /dev/null: with SV_STDIN3 set, the
+# supervisor reads fd 3 instead (the caller opens it on its standard
+# input, TASK221 slice 3's lock run), and fd 3 is closed for it.
+SV_STDIN3=
 sv_start() {
 	_ss_b=$1
 	shift
 	case $- in *u*) set +u && SV_LAST=$! && set -u ;; *) SV_LAST=$! ;; esac
 	SV_FORK=1
-	"$_ss_b" "$@" &
+	if [ -n "${SV_STDIN3:-}" ]; then
+		"$_ss_b" "$@" <&3 3<&- &
+	else
+		"$_ss_b" "$@" &
+	fi
 	SV_PID=$!
 	SV_FORK=
 }

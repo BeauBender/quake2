@@ -917,10 +917,10 @@ t_grace_refused() {
 }
 
 # t_orphan, with the real bench core (the lock on): a KILL to the caller's
-# process group that lands after bench_spawn has forked the run but before
+# process group that lands after the lock run has forked the run but before
 # the run's shell has started leaves the run with launchd as its parent, so
 # its lock shell reads as pid 1, which never goes, and the watcher would
-# never signal. The run is started as bench_spawn starts it (the marker, a
+# never signal. The run is started as the lock run starts it (the marker, a
 # token, a process group of its own) by a parent that is gone before the
 # run's shell starts. It must say so in one line and exit 143 before any
 # check, the scheduler, a make or the watcher starts. No process but

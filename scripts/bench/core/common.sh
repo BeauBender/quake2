@@ -412,8 +412,12 @@ bench_bounded_run() {
 	else
 		set -- --grace "$_bb_g" --events 9 -- "$@"
 	fi
-	if [ -z "$_bb_o" ] && [ "$_bb_i" = - ]; then
-		sv_start "$BENCH_SV" "$@" 9>> "$_bb_v" || :
+	if [ -z "$_bb_o" ] && [ "$_bb_i" = - ] && { :; } 2> /dev/null 3<&0; then
+		# this shell's standard input, through fd 3 (an asynchronous list
+		# reads /dev/null otherwise); a closed one is /dev/null below
+		SV_STDIN3=1
+		sv_start "$BENCH_SV" "$@" 3<&0 9>> "$_bb_v" || :
+		SV_STDIN3=
 	elif [ -z "$_bb_o" ]; then
 		sv_start "$BENCH_SV" "$@" < /dev/null 9>> "$_bb_v" || :
 	elif [ "$_bb_o" = "$_bb_e" ]; then
