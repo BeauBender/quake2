@@ -954,6 +954,7 @@ instructions file outside this card, for the owner to retire.
 | `lock run term` (check-bounded-run) | a TERM to the lock shell while its command ignores TERM (set before it says `ready`): `signal name=TERM` and `term-sent` reach the tap, lock status shows the lock held at `term-sent` (the group ignores TERM and is KILLed only after the 10 s grace, so held by construction), then `reaped`, end of file, exit 143, the lock free | FAIL: "no spawned event from the lock run's supervisor within 60 s" | ok, 10 s |
 | `lock run int` (check-bounded-run) | an INT to the lock shell at `spawned`: exit 130, the lock free, the command's group gone, TMPDIR empty | FAIL: "no spawned event from the lock run's supervisor within 60 s" | ok, 0 s |
 | `parent-gone` (check-supervise) | above | FAIL | ok |
+| `probe <caller> kill` (check-bounded-run, its verdict changed) | after a KILL of pins.sh, ios-sim.sh or ios-device.sh, the stand-ins are gone within 10 s while the flag that would end them is still there: the parent watch stopped them | "child runs; grandchild runs" (the old wanted line) | "child gone; grandchild gone" |
 | `stop shim` (check-bounded-run, replaces `poll-end`) | `bench_stop_group` on another pid sends nothing and returns 0; in the window before the start it removes its own events file and leaves a sibling's | ok (as today) | ok (as today) |
 | `t_lock_defer` (check-bench) | a TERM in `sv_start`'s fork window (a `sleep 1` before `SV_PID=$!` in a copy of scripts/lib) stops the command; exit 143, the lock free | (the stall applied to `bench_spawn`) | ok (as today) |
 | `t_spawn_stderr` (check-bench) | adds: with standard input closed the command reads `/dev/null` | ok | ok |
@@ -971,7 +972,7 @@ Both new lock run cases wait on the supervisor's events through `BENCH_BOUNDED_T
 | `sv-run-no-term` | supervise.sh: `sv_term` sends no TERM | lock run term: "sv_run did not forward TERM: no signal name=TERM within 60 s" |
 | `no-parent-watch`, `parent-no-stop` | supervise.c | parent-gone: "the caller's death stopped nothing" |
 | `start-read-local` (moved) | lock.sh: `bench_lock_untold_reused` reads ps in the local zone | t_core_id: "record: TZ UTC then Asia/Tokyo: a live group record did not keep the lock alive" |
-| `nap-quiet-wait` (moved) | common.sh: the nap's `wait` with standard error on /dev/null | nap trap: "nap trap: exit 143; stderr []" |
+| `nap-quiet-wait` (moved) | common.sh: a group around the nap's `wait` with standard error on /dev/null (on the `wait` alone the mutant passed: bash runs the trap after the builtin's redirection is undone) | nap trap: "nap trap: exit 143; stderr []" |
 | `hand-not-recorded` (retargeted) | common.sh: `_bu_k=hand` made `return 0` | sv 126 nospawn: "the lock was not kept" |
 | `ios-sim-kill9`, `sim-pkill-9` (retargeted) | ios-sim.sh: a KILL before `SV_PID=$1` in `stop_spawned` | the guard: "a KILL outside" |
 
