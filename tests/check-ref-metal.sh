@@ -726,7 +726,30 @@ if [ -n "$rtdir" ]; then
 		fi
 	done
 fi
-seg 7.6 ", $rtdir_mutants fit mutants, $rtdir_sky sky mutants and $rtdir_bounce bounce mutants refused"
+# FIX197: the reload key with the lightmap array's term dropped (lmtex-dropped) must fail the reload test
+# by its own line, a same-name reload at the same address with a new array kept
+rtdir_reload=0
+if [ -n "$rtdir" ]; then
+	sed 's/ && (last_lmtex == lmtex);/ \&\& ((last_lmtex == lmtex) || 1);/' < "$rm_dir/rm_rtdir.c" > "${tmp:?}/dirm/rm_rtdir.c"
+	if cmp -s "$rm_dir/rm_rtdir.c" "${tmp:?}/dirm/rm_rtdir.c"; then
+		bad "the reload mutant (lmtex-dropped) changed nothing"
+	# shellcheck disable=SC2086 # flags is a word list
+	elif ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -DRM_RTFX_HOST -Itests/metal -I"$rm_dir" \
+		-o "${tmp:?}/dirm/t" tests/metal/rm_rtdir_test.c "${tmp:?}/dirm/rm_rtdir.c" "$rm_dir/rm_rtgate.c" \
+		"$rm_dir/rm_rtfx.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+		"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/dirm.out" 2>&1; then
+		cat "${tmp:?}/dirm.out"
+		bad "the reload mutant (lmtex-dropped) does not compile"
+	elif "${tmp:?}/dirm/t" > "${tmp:?}/dirm.out" 2>&1; then
+		bad "tests/metal/rm_rtdir_test.c passes the reload mutant (lmtex-dropped)"
+	elif ! grep -qxF 'reload: a same-name reload with a new lightmap array is not built again' "${tmp:?}/dirm.out"; then
+		cat "${tmp:?}/dirm.out"
+		bad "tests/metal/rm_rtdir_test.c refuses the reload mutant (lmtex-dropped) for another reason"
+	else
+		rtdir_reload=1
+	fi
+fi
+seg 7.6 ", $rtdir_mutants fit mutants, $rtdir_reload reload mutant, $rtdir_sky sky mutants and $rtdir_bounce bounce mutants refused"
 
 # RT-primary's light on alias models (TASK191 slice 1, PM9): rm_rtmodel.c and common/mtl_rtm_math.h, held
 # to gl1's model colour (rm_pure.c) and to the G-buffer's split (rm_gbuf.c), with rm_rtshadow.c for the
