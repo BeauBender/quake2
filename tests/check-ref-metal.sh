@@ -500,7 +500,8 @@ done
 # the copy holds the stock kernel's code lines in their order, so that the two cannot drift apart
 # unseen. Mutants: the stock kernel edited (the checksum and the copy pin refuse it), the copy edited in
 # either helper, a repeated line of the copy dropped or moved (round 2), the guard dropped.
-rts_trace_sum='2595407311 7173'  # cksum of rm_rts_trace's text, from its name to its closing brace (TASK188 slice 3a)
+# FIX219 (#826) moved the stock trace's two G-buffer compares onto mtl_rtp_below1 and mtl_rtp_above_half; the hold on 2ba0dc63 showed every stock and rt-* pin byte-identical to main.
+rts_trace_sum='389723114 7191'  # cksum of rm_rts_trace's text, from its name to its closing brace (TASK188 slice 3a, re-pinned by FIX219)
 rts_text() { # <file>: rm_rts_trace's definition, from its name to its closing brace
 	awk '/^rm_rts_trace\(/ { b = 1 } b { print } b && /^}/ { exit }' "$1"
 }
