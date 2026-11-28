@@ -1778,7 +1778,7 @@ fi
 # TERM and waited for again). Each is refused only by the state its change
 # breaks, with the lines that change gives (<name>|<state>|<lines>|...).
 for _lm in \
-	'events-unchecked|wait with events spawned|term end |scripts/bench/core/common.sh|	elif ! bench_bounded_said reaped && {|	elif false && {' \
+	'events-unchecked|wait with events spawned|term end |scripts/bench/core/common.sh|	elif bench_bounded_lost "$_bs_st"; then|	elif false; then' \
 	'trap-status-dropped|done with events none|end |scripts/bench/core/common.sh|	if [ -n "$SV_STATUS" ]; then|	if false; then' \
 	'status-after-pid|status with events spawned|term recorded group end |scripts/bench/core/common.sh|	if [ -n "$SV_STATUS" ]; then|	if [ -z "$SV_PID" ] && [ -n "$SV_STATUS" ]; then'; do
 	_lmn=${_lm%%|*} _lmr=${_lm#*|}
