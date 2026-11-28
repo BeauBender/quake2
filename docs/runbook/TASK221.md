@@ -939,6 +939,13 @@ control" note) and with `t_poll_end_reaped`'s dash run. The dead `bench_on_signa
 functions of `pins.sh`, `ios-device.sh` and `ios-sim.sh` (only `bench_undefer` called
 them) went too.
 
+Kept, against the card's list (review round 1, spec I2): `bench_lock_untold_live` and
+`bench_lock_untold_reused` stay. They hold the group and hand records slice 2 added
+(a 126's group, held while it has a member and no later group has its id; a record
+with no group, held until it is removed by hand), which the lock still needs; only
+their start-time half went. The rest of the stale-reclaim and holder-identity code
+(the reclaim's holder checks, the queue's pid tests) is #760's, which is parked.
+
 `git grep -n -w <name>` for each deleted name, on the branch, prints nothing outside
 `docs/runbook/` (the card files' history), `docs/decisions/0016-harness-supervision.md`
 and `docs/reviews/` (dated records), and this list. The exceptions: comments in
@@ -1052,11 +1059,45 @@ On `34b13b2c` unless said:
 | `tests/check-bounded-run.sh`, `scripts/ios-sim.sh selftest`, `tests/check-ci-parity.sh` | see the report |
 | `tests/check-gate-parallel.sh`, `tests/check-require-guards.sh`, the whole `tests/check-bench.sh` (with its time on main and on the branch, `uptime` each) | the hold script, `hold-TASK221s3.sh` |
 
+### Review round 1: #726 and #741
+
+- **#741** (the `bench-poll` scratch directory left in TMPDIR) goes with `bench_poll`,
+  which this slice deletes; what is left of the class is the supervisor's events file.
+  Its cleanup is now held by a committed mutant: `events-kept` (check-bounded-run)
+  drops the events file's `rm -f` from `bench_bounded_end`, which `bench_bounded_stop`
+  ends with, and `sv pollint` refuses it by its line "scratch files:
+  bench-sv.<pid>.<random> bench-sv.<pid>.<random>.tap".
+- **#726** (a failed clock read in the shell stop loop must lead to KILL): the shell stop
+  loop, `bench_stop_groups`, is deleted, and the supervisor times its grace itself on its
+  kqueue (`EVFILT_TIMER`, `T_GRACE`, then `kill-sent`). The case that shows KILL after
+  the grace to a member that ignores TERM is check-supervise's `term-ignored` (a member
+  set to ignore TERM is alive at `term-sent`, gets KILL at `grace-end` and `kill-sent`,
+  and is gone: "a member that ignores TERM was alive after kill-sent" otherwise), held by
+  the mutant `drop-kill`; check-bounded-run's `sv endgroup` shows the same through
+  `bench_bounded` (a member that ignores TERM, KILLed at the grace's end, nothing left).
+  No shell code left in the bounded or the lock path reads a clock for the stop: `git
+  grep -n -w -e date -e bench_now -e bench_past -e BENCH_NOW` over `common.sh`,
+  `lock.sh`, `bench.sh` and `supervise.sh` finds only the bounded run's quit-time poll
+  (`_bb_t0`, `BENCH_BOUNDED_QUIT`, which sends TERM and leaves the grace to the
+  supervisor), the lock's wait for the lock (`bench_lock_acquire`), the queue's key, the
+  quiet marker's time, `bench_lock_now` (a record's `written=`), `bench_utc`, and
+  `bench_now`, which nothing calls. `bench_stop_group`, `bench_bounded_stop`, `sv_term`,
+  `sv_stop` and `sv_wait` read no clock.
+
+### The one-time measurement (review round 1, spec I1)
+
+<!-- MEASUREMENT PLACEHOLDER: the orchestrator fills this from its hold's log -->
+| Tree | `check-bench` wall time | `uptime` |
+|---|---|---|
+| main `c687c5cc` | TBD (orchestrator) | TBD |
+| branch `0d5ae74c` | TBD (orchestrator) | TBD |
+<!-- END MEASUREMENT PLACEHOLDER -->
+
 ### Files outside the card's list
 
 - **`scripts/lib/supervise.c`, `tests/supervise/supervise_test.c`,
   `tests/check-supervise.sh`**: the parent-death watch the card's "What remains" names,
-  its case and its two mutants.
+  its cases (`parent-gone`; round 1's `orphan` and `parent-race`) and its four mutants.
 - **`scripts/ios-sim.sh`**: the slice 3 caller "What remains" named (only the launch call sites,
   their helpers and a dead `bench_on_signal`).
 - **`scripts/pins.sh`**: its dead `bench_on_signal` and the comment naming
