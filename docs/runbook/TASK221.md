@@ -1135,12 +1135,14 @@ Review round 2, from the worktree:
 
 ### The one-time measurement (review round 1, spec I1)
 
-<!-- MEASUREMENT PLACEHOLDER: the orchestrator fills this from its hold's log -->
-| Tree | `check-bench` wall time | `uptime` |
+One run of the whole `sh tests/check-bench.sh` on each tree, each inside the bench lock (the orchestrator's holds, through `heavy.sh`), right after an `uptime`. Other lanes' agents were working on the host, so this is not a quiet-window timing; the load averages are given for that reason.
+
+| Tree | `check-bench` wall time | `uptime` load averages (1, 5, 15 min) |
 |---|---|---|
-| main `c687c5cc` | TBD (orchestrator) | TBD |
-| branch `0d5ae74c` | TBD (orchestrator) | TBD |
-<!-- END MEASUREMENT PLACEHOLDER -->
+| main `c687c5cc` | 664 s, `check-bench: ok` | 3.76 3.97 3.83 |
+| branch `4eb90562` (review round 5) | 561 s, `check-bench: ok`, 77 mutants caught | 3.36 3.60 4.22 |
+
+The round 0 hold's branch run, on `0d5ae74c`, never finished. `t_quiet_marker` still expected the removed exit 74, and the orchestrator stopped the run after 46 minutes. Round 4 fixed that case.
 
 ### Files outside the card's list
 
