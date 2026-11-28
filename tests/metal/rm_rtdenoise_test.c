@@ -510,7 +510,6 @@ hw_bits(float f)
 
 /* the floats beside the count's cut at 16 and inside the ramp, beyond FIX219's shared edges */
 static const gbe_edge_t hw_edges[] = {
-	{ 0x3f7fffffu, "largest below 1" },
 	{ 0x40000000u, "2" },
 	{ 0x41080000u, "8.5" },
 	{ 0x41700000u, "15" },
