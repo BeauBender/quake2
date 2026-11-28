@@ -1097,6 +1097,7 @@ Review round 2, from the worktree:
 | `tests/check-bounded-run.sh guard <root>` | ok on `b49cc5c2` |
 | `supervise.c`, `cc -fsyntax-only -O2 -Wall -Wextra -Werror`, with and without `-DSUPERVISE_TEST` | ok on `b49cc5c2` |
 | `tests/check-supervise.sh`, the whole `tests/check-bounded-run.sh`, `tests/check-bench.sh t_lock_stop t_lock_tokens t_lock_defer t_core_id` and the round 1 hold's other checks | the hold script `hold-TASK221s3r2.sh`, on the final commit |
+| round 4: `tests/check-bench.sh t_quiet_marker`, whose stopped command now holds the lock until a TERM to its lock shell (the whole check-bench hung on its old wait for 74); `doc/085_unittests.md` no longer promises 74 | `check-doc-links` and `check-runbook-index` ok from the worktree; the case itself, with the round 3 hold's checks, in the hold script `hold-TASK221s3r4.sh`, on the final commit |
 
 ### Review round 1: #726 and #741
 
