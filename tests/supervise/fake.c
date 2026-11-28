@@ -26,7 +26,11 @@
  *   wait          reaps one child; answers "waited pid=C"
  *
  * INT, TERM and HUP each write "sig=NAME" on the channel ("sig=TERM
- * ignored" after ignore-term) and then end the process with that signal.
+ * ignored" after ignore-term) and then end the process with that signal;
+ * the handlers are set before the hello is sent, so a signal sent once the
+ * hello is read is always reported. Built with -DFAKE_HOLD, each fake
+ * holds just after its hello until the runner writes to its channel or
+ * closes it (tests/check-supervise.sh runs every case so).
  */
 
 #include <sys/types.h>
@@ -173,8 +177,14 @@ hello(const char *role)
 	cm->cmsg_type = SCM_RIGHTS;
 	cm->cmsg_len = CMSG_LEN(sizeof(int));
 	memcpy(CMSG_DATA(cm), &sp[1], sizeof(int));
-	tell(&mh, sp);
+	/*
+	 * the handlers and the channel before the hello (FIX225): a runner
+	 * that has the hello may signal at once, and a signal in between would
+	 * end the fake at its default, or at put's _exit with no channel, with
+	 * nothing said
+	 */
 	arm(sp[0]);
+	tell(&mh, sp);
 }
 
 /* one command line from the channel; end of file ends the process */

@@ -27,10 +27,12 @@
 #             signal sent in that window finds the fake as a loaded host
 #             could leave it: the hello must mean the fake is ready.
 #   sanitizer the same cases built with -fsanitize=address,undefined.
-#   mutants   six one-line changes to a copy of supervise.c, each built
-#             as the test build (no-forget with the table of 8): each must
-#             fail its own case, for its own reason (the runner's FAIL line
-#             names both).
+#   mutants   seven one-line changes to a copy of supervise.c, each built
+#             as the test build (no-forget and no-relist with the table of
+#             8): each must fail its own case, for its own reason (the
+#             runner's FAIL line names both). Then one line of a copy of
+#             fake.c moved, built as the held fake: late-arm, which sets
+#             the handlers after the hello, must fail int-ignored.
 #   shape     no case waits on time: the test programs and this file hold
 #             no sleep call or sleep command and no ps.
 #
@@ -296,6 +298,25 @@ mutant no-forget cap "the last member's exit woke nothing" \
 	's/^	return sv_known\[k\] != sv_leader \&\& sv_gone\[k\]/	return 0 \&\& sv_gone[k]/' -DSV_MAXPIDS=8
 mutant no-relist untracked "group-empty came while the child of an unwatched member ran" \
 	's/more |= j == nseen;/more |= 0;/' -DSV_MAXPIDS=8
+# The fake's mutant (FIX225): the handlers and the channel set after the
+# hello, not before. It moves one line of a copy of fake.c, built as the
+# held fake, and int-ignored must refuse it with the line the merge gate
+# saw: the leader, signalled once its hello was read, said nothing.
+_fr="the leader said nothing (it exited), want sig=TERM"
+sed '/^	arm(sp\[0\]);$/{h;d;};/^	tell(\&mh, sp);$/G' "$tdir/fake.c" > "$tmp/fm-late-arm.c" || fail "fake mutant late-arm: sed failed"
+_fa=$(diff "$tdir/fake.c" "$tmp/fm-late-arm.c" | grep -c '^>') || _fa=0
+_fd=$(diff "$tdir/fake.c" "$tmp/fm-late-arm.c" | grep -c '^<') || _fd=0
+[ "$_fa" -eq 1 ] && [ "$_fd" -eq 1 ] ||
+	fail "fake mutant late-arm moves $_fa/$_fd lines, not 1: its pattern no longer fits fake.c"
+# shellcheck disable=SC2086
+cc -O1 $W -DFAKE_HOLD -o "$tmp/fm-late-arm" "$tmp/fm-late-arm.c" > "$tmp/fm-late-arm.cc" 2>&1 ||
+	{ cat "$tmp/fm-late-arm.cc" >&2; fail "fake mutant late-arm does not build"; }
+_fst=0
+"$tmp/runner" "$tmp/supervise-test" "$tmp/fm-late-arm" /bin/bash int-ignored > "$tmp/fm-late-arm.out" 2>&1 || _fst=$?
+[ "$_fst" -ne 0 ] || { cat "$tmp/fm-late-arm.out" >&2; fail "fake mutant late-arm survived case int-ignored"; }
+grep -F "FAIL int-ignored (/bin/bash): $_fr" "$tmp/fm-late-arm.out" > /dev/null ||
+	{ cat "$tmp/fm-late-arm.out" >&2; fail "fake mutant late-arm failed case int-ignored, but not for its reason ($_fr)"; }
+echo "check-supervise: fake mutant late-arm fails int-ignored: $_fr"
 
 # shape: no wait on time in the cases. The words are put together so that
 # this line does not match itself.
