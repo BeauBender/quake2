@@ -28,6 +28,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      issues: read
     steps:
     - name: Check out repository code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,6 +48,10 @@ jobs:
           --jq '.[] | select(.merged_at != null and .head.repo.full_name == env.GH_REPO) | "\(.head.ref) \(.head.sha)"' >merged.txt
         gh api --paginate "repos/$GH_REPO/issues?state=closed&per_page=100" \
           --jq '.[] | select(.pull_request == null and .state_reason == "completed") | (.closed_at | fromdate | tostring) as $at | .labels[].name | select(startswith("id:")) | ltrimstr("id:") + " " + $at' >closed.txt
+        echo "open heads: $(wc -l <open.txt), merged heads: $(wc -l <merged.txt), closed cards: $(wc -l <closed.txt)"
+        # A closed list read as empty (a token without issues: read) would
+        # only keep more, silently; it is never right here.
+        [ -s closed.txt ] || { echo "prune-branches: no closed card was read" >&2; exit 1; }
         scripts/prune-branches.sh plan open.txt merged.txt closed.txt >plan.txt
         cat plan.txt
         {

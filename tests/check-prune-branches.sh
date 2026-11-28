@@ -22,7 +22,8 @@
 #   workflow  runs on workflow_dispatch and schedule only; deletes only when
 #             the event is workflow_dispatch and its apply input is true;
 #             runs for the owner or the schedule; has permissions: {} at the
-#             top and no ${{ }} in a run line;
+#             top and no ${{ }} in a run line; the job can read issues, and
+#             an empty closed-card list fails the plan step (FIX224);
 #   mutants   copies of the script with the marker guard, the deletion test,
 #             the close-time test and the lease removed must each fail a case.
 #
@@ -216,6 +217,8 @@ awk '/run: \|/{f=1; next} /^    - /{f=0} f && /\$\{\{/' "$wf" | grep -q . &&
 grep -q "github.event_name == 'workflow_dispatch' && inputs.apply" "$wf" ||
 	bad "workflow: the delete step is not limited to a dispatch with apply"
 grep -q 'scripts/prune-branches.sh apply' "$wf" || bad "workflow: no apply step"
+grep -q '^      issues: read$' "$wf" || bad "workflow: the job cannot read issues, so no closed card reaches the plan"
+grep -q '\[ -s closed.txt \] ||' "$wf" || bad "workflow: an empty closed list does not fail the plan"
 grep -q 'scripts/prune-branches.sh plan' "$wf" || bad "workflow: no plan step"
 grep -q "github.event_name == 'schedule' || github.actor == github.repository_owner" "$wf" ||
 	bad "workflow: not limited to the owner and the schedule"
