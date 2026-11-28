@@ -54,6 +54,7 @@ using namespace metal::raytracing;
 
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
+#include "common/mtl_rtp_math.h"   /* FIX219: the G-buffer depth and normal tests (mtl_rtp_below1, mtl_rtp_above_half) */
 #include "common/mtl_rtao_math.h"
 #include "common/mtl_rts_math.h"
 #include "common/mtl_rtdir_math.h"
@@ -773,7 +774,7 @@ rm_rtdir_trace(depth2d<float, access::read> depth [[texture(0)]],
 	{
 		d = depth.read(px);
 		nn = normal.read(px);
-		world = ((d < 1.0f) && (nn.a > 0.5f)) ? 1u : 0u;
+		world = (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a)) ? 1u : 0u;
 	}
 
 	/* the traced light, from the lights alone (no texture reaches rm_rtdir_direct) */

@@ -48,7 +48,7 @@
 static inline int
 mtl_rtmt_model(unsigned mat, float depth, float normal_a)
 {
-	return (mat == MTL_GB_MAT_ALIAS) && (depth < 1.0f) && (normal_a > 0.5f);
+	return (mat == MTL_GB_MAT_ALIAS) && mtl_rtp_below1(depth) && mtl_rtp_above_half(normal_a);
 }
 
 /*

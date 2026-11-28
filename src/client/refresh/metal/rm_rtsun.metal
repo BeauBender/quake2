@@ -50,6 +50,7 @@ using namespace metal::raytracing;
 
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
+#include "common/mtl_rtp_math.h"   /* FIX219: the G-buffer depth and normal tests (mtl_rtp_below1, mtl_rtp_above_half) */
 #include "common/mtl_rtsun_math.h"
 #include "common/mtl_rtt_math.h"
 
@@ -187,7 +188,7 @@ rm_rtsun_trace(depth2d<float, access::read> depth [[texture(0)]],
 		const float d = depth.read(px);
 		const float4 nn = normal.read(px);
 
-		if ((d < 1.0f) && (nn.a > 0.5f))
+		if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 		{
 			const float3 n = normalize(nn.xyz * 2.0f - 1.0f);
 			const float4 l = lm.read(px);
@@ -301,7 +302,7 @@ rm_rtsun_temporal(depth2d<float, access::read> depth [[texture(0)]],
 		const uint hm = (uint)h.z;
 		float dist = 0.0f;
 
-		if (d < 1.0f)
+		if (mtl_rtp_below1(d))
 		{
 			dist = distance(rm_rtsun_position(v, px, d), v.eye.xyz);
 		}
@@ -433,7 +434,7 @@ rm_rtsun_trace_lo(depth2d<float, access::read> depth [[texture(0)]],
 			const float d = depth.read(sp);
 			const float4 nn = normal.read(sp);
 
-			if ((d < 1.0f) && (nn.a > 0.5f))
+			if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 			{
 				const mtl_rtao_v3_t n = rm_rtsun_lo_normal(nn);
 				const float4 l = lm.read(sp);
@@ -525,7 +526,7 @@ rm_rtsun_temporal_lo(depth2d<float, access::read> depth [[texture(0)]],
 		const uint hm = (uint)h.z;
 		float dist = 0.0f;
 
-		if (d < 1.0f)
+		if (mtl_rtp_below1(d))
 		{
 			dist = distance(rm_rtsun_position(v, sp, d), v.eye.xyz);
 		}
@@ -570,7 +571,7 @@ rm_rtsun_denoise_lo(depth2d<float, access::read> depth [[texture(0)]],
 		const float4 hc = hist.read(px);
 		const float4 nv = normal.read(rm_rtsun_lo_src(px, v.div, fw, fh));
 
-		if (!(mtl_rtd_strength(hc.w) > 0.0f) || !(nv.a > 0.5f))
+		if (!(mtl_rtd_strength(hc.w) > 0.0f) || !mtl_rtp_above_half(nv.a))
 		{
 			return;
 		}
@@ -595,7 +596,7 @@ rm_rtsun_denoise_lo(depth2d<float, access::read> depth [[texture(0)]],
 						const uint2 sp = uint2((uint)sx, (uint)sy);
 						const float4 hn = hist.read(sp);
 						const float4 nn = normal.read(rm_rtsun_lo_src(sp, v.div, fw, fh));
-						const float wt = (nn.a > 0.5f) ?
+						const float wt = mtl_rtp_above_half(nn.a) ?
 							mtl_rtd_weight(dx, dy, hc.y, hn.y, nc, rm_rtsun_lo_normal(nn), mc, (uint)hn.z, hn.w) : 0.0f;
 
 						acc = mtl_rtd_add(acc, wt, hn.x);
@@ -650,7 +651,7 @@ rm_rtsun_up(depth2d<float, access::read> depth [[texture(0)]],
 		const float d = depth.read(px);
 		const float4 nn = normal.read(px);
 
-		if ((d < 1.0f) && (nn.a > 0.5f))
+		if (mtl_rtp_below1(d) && mtl_rtp_above_half(nn.a))
 		{
 			const mtl_rtao_v3_t n = rm_rtsun_lo_normal(nn);
 			const float4 l = lm.read(px);
@@ -696,7 +697,7 @@ rm_rtsun_up(depth2d<float, access::read> depth [[texture(0)]],
 						const float ds = depth.read(sp);
 
 						in.ok[i] = ((tc == MTL_RTSUN_C_LIT) || (tc == MTL_RTSUN_C_SHADOW)) ? 1 : 0;
-						in.dn[i] = (ds < 1.0f) ? distance(rm_rtsun_position(v, sp, ds), v.eye.xyz) : 0.0f;
+						in.dn[i] = mtl_rtp_below1(ds) ? distance(rm_rtsun_position(v, sp, ds), v.eye.xyz) : 0.0f;
 						in.nn[i] = rm_rtsun_lo_normal(normal.read(sp));
 						in.mn[i] = mat.read(sp).r;
 						tv[i] = vis_lo.read(tp).r;
