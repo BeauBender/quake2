@@ -97,6 +97,49 @@ dfl(int sig)
 	return sigaction(sig, NULL, &sa) == 0 && sa.sa_handler == SIG_DFL;
 }
 
+/* arm: the channel is fd, and INT, HUP and TERM are reported on it */
+static void
+arm(int fd)
+{
+	struct sigaction sa;
+
+	chan = fd;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = on_signal;
+	sigemptyset(&sa.sa_mask);
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGHUP, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
+}
+
+/*
+ * tell: sends the hello and the far end sp[1] of the channel. A -DFAKE_HOLD
+ * build then holds, until the runner writes on the channel sp[0] or closes
+ * it, the step that follows the hello: a signal that comes in the hold
+ * finds the fake as it is just after its hello, however fast the host runs.
+ */
+static void
+tell(struct msghdr *mh, const int *sp)
+{
+	while (sendmsg(hello_fd, mh, 0) < 0)
+	{
+		if (errno != EINTR)
+		{
+			_exit(72);
+		}
+	}
+	close(sp[1]);
+#ifdef FAKE_HOLD
+	{
+		char c;
+
+		while (recv(sp[0], &c, 1, MSG_PEEK) < 0 && errno == EINTR)
+		{
+		}
+	}
+#endif
+}
+
 static void
 hello(const char *role)
 {
@@ -104,7 +147,6 @@ hello(const char *role)
 	struct msghdr mh;
 	struct iovec iov;
 	struct cmsghdr *cm;
-	struct sigaction sa;
 	sigset_t mask;
 	int sp[2], n;
 
@@ -131,21 +173,8 @@ hello(const char *role)
 	cm->cmsg_type = SCM_RIGHTS;
 	cm->cmsg_len = CMSG_LEN(sizeof(int));
 	memcpy(CMSG_DATA(cm), &sp[1], sizeof(int));
-	while (sendmsg(hello_fd, &mh, 0) < 0)
-	{
-		if (errno != EINTR)
-		{
-			_exit(72);
-		}
-	}
-	close(sp[1]);
-	chan = sp[0];
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = on_signal;
-	sigemptyset(&sa.sa_mask);
-	sigaction(SIGINT, &sa, NULL);
-	sigaction(SIGHUP, &sa, NULL);
-	sigaction(SIGTERM, &sa, NULL);
+	tell(&mh, sp);
+	arm(sp[0]);
 }
 
 /* one command line from the channel; end of file ends the process */

@@ -6,8 +6,9 @@
 # The parts, in order:
 #
 #   builds    supervise.c, its test build (-DSUPERVISE_TEST, the test clock),
-#             the test build with a watch table of 8 (-DSV_MAXPIDS=8) and the
-#             two test programs build clean with -Wall -Wextra -Werror.
+#             the test build with a watch table of 8 (-DSV_MAXPIDS=8), the
+#             two test programs and the held fake (-DFAKE_HOLD) build clean
+#             with -Wall -Wextra -Werror.
 #   helper    sv_path builds the binary on first use into the tool cache
 #             (SUPERVISE_CACHE here, a scratch directory), keyed by the
 #             source's hash; a second call builds nothing, and a source that
@@ -20,7 +21,11 @@
 #   cases     tests/supervise/supervise_test.c runs every case against the
 #             test build, with /bin/bash (3.2) and then /bin/sh as the
 #             caller shell, the cases that need no test clock against the
-#             release build, and every case against the table of 8.
+#             release build, every case against the table of 8, and every
+#             case against the held fake (FIX225), which stops just after
+#             each hello until the runner writes to it or closes it, so a
+#             signal sent in that window finds the fake as a loaded host
+#             could leave it: the hello must mean the fake is ready.
 #   sanitizer the same cases built with -fsanitize=address,undefined.
 #   mutants   six one-line changes to a copy of supervise.c, each built
 #             as the test build (no-forget with the table of 8): each must
@@ -66,6 +71,7 @@ SAN="-g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recov
 		cc -O1 $W -DSUPERVISE_TEST -o "$tmp/supervise-test" "$src" &&
 		cc -O1 $W -DSUPERVISE_TEST -DSV_MAXPIDS=8 -o "$tmp/supervise-cap" "$src" &&
 		cc -O1 $W -o "$tmp/fake" "$tdir/fake.c" &&
+		cc -O1 $W -DFAKE_HOLD -o "$tmp/fake-hold" "$tdir/fake.c" &&
 		cc -O1 $W -o "$tmp/runner" "$tdir/supervise_test.c"
 } > "$tmp/cc.log" 2>&1 || {
 	cat "$tmp/cc.log" >&2
@@ -239,6 +245,7 @@ for sh in /bin/bash /bin/sh; do
 done
 "$tmp/runner" --no-clock "$tmp/supervise" "$tmp/fake" /bin/bash || fail "a case failed against the release build"
 "$tmp/runner" "$tmp/supervise-cap" "$tmp/fake" /bin/bash || fail "a case failed against the build with a watch table of 8"
+"$tmp/runner" "$tmp/supervise-test" "$tmp/fake-hold" /bin/bash || fail "a case failed against the held fake"
 
 # sanitizer
 # shellcheck disable=SC2086
