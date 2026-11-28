@@ -4570,8 +4570,8 @@ seg 7.97 "; no G-buffer depth or normal float compare in $gbf_files files, $gbf_
 # (float) or (half) cast or a float(...) or half(...) call, and a .read(...) or the strength's call may
 # hold one level of nested parentheses. The header functions that take the count as a parameter (n, cn)
 # are pinned one by one: mtl_rtd_counted is the integer test of its pattern, and mtl_rtd_strength,
-# mtl_rtd_weight, mtl_rtd_result and mtl_rtpd_on test the count with their helper and compare neither it
-# nor the strength. Out of scope, by design: a history held under another name (h is also the homogeneous
+# mtl_rtd_weight, mtl_rtd_result, mtl_rtpd_on and mtl_rtpd_weight (which hands the count to mtl_rtd_weight)
+# test the count with their helper and compare neither it nor the strength. Out of scope, by design: a history held under another name (h is also the homogeneous
 # point in rm_rtmodel.metal, whose h.w > 0.0f is not a history; the kernels that call a history h pass
 # its .w only to FIX212's mtl_rtt helpers), step() and select(), and mtl_rtt_count's hcount + 1.0f
 # below MTL_RTT_COUNT_MAX, which lies behind mtl_rtt_atleast1. Each failure prints its own line, naming
@@ -4608,7 +4608,8 @@ hw_why() { # <metal dir>: one line per file or function that compares a history 
 	for spec in "$hd mtl_rtd_strength n if (!mtl_rtd_counted(n))" \
 			"$hd mtl_rtd_weight cn if ((m != mn) || !mtl_rtt_atleast1(cn))" \
 			"$hd mtl_rtd_result n if (!mtl_rtd_counted(n) || !(a.wsum > 0.0f))" \
-			"$1/common/mtl_rtpd_math.h mtl_rtpd_on n return world && mtl_rtd_counted(n);"; do
+			"$1/common/mtl_rtpd_math.h mtl_rtpd_on n return world && mtl_rtd_counted(n);" \
+			"$1/common/mtl_rtpd_math.h mtl_rtpd_weight cn return mtl_rtd_weight(dx, dy, d, dn, n, nn, m, mn, cn);"; do
 		# shellcheck disable=SC2086 # spec is a word list: the file, the function, the name, the text
 		set -- $spec
 		hfile=$1 hfunc=$2 hname=$3
@@ -4616,6 +4617,7 @@ hw_why() { # <metal dir>: one line per file or function that compares a history 
 		hw_fn "$hfile" "$hfunc" > "${tmp:?}/hw.fn"
 		hhelper=mtl_rtd_counted
 		[ "$hname" = cn ] && hhelper=mtl_rtt_atleast1
+		[ "$hfunc" = mtl_rtpd_weight ] && hhelper=mtl_rtd_weight
 		if ! grep -qF -- "$*" "${tmp:?}/hw.fn" || hw_cmp "$hname" < "${tmp:?}/hw.fn" || hw_cmp s < "${tmp:?}/hw.fn" ||
 				hw_cmp 'mtl_rtd_strength[(][^()]*[)]' < "${tmp:?}/hw.fn"; then
 			echo "hw: $hfunc does not test its count with $hhelper alone"
@@ -4632,7 +4634,7 @@ if [ -s "${tmp:?}/hw.out" ]; then
 	bad "a kernel compares a history weight with a float compare (FIX222): use mtl_rtd_counted or mtl_rtt_atleast1"
 fi
 for m in aostrength sunlo rawlane reversed neighbour alane histread macro castname parenname halfcall strength weight \
-		result pdon counted; do
+		result pdon pdweight counted; do
 	rm -rf "${tmp:?}/hwm"
 	cp -R "$rm_dir" "${tmp:?}/hwm"
 	case $m in
@@ -4679,6 +4681,9 @@ for m in aostrength sunlo rawlane reversed neighbour alane histread macro castna
 		pdon) f=common/mtl_rtpd_math.h o='return world && mtl_rtd_counted(n);'
 			n='return world && (mtl_rtd_strength(n) > 0.0f);'
 			want="hw: mtl_rtpd_on does not test its count with mtl_rtd_counted alone" ;;
+		pdweight) f=common/mtl_rtpd_math.h o='if (!mtl_rtp_above_half(nn_a))'
+			n='if (!mtl_rtp_above_half(nn_a) || !(cn >= 1.0f))'
+			want="hw: mtl_rtpd_weight does not test its count with mtl_rtd_weight alone" ;;
 		counted) f=common/mtl_rtd_math.h o='return (u >= MTL_RTD_BITS_FULL) && (u < MTL_RTD_BITS_NONE);'
 			n='return (u == u) && (n >= MTL_RTD_COUNT_FULL) && (n < MTL_RTD_COUNT_NONE);'
 			want="hw: mtl_rtd_counted is not the integer test of its pattern" ;;
@@ -4697,7 +4702,7 @@ for m in aostrength sunlo rawlane reversed neighbour alane histread macro castna
 	fi
 done
 rm -rf "${tmp:?}/hwm"
-[ "$hw_mutants" = 16 ] || bad "the history weight pin refused $hw_mutants of its 16 mutants by their own lines"
+[ "$hw_mutants" = 17 ] || bad "the history weight pin refused $hw_mutants of its 17 mutants by their own lines"
 seg 7.98 "; no history weight float compare in $hw_files files, $hw_mutants mutants refused by their own lines"
 
 if [ "$fail" = 0 ]; then
