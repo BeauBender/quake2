@@ -183,9 +183,9 @@ scripts/bench/bench.sh compare null-sleep --before HEAD~1 --after HEAD
   Being in the background of the terminal, the command gets `/dev/null`
   as standard input when that is a terminal, and a command that uses the
   terminal (reads it, sets it with `stty`, or writes to it under
-  `stty tostop`) is stopped by it: `lock run` then says so, ends the
-  command and exits 74 with the lock free, so run anything that prompts
-  without the lock. A command run under the lock gets `BENCH_LOCK_TOKEN`, so a
+  `stty tostop`) is stopped by it and stays stopped, holding the lock,
+  until a signal (TERM or HUP) to `lock run` ends it and frees the lock,
+  so run anything that prompts without the lock. A command run under the lock gets `BENCH_LOCK_TOKEN`, so a
   `bench.sh` it starts runs straight through instead of waiting for
   itself.
 - `host` prints the host token (`h-` and 12 hex digits) and the class

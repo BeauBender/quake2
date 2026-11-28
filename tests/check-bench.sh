@@ -76,8 +76,8 @@
 #     compare (unknown for a set stored without it), the pre-warm's length,
 #     its one lock hold with the runs, its thermal stop and drift's
 #     pre-warm, the quiet marker's fields and its removal on every exit
-#     (0, another status, a stopped command, TERM and HUP to the lock
-#     shell, an outer hold, a measurement), the new case keys, the
+#     (0, another status, TERM to a stopped command's lock shell, TERM
+#     and HUP to the lock shell, an outer hold, a measurement), the new case keys, the
 #     frequency probe's arithmetic and failures on synthetic dumps, and the
 #     host's own snapshot reader printing the stub's keys; and, from the
 #     review (round 1): a top line that takes the kernel's name and not an
