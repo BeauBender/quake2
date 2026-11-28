@@ -538,8 +538,6 @@ pins_on_signal() {
     fi
     exit "$1"
 }
-# the primitive's bench_undefer calls bench_on_signal with a signal that came while the engine started
-bench_on_signal() { pins_on_signal "$1"; }
 
 # run_engine <bin> <out> <limit>: runs the engine with engine_args, its
 # output in <out>/engine.log, stopped after <limit> seconds (pins_bounded);

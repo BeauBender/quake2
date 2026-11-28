@@ -26,9 +26,9 @@
 # Exit status: 0 done; 1 compare's verdict failed, or baseline get, drift
 # or compare found no baseline, or baseline put found one already; 2 a
 # usage, case, commit or setting error; 3 the adapter refused or failed;
-# 74 a command run under the lock stopped (a stop signal, or the terminal)
-# and was ended; 75 the lock wait ran out; a command run under the lock
-# otherwise exits with its own status.
+# 75 the lock wait ran out; 125 the supervisor of a command run under the
+# lock could not empty its group (the lock is kept while it has a member);
+# a command run under the lock otherwise exits with its own status.
 #
 # Environment: BENCH_STATE (lock state directory), BENCH_STORE (result
 # store), BENCH_LOCK_WAIT (seconds, default 3600), BENCH_LOCK_POLL (seconds,
@@ -72,29 +72,15 @@ bench_on_exit() {
 }
 
 # bench_on_signal <status>: stops what this process started (the command
-# under the lock, a bounded command: each with its whole process group),
-# then exits; the EXIT trap releases the lock after that. A signal that
-# arrives while bench_spawn starts a command is kept for bench_undefer.
+# under the lock, or a bounded command: each runs under its supervisor,
+# TASK221), then exits; the EXIT trap releases the lock after that. The
+# stop sends the supervisor TERM and waits for it (bench_stop_group), also
+# in sv_start's fork window (sv_pid), so the lock is never freed before the
+# supervisor's "reaped" event. A group it could not empty (its 126) is
+# recorded in the lock state first (FIX184), so the lock is kept while that
+# group has a member, whatever ends this shell.
 bench_on_signal() {
-	if [ -n "${BENCH_DEFER:-}" ]; then
-		BENCH_DEFERRED=$1
-		return 0
-	fi
 	trap '' INT TERM HUP
-	# The poll the signal came in is stopped first (FIX192), so the exit
-	# leaves none running.
-	bench_poll_end
-	# A signal that comes while bench_watch or bench_stop_group runs lands
-	# here with standard error on /dev/null, and fd 8 the caller's standard
-	# error (FIX172, round 1): the stop's lines and the lock's hold go there.
-	# fd 8 is open only inside those two (an inherited one is closed below);
-	# a subshell asks, since a failed redirection ends dash.
-	if (: >&8) 2> /dev/null; then exec 2>&8; fi
-	bench_lock_stop_child
-	# A bounded command runs under its supervisor (TASK221): the stop sends
-	# it TERM and waits for it. A group it could not empty (its 126) is
-	# recorded in the lock state first (FIX184), so the lock is kept while
-	# that group has a member, whatever ends this shell.
 	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group "$BENCH_BOUNDED_PID" || :; fi
 	exit "$1"
 }

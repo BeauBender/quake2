@@ -144,8 +144,6 @@ on_signal()
 	stop_child 2
 	exit "$1"
 }
-# bench_undefer calls it with a signal that came while a command started
-bench_on_signal() { on_signal "$1"; }
 
 # shown <path>: the path as messages print it: relative to the repository
 # when it is in it, its last component otherwise
@@ -718,9 +716,9 @@ cleanup()
 }
 trap cleanup EXIT
 trap 'on_signal 1' INT TERM QUIT
-# HUP is trapped too, so one that comes while a command starts is kept for
-# bench_undefer, which stops it (FIX192); it exits 129, as an untrapped HUP
-# did through the EXIT cleanup
+# HUP is trapped too, so one that comes while a command starts stops it
+# (FIX192; the supervisor's fork window is sv_pid's since TASK221); it
+# exits 129, as an untrapped HUP did through the EXIT cleanup
 trap 'on_signal 129' HUP
 
 if [ "$mode" = sign ]; then

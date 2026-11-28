@@ -202,11 +202,11 @@ usage()
 }
 uuid_re='[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}'
 
-# The one bounded-run primitive (FIX122): bench_bounded, bench_spawn and
-# bench_stop_group run a command in its own process group and stop that
-# whole group, by the identity recorded when it started, so a child that
-# simctl leaves behind is stopped too, and no pid this script did not start
-# is signalled.
+# The one bounded-run primitive (FIX122): bench_bounded and
+# bench_stop_group, and the process supervisor under them (TASK221), run a
+# command in its own process group and stop that whole group, so a child
+# that simctl leaves behind is stopped too, and no pid this script did not
+# start is signalled.
 [ -r "$repo/scripts/bench/core/common.sh" ] || die "no bounded-run primitive at scripts/bench/core/common.sh"
 . "$repo/scripts/bench/core/common.sh"
 exec 8>&-
@@ -242,13 +242,41 @@ bounded()
 	return $status
 }
 
-# stop_spawned <pid>: ends a command bench_spawn started, with its whole
-# process group (bench_stop_group: TERM, 5 s of grace, then SIGKILL), and
-# forgets it
+# spawn_launch <log> <command>...: the launch client under the process
+# supervisor (TASK221 slice 3), in the background, its output and the
+# supervisor's own lines to <log>; lpid is the supervisor's pid, which lives
+# while anything of the client's process group runs. A signal that comes
+# before lpid is stored leaves the supervisor to its parent watch: it stops
+# the group once this script has exited (parent-gone)
+spawn_launch()
+{
+	local log=$1
+	shift
+	bench_sv
+	"$BENCH_SV" --grace 5 -- "$@" < /dev/null > "$log" 2>&1 &
+	lpid=$!
+}
+
+# await_launch <seconds>: waits that long at most (whole seconds) for the
+# launch client's supervisor to end, and collects it; false while it runs
+await_launch()
+{
+	local n=0
+	while bench_pid_alive "$lpid"; do
+		[ "$n" -lt "$1" ] || return 1
+		sleep 1
+		n=$((n + 1))
+	done
+	wait "$lpid" 2>/dev/null || :
+}
+
+# stop_spawned <pid>: ends the launch client spawn_launch started as <pid>,
+# with its whole process group: TERM to its supervisor, which sends the
+# group TERM, 5 s of grace, then SIGKILL, and a wait for it (sv_stop)
 stop_spawned()
 {
-	bench_stop_group "$1" 5 || echo "ios-sim: could not tell whether pid $1 is still the command this script started; it may still run" >&2
-	bench_spawn_forget "$1"
+	SV_PID=$1
+	sv_stop || [ "$?" -ne 126 ] || echo "ios-sim: the launch client's process group could not be emptied; it may still run" >&2
 }
 
 # on_signal <status>: the INT, TERM and HUP trap; the EXIT trap's cleanup
@@ -258,9 +286,6 @@ on_signal()
 	if bench_deferred "$1"; then return 0; fi
 	exit "$1"
 }
-# bench_undefer calls it with a signal that came while a command started
-# (late_signal in cleanup's late calls)
-bench_on_signal() { if [ -n "${late:-}" ]; then late_signal; else on_signal "$1"; fi; }
 
 # ---- selftest: the smoke against a fake xcrun and make -------------------
 
@@ -1313,8 +1338,7 @@ late=
 # late_signal: the INT, TERM and HUP trap while cleanup's own bounded calls
 # run (a second signal): the bounded call it cut short is stopped with its
 # whole group, the scratch directory goes, and the script ends; the device
-# is left, and said. A signal while bench_spawn starts that call is kept
-# for bench_undefer, which calls it again once the pid is stored
+# is left, and said
 late_signal()
 {
 	if bench_deferred 1; then return 0; fi
@@ -1650,16 +1674,14 @@ launch_app()
 	shift 4
 	shot_taken=0
 	log=$out/console.$n.log
-	bench_spawn bench_to "$log" "$log" env SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@" < /dev/null
-	lpid=$BENCH_SPAWN_PID
-	bench_undefer
+	spawn_launch "$log" env SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@"
 	# the launch client lives as long as the app (--console-pty) and
 	# its pid line may come only when the app ends: watch the client
 	apid=$lpid
 	echo "ios-sim: app $bid pid $apid"
 	t=0
 	t0=$SECONDS
-	while bench_spawn_running "$apid"; do
+	while bench_pid_alive "$apid"; do
 		if [ -n "$bg" ] && [ "$bgdone" = 0 ] && [ "$t" -ge "$bgafter" ]; then
 			# the app goes to the background as a person's Home does: another app takes the screen
 			bounded 30 "${tmp:?}/bg.out" xcrun simctl launch "$udid" "$bg_app" || die "simctl launch of the other app ($bg_app) failed"
@@ -1669,7 +1691,7 @@ launch_app()
 			bgdone=1
 			shotbase=$t
 			# the same process must have lived through the background: a launch of a dead app starts a new one, which is a restart, not a resume
-			bench_spawn_running "$apid" || die "the app did not survive the background (the process $apid ended; the return started it again)"
+			bench_pid_alive "$apid" || die "the app did not survive the background (the process $apid ended; the return started it again)"
 			# the system's own log of the app (a command buffer submitted in the background is reported there)
 			[ -n "$shotat" ] || shotat=0
 		fi
@@ -1695,7 +1717,7 @@ launch_app()
 	if [ -n "$shotat" ] && [ "$shot_taken" = 0 ]; then
 		echo "ios-sim: start $n: the app ended before the screenshot (due $shotat s after the start or the return): none was taken" >&2
 	fi
-	if ! bench_await "$lpid" 10; then
+	if ! await_launch 10; then
 		echo "ios-sim: the launch client did not exit after the app; stopping it" >&2
 		stop_spawned "$lpid"
 	fi
@@ -1771,9 +1793,7 @@ fi
 # The engine finds Documents/baseq2 by itself: no write-directory option.
 # r_mode 4 and vid_fullscreen 1 are what the real data's default.cfg sets: the screen is its own size whatever they say (TASK147)
 args=(+set vid_renderer metal +set logfile 2 +set metal_stats 1 +set r_mode 4 +set vid_fullscreen 1 +exec smoke.cfg)
-bench_spawn bench_to "$out/console.log" "$out/console.log" env SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "${args[@]}" < /dev/null
-lpid=$BENCH_SPAWN_PID
-bench_undefer
+spawn_launch "$out/console.log" env SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "${args[@]}"
 # TASK147: the app stays at the console for smoke.cfg's frames, then quits by itself (the launch
 # client prints the app's pid only when it ends, so the app is watched through the launch client).
 # Once the engine's log shows the frame written, the simulator's own screenshot of it; then the app
@@ -1796,32 +1816,32 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 		framed=1
 		break
 	fi
-	bench_spawn_running "$lpid" || break
+	bench_pid_alive "$lpid" || break
 	sleep 1
 done
 if [ -n "$framed" ]; then
 	sleep "${IOS_SIM_SETTLE_SECONDS:-3}"   # the console is drawn and presented
 	bounded 60 "${tmp:?}/appshot.out" xcrun simctl io "$udid" screenshot ${IOS_SIM_DISPLAY:+"--display=$IOS_SIM_DISPLAY"} "$out/app.png" || die "simctl io screenshot of the app failed"
 	# the app quits by itself (smoke.cfg's quit): its shutdown line, or its end
-	while bench_spawn_running "$lpid" && [ "$SECONDS" -lt "$deadline" ]; do
+	while bench_pid_alive "$lpid" && [ "$SECONDS" -lt "$deadline" ]; do
 		if engine_log_has "$shutdown_line"; then
 			quit_seen=1
 			break
 		fi
 		sleep 1
 	done
-elif bench_spawn_running "$lpid"; then
+elif bench_pid_alive "$lpid"; then
 	bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 	die "the engine did not write its frame within $smoke_s s; terminated the app"
 fi
 # an app that has not quit by itself is terminated (this device only; engine.log then shows no quit
 # path, which fails below); the launch client ends with the app
-if [ -z "$quit_seen" ] && bench_spawn_running "$lpid"; then
+if [ -z "$quit_seen" ] && bench_pid_alive "$lpid"; then
 	echo "ios-sim: the app did not quit by itself within $smoke_s s; terminating it" >&2
 	bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 fi
 lgone=
-if bench_await "$lpid" 10; then lgone=1; fi
+if await_launch 10; then lgone=1; fi
 apid=$(sed -n "s/^$bid: \([0-9][0-9]*\).*/\1/p" "$out/console.log" | head -n 1)
 [ -n "$apid" ] || echo "ios-sim: no pid line from the launch client (log: $out/console.log)" >&2
 echo "ios-sim: app $bid pid ${apid:-?}"

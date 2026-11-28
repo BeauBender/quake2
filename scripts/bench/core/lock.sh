@@ -64,65 +64,59 @@
 # SIGKILL in the middle of a reclaim leaves its guard behind and blocks that
 # one reclaim; remove the reclaim.* directory by hand.
 #
-# The command: lock run starts it in its own process group (bench_spawn),
-# so it keeps the signal dispositions of the caller (SIGINT and SIGQUIT are
-# not ignored, and its own traps run) and the lock reaches its process
-# group: a descendant that moves itself into another group or session
-# (setsid, a shell with job control) is out of its reach. Its standard
-# input is the caller's, or /dev/null when that is a terminal. The group
-# is in the background: a command that uses the terminal (reads it, sets
-# it with stty, or writes to it under stty tostop) is stopped by the
-# terminal. The lock shell polls the command (bench_watch) instead of
-# waiting on it, so it sees such a stop: it says so, stops the group as on
-# a signal, and exits 74 with the lock freed. A terminal's Ctrl-C reaches
-# the lock shell, not the command.
+# The command: lock run runs it under the process supervisor
+# (scripts/lib/supervise.c, through bench_bounded_run, TASK221 slice 3),
+# with no wall time: it leads a process group of its own, with every
+# signal at its default (its own traps run), and the supervisor owns its
+# reap. Its standard input is the caller's, or /dev/null when that is a
+# terminal. The group is in the background: a command that uses the
+# terminal (sets it with stty, or writes to it under stty tostop) is
+# stopped by the terminal, and stays stopped, holding the lock, until a
+# signal stops the lock shell (74 is gone: the supervisor does not tell a
+# stopped command apart). A terminal's Ctrl-C reaches the lock shell, not
+# the command. The holder file's child= is the supervisor's pid, which
+# lives while anything of the command's group runs.
 #
 # Release: the EXIT, INT, TERM and HUP traps of bench.sh call
 # bench_lock_release, which removes the lock only while the holder file
 # still carries this process's token. On INT, TERM or HUP the lock shell
-# first stops the command's whole process group (bench_stop_group: TERM,
-# then KILL after bench_lock_grace, twice BENCH_STOP_GRACE and at least
-# BENCH_STOP_GRACE + 5 s, so that a nested bench.sh stopping a group of
-# its own with that grace, as bench_bounded does, finishes first). When
-# the command exits, what it left running in its group gets 1 s to end
-# and is then stopped the same way, with the same grace (bench_end_group),
-# before the lock is released. So nothing left in the command's process
-# group outlives the lock.
+# first stops the command (bench_stop_group: TERM to the supervisor, which
+# sends the group TERM and CONT, KILL after bench_lock_grace, twice
+# BENCH_STOP_GRACE and at least BENCH_STOP_GRACE + 5 s, so that a nested
+# bench.sh stopping a group of its own with that grace finishes first) and
+# waits for the supervisor: the lock is never freed before its "reaped"
+# event. When the command exits, what it left running in its group is
+# stopped the same way by the supervisor before it returns. So nothing
+# left in the command's process group outlives the lock. If the lock shell
+# itself is KILLed, the supervisor sees its parent go and stops the group
+# (parent-gone); the waiters take the lock as alive while the supervisor
+# (child=) runs.
 #
-# Commands that could not be stopped (FIX184): a bench.sh under the lock
-# whose stop of a bounded command could not tell whether its pid is still
-# that command (bench_stop_group returned 2: it leads no group and ps gives
-# no answer for it) records it in the lock directory, as
-# <state>/lock/untold.<pid>, before it forgets the command:
-#   pid=<pid> start=<its start time, or ? when ps gave none>
-#   written=<when the record is written> token=<the hold>
-# one per line (bench_lock_record; written= is in bench_proc_read's form of
-# a start time, in the C locale), written to a temporary file mktemp makes
-# (untold.tmp.XXXXXX) and renamed into place. Such a command may still
-# run, so the lock is held while it may: bench_lock_alive, for waiters and
-# lock status, takes the lock as alive while a record's pid answers kill
-# -0 and ps shows it with the recorded start time or cannot tell
-# (bench_proc_same), the rule the core keeps for its own commands; and the
-# lock shell's release waits for every such record, saying so, with INT,
-# TERM and HUP ignored, before it frees the lock and its quiet marker. A
-# record whose pid has gone, or that ps shows another process has (another
-# start time; for a record with start ?, a start later than written=, so a
-# process that took the pid after the record was written), holds nothing:
-# the release, or a reclaim, removes it with the lock. Nothing signals a
-# recorded pid but the shell that started it.
+# Commands that could not be stopped (FIX184, TASK221): a supervisor that
+# could not empty its command's process group (its 126, "could not stop"),
+# under the lock or in a bench.sh under it, has the group recorded in the
+# lock directory before anything is freed (bench_bounded_untold), and the
+# lock run exits 125 and says so.
 #
-# A group record (TASK221) is written the same way for a bounded command
-# whose supervisor could not empty its process group (its 126), under the
-# group's id <pgid>, as <state>/lock/untold.<pgid>:
+# A group record (TASK221) is written under the group's id <pgid>, as
+# <state>/lock/untold.<pgid>:
 #   pid=<pgid> start=- written=<when the record is written>
 #   token=<the hold> group=<pgid>
-# It holds the lock while kill -0 -- -<pgid> answers (no process takes a
-# group's id while the group has a member, so no ps is asked), unless ps
-# shows a process with the pid <pgid> that started later than written=
+# one per line (bench_lock_record; written= is in ps's form of a start
+# time, lstart in UTC and the C locale), written to a temporary file mktemp
+# makes (untold.tmp.XXXXXX) and renamed into place. It holds the lock while
+# kill -0 -- -<pgid> answers (no process takes a group's id while the
+# group has a member, so no ps is asked), unless ps shows a process with
+# the pid <pgid> that started later than written=
 # (bench_lock_untold_reused): the group emptied, and a process that took
 # the id after the record was written leads a new group under it, which
 # then holds nothing (security I2, round 1). A ps that gives no answer, or
-# a group with no leader left, keeps the lock.
+# a group with no leader left, keeps the lock. bench_lock_alive, for
+# waiters and lock status, takes the lock as alive while a record is live
+# (bench_lock_untold_live); the lock shell's release waits for every live
+# record, saying so, with INT, TERM and HUP ignored, before it frees the
+# lock and its quiet marker. A record from an older harness, with neither
+# group= nor hand=, holds the lock while its pid answers kill -0.
 #
 # A hand record (TASK221, review round 2) is written for a bounded command
 # whose supervisor could not empty its group (its 126) but named no group
@@ -147,8 +141,6 @@ BENCH_LOCK_LOG=
 BENCH_LOCK_OWNED=
 BENCH_LOCK_MINE=
 BENCH_LOCK_SINCE=
-BENCH_LOCK_CHILD=
-BENCH_LOCK_REAPED=
 BENCH_LOCK_GUARD=
 BENCH_LOCK_QUEUE=
 BENCH_LOCK_KEY=
@@ -214,7 +206,7 @@ bench_lock_unqueue() {
 # kill -0). A ps that fails (not on PATH, a fork failure, a sandbox) leaves
 # the answer to kill -0, asked again; a ps that succeeds and prints nothing
 # is no Z, so running. So a reader whose ps is broken never removes a live
-# waiter's ticket. bench_group_alive keeps bench_pid_running.
+# waiter's ticket.
 bench_lock_waiter_running() {
 	bench_pid_alive "$1" || return 1
 	_wr_s=$(ps -o stat= -p "$1" 2> /dev/null) || { bench_pid_alive "$1"; return; }
@@ -555,30 +547,26 @@ bench_lock_release() {
 	return 0
 }
 
-# bench_lock_record <pid>: records in the lock state (see the top) the
-# command bench_spawn started as <pid>, whose stop could not tell whether
-# <pid> is still it, with the start time bench_spawn read for it. Only under
-# a lock: the one this process holds, or the one its BENCH_LOCK_TOKEN names
-# (the lock directory is resolved here when this process has not done so).
-# Call it before the command is forgotten (bench_spawn_forget). With
-# "group" or "hand" after <pid>, a group or hand record (see the top).
+# bench_lock_record <id> group|hand: records in the lock state (see the
+# top) a group or hand record for a command whose supervisor could not
+# empty its group (its 126). Only under a lock: the one this process holds,
+# or the one its BENCH_LOCK_TOKEN names (the lock directory is resolved
+# here when this process has not done so).
 bench_lock_record() {
-	_lk_g=
 	case ${2:-} in
-	group | hand)
-		# group: a bounded command's process group its supervisor could not
-		# empty (TASK221), live while the group has a member; hand: one
-		# whose supervisor named no group, live until it is removed by hand
-		# (bench_lock_untold_live)
-		_lk_g="$2=$1
-"
-		_lk_s=-
-		;;
+	group | hand) ;;
 	*)
-		bench_spawned "$1" || return 0
-		_lk_s=${BENCH_ID_START:-?}
+		bench_note "bench_lock_record: a record is group or hand, not ${2:-none}"
+		return 0
 		;;
 	esac
+	# group: a bounded command's process group its supervisor could not
+	# empty (TASK221), live while the group has a member; hand: one whose
+	# supervisor named no group, live until it is removed by hand
+	# (bench_lock_untold_live)
+	_lk_g="$2=$1
+"
+	_lk_s=-
 	if [ -z "${BENCH_LOCK_DIR:-}" ]; then
 		[ -n "${BENCH_LOCK_TOKEN:-}" ] || return 0
 		# A subshell asks first: bench_lock_init dies on a bad setting.
@@ -598,7 +586,7 @@ bench_lock_record() {
 		fi
 		return 0
 	fi
-	# When it is written, in bench_proc_read's form (C locale): a process
+	# When it is written, in ps's lstart form (C locale, UTC): a process
 	# ps shows started later is not the recorded command (FIX184, round 1).
 	_lk_w=$(bench_lock_now)
 	# A temporary file mktemp makes (a name no other process knows ahead, so
@@ -617,9 +605,10 @@ bench_lock_record() {
 	bench_note "cannot record pid $1 in the lock state"
 }
 
-# bench_lock_now: the time now, in bench_proc_read's form of a start time
-# in the C locale: its words one blank apart, in UTC (TZ=UTC0) as
-# bench_proc_read reads them, whatever the caller's TZ (FIX184, round 2).
+# bench_lock_now: the time now, in ps's lstart form of a start time in the
+# C locale: its words one blank apart, in UTC (TZ=UTC0) as
+# bench_lock_untold_reused reads them, whatever the caller's TZ (FIX184,
+# round 2).
 bench_lock_now() {
 	(
 		LC_ALL=C
@@ -634,8 +623,9 @@ bench_lock_now() {
 }
 
 # bench_lock_later <a> <b>: start time <a> is later than <b>, both in
-# bench_proc_read's form in the C locale ("Sun Nov 22 09:45:08 2026", UTC,
-# to the second). False when either is not in that form.
+# ps's lstart form in the C locale ("Sun Nov 22 09:45:08 2026", UTC, to
+# the second; runs of blanks count as one). False when either is not in
+# that form.
 bench_lock_later() {
 	awk -v a="$1" -v b="$2" '
 		function key(s,  f, m) {
@@ -649,18 +639,15 @@ bench_lock_later() {
 		BEGIN { x = key(a); y = key(b); exit !(x != "" && y != "" && x > y) }'
 }
 
-# bench_lock_untold_reused <pid> <written>: a record with no start time,
-# written at <written> (bench_lock_now), whose <pid> ps shows started later
-# than that: the process is not the recorded command, which started before
-# its record was written, and has taken its pid. False when ps gives no
-# answer, or either time is not known.
+# bench_lock_untold_reused <pid> <written>: a group record written at
+# <written> (bench_lock_now), whose <pid> ps shows started later than
+# that: the process is not the recorded group's leader, which started
+# before its record was written, and leads a new group under its id. The
+# start time is read in UTC and the C locale, as written= is, whatever the
+# caller's TZ. False when ps gives no answer, or either time is not known.
 bench_lock_untold_reused() {
 	[ -n "$2" ] || return 1
-	_ur_n=$(
-		LC_ALL=C
-		export LC_ALL
-		bench_proc_read "$1" && printf '%s' "$BENCH_PS_START"
-	) || return 1
+	_ur_n=$(LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2> /dev/null) || return 1
 	bench_lock_later "$_ur_n" "$2"
 }
 
@@ -687,11 +674,11 @@ bench_lock_hand_note() {
 }
 
 # bench_lock_untold_live: a command recorded in the lock directory
-# (bench_lock_record) may still run: its pid answers kill -0, and ps shows
-# it with the recorded start time, not a zombie, or cannot tell
-# (bench_proc_same 0 or 2). Sets BENCH_LOCK_UNTOLD to those pids, one blank
-# apart, and BENCH_LOCK_HAND to the hand records among them. Only regular
-# files are read, never a link.
+# (bench_lock_record) may still run: a group record whose group still has
+# a member and no later group has its id, a hand record, or a record of an
+# older harness (neither group= nor hand=) whose pid answers kill -0. Sets
+# BENCH_LOCK_UNTOLD to those pids, one blank apart, and BENCH_LOCK_HAND to
+# the hand records among them. Only regular files are read, never a link.
 bench_lock_untold_live() {
 	BENCH_LOCK_UNTOLD=
 	BENCH_LOCK_HAND=
@@ -703,7 +690,6 @@ bench_lock_untold_live() {
 		case $_lu_p in
 		'' | 0 | 1 | *[!0-9]*) continue ;;
 		esac
-		_lu_s=$(bench_kv "$_lu_h" start)
 		# a hand record (TASK221, review round 2): no group to watch, so it
 		# is live until it is removed by hand
 		if [ "$(bench_kv "$_lu_h" hand)" = "$_lu_p" ]; then
@@ -721,37 +707,19 @@ bench_lock_untold_live() {
 			BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"
 			continue
 		fi
-		_lu_r=0
-		bench_proc_same "$_lu_p" "$_lu_s" || _lu_r=$?
-		case $_lu_r in
-		0)
-			case $BENCH_PS_F in
-			Z*) continue ;;
-			esac
-			;;
-		2)
-			# No start time was read for the command (FIX184, round 1): once
-			# ps shows a process with its pid that started after the record
-			# was written, that process is not the command.
-			case $_lu_s in
-			'' | '?')
-				if bench_lock_untold_reused "$_lu_p" "$(bench_kv "$_lu_h" written)"; then continue; fi
-				;;
-			esac
-			;;
-		*) continue ;;
-		esac
+		# an older harness's pid record (TASK221 slice 3 reads no start time)
+		bench_pid_alive "$_lu_p" || continue
 		BENCH_LOCK_UNTOLD="${BENCH_LOCK_UNTOLD:+$BENCH_LOCK_UNTOLD }$_lu_p"
 	done
 	[ -n "$BENCH_LOCK_UNTOLD" ]
 }
 
 # bench_lock_grace: prints the seconds the lock gives the command's process
-# group between TERM and KILL, on a signal, a stop and for what the command
-# left running alike: twice BENCH_STOP_GRACE (default 10), and at least
+# group between TERM and KILL, on a signal and for what the command left
+# running alike: twice BENCH_STOP_GRACE (default 10), and at least
 # BENCH_STOP_GRACE + 5. The floor lets a nested bench.sh stop its own
-# bounded group, which takes up to its grace, a second of clock and 2 s
-# after its KILL, before this KILL ends it.
+# bounded group, which takes up to its grace and 2 s after its KILL, before
+# this KILL ends it.
 bench_lock_grace() {
 	_lg_g=${BENCH_STOP_GRACE:-10}
 	_lg_l=$((2 * _lg_g))
@@ -759,59 +727,12 @@ bench_lock_grace() {
 	printf '%s\n' "$_lg_l"
 }
 
-# bench_lock_stop_child: stops the command this process runs under the lock
-# and its whole process group: TERM, up to bench_lock_grace seconds for the
-# group to go, then KILL; then reaps it (once it is reaped,
-# BENCH_LOCK_REAPED, the group only). bench_stop_group reads the identity
-# bench_spawn recorded for it, so a pid another process has taken since,
-# and a group another process leads under its id, get no signal (FIX172).
-# When the stop cannot tell whether the pid is still the command (one that
-# leads no group, while ps gives no answer for it), the lock is held for it
-# (bench_lock_hold_untold) before this returns, so the lock is not freed
-# while the command may still run.
-bench_lock_stop_child() {
-	[ -n "${BENCH_LOCK_CHILD:-}" ] || return 0
-	_lc_r=0
-	bench_stop_group "$BENCH_LOCK_CHILD" "$(bench_lock_grace)" "${BENCH_LOCK_REAPED:-}" || _lc_r=$?
-	if [ "$_lc_r" -eq 2 ]; then bench_lock_hold_untold "$BENCH_LOCK_CHILD"; fi
-	bench_spawn_forget "$BENCH_LOCK_CHILD"
-	BENCH_LOCK_CHILD=
-}
-
-# bench_lock_hold_untold <pid> [<grace>]: a stop could not tell whether
-# <pid> is still the command (FIX172, round 1), so the lock is kept, and
-# said, while it may be: every second until kill -0 fails for <pid>, or ps
-# shows another process has it (another start time). When ps answers again
-# and <pid> is still the command, it is stopped once more, with <grace>
-# seconds between TERM and KILL (default bench_lock_grace), and the hold
-# ends when that stop has sent its signals. A bounded command's hold passes
-# the bounded command's grace (BENCH_STOP_GRACE), so that a lock shell
-# stopping this shell with the lock's grace, which is longer, does not end
-# the hold before that KILL (FIX181, round 1). This is a visible hold with
-# no wall time: it lasts as long as the command, or the process that took
-# its pid, runs.
-bench_lock_hold_untold() {
-	bench_spawned "$1" || return 0
-	_lh_s=$BENCH_ID_START
-	bench_note "keeping the lock while pid $1 runs: it may still be the command, which could not be stopped"
-	while :; do
-		_lh_r=0
-		bench_proc_same "$1" "$_lh_s" || _lh_r=$?
-		case $_lh_r in
-		0) if bench_stop_group "$1" "${2:-$(bench_lock_grace)}"; then break; fi ;;
-		2) ;;
-		*) break ;;
-		esac
-		bench_nap 1
-	done
-	bench_note "pid $1 has ended, was stopped, or is no longer the command; freeing the lock"
-}
-
-# bench_lock_alive <holder text>: the holder's lock shell or its command is
-# alive, a command recorded as one that could not be stopped may still run
-# (bench_lock_untold_live, FIX184), or the command's process group still
-# has a member (the lock shell was killed and the command exited, but what
-# it started runs on).
+# bench_lock_alive <holder text>: the holder's lock shell or its child (the
+# command's supervisor, which lives while anything of the command's group
+# runs) is alive, a command recorded as one that could not be stopped may
+# still run (bench_lock_untold_live, FIX184), or, for a holder an older
+# harness wrote (child= the command itself), the command's process group
+# still has a member.
 bench_lock_alive() {
 	_lv_c=$(bench_kv "$1" child)
 	bench_pid_alive "$(bench_kv "$1" pid)" && return 0
@@ -824,9 +745,10 @@ bench_lock_alive() {
 }
 
 # bench_lock_run [--quiet] <label> -- <command...>: runs the command under
-# the lock and exits with its status (75 when the wait ran out, 74 when the
-# command stopped). With --quiet the quiet marker is written once the lock
-# is held, before the command starts.
+# the lock and exits with its status (75 when the wait ran out; 125 when its
+# supervisor could not empty its group, with the lock kept while the group
+# has a member; 127 when it cannot be run). With --quiet the quiet marker
+# is written once the lock is held, before the command starts.
 bench_lock_run() {
 	_ru_quiet=
 	if [ "${1:-}" = --quiet ]; then
@@ -853,35 +775,30 @@ bench_lock_run() {
 	BENCH_LOCK_TOKEN=$BENCH_LOCK_MINE
 	export BENCH_LOCK_TOKEN
 	if [ -n "$_ru_quiet" ]; then bench_quiet_mark "$_ru_label" "$$"; fi
-	# In the background, in its own process group, so the trap reaches the
-	# whole command. The lock shell polls it (bench_watch, below), and waits
-	# for each step of a poll with the wait builtin (bench_poll), so a TERM
-	# to the lock shell alone, or a signal to its process group (Ctrl-C),
-	# runs its trap at once (FIX192).
-	if [ -t 0 ]; then
-		bench_spawn "$@" < /dev/null
-	else
-		bench_spawn "$@"
-	fi
-	BENCH_LOCK_CHILD=$BENCH_SPAWN_PID
-	BENCH_LOCK_REAPED=
-	bench_undefer
-	bench_lock_write "$_ru_label" "$BENCH_LOCK_CHILD" || true
-	# Polled, not a plain wait: with job control off, wait never returns
-	# for a stopped child, and lock run has no wall time.
-	_ru_w=0
-	bench_watch "$BENCH_LOCK_CHILD" "" 1 || _ru_w=$?
-	if [ "$_ru_w" -eq 2 ]; then
-		bench_note "the command stopped (a stop signal, or it used the terminal, which lock run gives it only in the background); stopping it and freeing the lock"
-		bench_lock_stop_child
-		exit 74
-	fi
-	wait "$BENCH_LOCK_CHILD" 2> /dev/null || _ru_st=$?
-	BENCH_LOCK_REAPED=group
-	bench_end_group "$BENCH_LOCK_CHILD" "$(bench_lock_grace)" || bench_note "stopped what the command left running in its process group"
-	bench_spawn_forget "$BENCH_LOCK_CHILD"
-	BENCH_LOCK_CHILD=
+	# Under the supervisor (bench_bounded_run, no wall time), in a process
+	# group of its own; the holder names the supervisor once it has started
+	# (bench_lock_started). The lock shell waits for the supervisor with the
+	# wait builtin (sv_wait), so a TERM to the lock shell alone, or a signal
+	# to its process group (Ctrl-C), runs bench.sh's trap at once, which
+	# stops the supervisor (bench_stop_group) and waits for it. A 126 is
+	# recorded (bench_bounded_untold) and exits 125, and the release keeps
+	# the lock while the group has a member.
+	_ru_in=-
+	if [ -t 0 ]; then _ru_in=/dev/null; fi
+	BENCH_LOCK_LABEL=$_ru_label
+	BENCH_BOUNDED_STARTED=bench_lock_started
+	BENCH_BOUNDED_QUIT= BENCH_BOUNDED_UNTIL=
+	bench_bounded_run "" "$(bench_lock_grace)" "$_ru_in" - "$@" || _ru_st=$?
+	BENCH_BOUNDED_STARTED=
 	exit "$_ru_st"
+}
+
+BENCH_LOCK_LABEL=
+
+# bench_lock_started <pid>: the holder file names the supervisor of the
+# command under the lock as its child
+bench_lock_started() {
+	bench_lock_write "$BENCH_LOCK_LABEL" "$1" || true
 }
 
 # bench_lock_status: prints "lock=free", or "lock=held" with the holder;
