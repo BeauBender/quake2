@@ -80,6 +80,9 @@
 #     (rm_metalfx.c, TASK111; three scratch mutants of TASK109's effect
 #     reset and reset line it must fail), and tests/metal/rm_rtgate_test.c, the
 #     hardware gate of ray tracing (rm_rtgate.c, RT8, TASK60), and
+#     tests/metal/rm_fxgate_test.c, the world view's scaler decision and
+#     internal size over the gate's presentation rules (rm_metalfx.c with
+#     rm_rtgate.c, TASK109 slice 4; four scratch mutants it must fail), and
 #     tests/metal/rm_retro_tex_test.c, Retro's texture upload and 480-line
 #     view (common/mtl_retro_tex.h, TASK185). The gate's
 #     table of the r_rt_* cvars is then held to the sources: every
@@ -962,6 +965,59 @@ else
 	case $rtg in *", 0 failed") ;; *) bad "tests/metal/rm_rtgate_test.c printed no result line"; rtg="";; esac
 fi
 seg 10 "; ray-tracing gate ${rtg:-host test}"
+
+# TASK109 slice 4: the world view's scaler decision (rm_fx_view_mode, rm_metalfx.c) and its internal size,
+# over the gate's presentation rules (rm_rtgate.c): no scaler with every effect off and r_metalfx asking for
+# none, and the view at its output's size, with its line, without the temporal scaler, without any MetalFX
+# scaler and without ray tracing. Scratch mutants it must refuse, each compiled and each on its own line:
+# the scaler forced on (forceon); the device's fallback dropped, so a mode the device lacks runs
+# (fallbackdrop); RT-primary's clamp to off without the temporal scaler dropped (rtpclampdrop); the
+# presentation's fall to stock without ray tracing dropped (nortdrop).
+fxg=""
+fxg_mutants=0
+# shellcheck disable=SC2086 # flags and fxhost are word lists
+if ! $cc $flags $fxhost -o "${tmp:?}/rm_fxgate_test" tests/metal/rm_fxgate_test.c "$rm_dir/rm_metalfx.c" "$rm_dir/rm_rtgate.c" \
+	"$rm_dir/rm_rtfx.c" -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_fxgate_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_fxgate_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_fxgate_test.c failed"
+else
+	fxg=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_fxgate_test: //')
+	case $fxg in *", 0 failed") ;; *) bad "tests/metal/rm_fxgate_test.c printed no result line"; fxg="";; esac
+fi
+if [ -n "$fxg" ]; then
+	mkdir "${tmp:?}/fxg"
+	for fgm in forceon fallbackdrop rtpclampdrop nortdrop; do
+		cp "$rm_dir/rm_metalfx.c" "${tmp:?}/fxg/rm_metalfx.c"
+		cp "$rm_dir/rm_rtgate.c" "${tmp:?}/fxg/rm_rtgate.c"
+		case $fgm in
+			forceon) sed 's/return rm_fx_run(rm_fx_supported(rm_fx_mode_of(asked_v), has), 0, has);/return rm_fx_run(rm_fx_supported(rm_fx_mode_of(asked_v) | RM_FX_TEMPORAL, has), 0, has);/' \
+				"$rm_dir/rm_metalfx.c" > "${tmp:?}/fxg/rm_metalfx.c" ;;
+			fallbackdrop) sed 's/if (has & RM_FX_HAS(m))/if (has || 1)/' "$rm_dir/rm_metalfx.c" > "${tmp:?}/fxg/rm_metalfx.c" ;;
+			rtpclampdrop) sed 's/if ((mode == RM_PRES_RTPRIMARY) \&\& (!temporal || show))/if ((mode == RM_PRES_RTPRIMARY) \&\& (!temporal \&\& show))/' \
+				"$rm_dir/rm_rtgate.c" > "${tmp:?}/fxg/rm_rtgate.c" ;;
+			nortdrop) sed 's/else if (rm_pres_needs_rt((int)requested) \&\& (path == RM_RTG_NONE))/else if (rm_pres_needs_rt((int)requested) \&\& (path < RM_RTG_NONE))/' \
+				"$rm_dir/rm_rtgate.c" > "${tmp:?}/fxg/rm_rtgate.c" ;;
+		esac
+		if cmp -s "$rm_dir/rm_metalfx.c" "${tmp:?}/fxg/rm_metalfx.c" && cmp -s "$rm_dir/rm_rtgate.c" "${tmp:?}/fxg/rm_rtgate.c"; then
+			bad "the scaler-decision mutant ($fgm) changed nothing"
+		# shellcheck disable=SC2086 # flags and fxhost are word lists
+		elif ! $cc $flags $fxhost -I"$rm_dir" -o "${tmp:?}/fxg/t" tests/metal/rm_fxgate_test.c "${tmp:?}/fxg/rm_metalfx.c" \
+			"${tmp:?}/fxg/rm_rtgate.c" "$rm_dir/rm_rtfx.c" -lm > "${tmp:?}/fxg.out" 2>&1; then
+			cat "${tmp:?}/fxg.out"
+			bad "the scaler-decision mutant ($fgm) does not compile, so it tests nothing"
+		elif "${tmp:?}/fxg/t" > "${tmp:?}/fxg.out" 2>&1; then
+			bad "tests/metal/rm_fxgate_test.c passes the scaler-decision mutant ($fgm)"
+		else
+			fxg_mutants=$((fxg_mutants + 1))
+		fi
+		rm -f "${tmp:?}/fxg/t"
+	done
+	[ "$fxg_mutants" -eq 4 ] || bad "tests/metal/rm_fxgate_test.c refused $fxg_mutants of the 4 scaler-decision mutants"
+fi
+seg 10.1 "; scaler decision ${fxg:-host test}, $fxg_mutants mutants refused"
 
 # TASK190 slice 3: the menu's copy of RT-primary's scaler rule (vidrules.c) against the renderer's (rm_rtgate.c,
 # with rm_metalfx.c's view size and the row of common/rm_pres_table.h), one binary over both. pmbuild <rtgate dir> <vidrules.c> <out>. Mutants it must
