@@ -96,6 +96,12 @@ rm_fx_run(int m, int rt_effect, unsigned has)
 }
 
 int
+rm_fx_view_mode(float asked_v, unsigned has)
+{
+	return rm_fx_run(rm_fx_supported(rm_fx_mode_of(asked_v), has), 0, has);
+}
+
+int
 rm_fx_interp(float v, unsigned has)
 {
 	return isfinite(v) && (v != 0.0f) && ((has & RM_FX_HAS_INTERP) != 0);
