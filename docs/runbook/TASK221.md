@@ -845,14 +845,20 @@ so each is this slice's:
   directory instead: the lock run keeps the supervisor's events file there
   (`BENCH_BOUNDED_EVDIR`, `<state>/lock/bench-sv.<pid>.<random>`), and the waiters read
   the group from its `spawned ... pgid=<pgid>` line (`bench_lock_group_live`), which
-  the supervisor writes as soon as the group exists. A holder an older harness wrote
+  the supervisor writes just after the spawn, before it watches the group (review
+  round 2). The window left is from `posix_spawnp`'s return to that write: a KILL of
+  the lock shell's whole group that lands there leaves the command running with no
+  group named, and the lock reclaimable. A holder an older harness wrote
   (`child=` the command, its group's leader) is still read as before, through
   `kill -0 -- -<child>`.
 - **The status contract.** The command's own status; 75 for the wait; 127 for a command
   that cannot be run; on the supervisor's 126 ("could not stop") the group is recorded
   (`bench_bounded_untold`), the lock is kept while it has a member (the release waits,
   and says so), and `lock run` exits 125 and says "a command, or what it left running,
-  could not be stopped: it may still run".
+  could not be stopped: it may still run". A supervisor that ends after its `spawned`
+  event with no `reaped` one (KILLed alone), or with a 127, is read the same way
+  (`bench_bounded_lost`, review round 2), and the line is "the process supervisor ended
+  with status <s> before the command's group was empty: it may still run".
 - **Decided from the events, never from a `wait` alone:** the run's status goes through
   `bench_bounded_ours`, and a trap's stop through `bench_bounded_stop`, as slice 2's
   `bench_bounded` does, the `/bin/sh` re-wait's 127 included.
@@ -971,13 +977,17 @@ instructions file outside this card, for the owner to retire.
   No other `trap`, `set -m` or process-group line changed: bench.sh's `trap '' INT
   TERM HUP` is unchanged, and `set -m` went with `bench_spawn`.
 - **A KILLed lock shell** leaves no command running when its supervisor lives: the
-  parent watch stops the group. Whatever kills the lock shell or the supervisor (a KILL
-  of the lock shell's whole process group takes both; a supervisor that then cannot
-  empty the group exits 126 with no shell left to record it), the waiters take the lock
-  as alive while the group the supervisor named in the lock directory has a member, and
+  parent watch stops the group. A supervisor KILLed alone, the lock shell alive, is
+  read as its 126 (round 2): the group is recorded, the release waits while it has a
+  member, and `lock run` exits 125 (case `lock kill sv`, mutant `lost-unread`).
+  Whatever kills the lock shell or the supervisor after the `spawned` line (a KILL of
+  the lock shell's whole process group takes both; a supervisor that then cannot empty
+  the group exits 126 with no shell left to record it), the waiters take the lock as
+  alive while the group the supervisor named in the lock directory has a member, and
   reclaim it once the group is empty (round 1; cases `lock kill group` and `lock kill
-  sv126` in check-bounded-run, mutant `group-unread`). A pid that leads a new group under
-  the same id before the reclaim keeps the lock until it ends, as `child=` did on main.
+  sv126` in check-bounded-run, mutant `group-unread`). Only the window from
+  `posix_spawnp`'s return to that line is left. A pid that leads a new group under the
+  same id before the reclaim keeps the lock until it ends, as `child=` did on main.
 - **An older harness's pid record** (no `group=` or `hand=`) holds the lock while its
   pid answers `kill -0`: the start time no longer decides (fail closed).
 
@@ -990,6 +1000,8 @@ instructions file outside this card, for the owner to retire.
 | `parent-gone` (check-supervise) | above | FAIL | ok |
 | `orphan`, `parent-race` (check-supervise, round 1) | a caller gone before the supervisor reads it (ppid 1), or between that read and the watch: no `spawned`, end of file on the events, the 125 line | on `0d5ae74c`: FAIL, "a supervisor whose caller is gone ran its command"; parent-race "no parent-hold event" | ok |
 | `lock kill group`, `lock kill sv126` (check-bounded-run, round 1) | a KILL of the lock shell's whole group (the lock shell, the supervisor and its tee), or a KILLed lock shell whose supervisor (a stand-in) then exits 126 with the group left: while the command runs, lock status `alive=yes` and a second lock run with `BENCH_LOCK_WAIT=1` exits 75; once it ends, a lock run reclaims the lock (0) and the lock is free | on `0d5ae74c`: FAIL, "the lock was taken as gone while the command's group ran: ... alive=no; a second lock run exited 0 while the command ran, not 75" (both) | ok |
+| `lock kill sv` (check-bounded-run, round 2) | the real supervisor alone (the holder's `child=`, the command's parent) is KILLed while the lock shell lives: the lock shell says "it may still run", while the command runs lock status `alive=yes` with that `child=` and a second lock run exits 75; once it ends, the lock shell exits 125, a lock run gets the lock (0) and the lock is free | on `88654c79`: FAIL, "the lock shell exited 137 at its supervisor's KILL with no untold note, the command's group running" | ok |
+| `lock zero ids` (check-bounded-run, round 2) | an events file, a group record and a holder's `child=` naming `00`, `01`, `007`, `-1`, `0`, `1` or `x`: none is alive, and no `kill` names a group or sends a signal | on `88654c79`: FAIL, `00` and `01` alive, and `00`, `01` and `007` asked about as groups | ok |
 | `probe <caller> kill` (check-bounded-run, its verdict changed) | after a KILL of pins.sh, ios-sim.sh or ios-device.sh, the stand-ins are gone within 10 s while the flag that would end them is still there: the parent watch stopped them | "child runs; grandchild runs" (the old wanted line) | "child gone; grandchild gone" |
 | `stop shim` (check-bounded-run, replaces `poll-end`) | `bench_stop_group` on another pid sends nothing and returns 0; in the window before the start it removes its own events file and leaves a sibling's | ok (as today) | ok (as today) |
 | `t_lock_defer` (check-bench) | a TERM in `sv_start`'s fork window (a `sleep 1` before `SV_PID=$!` in a copy of scripts/lib) stops the command; exit 143, the lock free | (the stall applied to `bench_spawn`) | ok (as today) |
@@ -1011,6 +1023,7 @@ Both new lock run cases wait on the supervisor's events through `BENCH_BOUNDED_T
 | `orphan-runs` | supervise.c | orphan: "a supervisor whose caller is gone ran its command" (round 1) |
 | `parent-race-runs` | supervise.c | parent-race: "a supervisor whose caller is gone ran its command" (round 1) |
 | `group-unread` | lock.sh | check-bounded-run lock kill group: "the lock was taken as gone while the command's group ran" (round 1) |
+| `lost-unread` | common.sh: `bench_bounded_run` drops the lost rule after `sv_wait` | check-bounded-run lock kill sv: "the lock shell exited 137 at its supervisor's KILL with no untold note" (round 2) |
 | `start-read-local` (moved) | lock.sh: `bench_lock_untold_reused` reads ps in the local zone | t_core_id: "record: TZ UTC then Asia/Tokyo: a live group record did not keep the lock alive" |
 | `nap-quiet-wait` (moved) | common.sh: a group around the nap's `wait` with standard error on /dev/null (on the `wait` alone the mutant passed: bash runs the trap after the builtin's redirection is undone) | nap trap: "nap trap: exit 143; stderr []" |
 | `hand-not-recorded` (retargeted) | common.sh: `_bu_k=hand` made `return 0` | sv 126 nospawn: "the lock was not kept" |

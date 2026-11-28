@@ -80,10 +80,13 @@
 # supervisor shares the lock shell's process group, so neither pid stands
 # for the command's group: the supervisor's events file is kept in the lock
 # directory (<state>/lock/bench-sv.<pid>.<random>, BENCH_BOUNDED_EVDIR),
-# and its "spawned ... pgid=<pgid>" line, which the supervisor writes as
-# soon as the group exists, names that group to the waiters
-# (bench_lock_group_live). The file goes with the bounded run's end, and
-# with the lock's release or reclaim.
+# and its "spawned ... pgid=<pgid>" line, which the supervisor writes just
+# after the spawn, before it watches the group, names that group to the
+# waiters (bench_lock_group_live). The window left is from posix_spawnp's
+# return to that write, a few instructions: a KILL of the lock shell's
+# whole group that lands there leaves the command running with no group
+# named, and the lock can then be reclaimed while it runs. The file goes
+# with the bounded run's end, and with the lock's release or reclaim.
 #
 # Release: the EXIT, INT, TERM and HUP traps of bench.sh call
 # bench_lock_release, which removes the lock only while the holder file
@@ -97,13 +100,19 @@
 # stopped the same way by the supervisor before it returns. So nothing
 # left in the command's process group outlives the lock. If the lock shell
 # itself is KILLed, the supervisor sees its parent go and stops the group
-# (parent-gone). Whatever kills the lock shell or the supervisor (a KILL
-# of the lock shell's whole process group takes both; a supervisor that
-# then cannot empty the group exits 126 with no shell left to record it),
-# the waiters take the lock as alive while the group named in the lock
-# directory has a member (bench_lock_group_live), and reclaim it once the
-# group is empty. A pid that leads a new group under the same id before
-# the reclaim keeps the lock until it ends, as child= did before.
+# (parent-gone). If the supervisor alone is KILLed, the lock shell finds
+# its "spawned" event with no "reaped" one and takes it as the
+# supervisor's 126 (bench_bounded_lost, review round 2, security B1): the
+# group is recorded, the release waits while it has a member, and the
+# lock run exits 125. Whatever kills the lock shell or the supervisor
+# after the "spawned" line (a KILL of the lock shell's whole process group
+# takes both; a supervisor that then cannot empty the group exits 126 with
+# no shell left to record it), the waiters take the lock as alive while
+# the group named in the lock directory has a member
+# (bench_lock_group_live), and reclaim it once the group is empty; only
+# the window before that line, above, is open. A pid that leads a new
+# group under the same id before the reclaim keeps the lock until it
+# ends, as child= did before.
 #
 # Commands that could not be stopped (FIX184, TASK221): a supervisor that
 # could not empty its command's process group (its 126, "could not stop"),
@@ -746,10 +755,12 @@ bench_lock_grace() {
 # events file of its supervisor in the lock directory (bench-sv.<pid>.*,
 # the lock run's BENCH_BOUNDED_EVDIR) names its process group in a
 # "spawned" line, and that group still has a member. The supervisor
-# writes that line itself as soon as the group exists, so the lock is held
-# while the group runs whatever kills the lock shell or the supervisor
-# (review round 1, security B1). Only regular files are read, never a link
-# or a FIFO (the tap's).
+# writes that line itself just after the spawn (review round 2), so from
+# then on the lock is held while the group runs whatever kills the lock
+# shell or the supervisor (review round 1, security B1); the window from
+# posix_spawnp's return to the write is the one left. An id with a
+# leading zero is none. Only regular files are read, never a link or a
+# FIFO (the tap's).
 bench_lock_group_live() {
 	[ -n "${BENCH_LOCK_DIR:-}" ] || return 1
 	for _gl_f in "${BENCH_LOCK_DIR:?}"/bench-sv.*; do

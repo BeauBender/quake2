@@ -1152,7 +1152,13 @@ main(int argc, char **argv)
 		return 125;
 	}
 
-	/* the leader watched before anything is said; one that is already gone is seen by the peek */
+	/*
+	 * the group named just after the spawn, before the watch (TASK221 slice
+	 * 3, review round 2), so a caller's lock is held by it from here on; the
+	 * window left is from posix_spawnp's return to this write
+	 */
+	sv_emit("spawned pid=%d pgid=%d", (int)sv_leader, (int)sv_leader);
+	/* the leader watched before anything else is said; one that is already gone is seen by the peek */
 	sv_track(sv_leader);
 	if (sv_peek(sv_index(sv_leader) < 0 ? 0 : WNOHANG) < 0)
 	{
@@ -1164,7 +1170,6 @@ main(int argc, char **argv)
 	{
 		sv_arm(T_DEADLINE);
 	}
-	sv_emit("spawned pid=%d pgid=%d", (int)sv_leader, (int)sv_leader);
 	/* a stop signal pending at entry was never posted to the kqueue */
 	for (i = 0; i < (int)(sizeof(sv_watch) / sizeof(sv_watch[0])); i++)
 	{
