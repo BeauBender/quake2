@@ -78,6 +78,17 @@ int rm_fx_same(float a, float b);
  */
 int rm_fx_run(int m, int rt_effect, unsigned has);
 
+/*
+ * TASK109 slice 4: the mode the world views run for r_metalfx read as
+ * asked_v (RM_Effect's value: after the presentation's row and the A/B
+ * side) on a device with has: rm_fx_run of rm_fx_supported of
+ * rm_fx_mode_of, with no ray-traced effect counted, as before RT3. No
+ * scaler is made for RM_FX_OFF (RM_FX_Begin frees one and draws the view
+ * at its output's size), so with every effect off and r_metalfx asking
+ * for none, none is made, on any device.
+ */
+int rm_fx_view_mode(float asked_v, unsigned has);
+
 /* r_metalfx_interp's v: 1 when it is finite and not 0 and has holds the interpolator, else 0 */
 int rm_fx_interp(float v, unsigned has);
 
